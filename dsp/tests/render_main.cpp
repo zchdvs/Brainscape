@@ -1,6 +1,7 @@
 // Offline render harness: runs the exact engine the pedal will run, on the host,
 // and writes a WAV — seconds of iteration instead of a flash cycle
 // (docs/research/vst-and-shared-dsp.md rec #7).
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>

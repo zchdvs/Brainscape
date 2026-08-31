@@ -11,8 +11,16 @@
 #include <immintrin.h>
 #elif defined(__aarch64__)
 #define BRAINSCAPE_DENORMAL_AARCH64 1
-#elif defined(__arm__) && defined(__VFP_FP__)
+#elif defined(__arm__) && defined(__ARM_FP)
+// __ARM_FP (ACLE: hardware FP available), NOT __VFP_FP__ — GCC defines the latter
+// even for soft-float builds with no FPU, where the vmrs/vmsr below fail to
+// assemble (review finding, verified with arm-none-eabi-gcc -mfloat-abi=soft).
 #define BRAINSCAPE_DENORMAL_ARM32 1
+#elif !defined(BRAINSCAPE_ALLOW_NO_DENORMAL_GUARD)
+// A silent no-op guard would leave the audio path exposed to denormal stalls on
+// exactly the target nobody tested. Opt in explicitly if that is genuinely fine
+// (e.g. a soft-float utility build with no audio path).
+#error "No denormal-guard implementation for this target; define BRAINSCAPE_ALLOW_NO_DENORMAL_GUARD to accept a no-op."
 #endif
 
 namespace brainscape {

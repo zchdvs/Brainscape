@@ -566,7 +566,8 @@ class Engine {
   bool Init(const EngineConfig&, const Arenas&) noexcept; // no allocation; clears the history
                                                           // ring + engine state ONLY (never looper)
   void Reset() noexcept;                                  // RT-safe: kills grains, zeroes post/
-                                                          // feedback state; ring + params kept
+                                                          // feedback state, drains pending params
+                                                          // and snaps smoothers; ring + params kept
   void ClearHistory() noexcept;                           // non-RT (~40-80 ms memset)
   void ClearLooper()  noexcept;                           // non-RT, explicit — a plugin prepare
                                                           // path must NOT call this

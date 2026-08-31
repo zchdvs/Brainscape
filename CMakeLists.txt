@@ -7,6 +7,7 @@ project(brainscape LANGUAGES CXX)
 option(BRAINSCAPE_BUILD_TESTS    "Build the dsp/ unit tests and offline render tool" ON)
 option(BRAINSCAPE_BUILD_FIRMWARE "Build the Daisy Seed firmware (arm-none-eabi toolchain)" OFF)
 option(BRAINSCAPE_BUILD_PLUGIN   "Build the desktop plugin" OFF)
+option(BRAINSCAPE_WERROR         "Treat warnings as errors (on in CI)" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

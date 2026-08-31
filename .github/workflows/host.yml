@@ -15,8 +15,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=ON -DBRAINSCAPE_WERROR=ON
       - name: Build
         run: cmake --build build --config Release
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Render smoke test
+        shell: bash
+        run: |
+          BIN=$(find build -name "brainscape_render*" -type f | head -1)
+          "$BIN" smoke.wav && test -s smoke.wav
+
+  # Debug leg: the design's maxBlockSize contract is enforced by assert (design §9),
+  # which NDEBUG compiles out — so at least one leg must run with asserts live.
+  # ASan/UBSan cover exactly what the ring indexing and arena seams can get wrong.
+  debug-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBRAINSCAPE_BUILD_TESTS=ON -DBRAINSCAPE_WERROR=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # Compile-only cross build for the Cortex-M7: catches dsp/ portability breaks
+  # (hot-loop libm calls, soft-float macro traps, 32-bit size_t narrowing) with no
+  # hardware. Firmware proper lands with hardware bring-up.
+  arm-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install arm-none-eabi-gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - name: Configure
+        run: >
+          cmake -B build-arm
+          -DCMAKE_TOOLCHAIN_FILE=tools/cmake/arm-none-eabi-toolchain.cmake
+          -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=OFF -DBRAINSCAPE_WERROR=ON
+      - name: Build dsp library
+        run: cmake --build build-arm --target brainscape_dsp
