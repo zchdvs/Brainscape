@@ -1,0 +1,43 @@
+# Build outputs
+build/
+out/
+cmake-build-*/
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# IDE / editors
+.vscode/
+.idea/
+.vs/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# JUCE / plugin build artifacts
+JuceLibraryCode/
+*.jucer.bak
+
+# KiCad
+*-backups/
+*.kicad_pcb-bak
+*.kicad_sch-bak
+_autosave-*
+fp-info-cache
+*.lck
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
