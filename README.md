@@ -28,4 +28,4 @@ Two deliverables from one shared DSP core:
 
 ## License
 
-TBD. GPLv3 is the leading candidate (compatible with the VST3 SDK's dual license and common in open-source audio); hardware design files may use CERN-OHL. To be decided before first code lands.
+Code and firmware are licensed under the [GNU GPLv3](LICENSE). Hardware design files will likely ship under CERN-OHL-S once they land. For contributors: GPL/LGPL reference code is compatible and may be vendored with attribution; AGPL sources (e.g. Essentia) remain study-only — see [docs/research/](docs/research/) for per-source licensing notes.
