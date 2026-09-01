@@ -30,8 +30,17 @@ int main(int argc, char** argv) {
   }
   engine.SetParam(ParamId::DelayMs, 375.0f);
   engine.SetParam(ParamId::Mix, 0.5f);
-  engine.SetParam(ParamId::Feedback, 0.6f);
+  engine.SetParam(ParamId::Feedback, 0.55f);
   engine.SetParam(ParamId::OutTrimDb, 0.0f);
+  engine.SetParam(ParamId::GrainSizeMs, 120.0f);
+  engine.SetParam(ParamId::Overlap, 0.5f);
+  engine.SetParam(ParamId::SprayMs, 40.0f);
+  engine.SetParam(ParamId::PitchSt, 12.0f);  // octave-up shimmer
+  engine.SetParam(ParamId::SpreadCents, 8.0f);
+  engine.SetParam(ParamId::Jitter, 0.3f);
+  engine.SetParam(ParamId::WindowSustain, 0.4f);
+  engine.SetParam(ParamId::WindowSmooth, 0.8f);
+  engine.SetParam(ParamId::PanSpread, 0.7f);
   engine.Reset();
 
   // Test signal: a short 220 Hz burst, then a few staccato plucks (decaying sines).
@@ -69,6 +78,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "failed to write %s\n", path);
     return 1;
   }
-  std::printf("wrote %s (%zu frames, delay 375 ms, fb 0.6, mix 0.5)\n", path, frames);
+  std::printf("wrote %s (%zu frames, granular: +12 st shimmer, 120 ms grains, delay 375 ms)\n",
+              path, frames);
   return 0;
 }

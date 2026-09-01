@@ -9,10 +9,21 @@ namespace brainscape {
 // plain (denormalized) units everywhere; normalizing to [0,1] is the plugin wrapper's
 // job (VST3/CLAP convention, docs/research/preset-parameter-and-patch-format.md).
 enum class ParamId : uint32_t {
-  DelayMs   = 1,  // layer0.position.base_ms (skeleton: the single unity tap)
-  Mix       = 2,  // global wet/dry, linear crossfade (grain-delay-theory.md §3.11)
-  Feedback  = 3,  // feedback.amount (the taming chain lands with the grain engine)
-  OutTrimDb = 4,  // out_trim_db
+  DelayMs        = 1,   // layer0.position.base_ms — grain position behind the write head
+  Mix            = 2,   // global wet/dry, linear crossfade (grain-delay-theory.md §3.11)
+  Feedback       = 3,   // feedback.amount (the taming chain lands with the post chain)
+  OutTrimDb      = 4,   // out_trim_db
+  GrainSizeMs    = 5,   // layer0.size_ms
+  Overlap        = 6,   // scheduler.overlap — target voices = kMaxGrains * overlap^3
+  SprayMs        = 7,   // layer0.position.spray_ms
+  PitchSt        = 8,   // layer0.pitch.st (±24 st = the design's r_max = 4 ratio ceiling)
+  SpreadCents    = 9,   // layer0.pitch.spread_cents
+  ReverseProb    = 10,  // layer0.pitch.reverse_prob
+  Jitter         = 11,  // scheduler.jitter — synchronous <-> asynchronous morph
+  WindowSustain  = 12,  // layer0.window.sustain — flat-top fraction (1 = rectangular)
+  WindowSkew     = 13,  // layer0.window.skew — attack/decay balance
+  WindowSmooth   = 14,  // layer0.window.smoothness — piecewise -> half-cosine morph
+  PanSpread      = 15,  // layer0.pan_spread — per-grain equal-power pan width
 };
 
 struct ParamDescriptor {
@@ -33,10 +44,21 @@ struct ParamDescriptor {
 // "global.mix" is deliberately outside the mode-file leaf namespace (design §6:
 // Mix is a global performance control, not a per-mode leaf a macro can target).
 inline constexpr ParamDescriptor kParamTable[] = {
-    {ParamId::DelayMs,   "layer0.position.base_ms", 1.0f,   5000.0f, 250.0f, "ms"},
-    {ParamId::Mix,       "global.mix",              0.0f,   1.0f,    0.5f,   ""},
-    {ParamId::Feedback,  "feedback.amount",         0.0f,   0.95f,   0.0f,   ""},
-    {ParamId::OutTrimDb, "out_trim_db",             -24.0f, 24.0f,   0.0f,   "dB"},
+    {ParamId::DelayMs,       "layer0.position.base_ms",    1.0f,   5000.0f, 250.0f, "ms"},
+    {ParamId::Mix,           "global.mix",                 0.0f,   1.0f,    0.5f,   ""},
+    {ParamId::Feedback,      "feedback.amount",            0.0f,   0.95f,   0.0f,   ""},
+    {ParamId::OutTrimDb,     "out_trim_db",                -24.0f, 24.0f,   0.0f,   "dB"},
+    {ParamId::GrainSizeMs,   "layer0.size_ms",             1.0f,   500.0f,  90.0f,  "ms"},
+    {ParamId::Overlap,       "scheduler.overlap",          0.0f,   1.0f,    0.55f,  ""},
+    {ParamId::SprayMs,       "layer0.position.spray_ms",   0.0f,   2000.0f, 20.0f,  "ms"},
+    {ParamId::PitchSt,       "layer0.pitch.st",            -24.0f, 24.0f,   0.0f,   "st"},
+    {ParamId::SpreadCents,   "layer0.pitch.spread_cents",  0.0f,   100.0f,  0.0f,   "c"},
+    {ParamId::ReverseProb,   "layer0.pitch.reverse_prob",  0.0f,   1.0f,    0.0f,   ""},
+    {ParamId::Jitter,        "scheduler.jitter",           0.0f,   1.0f,    0.2f,   ""},
+    {ParamId::WindowSustain, "layer0.window.sustain",      0.0f,   1.0f,    0.3f,   ""},
+    {ParamId::WindowSkew,    "layer0.window.skew",         0.0f,   1.0f,    0.5f,   ""},
+    {ParamId::WindowSmooth,  "layer0.window.smoothness",   0.0f,   1.0f,    0.7f,   ""},
+    {ParamId::PanSpread,     "layer0.pan_spread",          0.0f,   1.0f,    0.5f,   ""},
 };
 inline constexpr size_t kNumParams = sizeof(kParamTable) / sizeof(kParamTable[0]);
 

@@ -7,6 +7,7 @@
 
 #include "brainscape/DenormalGuard.h"
 #include "brainscape/Engine.h"
+#include "brainscape/GrainMath.h"
 #include "brainscape/HostArenas.h"
 #include "catch.hpp"
 
@@ -33,6 +34,21 @@ EngineConfig SmallConfig() {
   return cfg;
 }
 
+// The degenerate clean-delay grain config the design predicts (§5 Pattern A):
+// rectangular window, abutting unity grains, one voice, no randomness.
+// overlap 0.25 -> target = 64 * 0.25^3 = 1.0 exactly.
+std::vector<std::pair<ParamId, float>> DegenerateDelay(float delayMs, float extraFb = 0.f,
+                                                       float mix = 1.f) {
+  return {{ParamId::DelayMs, delayMs},   {ParamId::Mix, mix},
+          {ParamId::Feedback, extraFb},  {ParamId::OutTrimDb, 0.0f},
+          {ParamId::GrainSizeMs, 10.0f}, {ParamId::Overlap, 0.25f},
+          {ParamId::SprayMs, 0.0f},      {ParamId::PitchSt, 0.0f},
+          {ParamId::SpreadCents, 0.0f},  {ParamId::ReverseProb, 0.0f},
+          {ParamId::Jitter, 0.0f},       {ParamId::WindowSustain, 1.0f},
+          {ParamId::WindowSkew, 0.5f},   {ParamId::WindowSmooth, 0.0f},
+          {ParamId::PanSpread, 0.0f}};
+}
+
 // Mirrors the engine's write-path quantizer (rounding-mode independent,
 // NaN-safe, symmetric clamp) so tests can compute exact expectations.
 int16_t Quantize(float x) {
@@ -52,8 +68,6 @@ struct MidRenderChange {
   float   value   = 0.f;
 };
 
-// Render `input` (mono, duplicated to both channels) through a fresh engine using
-// the given block sizes cycled in order.
 RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
                     const std::vector<std::pair<ParamId, float>>& params, bool primeParams,
                     const std::vector<uint32_t>& blockSizes,
@@ -94,13 +108,77 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
 
 }  // namespace
 
-TEST_CASE("PlanMemory sizes the bulk arena for the history ring") {
-  EngineConfig cfg;  // defaults: 2^22 frames, stereo int16
+// ── GrainMath unit tests ────────────────────────────────────────────────────────
+
+TEST_CASE("write-head guard clamps per direction") {
+  using grainmath::ClampDelayFrames;
+  const uint32_t buf = 32768;
+  const double   m   = 64.0;
+
+  // Forward, unity rate: near guard is just the margin.
+  REQUIRE(ClampDelayFrames(480.0, 480.0, 1.0, false, buf, m) == 480.0);
+  REQUIRE(ClampDelayFrames(10.0, 480.0, 1.0, false, buf, m) == m);
+  // Forward, pitched up: near guard grows by L*(r-1).
+  REQUIRE(ClampDelayFrames(100.0, 480.0, 4.0, false, buf, m) == 480.0 * 3.0 + m);
+  // Forward, pitched down: far guard shrinks by L*(1-r).
+  REQUIRE(ClampDelayFrames(40000.0, 480.0, 0.5, false, buf, m) == buf - 240.0 - m);
+  // Reverse: trivial near guard, far guard covers L*(1+r) of recession.
+  REQUIRE(ClampDelayFrames(10.0, 480.0, 1.0, true, buf, m) == m);
+  REQUIRE(ClampDelayFrames(40000.0, 480.0, 1.0, true, buf, m) == buf - 960.0 - m);
+}
+
+TEST_CASE("envelope geometry and exact mean compensation") {
+  using grainmath::EnvValue;
+  using grainmath::MakeEnv;
+
+  // Rectangular: sustain=1 -> unity everywhere, gain exactly 1.
+  const auto rect = MakeEnv(480.f, 1.0f, 0.5f);
+  REQUIRE(rect.gain == 1.0f);
+  REQUIRE(EnvValue(rect, 0.f) == 1.0f);
+  REQUIRE(EnvValue(rect, 479.f) == 1.0f);
+
+  // Symmetric triangle: sustain=0, skew=0.5.
+  const auto tri = MakeEnv(400.f, 0.0f, 0.5f);
+  REQUIRE(tri.gain == 2.0f);
+  REQUIRE(EnvValue(tri, 0.f) == 0.0f);
+  REQUIRE(EnvValue(tri, 100.f) == Approx(0.5f));
+  REQUIRE(EnvValue(tri, 200.f) == Approx(1.0f));
+  REQUIRE(EnvValue(tri, 400.f) == Approx(0.0f).margin(1e-6));
+
+  // Skewed: attack takes skew of the non-flat portion.
+  const auto skewed = MakeEnv(400.f, 0.5f, 0.25f);
+  REQUIRE(skewed.attackEnd == Approx(50.f));
+  REQUIRE(skewed.decayStart == Approx(250.f));
+  REQUIRE(EnvValue(skewed, 150.f) == 1.0f);
+}
+
+TEST_CASE("counter RNG is deterministic and in range") {
+  using grainmath::Draw;
+  using grainmath::RandUnit;
+  for (int64_t s : {int64_t{0}, int64_t{12345}, int64_t{1} << 33}) {
+    for (auto d : {Draw::Interval, Draw::Spray, Draw::Pan}) {
+      const float a = RandUnit(s, d);
+      REQUIRE(a == RandUnit(s, d));
+      REQUIRE(a >= 0.0f);
+      REQUIRE(a < 1.0f);
+    }
+  }
+  REQUIRE(RandUnit(7, grainmath::Draw::Spray) != RandUnit(7, grainmath::Draw::Pan));
+  REQUIRE(grainmath::SemitonesToRatio(12.0f) == 2.0f);
+  REQUIRE(grainmath::SemitonesToRatio(0.0f) == 1.0f);
+}
+
+// ── Engine tests ────────────────────────────────────────────────────────────────
+
+TEST_CASE("PlanMemory sizes all three tiers") {
+  EngineConfig cfg;  // defaults: 2^22 frames, maxBlockSize 512
   const MemoryPlan plan = PlanMemory(cfg);
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Bulk)] ==
           (size_t{1} << 22) * 2u * sizeof(int16_t));  // 16 MiB
+  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
+          (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
+  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] == 512u * 2u * sizeof(float));
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
-  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] == 0);
 }
 
 TEST_CASE("Init validates its inputs") {
@@ -116,9 +194,9 @@ TEST_CASE("Init validates its inputs") {
   }
   SECTION("rejects out-of-bounds historyFrames (floor and 32-bit overflow guard)") {
     EngineConfig bad = cfg;
-    bad.historyFrames = 4;  // power of two, but below the floor
+    bad.historyFrames = 4;
     REQUIRE_FALSE(engine.Init(bad, arenas.get()));
-    bad.historyFrames = 1u << 27;  // power of two, above the ceiling
+    bad.historyFrames = 1u << 27;
     REQUIRE_FALSE(engine.Init(bad, arenas.get()));
   }
   SECTION("rejects an undersized bulk arena") {
@@ -127,8 +205,8 @@ TEST_CASE("Init validates its inputs") {
     REQUIRE_FALSE(engine.Init(cfg, small));
   }
   SECTION("rejects a null bulk arena") {
-    Arenas nulls                                  = arenas.get();
-    nulls.base[static_cast<size_t>(Tier::Bulk)]   = nullptr;
+    Arenas nulls                                = arenas.get();
+    nulls.base[static_cast<size_t>(Tier::Bulk)] = nullptr;
     REQUIRE_FALSE(engine.Init(cfg, nulls));
   }
   SECTION("rejects a misaligned bulk arena") {
@@ -166,12 +244,10 @@ TEST_CASE("parameter table and accessors") {
   REQUIRE(engine.GetParam(ParamId::Mix) == 0.75f);
   engine.SetParam(ParamId::Mix, 9.0f);  // clamped to descriptor range
   REQUIRE(engine.GetParam(ParamId::Mix) == 1.0f);
-  engine.SetParam(ParamId::Feedback, -1.0f);
-  REQUIRE(engine.GetParam(ParamId::Feedback) == 0.0f);
+  engine.SetParam(ParamId::PitchSt, -99.0f);
+  REQUIRE(engine.GetParam(ParamId::PitchSt) == -24.0f);
 }
 
-// A single bad automation value must never poison the engine: NaN through the
-// old comparison clamps latched the smoothers at NaN forever (review finding).
 TEST_CASE("non-finite parameter values are rejected at the boundary") {
   EngineConfig cfg = SmallConfig();
   host::HeapArenas arenas(PlanMemory(cfg));
@@ -189,92 +265,96 @@ TEST_CASE("non-finite parameter values are rejected at the boundary") {
       REQUIRE(std::isfinite(engine.GetParam(table[i].id)));
     }
   }
-  // NaN maps to min deterministically.
   engine.SetParam(ParamId::Mix, std::numeric_limits<float>::quiet_NaN());
   REQUIRE(engine.GetParam(ParamId::Mix) == 0.0f);
 
-  // And the audio stays finite afterwards.
   std::vector<float> input(2048, 0.25f);
   const auto out = Render(cfg, input, {{ParamId::Mix, std::numeric_limits<float>::quiet_NaN()}},
                           false, {64});
   for (float v : out.l) REQUIRE(std::isfinite(v));
 }
 
-// Design contract #2 (unity-rate null): with mix=1, feedback=0, trim=0 dB and
-// dither off, the output equals the int16-quantized input delayed by exactly
-// delayFrames — bit-exact.
-TEST_CASE("delay null test: Tu path is sample-exact through the int16 ring") {
+// Design contract #2: the degenerate-delay grain config (rectangular window,
+// abutting unity grains, one voice) nulls bit-exactly against the int16 ring.
+// This is the whole one-engine bet in one test: Pattern A is a configuration.
+TEST_CASE("degenerate-delay null: abutting unity grains are a bit-exact delay") {
   EngineConfig cfg    = SmallConfig();
   cfg.ditherRingWrite = false;  // contract #2's dither-off mode (design §12.3)
+  const uint32_t d    = 480;    // DelayMs = 10 @ 48 kHz
 
-  SECTION("d = 480 via primed params") {
-    const uint32_t delayFrames = 480;  // DelayMs = 10 @ 48 kHz
+  SECTION("impulse + noise via primed params") {
     Rng rng;
-    std::vector<float> input(3000);
+    std::vector<float> input(4000);
     input[0] = 1.0f;
     for (size_t i = 1; i < input.size(); ++i) input[i] = 0.5f * rng.Next();
 
-    const auto out = Render(cfg, input,
-                            {{ParamId::DelayMs, 10.0f},
-                             {ParamId::Mix, 1.0f},
-                             {ParamId::Feedback, 0.0f},
-                             {ParamId::OutTrimDb, 0.0f}},
-                            /*primeParams=*/true, {64});
-
+    const auto out = Render(cfg, input, DegenerateDelay(10.0f), true, {64});
     for (size_t n = 0; n < out.l.size(); ++n) {
       const float expected =
-          n >= delayFrames
-              ? static_cast<float>(Quantize(input[n - delayFrames])) * (1.0f / 32767.0f)
-              : 0.0f;
+          n >= d ? static_cast<float>(Quantize(input[n - d])) * (1.0f / 32767.0f) : 0.0f;
       REQUIRE(out.l[n] == expected);
       REQUIRE(out.r[n] == expected);
     }
   }
 
-  SECTION("d = 480 via SetParam alone — the path users take (smoother must arrive)") {
-    const uint32_t delayFrames = 480;
+  SECTION("via SetParam alone — the path users take (smoothers must arrive)") {
     Rng rng;
     std::vector<float> input(48000);
     for (auto& x : input) x = 0.5f * rng.Next();
-
-    // primeParams=false: Mix ramps 0.5 -> 1.0 through the smoother, which must
-    // snap to exactly 1.0 (the bare one-pole stalls 1.4e-5 short; review finding).
-    const auto out = Render(cfg, input,
-                            {{ParamId::DelayMs, 10.0f},
-                             {ParamId::Mix, 1.0f},
-                             {ParamId::Feedback, 0.0f},
-                             {ParamId::OutTrimDb, 0.0f}},
-                            /*primeParams=*/false, {64});
-
-    for (size_t n = 24000; n < out.l.size(); ++n) {
+    const auto out = Render(cfg, input, DegenerateDelay(10.0f), false, {64});
+    // The normalization smoother is τ = 100 ms (design §3); its stall-snap to the
+    // exact target arrives after ~0.8 s from the default-config starting point.
+    for (size_t n = 43000; n < out.l.size(); ++n) {
       const float expected =
-          static_cast<float>(Quantize(input[n - delayFrames])) * (1.0f / 32767.0f);
+          static_cast<float>(Quantize(input[n - d])) * (1.0f / 32767.0f);
       REQUIRE(out.l[n] == expected);
     }
   }
+}
 
-  SECTION("d = 1 boundary: read-before-write ordering at the minimum tap") {
-    EngineConfig lowRate    = cfg;
-    lowRate.sampleRate      = 1000.0;  // DelayMs = 1 -> exactly 1 frame
-    std::vector<float> input(64, 0.f);
-    input[0] = 1.0f;
-    const auto out = Render(lowRate, input,
-                            {{ParamId::DelayMs, 1.0f},
-                             {ParamId::Mix, 1.0f},
-                             {ParamId::Feedback, 0.0f},
-                             {ParamId::OutTrimDb, 0.0f}},
-                            true, {16});
-    REQUIRE(out.l[0] == 0.0f);
-    REQUIRE(out.l[1] == static_cast<float>(Quantize(1.0f)) * (1.0f / 32767.0f));
-    REQUIRE(out.l[2] == 0.0f);
+// The guards clamp a sub-margin delay up to the margin — the impulse emerges at
+// exactly kGuardMarginFrames, not at the requested (unsafe) 48 frames.
+TEST_CASE("write-head guard clamps sub-margin delays") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  const auto margin   = static_cast<size_t>(detail::kGuardMarginFrames);
+
+  std::vector<float> input(2000, 0.f);
+  input[0] = 1.0f;
+  const auto out = Render(cfg, input, DegenerateDelay(1.0f), true, {64});  // 48 < margin
+
+  for (size_t n = 0; n < margin; ++n) REQUIRE(out.l[n] == 0.0f);
+  REQUIRE(out.l[margin] == static_cast<float>(Quantize(1.0f)) * (1.0f / 32767.0f));
+}
+
+// Coherent normalization (design §3): N identical unity grains sum to ~N*x and the
+// coherence-resolved 1/N brings it back to x. Not bit-exact: sequentially summing
+// 8 identical floats rounds at the odd multiples (3x, 5x, ...), so the null holds
+// to a few ULP — the assertion below is the honest version of "level-exact".
+TEST_CASE("coherent overlap is level-exact: 8 stacked unity grains null") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  auto params = DegenerateDelay(10.0f);
+  for (auto& p : params) {
+    if (p.first == ParamId::Overlap) p.second = 0.5f;  // 64 * 0.5^3 = 8 voices
+  }
+
+  Rng rng;
+  std::vector<float> input(6000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+  const auto out = Render(cfg, input, params, true, {64});
+
+  const uint32_t d = 480;
+  for (size_t n = 2000; n < out.l.size(); ++n) {
+    const float expected = static_cast<float>(Quantize(input[n - d])) * (1.0f / 32767.0f);
+    REQUIRE(out.l[n] == Approx(expected).margin(2e-6));  // few-ULP summation rounding
   }
 }
 
-// Design contract #1: rendering the same input under different block splittings
-// produces identical samples — smoother trajectories (per-sample, never per-block),
-// parameter drain timing, and the counter-keyed dither must all be split-invariant.
-// Precondition (honest scope): no parameter changes during the render; the
-// mid-render case is the hidden [.pending-spsc] test below.
+// Design contract #1: identical output under any block splitting, with the full
+// stochastic feature set active (jitter, spray, detune, reverse, dither) — every
+// draw is keyed on the absolute sample counter, never on block structure.
 TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   EngineConfig cfg = SmallConfig();  // dither ON — its split-invariance is under test
 
@@ -283,12 +363,13 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   for (auto& x : input) x = 0.8f * rng.Next();
 
   const std::vector<std::pair<ParamId, float>> params = {
-      {ParamId::DelayMs, 10.0f},
-      {ParamId::Mix, 0.7f},
-      {ParamId::Feedback, 0.5f},
-      {ParamId::OutTrimDb, -3.0f}};
+      {ParamId::DelayMs, 100.0f},   {ParamId::Mix, 0.7f},
+      {ParamId::Feedback, 0.5f},    {ParamId::OutTrimDb, -3.0f},
+      {ParamId::GrainSizeMs, 60.f}, {ParamId::Overlap, 0.55f},
+      {ParamId::SprayMs, 50.0f},    {ParamId::PitchSt, 7.0f},
+      {ParamId::SpreadCents, 20.f}, {ParamId::ReverseProb, 0.3f},
+      {ParamId::Jitter, 1.0f},      {ParamId::WindowSmooth, 0.7f}};
 
-  // primeParams=false: smoothers ramp from defaults — exercises per-sample smoothing.
   const auto ref = Render(cfg, input, params, false, {512});
   for (uint32_t split : {1u, 7u, 32u, 48u, 64u, 127u}) {
     const auto other = Render(cfg, input, params, false, {split});
@@ -299,10 +380,21 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   REQUIRE(std::memcmp(ref.l.data(), mixed.l.data(), ref.l.size() * sizeof(float)) == 0);
 }
 
+TEST_CASE("stochastic renders are reproducible run to run") {
+  EngineConfig cfg = SmallConfig();
+  Rng rng;
+  std::vector<float> input(8192);
+  for (auto& x : input) x = 0.6f * rng.Next();
+  const std::vector<std::pair<ParamId, float>> params = {
+      {ParamId::Jitter, 1.0f}, {ParamId::SprayMs, 200.0f}, {ParamId::ReverseProb, 0.5f}};
+  const auto a = Render(cfg, input, params, true, {128});
+  const auto b = Render(cfg, input, params, true, {128});
+  REQUIRE(std::memcmp(a.l.data(), b.l.data(), a.l.size() * sizeof(float)) == 0);
+}
+
 // Hidden until the SPSC event queue lands (design §9): a parameter change delivered
 // mid-render at a sampleOffset must be split-invariant. Run explicitly with
-// `brainscape_tests "[pending-spsc]"`. Enabling this in the default suite is the
-// acceptance criterion for the queue.
+// `brainscape_tests "[pending-spsc]"`.
 TEST_CASE("mid-render automation is split-invariant", "[.][pending-spsc]") {
   EngineConfig cfg = SmallConfig();
   Rng rng;
@@ -323,27 +415,19 @@ TEST_CASE("mid-render automation is split-invariant", "[.][pending-spsc]") {
 }
 
 // Design contract #4 (skeleton scope): feedback below unity is bounded AND decays
-// to true silence. Without dither, int16 rounding has fixed points in the loop and
-// a single impulse leaves a permanent tone (measured -70 dBFS at fb 0.95; review
-// finding) — the dithered write's random walk must be absorbed at exact zero.
+// to true silence — the dithered write's random walk is absorbed at exact zero.
 TEST_CASE("feedback is bounded and decays to silence") {
   EngineConfig cfg = SmallConfig();  // dither ON
 
   std::vector<float> input(240000, 0.0f);  // 5 s
   input[0] = 1.0f;
 
-  const auto out = Render(cfg, input,
-                          {{ParamId::DelayMs, 10.0f},
-                           {ParamId::Mix, 1.0f},
-                           {ParamId::Feedback, 0.6f},
-                           {ParamId::OutTrimDb, 0.0f}},
-                          true, {512});
+  const auto out = Render(cfg, input, DegenerateDelay(10.0f, 0.6f), true, {512});
 
   float peak = 0.f;
   for (float v : out.l) peak = std::max(peak, std::fabs(v));
   REQUIRE(peak <= 2.0f);
 
-  // The tail must be EXACTLY zero — not just quiet.
   for (size_t n = out.l.size() - 24000; n < out.l.size(); ++n) {
     REQUIRE(out.l[n] == 0.0f);
     REQUIRE(out.r[n] == 0.0f);
@@ -354,15 +438,89 @@ TEST_CASE("high feedback remains bounded") {
   EngineConfig cfg = SmallConfig();
   std::vector<float> input(96000, 0.0f);
   input[0] = 1.0f;
-  const auto out = Render(cfg, input,
-                          {{ParamId::DelayMs, 1.0f},
-                           {ParamId::Mix, 1.0f},
-                           {ParamId::Feedback, 0.95f},
-                           {ParamId::OutTrimDb, 0.0f}},
-                          true, {256});
+  const auto out = Render(cfg, input, DegenerateDelay(10.0f, 0.95f), true, {256});
   float peak = 0.f;
   for (float v : out.l) peak = std::max(peak, std::fabs(v));
   REQUIRE(peak <= 2.0f);
+}
+
+TEST_CASE("reverse grains render bounded, finite, non-silent audio") {
+  EngineConfig cfg = SmallConfig();
+  Rng rng;
+  std::vector<float> input(24000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+
+  auto params = DegenerateDelay(50.0f);
+  for (auto& p : params) {
+    if (p.first == ParamId::ReverseProb) p.second = 1.0f;
+  }
+  const auto out = Render(cfg, input, params, true, {128});
+
+  double energy = 0;
+  float  peak   = 0.f;
+  for (float v : out.l) {
+    REQUIRE(std::isfinite(v));
+    energy += double(v) * v;
+    peak = std::max(peak, std::fabs(v));
+  }
+  REQUIRE(energy > 1.0);
+  REQUIRE(peak <= 2.0f);
+}
+
+// Freeze (design §2.4): the pinned anchor keeps grains sourcing the frozen window
+// while live input has gone silent; unfrozen, the wet path decays to nothing.
+// The ring must outlast the render: the live write head keeps advancing during
+// freeze and overwrites the pinned window after one ring length (the design's
+// documented wraparound ceiling — the 32768-frame test ring demonstrated it).
+TEST_CASE("freeze sustains the wet path from the pinned window") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.historyFrames   = 1u << 17;  // 2.73 s — longer than the 2 s render
+  cfg.ditherRingWrite = false;
+
+  const size_t total = 96000, freezeAt = 24000;
+  Rng rng;
+  std::vector<float> input(total, 0.0f);
+  for (size_t i = 0; i < freezeAt; ++i) input[i] = 0.5f * rng.Next();
+
+  auto runOnce = [&](bool freeze) {
+    host::HeapArenas arenas(PlanMemory(cfg));
+    REQUIRE(arenas.ok());
+    Engine engine;
+    REQUIRE(engine.Init(cfg, arenas.get()));
+    for (auto& p : std::vector<std::pair<ParamId, float>>{
+             {ParamId::DelayMs, 100.0f}, {ParamId::Mix, 1.0f},
+             {ParamId::Feedback, 0.0f},  {ParamId::SprayMs, 0.0f},
+             {ParamId::Jitter, 0.0f}})
+      engine.SetParam(p.first, p.second);
+    engine.Reset();
+
+    std::vector<float> outL(total), outR(total);
+    size_t pos = 0;
+    bool   engaged = false;
+    while (pos < total) {
+      if (freeze && !engaged && pos >= freezeAt) {
+        engine.SetFreeze(true);
+        engaged = true;
+      }
+      const uint32_t n     = 256;
+      const float* ins[2]  = {input.data() + pos, input.data() + pos};
+      float*       outs[2] = {outL.data() + pos, outR.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = n;
+      engine.Process(ctx);
+      pos += n;
+    }
+    double tail = 0;
+    for (size_t i = total - 24000; i < total; ++i) tail += double(outL[i]) * outL[i];
+    return std::sqrt(tail / 24000.0);
+  };
+
+  const double frozenTail   = runOnce(true);
+  const double unfrozenTail = runOnce(false);
+  REQUIRE(frozenTail > 0.01);
+  REQUIRE(unfrozenTail < frozenTail * 0.1);
 }
 
 TEST_CASE("sample counter is free-running") {

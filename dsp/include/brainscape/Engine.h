@@ -4,12 +4,13 @@
 
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
+#include "brainscape/detail/Granular.h"
 
 namespace brainscape {
 
 // Shared build constants (docs/design/grain-engine.md §3): mode files are authored
 // against these; they are deliberately NOT EngineConfig fields.
-inline constexpr uint32_t kMaxGrains = 64;
+inline constexpr uint32_t kMaxGrains = detail::kGranularMaxGrains;
 
 struct EngineConfig {
   double   sampleRate    = 48000.0;   // fixed for the Engine's lifetime (design §9);
@@ -28,10 +29,10 @@ struct EngineConfig {
 
 MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 
-// Walking-skeleton Engine: the history ring (int16 interleaved stereo, Bulk arena)
-// plus one unity-rate tap — the design doc's `Tu` degenerate case, a clean delay —
-// inside the exact lifecycle / memory / parameter / process contracts the grain
-// engine will grow into. See docs/design/grain-engine.md §9-§10.
+// The granular engine: 64-voice pool + scheduler over the int16 history ring,
+// inside the lifecycle / memory / parameter / process contracts of
+// docs/design/grain-engine.md §9-§10. The clean delay is the degenerate config
+// the design predicts (§5 Pattern A): rectangular window, abutting unity grains.
 class Engine {
  public:
   Engine() noexcept = default;
@@ -39,13 +40,13 @@ class Engine {
   Engine& operator=(const Engine&) = delete;
 
   // Lifecycle. Init does not allocate; it validates the arenas (size AND alignment)
-  // against PlanMemory() and clears the history ring ONLY (never looper buffers —
-  // design §7). Non-RT: the ring clear is a multi-MiB memset.
+  // against PlanMemory(), builds the window LUT, and clears the history ring ONLY
+  // (never looper buffers — design §7). Non-RT: the ring clear is a multi-MiB memset.
   bool Init(const EngineConfig&, const Arenas&) noexcept;
 
-  // Audio thread only (or with Process quiesced). Drains pending parameters and
-  // snaps smoothers to their targets; will also kill voices and zero post/feedback
-  // state as those subsystems land (design §9). Keeps the history ring intact.
+  // Audio thread only (or with Process quiesced). Kills all grain voices, clears
+  // the feedback path, drains pending parameters and snaps smoothers to their
+  // targets (design §9). Keeps the history ring intact.
   void Reset() noexcept;
 
   // Non-RT: re-clears the history ring (multi-MiB memset).
@@ -71,14 +72,20 @@ class Engine {
   // Any thread; lock-free. Non-finite values are mapped to the descriptor minimum
   // (NaN must never reach the smoothers — it is an absorbing state there).
   // sampleOffset is accepted for API stability but the skeleton applies changes at
-  // the next Process() start — the sample-accurate SPSC event queue lands with the
-  // scheduler (design §9 threading table), at which point the currently hidden
-  // "[.pending-spsc]" split-invariance test becomes the acceptance criterion.
-  // Known limitation: Mix / Feedback / OutTrim are smoothed per-sample; DelayMs
-  // snaps at the block boundary (audible splice on knob moves) until the delay
-  // crossfade lands with the grain engine.
+  // the next Process() start — the sample-accurate SPSC event queue lands next
+  // (design §9 threading table); the hidden "[.pending-spsc]" test is its
+  // acceptance criterion. Mix / Feedback / OutTrim / normalization are smoothed
+  // per-sample; scheduler and per-grain values apply to grains born after the
+  // change (resolve-at-birth — design §6 automation semantics).
   void  SetParam(ParamId id, float plainValue, uint32_t sampleOffset = 0) noexcept;
   float GetParam(ParamId id) const noexcept;  // returns the pending (target) plain value
+
+  // Any thread; applied at the next Process() start. Freeze pins the grain
+  // position anchor (design §2.4) — the ring keeps recording, so a freeze held
+  // longer than the ring length (~87 s at the default config) is overwritten by
+  // wraparound (documented ceiling).
+  void SetFreeze(bool on) noexcept { freezePending_.store(on, std::memory_order_relaxed); }
+  bool GetFreeze() const noexcept { return freezePending_.load(std::memory_order_relaxed); }
 
   // Shared descriptor table (design §9): also available as brainscape::Descriptors().
   static const ParamDescriptor* Descriptors(size_t* count) noexcept;
@@ -86,7 +93,7 @@ class Engine {
   // Audio thread only (plain int64: an atomic 8-byte load is not lock-free on
   // Cortex-M7, so cross-thread readers wait for SaveState to land instead).
   // Free-running, advanced by numFrames every Process regardless of transport —
-  // the future counter-based RNG key (design §9); also keys the ring-write dither.
+  // keys every random draw (design §9) including the ring-write dither.
   int64_t SampleCounter() const noexcept { return sampleCounter_; }
 
   // Dry path is never block-delayed (design §2.5).
@@ -109,17 +116,30 @@ class Engine {
   };
 
   void ApplyParam(size_t index, float value) noexcept;
+  void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
+                                          // param actually changed (keeps exp2/pow
+                                          // off the steady-state audio path)
 
   EngineConfig cfg_{};
-  int16_t*     ring_        = nullptr;  // interleaved stereo, historyFrames frames
-  uint32_t     mask_        = 0;
-  uint32_t     writeFrame_  = 0;
-  uint32_t     delayFrames_ = 1;
-  Smoother     mix_, outGain_, feedback_;
+  int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
+  float*       windowLut_  = nullptr;  // Hot arena: kWindowLutSize half-cosine entries
+  float*       wetL_       = nullptr;  // Hot arena: maxBlockSize each
+  float*       wetR_       = nullptr;
+  float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo, maxBlockSize frames
+  uint32_t     mask_       = 0;
+  uint32_t     writeFrame_ = 0;
+  Smoother     mix_, outGain_, feedback_, norm_;
   int64_t      sampleCounter_ = 0;
   bool         ready_         = false;
+  bool         granularDirty_ = true;
+  bool         frozen_        = false;
+  uint32_t     frozenAnchor_  = 0;
+
+  detail::GranularCore   granular_;
+  detail::GranularParams gp_{};
 
   std::atomic<float> pending_[kNumParams]{};
+  std::atomic<bool>  freezePending_{false};
   float              active_[kNumParams]{};
 };
 

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "brainscape/DenormalGuard.h"
+#include "brainscape/GrainMath.h"
 
 namespace brainscape {
 
@@ -48,24 +49,19 @@ inline float OnePoleCoef(float tauMs, double sr) noexcept {
   return -static_cast<float>(std::expm1(-1.0 / (tauMs * 0.001 * sr)));
 }
 
-// SplitMix32 — the skeleton's counter-based hash (design §9: RNG keyed on the
-// free-running sample counter, independent of transport, split-invariant).
-inline uint32_t Hash32(uint32_t x) noexcept {
-  x += 0x9E3779B9u;
-  x ^= x >> 16;
-  x *= 0x21F0AAADu;
-  x ^= x >> 15;
-  x *= 0x735A2D97u;
-  x ^= x >> 15;
-  return x;
-}
-
 // ±1 LSB TPDF dither in the float domain (design §12.3). Applied to the ring write
 // so int16 rounding has no fixed points in the feedback loop — without it a single
 // impulse leaves a permanent tone (measured −70 dBFS at fb 0.95; review finding).
-inline float Tpdf(uint32_t key) noexcept {
-  const float u1 = static_cast<float>(Hash32(key) >> 8) * (1.0f / 16777216.0f);
-  const float u2 = static_cast<float>(Hash32(key ^ 0x6A09E667u) >> 8) * (1.0f / 16777216.0f);
+// Keys use the shared grainmath purpose stride so dither draws never collide with
+// grain-birth draws.
+inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
+  const auto key =
+      static_cast<uint32_t>(absSample) * static_cast<uint32_t>(grainmath::Draw::kCount) +
+      static_cast<uint32_t>(purpose);
+  const float u1 =
+      static_cast<float>(grainmath::Hash32(key) >> 8) * (1.0f / 16777216.0f);
+  const float u2 =
+      static_cast<float>(grainmath::Hash32(key ^ 0x6A09E667u) >> 8) * (1.0f / 16777216.0f);
   return (u1 + u2 - 1.0f) * kInvScale;
 }
 
@@ -88,11 +84,15 @@ const ParamDescriptor* FindParam(ParamId id) noexcept {
 
 MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   MemoryPlan plan{};
-  // Hot (DTCM-class): grain pool, LUTs, accumulator — lands with the grain engine.
-  plan.bytes[static_cast<size_t>(Tier::Hot)] = 0;
+  // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
+  // inside the Engine object — firmware places the Engine instance in DTCM.
+  plan.bytes[static_cast<size_t>(Tier::Hot)] =
+      (static_cast<size_t>(detail::kWindowLutSize) + 2u * cfg.maxBlockSize) * sizeof(float);
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
-  // Warm (AXI-class): reverb tank, onset detector — lands with the post chain.
-  plan.bytes[static_cast<size_t>(Tier::Warm)] = 0;
+  // Warm (AXI-class): the fixed-length feedback FIFO (see Process); reverb tank
+  // and onset detector join it with the post chain.
+  plan.bytes[static_cast<size_t>(Tier::Warm)] =
+      static_cast<size_t>(cfg.maxBlockSize) * 2u * sizeof(float);
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring now; looper A+B when the looper lands.
   // Frame counts are bounded by Init (<= 2^26), so these products cannot overflow
@@ -125,30 +125,53 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
     if ((reinterpret_cast<uintptr_t>(arenas.base[t]) & (plan.align[t] - 1u)) != 0) return false;
   }
 
-  cfg_           = cfg;
-  ring_          = static_cast<int16_t*>(arenas.base[static_cast<size_t>(Tier::Bulk)]);
+  cfg_  = cfg;
+  ring_ = static_cast<int16_t*>(arenas.base[static_cast<size_t>(Tier::Bulk)]);
+  auto* hot  = static_cast<float*>(arenas.base[static_cast<size_t>(Tier::Hot)]);
+  windowLut_ = hot;
+  wetL_      = hot + detail::kWindowLutSize;
+  wetR_      = wetL_ + cfg.maxBlockSize;
+  fbFifo_    = static_cast<float*>(arenas.base[static_cast<size_t>(Tier::Warm)]);
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
   sampleCounter_ = 0;
+  frozen_        = false;
+  frozenAnchor_  = 0;
+  freezePending_.store(false, std::memory_order_relaxed);
 
   // The Bulk arena (SDRAM on hardware) has undefined contents at boot. Clear the
   // history ring here — and only the ring; looper buffers are cleared explicitly by
   // the caller when that subsystem lands (design §7).
   std::memset(ring_, 0, static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t));
+  std::memset(fbFifo_, 0, static_cast<size_t>(cfg.maxBlockSize) * 2u * sizeof(float));
+
+  // Half-cosine smoothing LUT: maps the unit-peak piecewise envelope value to its
+  // cosine-eased equivalent. Mean over a linear ramp is 0.5 — identical to the
+  // raw leg — which is what makes the (1+sustain)/2 window mean exact (GrainMath.h).
+  for (uint32_t i = 0; i < detail::kWindowLutSize; ++i) {
+    const double x = static_cast<double>(i) / static_cast<double>(detail::kWindowLutSize - 1);
+    windowLut_[i]  = static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * x)));
+  }
+
+  granular_.Init(ring_, mask_, windowLut_);
 
   const float coef = OnePoleCoef(10.0f, cfg.sampleRate);
   mix_.coef        = coef;
   outGain_.coef    = coef;
   feedback_.coef   = coef;
+  norm_.coef       = OnePoleCoef(100.0f, cfg.sampleRate);  // design §3: τ ≈ 100 ms
 
   for (size_t i = 0; i < kNumParams; ++i) {
     pending_[i].store(kParamTable[i].def, std::memory_order_relaxed);
     active_[i] = kParamTable[i].def;
     ApplyParam(i, kParamTable[i].def);
   }
+  RebuildGranularParams();
+  granularDirty_ = false;
   mix_.Prime(mix_.target);
   outGain_.Prime(outGain_.target);
   feedback_.Prime(feedback_.target);
+  norm_.Prime(norm_.target);
 
   ready_ = true;
   return true;
@@ -156,14 +179,19 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
 
 void Engine::Reset() noexcept {
   if (!ready_) return;
+  granular_.Reset();
+  std::memset(fbFifo_, 0, static_cast<size_t>(cfg_.maxBlockSize) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     active_[i]    = p;
     ApplyParam(i, p);
   }
+  RebuildGranularParams();
+  granularDirty_ = false;
   mix_.Prime(mix_.target);
   outGain_.Prime(outGain_.target);
   feedback_.Prime(feedback_.target);
+  norm_.Prime(norm_.target);
 }
 
 void Engine::ClearHistory() noexcept {
@@ -178,22 +206,6 @@ void Engine::ClearLooper() noexcept {
 
 void Engine::ApplyParam(size_t index, float value) noexcept {
   switch (kParamTable[index].id) {
-    case ParamId::DelayMs: {
-      // std::lround, not lrint: half-away-from-zero regardless of the dynamic
-      // rounding mode, so the tap count is identical across builds (contract #6).
-      const double frames = static_cast<double>(value) * 0.001 * cfg_.sampleRate;
-      // Read-before-write makes historyFrames-1 the exact upper bound for the
-      // unity tap; the grain engine's §3 guard table replaces this. Lower bound
-      // wins if they ever conflict (Init floors historyFrames at 8).
-      // TODO(design §3): enforce d_min_fb (~5 ms) when feedback > 0 once the
-      // taming chain lands — a near-zero delay with feedback is a high-Q comb.
-      const uint32_t maxTap = cfg_.historyFrames - 1u;
-      auto d                = static_cast<uint32_t>(std::lround(frames));
-      if (d > maxTap) d = maxTap;
-      if (d < 1u) d = 1u;
-      delayFrames_ = d;
-      break;
-    }
     case ParamId::Mix:
       mix_.target = value;
       break;
@@ -205,7 +217,53 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
       // SemitonesToRatio lands — schedule-time transcendentals are charged in §8).
       outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
       break;
+    default:
+      granularDirty_ = true;  // scheduler/voice params rebuild once, at control rate
+      break;
   }
+}
+
+void Engine::RebuildGranularParams() noexcept {
+  const auto get = [&](ParamId id) {
+    return active_[static_cast<uint32_t>(id) - 1u];
+  };
+  const double sr = cfg_.sampleRate;
+
+  gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
+  gp_.sprayFrames     = static_cast<float>(get(ParamId::SprayMs) * 0.001 * sr);
+  float sizeFrames    = static_cast<float>(get(ParamId::GrainSizeMs) * 0.001 * sr);
+  if (sizeFrames < 1.0f) sizeFrames = 1.0f;
+  gp_.sizeFrames = sizeFrames;
+
+  const float overlap = get(ParamId::Overlap);
+  float target        = static_cast<float>(kMaxGrains) * overlap * overlap * overlap;
+  if (target < 1.0f) target = 1.0f;
+  if (target > static_cast<float>(kMaxGrains)) target = static_cast<float>(kMaxGrains);
+  gp_.targetVoices = target;
+
+  gp_.jitter      = get(ParamId::Jitter);
+  gp_.ratioBase   = get(ParamId::PitchSt);
+  gp_.spreadCents = get(ParamId::SpreadCents);
+  gp_.reverseProb = get(ParamId::ReverseProb);
+  gp_.sustain     = get(ParamId::WindowSustain);
+  gp_.skew        = get(ParamId::WindowSkew);
+  gp_.smoothness  = get(ParamId::WindowSmooth);
+  gp_.panSpread   = get(ParamId::PanSpread);
+  gp_.normGain    = 1.0f;  // normalization is applied (smoothed) in Process, not here
+
+  // Coherence-aware normalization exponent (design §3): unity-rate, zero-spray
+  // grains sum coherently (1/N); spray/detune/reverse/pitch decorrelate toward
+  // 1/sqrt(N). The corpus's unconditional 1/sqrt(N-1) overshoots +18 dB on the
+  // coherent delay family (review finding on the design's v1).
+  float decorr = 0.f;
+  decorr += gp_.sprayFrames * (1.0f / 64.0f);
+  decorr += gp_.spreadCents * 0.02f;
+  decorr += gp_.reverseProb;
+  decorr += gp_.ratioBase != 0.0f ? 1.0f : 0.0f;
+  decorr += gp_.jitter * 0.25f;
+  if (decorr > 1.0f) decorr = 1.0f;
+  const float p = 1.0f - 0.5f * decorr;
+  norm_.target  = std::pow(gp_.targetVoices, -p);
 }
 
 void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
@@ -243,7 +301,7 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   ScopedDenormalGuard guard;
 
   // Drain pending parameter changes at block start (sample-accurate queue lands
-  // with the scheduler).
+  // with the scheduler's event queue).
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
@@ -251,50 +309,69 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
       ApplyParam(i, p);
     }
   }
+  if (granularDirty_) {
+    RebuildGranularParams();
+    granularDirty_ = false;
+  }
+  const bool freezeReq = freezePending_.load(std::memory_order_relaxed);
+  if (freezeReq != frozen_) {
+    frozen_ = freezeReq;
+    if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
+  }
 
-  const float* inL    = ctx.in[0];
-  const float* inR    = cfg_.stereoInput ? ctx.in[1] : ctx.in[0];
-  float*       outL   = ctx.out[0];
-  float*       outR   = ctx.out[1];
-  const uint32_t d    = delayFrames_;
-  const bool   dither = cfg_.ditherRingWrite;
+  const float* inL  = ctx.in[0];
+  const float* inR  = cfg_.stereoInput ? ctx.in[1] : ctx.in[0];
+  float*       outL = ctx.out[0];
+  float*       outR = ctx.out[1];
 
+  const uint32_t ringStart = writeFrame_;
+  const bool     dither    = cfg_.ditherRingWrite;
+  const uint32_t fifoLen   = cfg_.maxBlockSize;
+
+  // ── Pass 1: write input (+ feedback) into the ring, per sample.
+  // The feedback signal is the wet output delayed by exactly maxBlockSize samples
+  // through a fixed-length FIFO — fixed by CONFIG, not by numFrames, so the loop
+  // is block-split invariant (contract #1). Loop delay is therefore
+  // base_ms + maxBlockSize frames; the taming chain revisits this seam.
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
-    const float dryL = inL[n];
-    const float dryR = inR[n];
-
-    // Read the tap before writing this frame: with d >= 1 the read frame is always
-    // strictly older than the write frame, so an impulse at frame 0 emerges at
-    // exactly frame d.
-    const uint32_t readFrame = (writeFrame_ - d) & mask_;
-    const float wetL = static_cast<float>(ring_[2u * readFrame]) * kInvScale;
-    const float wetR = static_cast<float>(ring_[2u * readFrame + 1u]) * kInvScale;
-
-    // Feedback topology (A): wet summed into the record path (design §2.3).
-    // The taming chain (DC/HP/LP/saturator/diffuser) lands with the grain engine;
-    // until then feedback.amount is capped below unity by its descriptor.
-    const float fb = feedback_.Next();
-    float wrL      = dryL + fb * wetL;
-    float wrR      = dryR + fb * wetR;
+    const int64_t abs  = sampleCounter_ + n;
+    const auto    slot = static_cast<uint32_t>(static_cast<uint64_t>(abs) % fifoLen);
+    const float   fb   = feedback_.Next();
+    float wrL          = inL[n] + fb * fbFifo_[2u * slot];
+    float wrR          = inR[n] + fb * fbFifo_[2u * slot + 1u];
     if (dither) {
       // Gated on non-zero so true silence stays bit-zero (no idle noise floor):
       // the write value performs a downward random walk absorbed at 0 instead of
       // latching on a quantization fixed point.
-      const auto key = static_cast<uint32_t>(sampleCounter_ + n) * 2u;
-      if (wrL != 0.0f) wrL += Tpdf(key);
-      if (wrR != 0.0f) wrR += Tpdf(key + 1u);
+      if (wrL != 0.0f) wrL += Tpdf(abs, grainmath::Draw::DitherL);
+      if (wrR != 0.0f) wrR += Tpdf(abs, grainmath::Draw::DitherR);
     }
     ring_[2u * writeFrame_]      = QuantizeS16(wrL);
     ring_[2u * writeFrame_ + 1u] = QuantizeS16(wrR);
     writeFrame_ = (writeFrame_ + 1u) & mask_;
+  }
+
+  // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
+  granular_.Process(gp_, sampleCounter_, ringStart, frozen_, frozenAnchor_, ctx.numFrames,
+                    wetL_, wetR_);
+
+  // ── Pass 3: normalization, feedback FIFO push, wet/dry mix, trim.
+  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+    const int64_t abs  = sampleCounter_ + n;
+    const auto    slot = static_cast<uint32_t>(static_cast<uint64_t>(abs) % fifoLen);
+    const float   nrm  = norm_.Next();
+    const float   wl   = wetL_[n] * nrm;
+    const float   wr   = wetR_[n] * nrm;
+    fbFifo_[2u * slot]      = wl;
+    fbFifo_[2u * slot + 1u] = wr;
 
     const float mix = mix_.Next();
     const float g   = outGain_.Next();
     // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
     // Two-multiply form, not dry + mix*(wet-dry): the lerp form is not bit-exact at
     // the endpoints, which would break the Tu null contract (design §10 #2).
-    outL[n] = (dryL * (1.0f - mix) + wetL * mix) * g;
-    outR[n] = (dryR * (1.0f - mix) + wetR * mix) * g;
+    outL[n] = (inL[n] * (1.0f - mix) + wl * mix) * g;
+    outR[n] = (inR[n] * (1.0f - mix) + wr * mix) * g;
   }
 
   sampleCounter_ += ctx.numFrames;
