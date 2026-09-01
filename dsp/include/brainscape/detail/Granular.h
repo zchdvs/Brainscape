@@ -24,43 +24,45 @@ struct Grain {
   grainmath::EnvSpec env;
   float    smoothness;  // piecewise->LUT window morph
   float    gainL, gainR;
+  uint8_t  tier;       // resolved at birth: 0 = cubic Hermite, 1 = linear
   bool     active;
   bool     unity;      // inc == +1.0 exactly: bit-exact integer read path (Tu)
 };
+static_assert(sizeof(Grain) <= 128, "grain pool must stay inside the DTCM budget (design §3)");
 
 // Block-rate parameters, resolved from the drained plain values once per block.
 struct GranularParams {
   double   baseDelayFrames;  // layer0.position.base_ms in frames
   float    sprayFrames;
-  float    sizeFrames;       // >= 1
-  float    targetVoices;     // kMaxGrains * overlap^3, clamped to [1, kMaxGrains]
+  uint32_t totalFrames;      // rounded grain length — spacing and voices derive from
+                             // this ONE integer (spacing from the unrounded float
+                             // opened whole-grain duty-cycle holes; review finding)
+  float    targetVoices;     // effective target: min(kMaxGrains*overlap^3, totalFrames),
+                             // since the 1-frame interval floor caps sustainable voices
   float    jitter;           // 0 = periodic, 1 = Poisson inter-arrival
-  float    ratioBase;        // from layer0.pitch.st
+  float    ratioBase;        // from layer0.pitch.st (semitones)
   float    spreadCents;
   float    reverseProb;
   float    sustain, skew, smoothness;
   float    panSpread;
-  float    normGain;         // targetVoices^-p, coherence-resolved (design §3)
 };
 
 class GranularCore {
  public:
-  // ring: int16 interleaved stereo, (mask+1) frames. windowLut: kWindowLutSize
-  // half-cosine entries (built by the caller in its Init).
   void Init(const int16_t* ring, uint32_t mask, const float* windowLut) noexcept {
-    ring_      = ring;
-    mask_      = mask;
-    lut_       = windowLut;
+    ring_ = ring;
+    mask_ = mask;
+    lut_  = windowLut;
     Reset();
   }
 
   // Kills all voices and re-arms the scheduler to fire on the next sample.
   void Reset() noexcept {
     for (auto& g : grains_) g.active = false;
+    orderCount_ = 0;
     // 1.0, not 0: the per-sample decrement runs before the fire check, so an
     // initial 0 leaves a -1 residual in the phasor and every subsequent birth
-    // lands one sample early — which breaks exact grain abutment (the ceiling
-    // then blocks the early fire and opens a full-interval gap).
+    // lands one sample early — which breaks exact grain abutment.
     intervalRemaining_ = 1.0f;
   }
 
@@ -73,14 +75,20 @@ class GranularCore {
                float* wetR) noexcept;
 
  private:
-  void ScheduleGrain(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame) noexcept;
-  uint32_t CountActiveAt(int64_t abs) const noexcept;
+  void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
+                     uint32_t anchorFrame) noexcept;
+  // Renders every live voice over [from, to) in BIRTH order (the canonical
+  // per-sample summation order — see Process), retiring finished grains.
+  void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
+                  float* wetR) noexcept;
 
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;
   uint32_t       mask_ = 0;
-  float          intervalRemaining_ = 0.0f;  // frames until the next scheduled birth
+  float          intervalRemaining_ = 1.0f;  // frames until the next scheduled birth
   Grain          grains_[kGranularMaxGrains]{};
+  uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order
+  uint32_t       orderCount_ = 0;
 };
 
 }  // namespace brainscape::detail

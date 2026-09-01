@@ -86,13 +86,16 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
   size_t pos = 0, blockIdx = 0;
   bool changed = false;
   while (pos < input.size()) {
-    if (!changed && pos >= change.atFrame) {
+    const uint32_t want = blockSizes[blockIdx % blockSizes.size()];
+    const auto     n    = static_cast<uint32_t>(std::min<size_t>(want, input.size() - pos));
+    // Fire the change before the block CONTAINING atFrame, with the in-block
+    // offset (the old >=-then-subtract form underflowed the offset and fired one
+    // block late; review finding).
+    if (!changed && change.atFrame >= pos && change.atFrame < pos + n) {
       engine.SetParam(change.id, change.value,
                       static_cast<uint32_t>(change.atFrame - pos));
       changed = true;
     }
-    const uint32_t want = blockSizes[blockIdx % blockSizes.size()];
-    const auto     n    = static_cast<uint32_t>(std::min<size_t>(want, input.size() - pos));
     const float* ins[2]  = {input.data() + pos, input.data() + pos};
     float*       outs[2] = {out.l.data() + pos, out.r.data() + pos};
     Engine::ProcessContext ctx;
@@ -164,8 +167,21 @@ TEST_CASE("counter RNG is deterministic and in range") {
     }
   }
   REQUIRE(RandUnit(7, grainmath::Draw::Spray) != RandUnit(7, grainmath::Draw::Pan));
+  // The full 64-bit counter is folded in: the truncating key repeated the whole
+  // draw stream every 2^29 samples (~3 h at 48 kHz; review finding).
+  REQUIRE(RandUnit(0, grainmath::Draw::Spray) !=
+          RandUnit(int64_t{1} << 29, grainmath::Draw::Spray));
   REQUIRE(grainmath::SemitonesToRatio(12.0f) == 2.0f);
   REQUIRE(grainmath::SemitonesToRatio(0.0f) == 1.0f);
+}
+
+TEST_CASE("spray reflection keeps a distribution instead of a rail pileup") {
+  using grainmath::ComputeDelayBounds;
+  using grainmath::ReflectIntoBounds;
+  const auto b = ComputeDelayBounds(960.0, 1.0, false, 32768u, 64.0);
+  REQUIRE(ReflectIntoBounds(500.0, b) == 500.0);          // in range: untouched
+  REQUIRE(ReflectIntoBounds(40.0, b) == 64.0 + 24.0);     // below lo: mirrored
+  REQUIRE(ReflectIntoBounds(-1e6, b) == b.lo);            // beyond one fold: clamped
 }
 
 // ── Engine tests ────────────────────────────────────────────────────────────────
@@ -379,6 +395,157 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   const auto mixed = Render(cfg, input, params, false, {48u, 1u, 127u, 32u});
   REQUIRE(std::memcmp(ref.l.data(), mixed.l.data(), ref.l.size() * sizeof(float)) == 0);
 }
+
+// The stale-slot defect was invisible below ~4764 frames and needed a saturated
+// pool to bite hardest (review finding) — so this variant renders 48000 frames at
+// overlap 1.0 with short grains, where slot churn is maximal.
+TEST_CASE("block-splitting bit-exactness under a saturated pool") {
+  EngineConfig cfg = SmallConfig();
+  Rng rng;
+  std::vector<float> input(48000);
+  for (auto& x : input) x = 0.8f * rng.Next();
+
+  const std::vector<std::pair<ParamId, float>> params = {
+      {ParamId::DelayMs, 100.0f},   {ParamId::Mix, 1.0f},
+      {ParamId::GrainSizeMs, 20.f}, {ParamId::Overlap, 1.0f},
+      {ParamId::SprayMs, 30.0f},    {ParamId::Jitter, 0.5f},
+      {ParamId::PitchSt, 5.0f}};
+
+  const auto ref = Render(cfg, input, params, true, {512});
+  for (uint32_t split : {48u, 64u, 127u}) {
+    const auto other = Render(cfg, input, params, true, {split});
+    REQUIRE(std::memcmp(ref.l.data(), other.l.data(), ref.l.size() * sizeof(float)) == 0);
+  }
+}
+
+// Design contract #3 (level consistency): coherent unity-rate presets stay within
+// ±1 dB of the input level across the whole overlap sweep — including fractional
+// targets, which are dither-ceiled rather than truncated (a fixed integer ceiling
+// against a fractional norm produced a 6 dB grain-rate tremolo; review finding).
+TEST_CASE("level consistency across the overlap sweep (contract #3)") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(48000);
+  for (size_t i = 0; i < input.size(); ++i) {
+    input[i] = 0.5f * std::sin(2.0 * 3.14159265358979 * 440.0 * (double(i) / 48000.0));
+  }
+  double inRms = 0;
+  for (size_t i = 24000; i < 48000; ++i) inRms += double(input[i]) * input[i];
+  inRms = std::sqrt(inRms / 24000.0);
+
+  for (float overlap : {0.25f, 0.30f, 0.35f, 0.50f, 0.62f, 0.75f, 0.87f, 1.0f}) {
+    auto params = DegenerateDelay(100.0f);
+    for (auto& p : params) {
+      if (p.first == ParamId::Overlap) p.second = overlap;
+      if (p.first == ParamId::GrainSizeMs) p.second = 20.0f;
+    }
+    const auto out = Render(cfg, input, params, true, {256});
+    double wetRms = 0;
+    for (size_t i = 24000; i < 48000; ++i) wetRms += double(out.l[i]) * out.l[i];
+    wetRms = std::sqrt(wetRms / 24000.0);
+    const double db = 20.0 * std::log10(wetRms / inRms);
+    INFO("overlap " << overlap << " -> " << db << " dB");
+    REQUIRE(std::fabs(db) < 1.0);
+  }
+}
+
+// The size knob is continuous: non-integral grain lengths must not open duty-cycle
+// holes (spacing from the unrounded float lost up to 48.8% of the signal in
+// whole-grain chunks across 80% of the knob range; review finding).
+TEST_CASE("no duty-cycle holes at non-integral grain sizes") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(30000, 0.5f);  // DC probe
+  for (float sizeMs : {9.99f, 7.7f, 71.2f}) {
+    auto params = DegenerateDelay(100.0f);
+    for (auto& p : params) {
+      if (p.first == ParamId::GrainSizeMs) p.second = sizeMs;
+    }
+    const auto out = Render(cfg, input, params, true, {128});
+    for (size_t n = 10000; n < out.l.size(); ++n) {
+      INFO("sizeMs " << sizeMs << " at n=" << n);
+      REQUIRE(out.l[n] > 0.4f);
+    }
+  }
+}
+
+// Freeze flips the coherence assumption (pinned grains are time-shifted copies,
+// not identical reads) — the normalization exponent must follow, or the wet path
+// drops up to 16.7 dB at the footswitch (review finding).
+TEST_CASE("freeze holds the wet level within 3 dB on a coherent preset") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.historyFrames   = 1u << 17;
+  cfg.ditherRingWrite = false;
+
+  const size_t total = 96000, freezeAt = 24064;
+  Rng rng;
+  std::vector<float> input(total);
+  for (auto& x : input) x = 0.5f * rng.Next();  // noise throughout — level comparison
+
+  host::HeapArenas arenas(PlanMemory(cfg));
+  REQUIRE(arenas.ok());
+  Engine engine;
+  REQUIRE(engine.Init(cfg, arenas.get()));
+  auto params = DegenerateDelay(100.0f);
+  for (auto& p : params) {
+    if (p.first == ParamId::Overlap) p.second = 0.5f;  // 8 coherent voices
+    if (p.first == ParamId::GrainSizeMs) p.second = 20.0f;
+  }
+  for (auto& p : params) engine.SetParam(p.first, p.second);
+  engine.Reset();
+
+  std::vector<float> outL(total), outR(total);
+  size_t pos = 0;
+  while (pos < total) {
+    if (pos == freezeAt) engine.SetFreeze(true);
+    const float* ins[2]  = {input.data() + pos, input.data() + pos};
+    float*       outs[2] = {outL.data() + pos, outR.data() + pos};
+    Engine::ProcessContext ctx;
+    ctx.in        = ins;
+    ctx.out       = outs;
+    ctx.numFrames = 256;
+    engine.Process(ctx);
+    pos += 256;
+  }
+
+  auto rms = [&](size_t from, size_t len) {
+    double acc = 0;
+    for (size_t i = from; i < from + len; ++i) acc += double(outL[i]) * outL[i];
+    return std::sqrt(acc / double(len));
+  };
+  // Before-freeze steady state vs. well after the τ=100 ms norm transition.
+  const double before = rms(12000, 12000);
+  const double after  = rms(60000, 24000);
+  const double db     = 20.0 * std::log10(after / before);
+  INFO("freeze level change: " << db << " dB");
+  REQUIRE(std::fabs(db) < 3.0);
+}
+
+#if defined(NDEBUG)
+// Release-only (the debug assert fires first, by design): an oversized block must
+// zero-fill and return — it was a silent heap overrun past the wet buffers
+// (review finding).
+TEST_CASE("oversized numFrames yields silence, not a buffer overrun") {
+  EngineConfig cfg  = SmallConfig();
+  cfg.maxBlockSize  = 64;
+  host::HeapArenas arenas(PlanMemory(cfg));
+  Engine engine;
+  REQUIRE(engine.Init(cfg, arenas.get()));
+
+  std::vector<float> in(128, 0.5f), outL(128, 123.f), outR(128, 123.f);
+  const float* ins[2]  = {in.data(), in.data()};
+  float*       outs[2] = {outL.data(), outR.data()};
+  Engine::ProcessContext ctx;
+  ctx.in        = ins;
+  ctx.out       = outs;
+  ctx.numFrames = 128;  // > maxBlockSize
+  engine.Process(ctx);
+  for (float v : outL) REQUIRE(v == 0.0f);
+  for (float v : outR) REQUIRE(v == 0.0f);
+}
+#endif
 
 TEST_CASE("stochastic renders are reproducible run to run") {
   EngineConfig cfg = SmallConfig();

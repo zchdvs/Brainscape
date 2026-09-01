@@ -30,41 +30,70 @@ enum class Draw : uint32_t {
   Pan      = 4,
   DitherL  = 5,  // owned by the ring-write dither in Engine.cpp
   DitherR  = 6,
+  Ceiling  = 7,  // fractional-target voice-ceiling dither
   kCount   = 8,  // key stride (power of two)
 };
 
-// Uniform [0, 1) from an absolute sample index and a purpose.
+// Uniform [0, 1) from an absolute sample index and a purpose. The 64-bit counter
+// is folded in full — truncating it first would repeat the whole draw stream
+// every 2^29 samples (~3 h at 48 kHz; review finding).
 inline float RandUnit(int64_t absSample, Draw purpose) noexcept {
-  const auto key = static_cast<uint32_t>(absSample) * static_cast<uint32_t>(Draw::kCount) +
+  const auto k64 = static_cast<uint64_t>(absSample) * static_cast<uint32_t>(Draw::kCount) +
                    static_cast<uint32_t>(purpose);
+  const auto key = static_cast<uint32_t>(k64) ^ static_cast<uint32_t>(k64 >> 32);
   return static_cast<float>(Hash32(key) >> 8) * (1.0f / 16777216.0f);
 }
 
 inline float SemitonesToRatio(float st) noexcept {
-  // exp2f at grain-birth rate; the M7 build swaps this for LUT + lerp when the
-  // §8 schedule-time budget is measured (design §3).
+  // exp2f at grain-birth rate. TODO(contract #7): replace with an in-tree LUT+lerp
+  // before any cross-build null is attempted — a 1-ULP libm difference here was
+  // measured to null at only -108.7 dBFS across builds (review finding), and the
+  // design (§3) mandates LUT+lerp on the M7 for the §8 budget anyway.
   return std::exp2(st * (1.0f / 12.0f));
 }
 
-// Write-head guards (design §3, per-direction table). d = scheduled delay in
+// Write-head guard bounds (design §3, per-direction table). d = scheduled delay in
 // frames behind the anchor; outFrames = grain length in OUTPUT samples; ratio =
 // |playback rate|. Reverse convention: the grain starts at its scheduled position
 // and reads backward (receding from the write head), so its near guard is trivial
 // and its far guard must cover L*(1+r) of recession.
+struct DelayBounds {
+  double lo, hi;
+};
+
+inline DelayBounds ComputeDelayBounds(double outFrames, double ratio, bool reverse,
+                                      uint32_t bufFrames, double marginFrames) noexcept {
+  DelayBounds b;
+  if (reverse) {
+    b.lo = marginFrames;
+    b.hi = static_cast<double>(bufFrames) - outFrames * (1.0 + ratio) - marginFrames;
+  } else {
+    b.lo = outFrames * (ratio > 1.0 ? ratio - 1.0 : 0.0) + marginFrames;
+    b.hi = static_cast<double>(bufFrames) - outFrames * (ratio < 1.0 ? 1.0 - ratio : 0.0) -
+           marginFrames;
+  }
+  if (b.hi < b.lo) b.hi = b.lo;  // degenerate config: near guard wins
+  return b;
+}
+
 inline double ClampDelayFrames(double d, double outFrames, double ratio, bool reverse,
                                uint32_t bufFrames, double marginFrames) noexcept {
-  double lo, hi;
-  if (reverse) {
-    lo = marginFrames;
-    hi = static_cast<double>(bufFrames) - outFrames * (1.0 + ratio) - marginFrames;
-  } else {
-    lo = outFrames * (ratio > 1.0 ? ratio - 1.0 : 0.0) + marginFrames;
-    hi = static_cast<double>(bufFrames) - outFrames * (ratio < 1.0 ? 1.0 - ratio : 0.0) -
-         marginFrames;
-  }
-  if (hi < lo) hi = lo;  // degenerate config: near guard wins (validator warns upstream)
-  if (d < lo) d = lo;
-  if (d > hi) d = hi;
+  const DelayBounds b = ComputeDelayBounds(outFrames, ratio, reverse, bufFrames, marginFrames);
+  if (d < b.lo) d = b.lo;
+  if (d > b.hi) d = b.hi;
+  return d;
+}
+
+// Fold a sprayed delay back into the guard bounds by reflection. Clamping instead
+// piles a large fraction of the population onto the margin rail as one coherent
+// tap (measured 50% of draws at base 1 ms / spray 50 ms — review finding);
+// reflection keeps a distribution. Clamp remains only as the final backstop for
+// draws beyond one full reflection.
+inline double ReflectIntoBounds(double d, const DelayBounds& b) noexcept {
+  if (d < b.lo) d = b.lo + (b.lo - d);
+  if (d > b.hi) d = b.hi - (d - b.hi);
+  if (d < b.lo) d = b.lo;
+  if (d > b.hi) d = b.hi;
   return d;
 }
 

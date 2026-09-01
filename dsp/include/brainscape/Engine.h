@@ -12,10 +12,20 @@ namespace brainscape {
 // against these; they are deliberately NOT EngineConfig fields.
 inline constexpr uint32_t kMaxGrains = detail::kGranularMaxGrains;
 
+// The feedback path re-enters the ring through a FIFO of exactly this many frames,
+// so the loop period is base_ms + kFeedbackDelayFrames/sr on EVERY target. Sizing
+// the FIFO from maxBlockSize instead made a 100 ms preset repeat at 101 ms on the
+// pedal and 110.7 ms in a plugin at a 512 buffer (review finding — contract #6).
+// Power of two so the slot index is a mask, not a 64-bit modulo (which compiled to
+// two __aeabi_uldivmod calls per sample on Cortex-M7).
+inline constexpr uint32_t kFeedbackDelayFrames = 512;
+
 struct EngineConfig {
   double   sampleRate    = 48000.0;   // fixed for the Engine's lifetime (design §9);
                                       // rate changes re-run PlanMemory + Init
-  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, plugin the host max
+  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, plugin the host max.
+                                      // Must be <= kFeedbackDelayFrames (Init enforces) —
+                                      // a wrapper facing larger host buffers chunks them.
   uint32_t historyFrames = 1u << 22;  // power of two in [8, 2^26]; masked indexing
   uint32_t looperFrames  = 0;         // 0 disables the looper subsystem (not yet implemented)
   bool     stereoInput   = true;
@@ -60,6 +70,7 @@ class Engine {
     const float* const* in  = nullptr;  // planar; in[0]=L, in[1]=R (unused if !stereoInput)
     float* const*       out = nullptr;  // planar stereo
     uint32_t numFrames      = 0;        // 1..maxBlockSize, varies freely block to block
+    // Reserved for the CLOCK trigger source (design §4) — not yet read by the engine.
     double   tempoBpm       = 120.0;
     int64_t  timelinePos    = 0;
     bool     transportPlaying = false;

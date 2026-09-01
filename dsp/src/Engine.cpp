@@ -92,7 +92,7 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   // Warm (AXI-class): the fixed-length feedback FIFO (see Process); reverb tank
   // and onset detector join it with the post chain.
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
-      static_cast<size_t>(cfg.maxBlockSize) * 2u * sizeof(float);
+      static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float);
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring now; looper A+B when the looper lands.
   // Frame counts are bounded by Init (<= 2^26), so these products cannot overflow
@@ -108,6 +108,7 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
 bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
   if (cfg.sampleRate <= 0.0 || cfg.maxBlockSize == 0) return false;
+  if (cfg.maxBlockSize > kFeedbackDelayFrames) return false;  // wrappers chunk larger buffers
   if (!IsPowerOfTwo(cfg.historyFrames)) return false;
   // Bounds guard both usefulness (design fixes the ring at 2^22; the ratio ceiling
   // makes anything past 2^26 meaningless) and 32-bit size_t overflow in PlanMemory,
@@ -143,7 +144,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   // history ring here — and only the ring; looper buffers are cleared explicitly by
   // the caller when that subsystem lands (design §7).
   std::memset(ring_, 0, static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t));
-  std::memset(fbFifo_, 0, static_cast<size_t>(cfg.maxBlockSize) * 2u * sizeof(float));
+  std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
 
   // Half-cosine smoothing LUT: maps the unit-peak piecewise envelope value to its
   // cosine-eased equivalent. Mean over a linear ramp is 0.5 — identical to the
@@ -180,7 +181,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
 void Engine::Reset() noexcept {
   if (!ready_) return;
   granular_.Reset();
-  std::memset(fbFifo_, 0, static_cast<size_t>(cfg_.maxBlockSize) * 2u * sizeof(float));
+  std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     active_[i]    = p;
@@ -231,14 +232,20 @@ void Engine::RebuildGranularParams() noexcept {
 
   gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
   gp_.sprayFrames     = static_cast<float>(get(ParamId::SprayMs) * 0.001 * sr);
-  float sizeFrames    = static_cast<float>(get(ParamId::GrainSizeMs) * 0.001 * sr);
-  if (sizeFrames < 1.0f) sizeFrames = 1.0f;
-  gp_.sizeFrames = sizeFrames;
+  // ONE rounded integer drives grain length, spacing, and the voice budget —
+  // spacing from the unrounded float opened duty-cycle holes across 80% of the
+  // size_ms range (review finding, up to 48.8% silence).
+  auto total = static_cast<uint32_t>(std::lround(get(ParamId::GrainSizeMs) * 0.001 * sr));
+  if (total < 1u) total = 1u;
+  gp_.totalFrames = total;
 
   const float overlap = get(ParamId::Overlap);
   float target        = static_cast<float>(kMaxGrains) * overlap * overlap * overlap;
   if (target < 1.0f) target = 1.0f;
   if (target > static_cast<float>(kMaxGrains)) target = static_cast<float>(kMaxGrains);
+  // The 1-frame inter-arrival floor caps sustainable voices at the grain length:
+  // normalizing to an unreachable target read up to -12.9 dB low (review finding).
+  if (target > static_cast<float>(total)) target = static_cast<float>(total);
   gp_.targetVoices = target;
 
   gp_.jitter      = get(ParamId::Jitter);
@@ -249,19 +256,30 @@ void Engine::RebuildGranularParams() noexcept {
   gp_.skew        = get(ParamId::WindowSkew);
   gp_.smoothness  = get(ParamId::WindowSmooth);
   gp_.panSpread   = get(ParamId::PanSpread);
-  gp_.normGain    = 1.0f;  // normalization is applied (smoothed) in Process, not here
 
   // Coherence-aware normalization exponent (design §3): unity-rate, zero-spray
-  // grains sum coherently (1/N); spray/detune/reverse/pitch decorrelate toward
-  // 1/sqrt(N). The corpus's unconditional 1/sqrt(N-1) overshoots +18 dB on the
-  // coherent delay family (review finding on the design's v1).
+  // grains all read the SAME source sample and sum coherently (1/N); anything
+  // that spreads their read positions decorrelates them toward 1/sqrt(N).
+  // Every term is continuous and expressed as accumulated divergence — the v1
+  // heuristic's boolean pitch term was a +17.85 dB cliff at 0.001 st, its
+  // frame-keyed spray term saturated at 1.33 ms (and differed per sample rate),
+  // and its jitter term had the wrong sign: at unity rate a grain's output is
+  // independent of its birth time, so timing jitter decorrelates nothing
+  // (review findings, all measured).
+  const float ratio        = grainmath::SemitonesToRatio(gp_.ratioBase);
+  const float kDecorrFrames = static_cast<float>(0.003 * sr);  // ~3 ms of divergence = full
+  auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
   float decorr = 0.f;
-  decorr += gp_.sprayFrames * (1.0f / 64.0f);
-  decorr += gp_.spreadCents * 0.02f;
+  decorr += clamp01(std::fabs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
+  decorr += clamp01(get(ParamId::SprayMs) * (1.0f / 30.0f));  // ms-based: rate-independent
+  decorr += clamp01(std::fabs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
+                    static_cast<float>(total) / kDecorrFrames);
   decorr += gp_.reverseProb;
-  decorr += gp_.ratioBase != 0.0f ? 1.0f : 0.0f;
-  decorr += gp_.jitter * 0.25f;
-  if (decorr > 1.0f) decorr = 1.0f;
+  // Freeze pins the anchor, turning identical grains into time-shifted copies of
+  // one window — fully decorrelated. Without this term, engaging freeze on a
+  // coherent preset dropped the wet path up to 16.7 dB (review finding).
+  if (frozen_) decorr = 1.0f;
+  decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
   norm_.target  = std::pow(gp_.targetVoices, -p);
 }
@@ -284,11 +302,15 @@ float Engine::GetParam(ParamId id) const noexcept {
 }
 
 void Engine::Process(const ProcessContext& ctx) noexcept {
-  assert(ready_);
+  // No assert on ready_: the documented contract IS the zero-fill below, and an
+  // assert here killed the whole suite on the Debug/sanitizer CI leg (review
+  // finding). The block-size assert stays — that one is a genuine caller bug.
   assert(ctx.numFrames >= 1 && ctx.numFrames <= cfg_.maxBlockSize);
-  if (!ready_ || ctx.in == nullptr || ctx.out == nullptr || ctx.numFrames == 0) {
-    // Never hand back stale host memory: an Init failure must sound like silence,
-    // not like uninitialized buffers at full volume (review finding).
+  if (!ready_ || ctx.in == nullptr || ctx.out == nullptr || ctx.numFrames == 0 ||
+      ctx.numFrames > cfg_.maxBlockSize) {
+    // Never hand back stale host memory — and never overrun the Hot-arena wet
+    // buffers on an oversized block (review finding: hosts do hand out blocks
+    // larger than the prepared maximum; that was a silent heap overflow).
     if (ctx.out != nullptr) {
       for (uint32_t n = 0; n < ctx.numFrames; ++n) {
         if (ctx.out[0] != nullptr) ctx.out[0][n] = 0.f;
@@ -301,7 +323,24 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   ScopedDenormalGuard guard;
 
   // Drain pending parameter changes at block start (sample-accurate queue lands
-  // with the scheduler's event queue).
+  // with the scheduler's event queue). Freeze drains FIRST because the
+  // normalization exponent depends on it (frozen grains are decorrelated).
+  const bool freezeReq = freezePending_.load(std::memory_order_relaxed);
+  if (freezeReq != frozen_) {
+    frozen_ = freezeReq;
+    if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
+    granularDirty_ = true;
+  }
+  if (frozen_) {
+    // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
+    // has consumed 3/4 of the ring behind the pin, re-pin to the present. The
+    // splice is audible and documented; the alternative was the frozen window
+    // silently degrading into delayed live signal as it is overwritten.
+    const uint32_t age = (writeFrame_ - frozenAnchor_) & mask_;
+    if (age > cfg_.historyFrames - (cfg_.historyFrames >> 2)) {
+      frozenAnchor_ = writeFrame_;
+    }
+  }
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
@@ -313,11 +352,6 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
     RebuildGranularParams();
     granularDirty_ = false;
   }
-  const bool freezeReq = freezePending_.load(std::memory_order_relaxed);
-  if (freezeReq != frozen_) {
-    frozen_ = freezeReq;
-    if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
-  }
 
   const float* inL  = ctx.in[0];
   const float* inR  = cfg_.stereoInput ? ctx.in[1] : ctx.in[0];
@@ -326,16 +360,17 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
 
   const uint32_t ringStart = writeFrame_;
   const bool     dither    = cfg_.ditherRingWrite;
-  const uint32_t fifoLen   = cfg_.maxBlockSize;
 
   // ── Pass 1: write input (+ feedback) into the ring, per sample.
-  // The feedback signal is the wet output delayed by exactly maxBlockSize samples
-  // through a fixed-length FIFO — fixed by CONFIG, not by numFrames, so the loop
-  // is block-split invariant (contract #1). Loop delay is therefore
-  // base_ms + maxBlockSize frames; the taming chain revisits this seam.
+  // The feedback signal is the wet output delayed by exactly kFeedbackDelayFrames
+  // through a fixed-length FIFO — a shared build constant, so the loop period
+  // (base_ms + kFeedbackDelayFrames/sr) is identical on firmware and plugin and
+  // block-split invariant (contracts #1/#6). The taming chain revisits this seam.
+  // Slot index is a mask of the absolute sample (power-of-two length) — a 64-bit
+  // modulo compiled to two __aeabi_uldivmod calls per sample on Cortex-M7.
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const int64_t abs  = sampleCounter_ + n;
-    const auto    slot = static_cast<uint32_t>(static_cast<uint64_t>(abs) % fifoLen);
+    const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   fb   = feedback_.Next();
     float wrL          = inL[n] + fb * fbFifo_[2u * slot];
     float wrR          = inR[n] + fb * fbFifo_[2u * slot + 1u];
@@ -355,10 +390,11 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   granular_.Process(gp_, sampleCounter_, ringStart, frozen_, frozenAnchor_, ctx.numFrames,
                     wetL_, wetR_);
 
-  // ── Pass 3: normalization, feedback FIFO push, wet/dry mix, trim.
+  // ── Pass 3: normalization (smoothed, applied here — GranularParams carries no
+  // gain), feedback FIFO push, wet/dry mix, trim.
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const int64_t abs  = sampleCounter_ + n;
-    const auto    slot = static_cast<uint32_t>(static_cast<uint64_t>(abs) % fifoLen);
+    const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   nrm  = norm_.Next();
     const float   wl   = wetL_[n] * nrm;
     const float   wr   = wetR_[n] * nrm;
