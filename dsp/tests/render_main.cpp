@@ -41,6 +41,12 @@ int main(int argc, char** argv) {
   engine.SetParam(ParamId::WindowSustain, 0.4f);
   engine.SetParam(ParamId::WindowSmooth, 0.8f);
   engine.SetParam(ParamId::PanSpread, 0.7f);
+  engine.SetParam(ParamId::ModDepth, 0.2f);
+  engine.SetParam(ParamId::ModRateHz, 0.5f);
+  engine.SetParam(ParamId::ReverbMix, 0.4f);
+  engine.SetParam(ParamId::ReverbTime, 0.75f);
+  engine.SetParam(ParamId::FilterCutoffHz, 9500.0f);
+  engine.SetParam(ParamId::FilterRes, 0.15f);
   engine.Reset();
 
   // Test signal: a short 220 Hz burst, then a few staccato plucks (decaying sines).

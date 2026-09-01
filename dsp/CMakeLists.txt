@@ -1,6 +1,7 @@
 add_library(brainscape_dsp STATIC
   src/Engine.cpp
   src/Granular.cpp
+  src/PostChain.cpp
 )
 target_include_directories(brainscape_dsp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(brainscape_dsp PUBLIC cxx_std_17)

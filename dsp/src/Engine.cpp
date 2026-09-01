@@ -41,14 +41,6 @@ inline int16_t QuantizeS16(float x) noexcept {
 
 inline bool IsPowerOfTwo(uint32_t v) noexcept { return v != 0 && (v & (v - 1)) == 0; }
 
-// Per-sample one-pole coefficient from a wall-clock time constant — never per block,
-// which would make trajectories depend on host block size (design §3, contract #1).
-// expm1, not 1-exp: the subtraction cancels to ~18 mantissa bits and a 1-ulp libm
-// difference would eat most of contract #7's cross-build budget (review finding).
-inline float OnePoleCoef(float tauMs, double sr) noexcept {
-  return -static_cast<float>(std::expm1(-1.0 / (tauMs * 0.001 * sr)));
-}
-
 // ±1 LSB TPDF dither in the float domain (design §12.3). Applied to the ring write
 // so int16 rounding has no fixed points in the feedback loop — without it a single
 // impulse leaves a permanent tone (measured −70 dBFS at fb 0.95; review finding).
@@ -89,17 +81,20 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   plan.bytes[static_cast<size_t>(Tier::Hot)] =
       (static_cast<size_t>(detail::kWindowLutSize) + 2u * cfg.maxBlockSize) * sizeof(float);
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
-  // Warm (AXI-class): the fixed-length feedback FIFO (see Process); reverb tank
-  // and onset detector join it with the post chain.
+  // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank.
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
-      static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float);
+      (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
+       detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
+       detail::PostChain::WarmFloats(cfg.sampleRate)) *
+      sizeof(float);
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
-  // Bulk (SDRAM-class): history ring now; looper A+B when the looper lands.
-  // Frame counts are bounded by Init (<= 2^26), so these products cannot overflow
-  // a 32-bit size_t on the embedded target.
+  // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
+  // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
+  // cannot overflow a 32-bit size_t on the embedded target.
   plan.bytes[static_cast<size_t>(Tier::Bulk)] =
       static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t) +
-      static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u;
+      static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u +
+      static_cast<size_t>(detail::PostChain::BulkFloats(cfg.sampleRate)) * sizeof(float);
   // Cache-line aligned: the SD/DMA coherency rule needs 32-byte-aligned ranges (design §7).
   plan.align[static_cast<size_t>(Tier::Bulk)] = 32;
   return plan;
@@ -132,7 +127,18 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   windowLut_ = hot;
   wetL_      = hot + detail::kWindowLutSize;
   wetR_      = wetL_ + cfg.maxBlockSize;
-  fbFifo_    = static_cast<float*>(arenas.base[static_cast<size_t>(Tier::Warm)]);
+  // Warm layout: [feedback FIFO][taming diffuser][mod lines + reverb tank].
+  auto* warm = static_cast<float*>(arenas.base[static_cast<size_t>(Tier::Warm)]);
+  fbFifo_    = warm;
+  warm += static_cast<size_t>(kFeedbackDelayFrames) * 2u;
+  tamer_.Init(warm, cfg.sampleRate);
+  warm += detail::FeedbackTamer::WarmFloats(cfg.sampleRate);
+  // Bulk layout: [history ring][looper A+B (future)][post-delay floats].
+  auto* postBulk = reinterpret_cast<float*>(
+      reinterpret_cast<char*>(arenas.base[static_cast<size_t>(Tier::Bulk)]) +
+      static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t) +
+      static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u);
+  post_.Init(warm, postBulk, cfg.sampleRate);
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
   sampleCounter_ = 0;
@@ -156,11 +162,10 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
 
   granular_.Init(ring_, mask_, windowLut_);
 
-  const float coef = OnePoleCoef(10.0f, cfg.sampleRate);
-  mix_.coef        = coef;
-  outGain_.coef    = coef;
-  feedback_.coef   = coef;
-  norm_.coef       = OnePoleCoef(100.0f, cfg.sampleRate);  // design §3: τ ≈ 100 ms
+  mix_.SetTau(10.0f, cfg.sampleRate);
+  outGain_.SetTau(10.0f, cfg.sampleRate);
+  feedback_.SetTau(10.0f, cfg.sampleRate);
+  norm_.SetTau(100.0f, cfg.sampleRate);  // design §3: τ ≈ 100 ms
 
   for (size_t i = 0; i < kNumParams; ++i) {
     pending_[i].store(kParamTable[i].def, std::memory_order_relaxed);
@@ -168,7 +173,9 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
     ApplyParam(i, kParamTable[i].def);
   }
   RebuildGranularParams();
+  RebuildPostParams();
   granularDirty_ = false;
+  postDirty_     = false;
   mix_.Prime(mix_.target);
   outGain_.Prime(outGain_.target);
   feedback_.Prime(feedback_.target);
@@ -181,6 +188,8 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
 void Engine::Reset() noexcept {
   if (!ready_) return;
   granular_.Reset();
+  post_.Reset();
+  tamer_.Reset();
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
@@ -188,7 +197,9 @@ void Engine::Reset() noexcept {
     ApplyParam(i, p);
   }
   RebuildGranularParams();
+  RebuildPostParams();
   granularDirty_ = false;
+  postDirty_     = false;
   mix_.Prime(mix_.target);
   outGain_.Prime(outGain_.target);
   feedback_.Prime(feedback_.target);
@@ -212,6 +223,7 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
       break;
     case ParamId::Feedback:
       feedback_.target = value;
+      tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
       break;
     case ParamId::OutTrimDb:
       // exp2f, not powf (cheaper, and the pattern to copy is LUT+lerp when
@@ -219,9 +231,35 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
       outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
       break;
     default:
-      granularDirty_ = true;  // scheduler/voice params rebuild once, at control rate
+      // Scheduler/voice params vs post-chain params rebuild their own blocks,
+      // once, at control rate.
+      if (static_cast<uint32_t>(kParamTable[index].id) >=
+          static_cast<uint32_t>(ParamId::ModRateHz)) {
+        postDirty_ = true;
+      } else {
+        granularDirty_ = true;
+      }
       break;
   }
+}
+
+void Engine::RebuildPostParams() noexcept {
+  const auto get = [&](ParamId id) {
+    return active_[static_cast<uint32_t>(id) - 1u];
+  };
+  pp_.modRateHz    = get(ParamId::ModRateHz);
+  pp_.modDepth     = get(ParamId::ModDepth);
+  pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
+  pp_.delayFb      = get(ParamId::DelayFb);
+  pp_.delayMix     = get(ParamId::DelayMix);
+  pp_.reverbTime   = get(ParamId::ReverbTime);
+  pp_.reverbMix    = get(ParamId::ReverbMix);
+  pp_.filterCutoff = get(ParamId::FilterCutoffHz);
+  pp_.filterRes    = get(ParamId::FilterRes);
+  pp_.filterMorph  = get(ParamId::FilterMorph);
+  // Fully CW = exact stage bypass (design §2.6 endpoint semantics) — also what
+  // keeps the bit-exact null contracts reachable with the filter at default.
+  pp_.filterBypass = pp_.filterCutoff >= FindParam(ParamId::FilterCutoffHz)->max - 0.5f;
 }
 
 void Engine::RebuildGranularParams() noexcept {
@@ -352,6 +390,10 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
     RebuildGranularParams();
     granularDirty_ = false;
   }
+  if (postDirty_) {
+    RebuildPostParams();
+    postDirty_ = false;
+  }
 
   const float* inL  = ctx.in[0];
   const float* inR  = cfg_.stereoInput ? ctx.in[1] : ctx.in[0];
@@ -375,11 +417,15 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
     float wrL          = inL[n] + fb * fbFifo_[2u * slot];
     float wrR          = inR[n] + fb * fbFifo_[2u * slot + 1u];
     if (dither) {
-      // Gated on non-zero so true silence stays bit-zero (no idle noise floor):
-      // the write value performs a downward random walk absorbed at 0 instead of
+      // Gated at a quarter LSB, not at zero: below half an LSB plain rounding
+      // already absorbs to exact 0 (no fixed points exist down there), while a
+      // zero gate let the taming chain's asymptotic filter tail hold the gate
+      // open and sustain an LSB-level dither loop forever. Above the gate, the
+      // write value performs a downward random walk absorbed at 0 instead of
       // latching on a quantization fixed point.
-      if (wrL != 0.0f) wrL += Tpdf(abs, grainmath::Draw::DitherL);
-      if (wrR != 0.0f) wrR += Tpdf(abs, grainmath::Draw::DitherR);
+      constexpr float kDitherGate = 0.25f / 32767.0f;
+      if (wrL > kDitherGate || wrL < -kDitherGate) wrL += Tpdf(abs, grainmath::Draw::DitherL);
+      if (wrR > kDitherGate || wrR < -kDitherGate) wrR += Tpdf(abs, grainmath::Draw::DitherR);
     }
     ring_[2u * writeFrame_]      = QuantizeS16(wrL);
     ring_[2u * writeFrame_ + 1u] = QuantizeS16(wrR);
@@ -390,24 +436,37 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   granular_.Process(gp_, sampleCounter_, ringStart, frozen_, frozenAnchor_, ctx.numFrames,
                     wetL_, wetR_);
 
-  // ── Pass 3: normalization (smoothed, applied here — GranularParams carries no
-  // gain), feedback FIFO push, wet/dry mix, trim.
+  // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
+  // the FIFO (design §2.3: DC/HP/LP/saturator/diffuser sit inside the loop; the
+  // tap is pre-post-chain per the §2 diagram). The tamer always runs so its
+  // filter state stays split-invariant regardless of the feedback amount.
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   nrm  = norm_.Next();
     const float   wl   = wetL_[n] * nrm;
     const float   wr   = wetR_[n] * nrm;
-    fbFifo_[2u * slot]      = wl;
-    fbFifo_[2u * slot + 1u] = wr;
+    wetL_[n] = wl;
+    wetR_[n] = wr;
+    float tl = wl, tr = wr;
+    tamer_.ProcessSample(tl, tr);
+    fbFifo_[2u * slot]      = tl;
+    fbFifo_[2u * slot + 1u] = tr;
+  }
 
+  // ── Pass 3b: the post chain, in place on the wet buffers (design §2.6:
+  // mod -> delay -> reverb -> filter, ordered and bypassable).
+  post_.Process(pp_, ctx.numFrames, wetL_, wetR_);
+
+  // ── Pass 3c: wet/dry mix and output trim.
+  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const float mix = mix_.Next();
     const float g   = outGain_.Next();
     // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
     // Two-multiply form, not dry + mix*(wet-dry): the lerp form is not bit-exact at
     // the endpoints, which would break the Tu null contract (design §10 #2).
-    outL[n] = (inL[n] * (1.0f - mix) + wl * mix) * g;
-    outR[n] = (inR[n] * (1.0f - mix) + wr * mix) * g;
+    outL[n] = (inL[n] * (1.0f - mix) + wetL_[n] * mix) * g;
+    outR[n] = (inR[n] * (1.0f - mix) + wetR_[n] * mix) * g;
   }
 
   sampleCounter_ += ctx.numFrames;

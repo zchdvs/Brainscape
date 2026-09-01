@@ -5,6 +5,8 @@
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
 #include "brainscape/detail/Granular.h"
+#include "brainscape/detail/PostChain.h"
+#include "brainscape/detail/Smoother.h"
 
 namespace brainscape {
 
@@ -111,25 +113,13 @@ class Engine {
   uint32_t LatencySamples() const noexcept { return 0; }
 
  private:
-  struct Smoother {
-    float value = 0.f, target = 0.f, coef = 1.f;
-    void  Prime(float v) noexcept { value = target = v; }
-    float Next() noexcept {
-      // Snap on stall: the bare one-pole freezes short of its target once the
-      // increment rounds to a no-op (~1.4e-5 short at this coefficient — review
-      // finding), which would leave Mix=1.0 never exactly 1.0 and break the Tu
-      // null on the ordinary SetParam path. Detecting `next == value` catches the
-      // stall exactly at any magnitude, since the stall point scales with ULP.
-      const float next = value + coef * (target - value);
-      value            = (next == value) ? target : next;
-      return value;
-    }
-  };
+  using Smoother = detail::Smoother;
 
   void ApplyParam(size_t index, float value) noexcept;
   void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
                                           // param actually changed (keeps exp2/pow
                                           // off the steady-state audio path)
+  void RebuildPostParams() noexcept;      // same discipline for the post chain
 
   EngineConfig cfg_{};
   int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
@@ -143,11 +133,15 @@ class Engine {
   int64_t      sampleCounter_ = 0;
   bool         ready_         = false;
   bool         granularDirty_ = true;
+  bool         postDirty_     = true;
   bool         frozen_        = false;
   uint32_t     frozenAnchor_  = 0;
 
   detail::GranularCore   granular_;
   detail::GranularParams gp_{};
+  detail::PostChain      post_;
+  detail::PostParams     pp_{};
+  detail::FeedbackTamer  tamer_;
 
   std::atomic<float> pending_[kNumParams]{};
   std::atomic<bool>  freezePending_{false};

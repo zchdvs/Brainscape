@@ -190,10 +190,14 @@ TEST_CASE("PlanMemory sizes all three tiers") {
   EngineConfig cfg;  // defaults: 2^22 frames, maxBlockSize 512
   const MemoryPlan plan = PlanMemory(cfg);
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Bulk)] ==
-          (size_t{1} << 22) * 2u * sizeof(int16_t));  // 16 MiB
+          (size_t{1} << 22) * 2u * sizeof(int16_t) +
+              detail::PostChain::BulkFloats(cfg.sampleRate) * sizeof(float));
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
-  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] == 512u * 2u * sizeof(float));
+  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] ==
+          (512u * 2u + detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
+           detail::PostChain::WarmFloats(cfg.sampleRate)) *
+              sizeof(float));
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
 }
 
@@ -379,12 +383,17 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   for (auto& x : input) x = 0.8f * rng.Next();
 
   const std::vector<std::pair<ParamId, float>> params = {
-      {ParamId::DelayMs, 100.0f},   {ParamId::Mix, 0.7f},
-      {ParamId::Feedback, 0.5f},    {ParamId::OutTrimDb, -3.0f},
-      {ParamId::GrainSizeMs, 60.f}, {ParamId::Overlap, 0.55f},
-      {ParamId::SprayMs, 50.0f},    {ParamId::PitchSt, 7.0f},
-      {ParamId::SpreadCents, 20.f}, {ParamId::ReverseProb, 0.3f},
-      {ParamId::Jitter, 1.0f},      {ParamId::WindowSmooth, 0.7f}};
+      {ParamId::DelayMs, 100.0f},      {ParamId::Mix, 0.7f},
+      {ParamId::Feedback, 0.5f},       {ParamId::OutTrimDb, -3.0f},
+      {ParamId::GrainSizeMs, 60.f},    {ParamId::Overlap, 0.55f},
+      {ParamId::SprayMs, 50.0f},       {ParamId::PitchSt, 7.0f},
+      {ParamId::SpreadCents, 20.f},    {ParamId::ReverseProb, 0.3f},
+      {ParamId::Jitter, 1.0f},         {ParamId::WindowSmooth, 0.7f},
+      {ParamId::ModDepth, 0.3f},       {ParamId::ModRateHz, 2.0f},
+      {ParamId::DelayMix, 0.3f},       {ParamId::DelayTimeMs, 60.0f},
+      {ParamId::ReverbMix, 0.4f},      {ParamId::ReverbTime, 0.7f},
+      {ParamId::FilterCutoffHz, 9000.0f}, {ParamId::FilterRes, 0.3f},
+      {ParamId::FilterMorph, 0.5f}};
 
   const auto ref = Render(cfg, input, params, false, {512});
   for (uint32_t split : {1u, 7u, 32u, 48u, 64u, 127u}) {
@@ -688,6 +697,98 @@ TEST_CASE("freeze sustains the wet path from the pinned window") {
   const double unfrozenTail = runOnce(false);
   REQUIRE(frozenTail > 0.01);
   REQUIRE(unfrozenTail < frozenTail * 0.1);
+}
+
+// ── Post chain (design §2.6) ───────────────────────────────────────────────────
+
+TEST_CASE("reverb tail length follows reverb time") {
+  EngineConfig cfg = SmallConfig();
+
+  std::vector<float> input(96000, 0.0f);  // 2 s
+  Rng rng;
+  for (size_t i = 0; i < 24000; ++i) input[i] = 0.5f * rng.Next();  // 0.5 s burst
+
+  auto tailRms = [&](float time) {
+    auto params = DegenerateDelay(100.0f);
+    params.push_back({ParamId::ReverbMix, 1.0f});
+    params.push_back({ParamId::ReverbTime, time});
+    const auto out = Render(cfg, input, params, true, {256});
+    double acc = 0;
+    for (size_t i = 60000; i < 96000; ++i) acc += double(out.l[i]) * out.l[i];
+    return std::sqrt(acc / 36000.0);
+  };
+
+  const double shortTail = tailRms(0.1f);
+  const double longTail  = tailRms(0.9f);
+  REQUIRE(longTail > 1e-4);
+  REQUIRE(longTail > shortTail * 3.0);
+}
+
+TEST_CASE("post delay echoes at its own time, after the grain delay") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(24000, 0.0f);
+  input[0] = 1.0f;
+  auto params = DegenerateDelay(100.0f);  // grain delay: 4800 frames
+  params.push_back({ParamId::DelayMix, 1.0f});
+  params.push_back({ParamId::DelayTimeMs, 100.0f});  // post delay: another 4800
+  params.push_back({ParamId::DelayFb, 0.0f});
+  const auto out = Render(cfg, input, params, true, {256});
+
+  // Insert semantics at mix 1: the direct grain impulse is replaced by silence
+  // (the tap has nothing yet), and the echo lands at grain + post delay.
+  REQUIRE(std::fabs(out.l[4800]) < 1e-4f);
+  REQUIRE(std::fabs(out.l[9600]) > 0.5f);
+}
+
+TEST_CASE("filter morph: HP kills DC, LP passes it") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(48000, 0.5f);  // DC probe through the wet path
+
+  auto steady = [&](float morph) {
+    auto params = DegenerateDelay(50.0f);
+    params.push_back({ParamId::FilterCutoffHz, 1000.0f});
+    params.push_back({ParamId::FilterRes, 0.1f});
+    params.push_back({ParamId::FilterMorph, morph});
+    const auto out = Render(cfg, input, params, true, {256});
+    double acc = 0;
+    for (size_t i = 36000; i < 48000; ++i) acc += double(out.l[i]) * out.l[i];
+    return std::sqrt(acc / 12000.0);
+  };
+
+  REQUIRE(steady(0.0f) > 0.3);   // LP at 1 kHz passes DC
+  REQUIRE(steady(2.0f) < 0.02);  // HP at 1 kHz blocks DC
+}
+
+// Feedback past unity is the design's self-oscillation feature (§2.3, §11): the
+// taming chain's saturator bounds it into a sustained limit cycle, not a rail.
+TEST_CASE("feedback above unity self-oscillates bounded") {
+  EngineConfig cfg = SmallConfig();
+  std::vector<float> input(192000, 0.0f);  // 4 s
+  input[0] = 1.0f;
+  const auto out = Render(cfg, input, DegenerateDelay(50.0f, 1.1f), true, {256});
+
+  float peak = 0.f;
+  for (float v : out.l) peak = std::max(peak, std::fabs(v));
+  REQUIRE(peak <= 2.5f);
+
+  double tail = 0;
+  for (size_t i = 144000; i < 192000; ++i) tail += double(out.l[i]) * out.l[i];
+  REQUIRE(std::sqrt(tail / 48000.0) > 1e-3);  // still singing, not decayed
+}
+
+// The taming chain's DC blocker: a DC input recirculated at high feedback must
+// not integrate toward the rail (grain-delay-theory.md §3.10).
+TEST_CASE("feedback loop rejects DC") {
+  EngineConfig cfg = SmallConfig();
+  std::vector<float> input(144000, 0.5f);  // 3 s of DC
+  const auto out = Render(cfg, input, DegenerateDelay(50.0f, 0.9f), true, {256});
+  float peak = 0.f;
+  for (float v : out.l) peak = std::max(peak, std::fabs(v));
+  REQUIRE(peak <= 2.0f);
 }
 
 TEST_CASE("sample counter is free-running") {
