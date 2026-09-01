@@ -42,6 +42,23 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # Release+sanitizer leg: the assert-guarded contract paths (e.g. the oversized-
+  # block zero-fill test, which is #if NDEBUG) only exist in Release — this is the
+  # leg where they run UNDER a sanitizer (review finding: the Debug/ASan leg never
+  # compiled that test, and plain Release could not detect the overrun).
+  release-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBRAINSCAPE_BUILD_TESTS=ON
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -DNDEBUG"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
   # Compile-only cross build for the Cortex-M7: catches dsp/ portability breaks
   # (hot-loop libm calls, soft-float macro traps, 32-bit size_t narrowing) with no
   # hardware. Firmware proper lands with hardware bring-up.

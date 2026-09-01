@@ -736,10 +736,88 @@ TEST_CASE("post delay echoes at its own time, after the grain delay") {
   params.push_back({ParamId::DelayFb, 0.0f});
   const auto out = Render(cfg, input, params, true, {256});
 
-  // Insert semantics at mix 1: the direct grain impulse is replaced by silence
-  // (the tap has nothing yet), and the echo lands at grain + post delay.
-  REQUIRE(std::fabs(out.l[4800]) < 1e-4f);
+  // Insert semantics at mix 1, with Reset() priming the post smoothers from the
+  // actual params (an unprimed mix leaked 37% of the un-delayed signal; review
+  // finding): the whole pre-echo window is EXACT silence.
+  for (size_t n = 0; n < 9600; n += 7) REQUIRE(out.l[n] == 0.0f);
   REQUIRE(std::fabs(out.l[9600]) > 0.5f);
+}
+
+TEST_CASE("reverb produces early energy, not a delayed slap") {
+  EngineConfig cfg = SmallConfig();
+  std::vector<float> input(9600, 0.0f);
+  input[0] = 1.0f;
+  auto params = DegenerateDelay(1.0f);  // grain delay clamps to the 64-frame margin
+  params.push_back({ParamId::ReverbMix, 1.0f});
+  params.push_back({ParamId::ReverbTime, 0.5f});
+  const auto out = Render(cfg, input, params, true, {256});
+
+  // The impulse reaches the tank at ~64 frames; the multi-tap wet must put
+  // audible energy inside the first 30 ms (raw line-end outputs were silent for
+  // 107 ms; review finding).
+  double early = 0;
+  for (size_t n = 64; n < 64 + 1440; ++n) early += double(out.l[n]) * out.l[n];
+  REQUIRE(std::sqrt(early / 1440.0) > 1e-3);
+}
+
+TEST_CASE("filter is bounded at the resonance stop") {
+  EngineConfig cfg = SmallConfig();
+  std::vector<float> input(480000);  // 10 s
+  for (size_t i = 0; i < input.size(); ++i) {
+    input[i] = 0.25f * std::sin(2.0 * 3.14159265358979 * 1000.0 * (double(i) / 48000.0));
+  }
+  auto params = DegenerateDelay(50.0f);
+  params.push_back({ParamId::FilterCutoffHz, 1000.0f});
+  params.push_back({ParamId::FilterRes, 1.0f});  // the descriptor max
+  params.push_back({ParamId::FilterMorph, 0.0f});
+  const auto out = Render(cfg, input, params, true, {512});
+  float peak = 0.f;
+  for (float v : out.l) peak = std::max(peak, std::fabs(v));
+  // Extreme resonance is allowed to be loud, but it must be bounded — the
+  // un-floored damp ran away to 520+ and climbing (review finding).
+  REQUIRE(peak < 120.0f);
+  for (float v : out.l) REQUIRE(std::isfinite(v));
+}
+
+TEST_CASE("filter re-engage after bypass starts from silence, no burst") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  const size_t total = 192000;  // 4 s
+  std::vector<float> input(total, 0.0f);
+  for (size_t i = 0; i < 96000; ++i) {
+    input[i] = 0.1f * static_cast<float>(
+                          std::sin(2.0 * 3.14159265358979 * 300.0 * (double(i) / 48000.0)));
+  }
+
+  host::HeapArenas arenas(PlanMemory(cfg));
+  Engine engine;
+  REQUIRE(engine.Init(cfg, arenas.get()));
+  auto params = DegenerateDelay(50.0f);
+  params.push_back({ParamId::FilterCutoffHz, 300.0f});
+  params.push_back({ParamId::FilterRes, 0.95f});
+  for (auto& p : params) engine.SetParam(p.first, p.second);
+  engine.Reset();
+
+  std::vector<float> outL(total), outR(total);
+  size_t pos = 0;
+  while (pos < total) {
+    if (pos == 96000) engine.SetParam(ParamId::FilterCutoffHz, 20000.0f);  // bypass
+    if (pos == 144000) engine.SetParam(ParamId::FilterCutoffHz, 300.0f);   // re-engage
+    const float* ins[2]  = {input.data() + pos, input.data() + pos};
+    float*       outs[2] = {outL.data() + pos, outR.data() + pos};
+    Engine::ProcessContext ctx;
+    ctx.in        = ins;
+    ctx.out       = outs;
+    ctx.numFrames = 256;
+    engine.Process(ctx);
+    pos += 256;
+  }
+  // Input has been silent since 2.0 s; re-engaging at 3.0 s must not discharge
+  // stored resonant state (measured a 3.9-peak burst pre-fix; review finding).
+  float burst = 0.f;
+  for (size_t i = 144000; i < total; ++i) burst = std::max(burst, std::fabs(outL[i]));
+  REQUIRE(burst < 0.05f);
 }
 
 TEST_CASE("filter morph: HP kills DC, LP passes it") {
@@ -765,6 +843,9 @@ TEST_CASE("filter morph: HP kills DC, LP passes it") {
 
 // Feedback past unity is the design's self-oscillation feature (§2.3, §11): the
 // taming chain's saturator bounds it into a sustained limit cycle, not a rail.
+// The peak band has a LOW side too, so an absent/identity saturator (which rails
+// at exactly 1.0 with different dynamics) or a dead loop also fails — the first
+// version of this test passed under every taming-chain mutation (review finding).
 TEST_CASE("feedback above unity self-oscillates bounded") {
   EngineConfig cfg = SmallConfig();
   std::vector<float> input(192000, 0.0f);  // 4 s
@@ -773,22 +854,34 @@ TEST_CASE("feedback above unity self-oscillates bounded") {
 
   float peak = 0.f;
   for (float v : out.l) peak = std::max(peak, std::fabs(v));
-  REQUIRE(peak <= 2.5f);
+  REQUIRE(peak <= 1.5f);
+  REQUIRE(peak >= 0.1f);
 
   double tail = 0;
   for (size_t i = 144000; i < 192000; ++i) tail += double(out.l[i]) * out.l[i];
-  REQUIRE(std::sqrt(tail / 48000.0) > 1e-3);  // still singing, not decayed
+  const double tailRms = std::sqrt(tail / 48000.0);
+  REQUIRE(tailRms > 1e-3);   // still singing, not decayed
+  REQUIRE(tailRms < 0.75);   // ...and not railed at full scale
 }
 
-// The taming chain's DC blocker: a DC input recirculated at high feedback must
-// not integrate toward the rail (grain-delay-theory.md §3.10).
+// The taming chain's HP stages: recirculating DC must not raise the steady-state
+// DC level at all — the output mean at high feedback must match the feedback-free
+// mean. (The old peak<=2 bound was structurally unreachable and passed with the
+// entire taming chain deleted; review finding.)
 TEST_CASE("feedback loop rejects DC") {
   EngineConfig cfg = SmallConfig();
   std::vector<float> input(144000, 0.5f);  // 3 s of DC
-  const auto out = Render(cfg, input, DegenerateDelay(50.0f, 0.9f), true, {256});
-  float peak = 0.f;
-  for (float v : out.l) peak = std::max(peak, std::fabs(v));
-  REQUIRE(peak <= 2.0f);
+
+  auto steadyMean = [&](float fb) {
+    const auto out = Render(cfg, input, DegenerateDelay(50.0f, fb), true, {256});
+    double acc = 0;
+    for (size_t i = 96000; i < 144000; ++i) acc += out.l[i];
+    return acc / 48000.0;
+  };
+  const double atZero = steadyMean(0.0f);
+  const double atHigh = steadyMean(0.9f);
+  REQUIRE(atZero > 0.3);  // sanity: the DC probe actually flows
+  REQUIRE(std::fabs(atHigh - atZero) < 0.05 * atZero);
 }
 
 TEST_CASE("sample counter is free-running") {

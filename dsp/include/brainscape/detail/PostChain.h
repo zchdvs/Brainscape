@@ -7,9 +7,9 @@
 // chain (§2.3). Internal — included by Engine.h; free to change.
 //
 // Determinism rules (design §10 contracts #1/#7): every per-sample nonlinearity
-// and oscillator here is in-tree arithmetic (parabolic sine, Padé tanh) — no
-// libm in the audio path. Control-rate coefficient math (sinf/expm1) runs only
-// when a parameter actually changes.
+// and oscillator here is in-tree arithmetic (parabolic sine, Padé tanh) or an
+// IEEE-exact operation (sqrtf) — no libm in the audio path. Control-rate
+// coefficient math (sinf/expm1) runs at Init or when a parameter changes.
 namespace brainscape::detail {
 
 // ── Small primitives ────────────────────────────────────────────────────────────
@@ -21,7 +21,8 @@ inline float CheapSine(float phase01) noexcept {
   return x * (8.0f - 16.0f * (x < 0.f ? -x : x));       // peaks exactly ±1 at ±0.25
 }
 
-// Padé tanh — bounded soft saturator (design §2.3), exact 0 at 0.
+// Padé tanh — bounded soft saturator (design §2.3). C1-continuous at the ±3 seam
+// (value and derivative both match), exact 0 at 0.
 inline float SoftSat(float x) noexcept {
   if (x > 3.0f) return 1.0f;
   if (x < -3.0f) return -1.0f;
@@ -48,6 +49,11 @@ struct Allpass {
     buf[pos]      = x + g * y;
     if (++pos == len) pos = 0;
     return y;
+  }
+  float TapBack(uint32_t back) const noexcept {  // read inside the line, no state change
+    uint32_t i = pos + len - back;
+    if (i >= len) i -= len;
+    return buf[i];
   }
 };
 
@@ -111,17 +117,20 @@ inline constexpr uint32_t kPostStages = 4;
 
 struct PostParams {
   float modRateHz    = 0.4f;
-  float modDepth     = 0.0f;   // 0 = exactly transparent (dry term is x*1 + wet*0)
+  float modDepth     = 0.0f;   // drives excursion AND a wet mix capped at 0.5 so a
+                               // dry term always survives (chorus, not vibrato);
+                               // 0 = exactly transparent
   float delayFrames  = 16800;  // post.delay.time_ms in frames (snaps; crossfade TODO)
   float delayFb      = 0.3f;
-  float delayMix     = 0.0f;   // 0 = exactly transparent
+  float delayMix     = 0.0f;   // equal-power; 0 = exactly transparent
   float reverbTime   = 0.5f;
-  float reverbMix    = 0.0f;   // 0 = exactly transparent
+  float reverbMix    = 0.0f;   // equal-power; 0 = exactly transparent
   float filterCutoff = 20000.f;
   float filterRes    = 0.1f;
-  float filterMorph  = 0.0f;   // 0..3 continuous LP -> BP -> HP -> Notch
-  bool  filterBypass = true;   // cutoff at descriptor max = exact bypass (design §2.6
-                               // endpoint semantics; also what keeps the null bit-exact)
+  float filterMorph  = 0.0f;   // 0..3 continuous LP -> BP -> HP -> Notch (equal-power)
+  bool  filterBypass = true;   // cutoff at descriptor max ramps the insert mix to an
+                               // EXACT bypass (design §2.6: click-free crossfade,
+                               // and the null contracts' transparency)
 };
 
 class PostChain {
@@ -131,40 +140,59 @@ class PostChain {
   static uint32_t BulkFloats(double sampleRate) noexcept;
 
   void Init(float* warm, float* bulk, double sampleRate) noexcept;
-  void Reset() noexcept;
-  // In-place over the block. Stage mixes are smoothed per sample internally.
+  // RT-safe: clears small filter/LFO state and primes smoothers from the given
+  // params. Does NOT memset the delay/reverb buffers (750 KiB of SDRAM — review
+  // finding: that made Engine::Reset miss 2-4 audio deadlines); stale tails are
+  // masked by the mix ramps and fully cleared by the non-RT ClearBuffers().
+  void Reset(const PostParams& p) noexcept;
+  void ClearBuffers() noexcept;  // non-RT: memsets mod/delay/reverb storage
+  // In-place over the block. Stage mixes are smoothed per sample internally; a
+  // stage whose mix target and smoothed value are both exactly 0 is skipped
+  // (its buffers freeze while bypassed — normal bypass semantics).
   void Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept;
 
  private:
-  void UpdateFilterCoefs(float cutoff, float res) noexcept;  // control rate (sinf)
+  void UpdateFilterCoefs(float cutoff, float res, float morph) noexcept;  // control rate
 
   double sr_ = 48000.0;
 
-  // Mod (stereo chorus-class): one LFO, quadrature R, modulated tap.
+  // Mod (stereo chorus): one LFO, quadrature R, modulated tap; wet capped at 0.5.
   DelaySlice modL_{}, modR_{};
-  float      lfoPhase_ = 0.f;
+  float      lfoPhase_  = 0.f;
+  float      modCenter_ = 0.f, modMaxExc_ = 0.f;  // frames, fixed at Init
   Smoother   modDepthSm_{};
 
-  // Post delay (stereo, Bulk).
+  // Post delay (stereo, Bulk) with damped, DC-blocked regeneration.
   DelaySlice pdL_{}, pdR_{};
+  float      pdLpL_ = 0.f, pdLpR_ = 0.f;  // loop damping LP state
+  float      pdDcL_ = 0.f, pdDcR_ = 0.f;  // loop DC-blocker state
+  float      pdLpCoef_ = 1.f, pdDcCoef_ = 0.f;
   Smoother   delayMixSm_{};
 
   // Reverb: Clouds-style Dattorro/Griesinger — 4 input diffusers, figure-8 tank
-  // (2 x (AP, AP, delay) with damping LP and decay), slow LFO on the long delays.
-  float      rvBandwidth_ = 0.f;  // input LP state
+  // (both halves damped), slow LFO on the long delays, multi-tap wet outputs
+  // (raw line-end outputs were two discrete slaps with 107 ms of silence first —
+  // review finding).
+  float      rvBandwidth_ = 0.f;
   Allpass    rvAp_[4]{};
   Allpass    rvDap_[4]{};
   DelaySlice rvDel_[2]{};
-  float      rvLp_[2] = {0.f, 0.f};
-  float      rvLfoPhase_ = 0.f;
+  float      rvLp_[2]     = {0.f, 0.f};
+  float      rvLfoPhase_  = 0.f;
+  float      rvDamp_ = 0.f, rvBw_ = 0.f, rvExc_ = 0.f, rvLfoInc_ = 0.f;  // fixed at Init
+  float      rvDl0_ = 0.f, rvDl1_ = 0.f;                                  // fixed at Init
+  uint32_t   rvTapL_[3] = {0, 0, 0}, rvTapR_[3] = {0, 0, 0};              // fixed at Init
   Smoother   reverbMixSm_{};
 
-  // Filter: stereo double-sampled SVF with continuous morph (post-fx doc §3.1 —
-  // all outputs are computed by the recurrence anyway, so the morph is free).
-  float svfFreq_ = 0.f, svfDamp_ = 0.f;
-  float svfCutoffCached_ = -1.f, svfResCached_ = -1.f;
-  float svfL_[3] = {0.f, 0.f, 0.f};  // low, band, (notch derived)
-  float svfR_[3] = {0.f, 0.f, 0.f};
+  // Filter: stereo double-sampled SVF, equal-power morph, smoothed insert mix.
+  float    svfFreq_ = 0.f, svfDamp_ = 0.f;
+  float    svfWa_ = 1.f, svfWb_ = 0.f;  // equal-power morph weights (control rate)
+  uint32_t svfSeg_ = 0;
+  float    svfCutoffCached_ = -1.f, svfResCached_ = -1.f, svfMorphCached_ = -1.f;
+  float    svfL_[2] = {0.f, 0.f};
+  float    svfR_[2] = {0.f, 0.f};
+  Smoother filterMixSm_{};
+  bool     svfCleared_ = true;
 
   Stage order_[kPostStages] = {Stage::Mod, Stage::Delay, Stage::Reverb, Stage::Filter};
 };

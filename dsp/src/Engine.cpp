@@ -102,7 +102,11 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
 
 bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
-  if (cfg.sampleRate <= 0.0 || cfg.maxBlockSize == 0) return false;
+  // Rate bounds: below ~40 Hz the ms-sized post buffers round to zero length and
+  // a DelaySlice write walks off its arena (review finding); above 384 kHz is
+  // outside anything the design supports.
+  if (cfg.sampleRate < 8000.0 || cfg.sampleRate > 384000.0) return false;
+  if (cfg.maxBlockSize == 0) return false;
   if (cfg.maxBlockSize > kFeedbackDelayFrames) return false;  // wrappers chunk larger buffers
   if (!IsPowerOfTwo(cfg.historyFrames)) return false;
   // Bounds guard both usefulness (design fixes the ring at 2^22; the ratio ceiling
@@ -174,6 +178,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   }
   RebuildGranularParams();
   RebuildPostParams();
+  post_.Reset(pp_);  // primes the post-chain mix smoothers from the ACTUAL params
   granularDirty_ = false;
   postDirty_     = false;
   mix_.Prime(mix_.target);
@@ -188,7 +193,6 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
 void Engine::Reset() noexcept {
   if (!ready_) return;
   granular_.Reset();
-  post_.Reset();
   tamer_.Reset();
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
@@ -198,6 +202,10 @@ void Engine::Reset() noexcept {
   }
   RebuildGranularParams();
   RebuildPostParams();
+  // RT-safe post reset: small state + smoother priming only — clearing the
+  // 750 KiB SDRAM post-delay here cost 2-4 consecutive audio deadlines (review
+  // finding). The full buffer clear lives in ClearHistory (non-RT).
+  post_.Reset(pp_);
   granularDirty_ = false;
   postDirty_     = false;
   mix_.Prime(mix_.target);
@@ -209,6 +217,7 @@ void Engine::Reset() noexcept {
 void Engine::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
+  post_.ClearBuffers();  // the post delay/reverb tails are history too
 }
 
 void Engine::ClearLooper() noexcept {
@@ -252,14 +261,17 @@ void Engine::RebuildPostParams() noexcept {
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
   pp_.delayFb      = get(ParamId::DelayFb);
   pp_.delayMix     = get(ParamId::DelayMix);
-  pp_.reverbTime   = get(ParamId::ReverbTime);
-  pp_.reverbMix    = get(ParamId::ReverbMix);
-  pp_.filterCutoff = get(ParamId::FilterCutoffHz);
+  pp_.reverbTime = get(ParamId::ReverbTime);
+  pp_.reverbMix  = get(ParamId::ReverbMix);
+  const float rawCutoff = get(ParamId::FilterCutoffHz);
+  // Bypass decides on the RAW knob value (fully CW = bypass, design §2.6); the
+  // engaged cutoff is clamped against the actual rate so the knob cannot silently
+  // pin past sr/4 at low sample rates (review finding).
+  pp_.filterBypass = rawCutoff >= FindParam(ParamId::FilterCutoffHz)->max - 0.5f;
+  const auto maxHz = static_cast<float>(cfg_.sampleRate * 0.45);
+  pp_.filterCutoff = rawCutoff < maxHz ? rawCutoff : maxHz;
   pp_.filterRes    = get(ParamId::FilterRes);
   pp_.filterMorph  = get(ParamId::FilterMorph);
-  // Fully CW = exact stage bypass (design §2.6 endpoint semantics) — also what
-  // keeps the bit-exact null contracts reachable with the filter at default.
-  pp_.filterBypass = pp_.filterCutoff >= FindParam(ParamId::FilterCutoffHz)->max - 0.5f;
 }
 
 void Engine::RebuildGranularParams() noexcept {

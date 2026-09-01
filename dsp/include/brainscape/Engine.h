@@ -56,9 +56,11 @@ class Engine {
   // (never looper buffers — design §7). Non-RT: the ring clear is a multi-MiB memset.
   bool Init(const EngineConfig&, const Arenas&) noexcept;
 
-  // Audio thread only (or with Process quiesced). Kills all grain voices, clears
-  // the feedback path, drains pending parameters and snaps smoothers to their
-  // targets (design §9). Keeps the history ring intact.
+  // Audio thread only (or with Process quiesced). RT-safe: kills all grain
+  // voices, clears the feedback path and small post-chain state, drains pending
+  // parameters and snaps smoothers to their targets (design §9). Keeps the
+  // history ring AND the large post delay/reverb buffers intact (their stale
+  // tails are masked by the mix ramps; ClearHistory does the full non-RT clear).
   void Reset() noexcept;
 
   // Non-RT: re-clears the history ring (multi-MiB memset).
@@ -126,7 +128,9 @@ class Engine {
   float*       windowLut_  = nullptr;  // Hot arena: kWindowLutSize half-cosine entries
   float*       wetL_       = nullptr;  // Hot arena: maxBlockSize each
   float*       wetR_       = nullptr;
-  float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo, maxBlockSize frames
+  float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo,
+                                       // kFeedbackDelayFrames frames (NOT maxBlockSize —
+                                       // see the constant's rationale above)
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
   Smoother     mix_, outGain_, feedback_, norm_;

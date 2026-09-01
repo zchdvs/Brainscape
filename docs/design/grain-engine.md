@@ -482,9 +482,9 @@ firmware config (48 kHz, maxBlockSize 48) unless noted.
 |---|---|---|
 | **DTCM arena** (Tier::Hot) | 64 grain structs (`sizeof(Grain)` ≈ 120 B, static_asserted) 7.5 · grain-size LUT 1 · block accumulator `2ch × maxBlockSize × 4 B` 0.4 (plugin @512: 4) · scheduler/RNG/smoothers 5 · mark ring 0.5 · [optional T0 staging `8 × (maxBlockSize·r_max + 4) × 4 B` ≈ 6.3] | **~15–21** |
 | **DTCM, linker-managed** | ISR stack, platform .data/.bss — *not* arena rows; libDaisy's stock linker scripts default .data/.bss/stack to DTCM, so actual headroom **must be read from the .map file** (§10 gate). Window LUT (16 KiB) moves to AXI if DTCM is tight. | — |
-| **AXI arena** (Tier::Warm) | reverb tank 72 (worst case, from-scratch Dattorro @ 48 kHz 16-bit; 48 if Clouds-derived) · window LUT 16 · feedback diffuser 8 · mod delay lines "2 × 50 ms @ sr" 19 · onset detector 10 · SVFs/DC/sat/misc 8 · **ModeBlob ring 4 slots × 4 KiB = 16** · preset staging 12 | **~161** |
+| **AXI arena** (Tier::Warm) | reverb tank (**float32 as implemented: ~96 KiB**; 16-bit Q4.12 halves it and is the M7 fallback if AXI gets tight) · window LUT 16 · feedback tamer diffuser 4 · feedback FIFO 4 · mod delay lines "2 × 25 ms @ sr" 10 · onset detector 10 · SVFs/DC/sat/misc 8 · **ModeBlob ring 4 slots × 4 KiB = 16** · preset staging 12 | **~176** |
 | **D2** | libDaisy audio DMA, FatFs/SDMMC, MIDI, UI — no DSP state | platform |
-| **SDRAM arena** (Tier::Bulk) | history ring 2²² frames stereo int16 = 87.4 s → **16 MiB** · looper A **23 MiB** + looper B **23 MiB** · post-chain delay line (≤ 2 s stereo int16, sequential access — cache-friendly) 0.4 · scratch 0.5 | **≈62.9 / 64 MiB** |
+| **SDRAM arena** (Tier::Bulk) | history ring 2²² frames stereo int16 = 87.4 s → **16 MiB** · looper A **23 MiB** + looper B **23 MiB** · post-chain delay line (≤ 2 s stereo, **float32 as implemented: 0.75 MiB**; int16 halves it — sequential single stream either way) · scratch 0.5 | **≈63.3 / 64 MiB** |
 
 Rules: only the history ring, looper, and post-delay touch SDRAM at audio rate (the reverb
 tank in SRAM avoids the measured ~3.5× penalty, post-fx doc §1.6). SDRAM is not zeroed at
