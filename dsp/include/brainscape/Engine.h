@@ -5,6 +5,7 @@
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
 #include "brainscape/detail/Granular.h"
+#include "brainscape/detail/OnsetDetector.h"
 #include "brainscape/detail/PostChain.h"
 #include "brainscape/detail/Smoother.h"
 
@@ -102,6 +103,24 @@ class Engine {
   void SetFreeze(bool on) noexcept { freezePending_.store(on, std::memory_order_relaxed); }
   bool GetFreeze() const noexcept { return freezePending_.load(std::memory_order_relaxed); }
 
+  // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
+  // the guaranteed-working fallback when onset detection can't hear the source.
+  enum class TriggerSource : uint8_t { Footswitch = 0, MidiNote = 1, Sidechain = 2 };
+  // Any thread; lock-free. Fires a grain (oldest-steal — explicit triggers never
+  // drop) at the start of the next Process. velocity and sampleOffset are
+  // accepted for API stability; both apply with the SPSC event queue.
+  void Trigger(TriggerSource /*src*/ = TriggerSource::Footswitch, float /*velocity*/ = 1.f,
+               uint32_t /*sampleOffset*/ = 0) noexcept {
+    manualTriggers_.fetch_add(1u, std::memory_order_relaxed);
+  }
+
+  // Any thread; atomic exchange(0). Counts onsets since the last call — counted,
+  // not boolean, so fast passages stay individually visible on the trigger LED
+  // (design §9; the LED driver stretches each to a visible minimum).
+  uint32_t ConsumeOnsetCount() noexcept {
+    return onsetCount_.exchange(0u, std::memory_order_relaxed);
+  }
+
   // Shared descriptor table (design §9): also available as brainscape::Descriptors().
   static const ParamDescriptor* Descriptors(size_t* count) noexcept;
 
@@ -146,10 +165,13 @@ class Engine {
   detail::PostChain      post_;
   detail::PostParams     pp_{};
   detail::FeedbackTamer  tamer_;
+  detail::OnsetDetector  detector_;
 
-  std::atomic<float> pending_[kNumParams]{};
-  std::atomic<bool>  freezePending_{false};
-  float              active_[kNumParams]{};
+  std::atomic<float>    pending_[kNumParams]{};
+  std::atomic<bool>     freezePending_{false};
+  std::atomic<uint32_t> onsetCount_{0};
+  std::atomic<uint32_t> manualTriggers_{0};
+  float                 active_[kNumParams]{};
 };
 
 }  // namespace brainscape

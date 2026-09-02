@@ -45,6 +45,21 @@ struct GranularParams {
   float    reverseProb;
   float    sustain, skew, smoothness;
   float    panSpread;
+  bool     onsetTrigger;     // OR'd ONSET source: each detected onset fires a grain
+                             // (oldest-steal — explicit triggers never drop, design §4)
+  bool     posFromMark;      // POS_MARK: grains read from the most recent onset mark
+                             // (the Strum family's mechanism) instead of POS_LIVE
+};
+
+// External trigger events for one block, collected by the Engine (onset detector,
+// manual/MIDI triggers). Offsets are block-relative sample indices, ascending.
+struct TriggerEvents {
+  static constexpr uint32_t kMaxOnsets = 8;  // > maxBlockSize/kOnsetHop + slack
+  uint32_t onsetOffset[kMaxOnsets];
+  uint32_t onsetMarkFrame[kMaxOnsets];  // ring frame where the onset's audio starts
+  uint32_t onsetCount   = 0;
+  uint32_t manualCount  = 0;  // fired at offsets 0,1,2,... (consecutive so the
+                              // counter-keyed draws stay distinct per grain)
 };
 
 class GranularCore {
@@ -60,6 +75,8 @@ class GranularCore {
   void Reset() noexcept {
     for (auto& g : grains_) g.active = false;
     orderCount_ = 0;
+    markCount_  = 0;
+    markHead_   = 0;
     // 1.0, not 0: the per-sample decrement runs before the fire check, so an
     // initial 0 leaves a -1 residual in the phasor and every subsequent birth
     // lands one sample early — which breaks exact grain abutment.
@@ -70,13 +87,24 @@ class GranularCore {
   // ringFrameAtBlockStart: the ring frame where absSample's input is written.
   // frozen/frozenAnchor: design §2.4 — positions resolve against the pinned
   // anchor instead of the advancing write position; the ring keeps recording.
-  void Process(const GranularParams& p, int64_t absSample, uint32_t ringFrameAtBlockStart,
-               bool frozen, uint32_t frozenAnchor, uint32_t numFrames, float* wetL,
-               float* wetR) noexcept;
+  void Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
+               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
+               uint32_t numFrames, float* wetL, float* wetR) noexcept;
 
  private:
+  struct Mark {
+    int64_t  abs;
+    uint32_t frame;
+  };
+  static constexpr uint32_t kMaxMarks = 16;
+
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                      uint32_t anchorFrame) noexcept;
+  // Fire an explicit trigger: free slot if available, else steal the OLDEST voice
+  // (design §4 allocation policy — explicit triggers never drop a hit).
+  void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
+                    uint32_t* renderedTo, uint32_t n, int64_t absSample, float* wetL,
+                    float* wetR) noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
@@ -89,6 +117,9 @@ class GranularCore {
   Grain          grains_[kGranularMaxGrains]{};
   uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order
   uint32_t       orderCount_ = 0;
+  Mark           marks_[kMaxMarks]{};  // recent onset marks (ring of kMaxMarks)
+  uint32_t       markHead_  = 0;
+  uint32_t       markCount_ = 0;
 };
 
 }  // namespace brainscape::detail

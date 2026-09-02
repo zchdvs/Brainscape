@@ -69,13 +69,20 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   const float ratio   = grainmath::SemitonesToRatio(st);
   const bool  reverse = p.reverseProb > 0.f && RandUnit(birthAbs, Draw::Reverse) < p.reverseProb;
 
-  // Position: base delay ± spray, reflected (not clamped) into the per-direction
-  // write-head guard bounds so spray keeps a distribution instead of piling onto
-  // the margin rail (review finding).
+  // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
+  // recent onset mark — the Strum family's mechanism, design §4). Spray is
+  // reflected (not clamped) into the per-direction guard bounds so it keeps a
+  // distribution instead of piling onto the margin rail (review finding).
   const auto bounds = grainmath::ComputeDelayBounds(
       static_cast<double>(total), static_cast<double>(ratio), reverse, mask_ + 1u,
       kGuardMarginFrames);
-  double d = p.baseDelayFrames;
+  double d;
+  if (p.posFromMark && markCount_ > 0) {
+    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
+    d             = static_cast<double>((anchorFrame - m.frame) & mask_);
+  } else {
+    d = p.baseDelayFrames;
+  }
   if (p.sprayFrames > 0.f) {
     d += static_cast<double>((RandUnit(birthAbs, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
     d = grainmath::ReflectIntoBounds(d, bounds);
@@ -171,7 +178,33 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
   orderCount_ = w;
 }
 
-void GranularCore::Process(const GranularParams& p, int64_t absSample,
+void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
+                                uint32_t anchorFrame, uint32_t* renderedTo, uint32_t n,
+                                int64_t absSample, float* wetL, float* wetR) noexcept {
+  // Flush up to the trigger sample so a reused/stolen slot's tail is emitted.
+  RenderSpan(*renderedTo, n, absSample, wetL, wetR);
+  *renderedTo = n;
+
+  uint32_t slot = kGranularMaxGrains;
+  for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
+    if (!grains_[i].active || grains_[i].endAbs <= birthAbs) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot == kGranularMaxGrains) {
+    // Oldest-steal (design §4): the order_ list is ascending birth order, so the
+    // head is the oldest live voice. Its un-rendered remainder is cut hard —
+    // partikkel's documented policy; tight response beats a fade here.
+    slot = order_[0];
+    for (uint32_t i = 1; i < orderCount_; ++i) order_[i - 1] = order_[i];
+    --orderCount_;
+  }
+  ScheduleGrain(slot, p, birthAbs, anchorFrame);
+  order_[orderCount_++] = static_cast<uint8_t>(slot);
+}
+
+void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
                            uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
                            uint32_t numFrames, float* wetL, float* wetR) noexcept {
   for (uint32_t n = 0; n < numFrames; ++n) {
@@ -194,12 +227,37 @@ void GranularCore::Process(const GranularParams& p, int64_t absSample,
   // between block 1 and 512). At extreme birth rates segments approach one
   // sample; TODO(§8): revisit segment batching before the M7 budget pass.
   uint32_t renderedTo = 0;
+  uint32_t evIdx      = 0;
+
+  // Manual/MIDI triggers fire at the top of the block, one per consecutive
+  // sample so their counter-keyed draws stay distinct (design §9: sample-offset
+  // delivery lands with the SPSC event queue).
+  for (uint32_t m = 0; m < ev.manualCount && m < numFrames; ++m) {
+    const uint32_t anchor =
+        frozen ? frozenAnchor : ((ringFrameAtBlockStart + m) & mask_);
+    FireExternal(p, absSample + m, anchor, &renderedTo, m, absSample, wetL, wetR);
+  }
 
   for (uint32_t n = 0; n < numFrames; ++n) {
+    const int64_t abs = absSample + n;
+
+    // Onset events: record the mark always (POS_MARK feeds on it); fire a grain
+    // only when the ONSET trigger source is enabled (OR'd with the free-running
+    // scheduler, design §4).
+    while (evIdx < ev.onsetCount && ev.onsetOffset[evIdx] == n) {
+      marks_[markHead_] = {abs, ev.onsetMarkFrame[evIdx]};
+      markHead_         = (markHead_ + 1u) % kMaxMarks;
+      if (markCount_ < kMaxMarks) ++markCount_;
+      if (p.onsetTrigger) {
+        const uint32_t anchor =
+            frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
+        FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
+      }
+      ++evIdx;
+    }
+
     intervalRemaining_ -= 1.0f;
     if (intervalRemaining_ > 0.0f) continue;
-
-    const int64_t abs = absSample + n;
 
     // Time-aware sweep: a slot is reusable when its grain has fully sounded
     // (endAbs <= abs); the flush below guarantees it is also fully rendered.

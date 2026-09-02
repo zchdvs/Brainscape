@@ -196,7 +196,8 @@ TEST_CASE("PlanMemory sizes all three tiers") {
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] ==
           (512u * 2u + detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
-           detail::PostChain::WarmFloats(cfg.sampleRate)) *
+           detail::PostChain::WarmFloats(cfg.sampleRate) +
+           detail::OnsetDetector::WarmFloats()) *
               sizeof(float));
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
 }
@@ -393,7 +394,8 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
       {ParamId::DelayMix, 0.3f},       {ParamId::DelayTimeMs, 60.0f},
       {ParamId::ReverbMix, 0.4f},      {ParamId::ReverbTime, 0.7f},
       {ParamId::FilterCutoffHz, 9000.0f}, {ParamId::FilterRes, 0.3f},
-      {ParamId::FilterMorph, 0.5f}};
+      {ParamId::FilterMorph, 0.5f},       {ParamId::TriggerSens, 0.8f},
+      {ParamId::OnsetTrigger, 1.0f},      {ParamId::PositionSource, 1.0f}};
 
   const auto ref = Render(cfg, input, params, false, {512});
   for (uint32_t split : {1u, 7u, 32u, 48u, 64u, 127u}) {
@@ -882,6 +884,159 @@ TEST_CASE("feedback loop rejects DC") {
   const double atHigh = steadyMean(0.9f);
   REQUIRE(atZero > 0.3);  // sanity: the DC probe actually flows
   REQUIRE(std::fabs(atHigh - atZero) < 0.05 * atZero);
+}
+
+// ── Onset detector and trigger layer (design §4) ───────────────────────────────
+
+namespace {
+
+// Renders through an Engine while exposing it — the shared Render() helper hides
+// the instance, and the trigger tests need ConsumeOnsetCount / Trigger.
+struct LiveEngine {
+  host::HeapArenas arenas;
+  Engine           engine;
+  explicit LiveEngine(const EngineConfig& cfg,
+                      const std::vector<std::pair<ParamId, float>>& params)
+      : arenas(PlanMemory(cfg)) {
+    REQUIRE(arenas.ok());
+    REQUIRE(engine.Init(cfg, arenas.get()));
+    for (auto& p : params) engine.SetParam(p.first, p.second);
+    engine.Reset();
+  }
+  void Run(const std::vector<float>& input, std::vector<float>* outL = nullptr) {
+    std::vector<float> l(input.size()), r(input.size());
+    size_t pos = 0;
+    while (pos < input.size()) {
+      const auto n = static_cast<uint32_t>(std::min<size_t>(256, input.size() - pos));
+      const float* ins[2]  = {input.data() + pos, input.data() + pos};
+      float*       outs[2] = {l.data() + pos, r.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = n;
+      engine.Process(ctx);
+      pos += n;
+    }
+    if (outL) *outL = std::move(l);
+  }
+};
+
+// A percussive pluck: sharp noise attack, exponential decay.
+void AddPluck(std::vector<float>* buf, size_t at, float amp, uint32_t seed) {
+  Rng rng;
+  rng.s = seed;
+  for (size_t i = 0; i < 2400 && at + i < buf->size(); ++i) {
+    (*buf)[at + i] += amp * rng.Next() * std::exp(-double(i) / 480.0);
+  }
+}
+
+}  // namespace
+
+TEST_CASE("onset detector counts plucks, ignores silence and steady tones") {
+  EngineConfig cfg = SmallConfig();
+
+  SECTION("eight plucks are counted, within min-IOI tolerance") {
+    std::vector<float> input(120000, 0.0f);  // 2.5 s
+    for (int k = 0; k < 8; ++k) AddPluck(&input, 12000 + k * 12000, 0.6f, 77u + k);
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    const uint32_t count = live.engine.ConsumeOnsetCount();
+    INFO("onsets: " << count);
+    REQUIRE(count >= 6);
+    REQUIRE(count <= 10);
+    REQUIRE(live.engine.ConsumeOnsetCount() == 0);  // exchange(0) drains
+  }
+  SECTION("silence yields zero onsets") {
+    std::vector<float> input(48000, 0.0f);
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    REQUIRE(live.engine.ConsumeOnsetCount() == 0);
+  }
+  SECTION("a steady tone triggers at most its own attack") {
+    std::vector<float> input(96000);
+    for (size_t i = 0; i < input.size(); ++i) {
+      input[i] = 0.4f * static_cast<float>(
+                            std::sin(2.0 * 3.14159265358979 * 220.0 * (double(i) / 48000.0)));
+    }
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    REQUIRE(live.engine.ConsumeOnsetCount() <= 2);
+  }
+  SECTION("adaptive whitening hears quiet plucks too") {
+    std::vector<float> input(96000, 0.0f);
+    for (int k = 0; k < 4; ++k) AddPluck(&input, 12000 + k * 18000, 0.03f, 300u + k);
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    REQUIRE(live.engine.ConsumeOnsetCount() >= 2);
+  }
+}
+
+// ONSET as an OR'd trigger source with POS_MARK positioning: grains sound the
+// marked audio immediately, while the free-running scheduler is parked 2 s in
+// the past (still silent ring) — so all early wet energy is onset-driven.
+TEST_CASE("onset-triggered grains sound the marked audio") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.historyFrames   = 1u << 17;  // > 2 s so DelayMs 2000 is a legal position
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(96000, 0.0f);  // 2 s
+  for (int k = 0; k < 4; ++k) AddPluck(&input, 9600 + k * 19200, 0.6f, 500u + k);
+
+  auto params = DegenerateDelay(2000.0f);  // periodic grains read silent history
+  for (auto& p : params) {
+    if (p.first == ParamId::GrainSizeMs) p.second = 80.0f;
+  }
+
+  auto energyUpTo = [&](bool onsetTrigger) {
+    auto ps = params;
+    if (onsetTrigger) {
+      ps.push_back({ParamId::OnsetTrigger, 1.0f});
+      ps.push_back({ParamId::PositionSource, 1.0f});
+    }
+    LiveEngine live(cfg, ps);
+    std::vector<float> out;
+    live.Run(input, &out);
+    double acc = 0;
+    for (size_t i = 0; i < 86400; ++i) acc += double(out[i]) * out[i];  // first 1.8 s
+    return acc;
+  };
+
+  const double withTriggers    = energyUpTo(true);
+  const double withoutTriggers = energyUpTo(false);
+  REQUIRE(withTriggers > 1.0);
+  REQUIRE(withoutTriggers < withTriggers * 0.01);
+}
+
+// The external Trigger() fallback (design §4: explicit triggers never drop).
+TEST_CASE("manual Trigger fires an extra grain") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  std::vector<float> input(48000, 0.5f);  // DC probe
+  auto params = DegenerateDelay(100.0f);
+
+  LiveEngine live(cfg, params);
+  std::vector<float> out(input.size()), r(input.size());
+  size_t pos = 0;
+  while (pos < input.size()) {
+    if (pos == 24064) live.engine.Trigger();  // between blocks, steady state
+    const auto n = static_cast<uint32_t>(std::min<size_t>(256, input.size() - pos));
+    const float* ins[2]  = {input.data() + pos, input.data() + pos};
+    float*       outs[2] = {out.data() + pos, r.data() + pos};
+    Engine::ProcessContext ctx;
+    ctx.in        = ins;
+    ctx.out       = outs;
+    ctx.numFrames = n;
+    live.engine.Process(ctx);
+    pos += n;
+  }
+  // Steady degenerate delay sits at ~0.5; the manually fired grain overlaps the
+  // periodic voice, briefly doubling the wet sum.
+  float before = 0.f, after = 0.f;
+  for (size_t i = 20000; i < 24000; ++i) before = std::max(before, std::fabs(out[i]));
+  for (size_t i = 24064; i < 29000; ++i) after = std::max(after, std::fabs(out[i]));
+  REQUIRE(before < 0.6f);
+  REQUIRE(after > 0.8f);
 }
 
 TEST_CASE("sample counter is free-running") {

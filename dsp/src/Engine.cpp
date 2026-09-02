@@ -81,11 +81,12 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   plan.bytes[static_cast<size_t>(Tier::Hot)] =
       (static_cast<size_t>(detail::kWindowLutSize) + 2u * cfg.maxBlockSize) * sizeof(float);
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
-  // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank.
+  // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
+  // + onset-detector analysis/FFT/whitening state.
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
       (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
        detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
-       detail::PostChain::WarmFloats(cfg.sampleRate)) *
+       detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
       sizeof(float);
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
@@ -143,6 +144,8 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
       static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t) +
       static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u);
   post_.Init(warm, postBulk, cfg.sampleRate);
+  warm += detail::PostChain::WarmFloats(cfg.sampleRate);
+  detector_.Init(warm, cfg.sampleRate);
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
   sampleCounter_ = 0;
@@ -194,6 +197,9 @@ void Engine::Reset() noexcept {
   if (!ready_) return;
   granular_.Reset();
   tamer_.Reset();
+  detector_.Reset();
+  onsetCount_.store(0u, std::memory_order_relaxed);
+  manualTriggers_.store(0u, std::memory_order_relaxed);
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
@@ -238,6 +244,9 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
       // exp2f, not powf (cheaper, and the pattern to copy is LUT+lerp when
       // SemitonesToRatio lands — schedule-time transcendentals are charged in §8).
       outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
+      break;
+    case ParamId::TriggerSens:
+      detector_.SetSensitivity(value);
       break;
     default:
       // Scheduler/voice params vs post-chain params rebuild their own blocks,
@@ -302,10 +311,12 @@ void Engine::RebuildGranularParams() noexcept {
   gp_.ratioBase   = get(ParamId::PitchSt);
   gp_.spreadCents = get(ParamId::SpreadCents);
   gp_.reverseProb = get(ParamId::ReverseProb);
-  gp_.sustain     = get(ParamId::WindowSustain);
-  gp_.skew        = get(ParamId::WindowSkew);
-  gp_.smoothness  = get(ParamId::WindowSmooth);
-  gp_.panSpread   = get(ParamId::PanSpread);
+  gp_.sustain      = get(ParamId::WindowSustain);
+  gp_.skew         = get(ParamId::WindowSkew);
+  gp_.smoothness   = get(ParamId::WindowSmooth);
+  gp_.panSpread    = get(ParamId::PanSpread);
+  gp_.onsetTrigger = get(ParamId::OnsetTrigger) >= 0.5f;
+  gp_.posFromMark  = get(ParamId::PositionSource) >= 0.5f;
 
   // Coherence-aware normalization exponent (design §3): unity-rate, zero-spray
   // grains all read the SAME source sample and sum coherently (1/N); anything
@@ -415,19 +426,33 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   const uint32_t ringStart = writeFrame_;
   const bool     dither    = cfg_.ditherRingWrite;
 
-  // ── Pass 1: write input (+ feedback) into the ring, per sample.
-  // The feedback signal is the wet output delayed by exactly kFeedbackDelayFrames
-  // through a fixed-length FIFO — a shared build constant, so the loop period
-  // (base_ms + kFeedbackDelayFrames/sr) is identical on firmware and plugin and
-  // block-split invariant (contracts #1/#6). The taming chain revisits this seam.
+  // ── Pass 1: write input (+ feedback) into the ring, per sample, and feed the
+  // onset detector (hop boundaries on the absolute grid, so detection is
+  // split-invariant). The feedback signal is the wet output delayed by exactly
+  // kFeedbackDelayFrames through a fixed-length FIFO — a shared build constant,
+  // so the loop period is identical on firmware and plugin (contracts #1/#6).
   // Slot index is a mask of the absolute sample (power-of-two length) — a 64-bit
   // modulo compiled to two __aeabi_uldivmod calls per sample on Cortex-M7.
+  detail::TriggerEvents ev;
+  ev.manualCount = manualTriggers_.exchange(0u, std::memory_order_relaxed);
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   fb   = feedback_.Next();
     float wrL          = inL[n] + fb * fbFifo_[2u * slot];
     float wrR          = inR[n] + fb * fbFifo_[2u * slot + 1u];
+
+    // Detector listens to the raw mono input (pre-feedback: regenerated wet must
+    // not re-trigger grains — that would be a trigger feedback loop).
+    if (detector_.ProcessSample(0.5f * (inL[n] + inR[n]), abs) &&
+        ev.onsetCount < detail::TriggerEvents::kMaxOnsets) {
+      ev.onsetOffset[ev.onsetCount] = n;
+      // Attribute the onset's audio to the start of the hop just analyzed.
+      ev.onsetMarkFrame[ev.onsetCount] =
+          (ringStart + n + 1u - detail::kOnsetHop) & mask_;
+      ++ev.onsetCount;
+      onsetCount_.fetch_add(1u, std::memory_order_relaxed);
+    }
     if (dither) {
       // Gated at a quarter LSB, not at zero: below half an LSB plain rounding
       // already absorbs to exact 0 (no fixed points exist down there), while a
@@ -445,8 +470,8 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   }
 
   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
-  granular_.Process(gp_, sampleCounter_, ringStart, frozen_, frozenAnchor_, ctx.numFrames,
-                    wetL_, wetR_);
+  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, frozenAnchor_,
+                    ctx.numFrames, wetL_, wetR_);
 
   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
   // the FIFO (design §2.3: DC/HP/LP/saturator/diffuser sit inside the loop; the

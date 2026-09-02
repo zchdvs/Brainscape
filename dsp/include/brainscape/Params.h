@@ -35,6 +35,9 @@ enum class ParamId : uint32_t {
                         // (design §2.6 endpoint semantics: Filter fully CW = bypass)
   FilterRes      = 24,  // post.filter.res
   FilterMorph    = 25,  // post.filter.morph — 0..3 continuous LP -> BP -> HP -> Notch
+  TriggerSens    = 26,  // trigger.sensitivity — onset-detector threshold (1 = hair trigger)
+  OnsetTrigger   = 27,  // scheduler.onset_trigger — >=0.5 fires a grain per onset (OR'd)
+  PositionSource = 28,  // layer0.position.source — >=0.5 = POS_MARK (most recent onset)
 };
 
 struct ParamDescriptor {
@@ -81,6 +84,9 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::FilterCutoffHz, "post.filter.cutoff_hz",     40.0f,  20000.0f, 20000.0f, "Hz"},
     {ParamId::FilterRes,      "post.filter.res",           0.0f,   1.0f,     0.1f,     ""},
     {ParamId::FilterMorph,    "post.filter.morph",         0.0f,   3.0f,     0.0f,     ""},
+    {ParamId::TriggerSens,    "trigger.sensitivity",       0.0f,   1.0f,     0.5f,     ""},
+    {ParamId::OnsetTrigger,   "scheduler.onset_trigger",   0.0f,   1.0f,     0.0f,     ""},
+    {ParamId::PositionSource, "layer0.position.source",    0.0f,   1.0f,     0.0f,     ""},
 };
 inline constexpr size_t kNumParams = sizeof(kParamTable) / sizeof(kParamTable[0]);
 
