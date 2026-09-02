@@ -24,6 +24,13 @@ static_assert(TableIsContiguous(), "kParamTable must be ordered by contiguous id
 static_assert(std::atomic<float>::is_always_lock_free,
               "SetParam/GetParam must be lock-free on this target");
 
+// The onset event list must cover every hop boundary in the largest legal block
+// (maxBlockSize <= kFeedbackDelayFrames, enforced in Init) — if the FIFO constant
+// is ever raised, this is the assert that keeps onsets from being dropped.
+static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
+                  detail::TriggerEvents::kMaxOnsets,
+              "TriggerEvents::kMaxOnsets must cover the largest legal block");
+
 constexpr float kInvScale = 1.0f / 32767.0f;
 
 // Rounding-mode-independent, NaN-safe int16 quantizer. Not lrintf: lrintf follows
@@ -339,7 +346,10 @@ void Engine::RebuildGranularParams() noexcept {
   // Freeze pins the anchor, turning identical grains into time-shifted copies of
   // one window — fully decorrelated. Without this term, engaging freeze on a
   // coherent preset dropped the wet path up to 16.7 dB (review finding).
-  if (frozen_) decorr = 1.0f;
+  // POS_MARK is the same geometry (all grains anchored to one ring frame, born
+  // at different times) — without its term the Strum family read up to 18 dB
+  // quiet across the overlap knob (review finding).
+  if (frozen_ || gp_.posFromMark) decorr = 1.0f;
   decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
   norm_.target  = std::pow(gp_.targetVoices, -p);
@@ -433,8 +443,17 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   // so the loop period is identical on firmware and plugin (contracts #1/#6).
   // Slot index is a mask of the absolute sample (power-of-two length) — a 64-bit
   // modulo compiled to two __aeabi_uldivmod calls per sample on Cortex-M7.
+  // Deliver at most numFrames manual triggers this block and CARRY the surplus —
+  // draining the counter dropped every trigger past numFrames, silently breaking
+  // the "explicit triggers never drop" contract on small blocks (review finding).
   detail::TriggerEvents ev;
-  ev.manualCount = manualTriggers_.exchange(0u, std::memory_order_relaxed);
+  {
+    const uint32_t queued = manualTriggers_.load(std::memory_order_relaxed);
+    ev.manualCount        = queued < ctx.numFrames ? queued : ctx.numFrames;
+    if (ev.manualCount > 0) {
+      manualTriggers_.fetch_sub(ev.manualCount, std::memory_order_relaxed);
+    }
+  }
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
@@ -443,15 +462,20 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
     float wrR          = inR[n] + fb * fbFifo_[2u * slot + 1u];
 
     // Detector listens to the raw mono input (pre-feedback: regenerated wet must
-    // not re-trigger grains — that would be a trigger feedback loop).
-    if (detector_.ProcessSample(0.5f * (inL[n] + inR[n]), abs) &&
-        ev.onsetCount < detail::TriggerEvents::kMaxOnsets) {
-      ev.onsetOffset[ev.onsetCount] = n;
-      // Attribute the onset's audio to the start of the hop just analyzed.
-      ev.onsetMarkFrame[ev.onsetCount] =
-          (ringStart + n + 1u - detail::kOnsetHop) & mask_;
-      ++ev.onsetCount;
-      onsetCount_.fetch_add(1u, std::memory_order_relaxed);
+    // not re-trigger grains — that would be a trigger feedback loop). It runs
+    // unconditionally even when nothing consumes onsets: the trigger LED must
+    // stay live for sensitivity calibration (research rec #7), and gating it on
+    // parameters would make the whitening state parameter-history dependent.
+    if (detector_.ProcessSample(0.5f * (inL[n] + inR[n]), abs)) {
+      onsetCount_.fetch_add(1u, std::memory_order_relaxed);  // LED even if the
+                                                             // event list is full
+      if (ev.onsetCount < detail::TriggerEvents::kMaxOnsets) {
+        ev.onsetOffset[ev.onsetCount] = n;
+        // Attribute the onset's audio to the start of the hop just analyzed.
+        ev.onsetMarkFrame[ev.onsetCount] =
+            (ringStart + n + 1u - detail::kOnsetHop) & mask_;
+        ++ev.onsetCount;
+      }
     }
     if (dither) {
       // Gated at a quarter LSB, not at zero: below half an LSB plain rounding

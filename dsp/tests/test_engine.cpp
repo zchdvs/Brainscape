@@ -922,11 +922,13 @@ struct LiveEngine {
 };
 
 // A percussive pluck: sharp noise attack, exponential decay.
-void AddPluck(std::vector<float>* buf, size_t at, float amp, uint32_t seed) {
+void AddPluck(std::vector<float>* buf, size_t at, float amp, uint32_t seed,
+              double decaySamples = 480.0) {
   Rng rng;
-  rng.s = seed;
-  for (size_t i = 0; i < 2400 && at + i < buf->size(); ++i) {
-    (*buf)[at + i] += amp * rng.Next() * std::exp(-double(i) / 480.0);
+  rng.s          = seed;
+  const auto len = static_cast<size_t>(decaySamples * 5.0);
+  for (size_t i = 0; i < len && at + i < buf->size(); ++i) {
+    (*buf)[at + i] += amp * rng.Next() * std::exp(-double(i) / decaySamples);
   }
 }
 
@@ -952,8 +954,10 @@ TEST_CASE("onset detector counts plucks, ignores silence and steady tones") {
     live.Run(input);
     REQUIRE(live.engine.ConsumeOnsetCount() == 0);
   }
-  SECTION("a steady tone triggers at most its own attack") {
-    std::vector<float> input(96000);
+  SECTION("a steady tone triggers at most its own attack — held 10 s") {
+    // Long hold: the pre-peak-picker detector free-ran at the min-IOI rate
+    // starting ~6 s in (whitening memory decayed into leakage flutter; review).
+    std::vector<float> input(480000);
     for (size_t i = 0; i < input.size(); ++i) {
       input[i] = 0.4f * static_cast<float>(
                             std::sin(2.0 * 3.14159265358979 * 220.0 * (double(i) / 48000.0)));
@@ -969,6 +973,149 @@ TEST_CASE("onset detector counts plucks, ignores silence and steady tones") {
     live.Run(input);
     REQUIRE(live.engine.ConsumeOnsetCount() >= 2);
   }
+  SECTION("a hiss floor does not fire, and plucks over hiss count exactly") {
+    // -60 dBFS hiss (a benign guitar rig): the bare-threshold detector fired at
+    // the min-IOI rate on this — 30 counts for 8 plucks (review finding).
+    Rng rng;
+    std::vector<float> input(120000);
+    for (auto& x : input) x = 0.001f * rng.Next();
+    for (int k = 0; k < 8; ++k) AddPluck(&input, 12000 + k * 12000, 0.6f, 900u + k);
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    const uint32_t count = live.engine.ConsumeOnsetCount();
+    INFO("onsets over hiss: " << count);
+    REQUIRE(count >= 7);
+    REQUIRE(count <= 9);
+  }
+  SECTION("pure noise floor alone fires nothing") {
+    Rng rng;
+    std::vector<float> input(240000);  // 5 s
+    for (auto& x : input) x = 0.001f * rng.Next();
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    REQUIRE(live.engine.ConsumeOnsetCount() == 0);
+  }
+  SECTION("realistic 200 ms pluck decays still count once each") {
+    // The old suite's 10 ms decay dodged the failure: at 60 ms+ the bare
+    // threshold re-fired down the tail (review: 25 counts for 8 plucks).
+    std::vector<float> input(240000, 0.0f);
+    for (int k = 0; k < 8; ++k) AddPluck(&input, 12000 + k * 24000, 0.6f, 1100u + k, 9600.0);
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    const uint32_t count = live.engine.ConsumeOnsetCount();
+    INFO("onsets on long decays: " << count);
+    REQUIRE(count >= 7);
+    REQUIRE(count <= 10);
+  }
+  SECTION("held hard-clipped chord chatters only a little") {
+    // The research's structural case: honesty target is BOUNDED chatter, not
+    // zero (the bare threshold fired 179x/5 s; even Dixon alone leaves ~113 —
+    // the growth hysteresis is what tames it; review findings).
+    std::vector<float> input(240000);  // 5 s
+    for (size_t i = 0; i < input.size(); ++i) {
+      const double t = double(i) / 48000.0;
+      double s = std::sin(2 * 3.14159265358979 * 110.0 * t) +
+                 std::sin(2 * 3.14159265358979 * 138.6 * t) +
+                 std::sin(2 * 3.14159265358979 * 164.8 * t);
+      s *= 6.0;
+      input[i] = static_cast<float>(s > 1.0 ? 1.0 : (s < -1.0 ? -1.0 : s)) * 0.8f;
+    }
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    live.Run(input);
+    const uint32_t count = live.engine.ConsumeOnsetCount();
+    INFO("chatter on held clipped chord: " << count);
+    REQUIRE(count <= 25);
+  }
+  SECTION("mid-stream Reset plants no spurious onset") {
+    // An absolute warmup index expired after the first 1024 samples, so every
+    // later Reset fired exactly one bogus onset + mark (review finding).
+    std::vector<float> tone(96000);
+    for (size_t i = 0; i < tone.size(); ++i) {
+      tone[i] = 0.4f * static_cast<float>(
+                           std::sin(2.0 * 3.14159265358979 * 196.0 * (double(i) / 48000.0)));
+    }
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    std::vector<float> half(tone.begin(), tone.begin() + 48000);
+    live.Run(half);
+    live.engine.ConsumeOnsetCount();  // drain the initial attack
+    live.engine.Reset();
+    std::vector<float> rest(tone.begin() + 48000, tone.end());
+    live.Run(rest);
+    REQUIRE(live.engine.ConsumeOnsetCount() == 0);
+  }
+}
+
+// Queued manual triggers beyond one block's frames must carry, not drop — and
+// carrying makes delivery block-size invariant (8 triggers land at absolute
+// offsets 0..7 whether the block is 4 frames or 512).
+TEST_CASE("manual trigger surplus carries across blocks, split-invariant") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  Rng rng;
+  std::vector<float> input(24000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+
+  auto render = [&](uint32_t blockSize) {
+    LiveEngine live(cfg, DegenerateDelay(100.0f));
+    for (int i = 0; i < 8; ++i) live.engine.Trigger();
+    std::vector<float> out(input.size()), r(input.size());
+    size_t pos = 0;
+    while (pos < input.size()) {
+      const auto n = static_cast<uint32_t>(std::min<size_t>(blockSize, input.size() - pos));
+      const float* ins[2]  = {input.data() + pos, input.data() + pos};
+      float*       outs[2] = {out.data() + pos, r.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = n;
+      live.engine.Process(ctx);
+      pos += n;
+    }
+    return out;
+  };
+
+  const auto big   = render(512);
+  const auto small = render(4);
+  REQUIRE(std::memcmp(big.data(), small.data(), big.size() * sizeof(float)) == 0);
+}
+
+// POS_MARK normalization: mark-anchored grains are time-shifted copies (like
+// freeze) — without the decorrelation term the Strum family read up to 18 dB
+// quiet across the overlap knob (review finding).
+TEST_CASE("POS_MARK level holds across the overlap knob") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.historyFrames   = 1u << 17;  // ring must outlast the render, or the mark
+                                   // staleness guard (correctly) falls back mid-test
+  cfg.ditherRingWrite = false;
+
+  Rng rng;
+  std::vector<float> input(96000, 0.0f);
+  // Noise starts AFTER the detector's warmup so its attack actually records a
+  // mark — noise-from-sample-zero left the mark ring empty (warmup swallowed the
+  // only onset) and the test measured the coherent no-mark fallback instead.
+  for (size_t i = 6000; i < input.size(); ++i) input[i] = 0.5f * rng.Next();
+
+  auto wetRms = [&](float overlap) {
+    auto params = DegenerateDelay(100.0f);
+    for (auto& p : params) {
+      if (p.first == ParamId::Overlap) p.second = overlap;
+      if (p.first == ParamId::GrainSizeMs) p.second = 20.0f;
+    }
+    params.push_back({ParamId::PositionSource, 1.0f});
+    LiveEngine live(cfg, params);
+    std::vector<float> out;
+    live.Run(input, &out);
+    double acc = 0;
+    for (size_t i = 48000; i < 96000; ++i) acc += double(out[i]) * out[i];
+    return std::sqrt(acc / 48000.0);
+  };
+
+  const double lo = wetRms(0.25f);
+  const double hi = wetRms(0.75f);
+  const double db = 20.0 * std::log10(hi / lo);
+  INFO("POS_MARK level change across overlap: " << db << " dB");
+  REQUIRE(std::fabs(db) < 3.0);
 }
 
 // ONSET as an OR'd trigger source with POS_MARK positioning: grains sound the

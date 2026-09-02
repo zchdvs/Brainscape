@@ -106,9 +106,12 @@ class Engine {
   // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
   // the guaranteed-working fallback when onset detection can't hear the source.
   enum class TriggerSource : uint8_t { Footswitch = 0, MidiNote = 1, Sidechain = 2 };
-  // Any thread; lock-free. Fires a grain (oldest-steal — explicit triggers never
-  // drop) at the start of the next Process. velocity and sampleOffset are
-  // accepted for API stability; both apply with the SPSC event queue.
+  // Any thread; lock-free. Fires a grain (oldest-steal; a surplus beyond one
+  // block's frames carries to the next block — explicit triggers never drop).
+  // src, velocity and sampleOffset are all accepted for API stability but not
+  // yet read: source routing, velocity, and sample-accurate delivery land with
+  // the mode system and SPSC event queue. A SIDECHAIN audio input is not yet
+  // expressible through ProcessContext at all (reserved, like tempoBpm).
   void Trigger(TriggerSource /*src*/ = TriggerSource::Footswitch, float /*velocity*/ = 1.f,
                uint32_t /*sampleOffset*/ = 0) noexcept {
     manualTriggers_.fetch_add(1u, std::memory_order_relaxed);

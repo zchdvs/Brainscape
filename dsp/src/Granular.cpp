@@ -55,7 +55,7 @@ inline float EnvMorphed(const grainmath::EnvSpec& e, float i, float smoothness,
 
 void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                                  uint32_t anchorFrame) noexcept {
-  const uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
+  uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment.
   float st = p.ratioBase;
@@ -70,19 +70,39 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   const bool  reverse = p.reverseProb > 0.f && RandUnit(birthAbs, Draw::Reverse) < p.reverseProb;
 
   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
-  // recent onset mark — the Strum family's mechanism, design §4). Spray is
-  // reflected (not clamped) into the per-direction guard bounds so it keeps a
-  // distribution instead of piling onto the margin rail (review finding).
+  // recent onset mark — the Strum family's mechanism, design §4).
+  double d          = p.baseDelayFrames;
+  bool   markActive = false;
+  if (p.posFromMark && markCount_ > 0) {
+    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
+    // Staleness guard: once the write head has lapped the ring, the modular
+    // distance aliases to a small value and the "mark" is live audio (review
+    // finding) — fall back to the base position instead.
+    if (birthAbs - m.abs < static_cast<int64_t>(mask_)) {
+      d          = static_cast<double>((anchorFrame - m.frame) & mask_);
+      markActive = true;
+      // Read attack-length earlier so the marked transient lands at the
+      // envelope's flat top, not 15-31 dB down the fade-in (review finding).
+      d += static_cast<double>(grainmath::MakeEnv(static_cast<float>(total), p.sustain,
+                                                  p.skew)
+                                   .attackEnd);
+      // Upward pitch inflates the near guard past the mark distance and would
+      // silently clamp the grain onto pre-onset material (review finding): cap
+      // the grain length so the guard fits, instead of losing the transient.
+      if (ratio > 1.0f) {
+        const double maxOut = (d - kGuardMarginFrames) / (static_cast<double>(ratio) - 1.0);
+        if (maxOut < static_cast<double>(total)) {
+          total = maxOut >= 16.0 ? static_cast<uint32_t>(maxOut) : 16u;
+        }
+      }
+    }
+  }
+  // Spray is reflected (not clamped) into the per-direction guard bounds so it
+  // keeps a distribution instead of piling onto the margin rail (review finding).
   const auto bounds = grainmath::ComputeDelayBounds(
       static_cast<double>(total), static_cast<double>(ratio), reverse, mask_ + 1u,
       kGuardMarginFrames);
-  double d;
-  if (p.posFromMark && markCount_ > 0) {
-    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
-    d             = static_cast<double>((anchorFrame - m.frame) & mask_);
-  } else {
-    d = p.baseDelayFrames;
-  }
+  (void)markActive;
   if (p.sprayFrames > 0.f) {
     d += static_cast<double>((RandUnit(birthAbs, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
     d = grainmath::ReflectIntoBounds(d, bounds);
@@ -229,17 +249,18 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
   uint32_t renderedTo = 0;
   uint32_t evIdx      = 0;
 
-  // Manual/MIDI triggers fire at the top of the block, one per consecutive
-  // sample so their counter-keyed draws stay distinct (design §9: sample-offset
-  // delivery lands with the SPSC event queue).
-  for (uint32_t m = 0; m < ev.manualCount && m < numFrames; ++m) {
-    const uint32_t anchor =
-        frozen ? frozenAnchor : ((ringFrameAtBlockStart + m) & mask_);
-    FireExternal(p, absSample + m, anchor, &renderedTo, m, absSample, wetL, wetR);
-  }
-
   for (uint32_t n = 0; n < numFrames; ++n) {
     const int64_t abs = absSample + n;
+
+    // Manual/MIDI triggers fire INSIDE the per-sample loop, one per consecutive
+    // sample — a pre-loop fired them out of birth order relative to same-block
+    // scheduler/onset births, breaking order_'s ascending-birth invariant that
+    // both the canonical summation order and oldest-steal rely on (review
+    // finding). Sample-offset delivery lands with the SPSC event queue.
+    if (n < ev.manualCount) {
+      const uint32_t anchor = frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
+      FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
+    }
 
     // Onset events: record the mark always (POS_MARK feeds on it); fire a grain
     // only when the ONSET trigger source is enabled (OR'd with the free-running
