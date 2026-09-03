@@ -24,10 +24,12 @@ Two deliverables from one shared DSP core:
 
 ## Status
 
-**Early development.** Research lives in [docs/research/](docs/research/), the engine design
-in [docs/design/grain-engine.md](docs/design/grain-engine.md). The `dsp/` walking skeleton —
-history ring + delay tap inside the full lifecycle/memory/parameter contracts — builds and
-passes its contract tests on Linux/macOS/Windows:
+**Core DSP engine complete (v1 scope)** — granular scheduler and 64-voice pool, post chain
+with above-unity feedback taming, and the spectral-flux trigger layer, all inside bit-exact
+determinism contracts. See **[docs/STATUS.md](docs/STATUS.md)** for the full picture and next
+steps. Research lives in [docs/research/](docs/research/), the engine design in
+[docs/design/grain-engine.md](docs/design/grain-engine.md). Build and test on
+Linux/macOS/Windows:
 
 ```bash
 cmake -B build -DBRAINSCAPE_BUILD_TESTS=ON
