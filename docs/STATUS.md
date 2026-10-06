@@ -12,10 +12,11 @@
 The project has completed its **research**, the **core DSP engine** (v1 scope), the
 **designs for pedal/desktop parity and the companion app**, and the **engine side of the
 determinism profile**: one `dsp/` build profile, in-tree math, a full floating-point
-control-word guard, a deterministic denormal flush, a NaN-free boundary and the block-split
-fix. A golden-hash harness renders a 22-preset corpus bit-identically with MSVC, GCC, Clang
-and the Cortex-M7 code run under emulation, at any block size; it reports and does not yet
-gate. A JUCE plugin and standalone skeleton hosts the engine. Nothing has touched real
+control-word guard, a deterministic denormal flush, a NaN-free boundary, the block-split
+fix, and the engine state API (an exact `Restart`, a random-number epoch, one `LoadPreset`
+entry point and frame-stamped events). A golden-hash harness renders a 22-preset corpus
+bit-identically with MSVC, GCC, Clang and the Cortex-M7 code run under emulation, at any
+block size; it reports and does not yet gate. A JUCE plugin and standalone skeleton hosts the engine. Nothing has touched real
 hardware, and the parity and plugin CI workflows have not yet run on GitHub.
 
 | Phase | State |
@@ -26,7 +27,7 @@ hardware, and the parity and plugin CI workflows have not yet run on GitHub.
 | `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (block-split defect found and fixed 2026-10-05) |
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
-| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Engine side landed; golden harness report-only ([determinism-profile.md](design/determinism-profile.md)). `Restart`, epoch, `LoadPreset` and stamped events are **next**, then minting sound revision 1 |
+| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Engine side landed, `Restart`, epoch, `LoadPreset` and stamped events included; golden harness report-only ([determinism-profile.md](design/determinism-profile.md)). Minting sound revision 1 is **next** |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper, plain-value parameters, test-bench editor; no presets, library or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | ⬜ Not started — needs its own design doc |
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
@@ -70,10 +71,12 @@ and fed the same 48 kHz float32 input and the same frame-stamped events, write i
 float32 output, whatever block sizes each side uses. Not
 covered: the pedal's analog path, live playing, preset loads that keep trails (Spillover),
 DAW sessions at other sample rates, and DAW automation. The full contract is in
-[determinism-profile.md](design/determinism-profile.md). The exact-restart state, the exact
-preset load and frame-stamped events are not built yet, so today the guarantee holds for
-renders that start from a fresh `Init`, set every parameter and apply events at block
-boundaries, which is how the golden harness renders.
+[determinism-profile.md](design/determinism-profile.md). The engine now has every piece of
+that recipe except the compiled preset package: the golden harness Inits one engine, and
+for every render restarts it with `LoadPreset(…, Exact)` from a decoded preset state and
+hands its scripted events to `Process` at their frames. Rendering with a fresh `Init` per
+preset, or with the events applied between blocks split at their frames, gives the same
+bits.
 
 ## What the engine does today
 
@@ -123,7 +126,13 @@ implementing:
     `SanitizeInput` and `ConditionInput24` for input, and finite input giving finite output;
   - the engine defects the profile listed, fixed: mono in-place aliasing, the dither key
     (it now folds the whole 64-bit sample counter), and the three block-split mechanisms,
-    with pin-eligible marks (a frozen grain positions only at marks recorded before the pin).
+    with pin-eligible marks (a frozen grain positions only at marks recorded before the pin);
+  - the state API: `Engine::Restart` (the exact post-`Init` state, parameters kept), a
+    random-number epoch that Spillover loads restart, `LoadPreset(PresetState, Exact or
+    Spillover)` in the profile's fixed order with a report of inexact loads, frame-stamped
+    events in `ProcessContext` (parameter, freeze, trigger and Spillover load) applied at
+    their frames by splitting the block inside `Process`, the `EventQueue` transport with its
+    overflow count, and a toolchain ID (compiler, version, target, FP-flag hash).
 
 ### Verified behavioral contracts (the test suite enforces these)
 
@@ -144,7 +153,13 @@ implementing:
 - **Feedback decays to exact zero** (not just quiet) and self-oscillates bounded
   above unity.
 - **Deterministic, reproducible renders** — every random draw is keyed on a free-running
-  counter, never on block structure or call history.
+  counter (relative to the random-number epoch), never on block structure or call history.
+- **Exact restart and stamped events**: a used engine after `Restart` renders exactly what a
+  fresh `Init` renders (feedback, freeze, marks, every post stage, a Spillover epoch and
+  queued triggers left behind), and events at odd frames render what a wrapper splitting its
+  blocks there renders, at block sizes 1 to 512. A Spillover load never reconverges with the
+  Exact render (4 s measured, as the profile states); followed by `Reset` it reconverges after
+  0.250–0.264 s, the record's figures.
 - **Bit-identical across conforming builds** on the golden corpus (above), whatever the
   host's floating-point environment: renders under FTZ|DAZ with round-toward-zero, or with
   every exception unmasked, match the clean render, and flushing forced on inside the guard
@@ -156,7 +171,7 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (78 test cases / ~2.54M assertions in Release, 77 in Debug),
+**Suite** (`ctest`): `dsp_unit` (94 test cases / ~2.59M assertions in Release, 93 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
 editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with
@@ -190,14 +205,17 @@ records live in [docs/design/reviews/](design/reviews/).
   revision 1 (profile §8.4 step 10). The parity and plugin workflows have never run on
   GitHub; the AArch64, macOS and Ubuntu-QEMU legs are untested, and the QEMU and toolchain
   pins still need their first CI run to record checksums. Apple Silicon parity is unmeasured.
-- **Engine API the companion needs:** an exact `Restart`, a random-number epoch for
-  preset loads that keep trails, one `LoadPreset` entry point with a fixed order, and
-  frame-stamped events with an overflow counter; each must follow the guard pattern. Smaller
-  items: the time-parameter smoothing decision (automating delay times clicks: no smoothing on
-  the post-delay tap), input above 0 dBFS hard-clips in the int16 ring, and `Trigger()`'s
-  source/velocity/offset are accepted but unread.
-- **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
-  natively), Restart on transport start and the spare engine, the wrapper bypass with
+- **Engine API still to come:** `PresetState` holds the STAT leaves only (the mode blob,
+  macros and the stored performance state arrive with the mode system, and the `.bsp`
+  decoder with the package format); tap/tempo, mode-switch, macro and expression events;
+  `SaveState`/`LoadState` (which will carry the epoch). Smaller items: the time-parameter
+  smoothing decision (automating delay times clicks: no smoothing on the post-delay tap),
+  input above 0 dBFS hard-clips in the int16 ring, and a trigger's source and velocity are
+  carried but unread.
+- **Plugin skeleton gaps:** the wrapper still applies events and state restores between
+  blocks it splits itself (the same bits) instead of through `ProcessContext` events and
+  `LoadPreset`; the resampled 48 kHz mode (other host rates run the engine natively),
+  Restart on transport start and the spare engine, the wrapper bypass with
   crossfade, the pedal-faithful input option (`ConditionInput24`), MIDI CC mapping, pluginval
   in CI, CLAP and LV2, `.bsp` session state, and the freeze of parameter IDs and tapers. The
   In/Out level controls are wrapper code outside the guard and never part of a preset.
@@ -234,10 +252,9 @@ Steps 1–4 need no hardware.
 1. **Determinism profile and the `dsp/` API.** Landed: the build profile, header hygiene,
    in-tree math with the symbol audit, the full control-word guard and denormal flush, the
    NaN-free boundary, the block-split fix, mono aliasing and the dither key, the parity
-   harness and its M7 leg (report-only), and the JUCE skeleton. Remaining: `Restart`, the
-   random-number epoch, `LoadPreset` and frame-stamped events (profile steps 8–9, before
-   minting because golden scripts place events at odd frames), and the time-parameter
-   smoothing decision.
+   harness and its M7 leg (report-only), the JUCE skeleton, and `Restart`, the random-number
+   epoch, `LoadPreset` and frame-stamped events (profile step 9). Remaining: the
+   time-parameter smoothing decision.
 2. **Mint internal sound revision 1.** Golden hashes and CI gates turn on, including the
    emulated Cortex-M7 parity job on every pull request; then the nightly legs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and

@@ -726,13 +726,13 @@ instance ([companion-app.md](companion-app.md), "Canonical configuration and lif
 word around `Process` only. That header is gone. Its replacement is private,
 `dsp/src/detail/FpEnvGuard.h`: it writes the complete control word (round-to-nearest,
 gradual underflow, which keeps subnormals rather than flushing them to zero) and restores
-the caller's word on exit, on `Init`, `Reset`, `ClearHistory`, `Process`, `SetParam`,
-`PlanMemory`, `Canonicalize` and the exported taper and display functions whose results
-reach the engine (`PlainFromNormalized`, `NormalizedFromPlain`, `FormatPlain`). Each public
-entry point is a thin wrapper around a `BRAINSCAPE_FP_BODY` function, so no FP work can move
-across the control-word write; `Restart` and `LoadPreset` will follow the same pattern when
-they land ([determinism-profile.md](determinism-profile.md), "A full control-word guard on
-every engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
+the caller's word on exit, on `Init`, `Reset`, `Restart`, `ClearHistory`, `Process`,
+`SetParam`, `LoadPreset`, `PlanMemory`, `Canonicalize`, `CheckPreset` and the exported taper
+and display functions whose results reach the engine (`PlainFromNormalized`,
+`NormalizedFromPlain`, `FormatPlain`). Each public entry point is a thin wrapper around a
+`BRAINSCAPE_FP_BODY` function, so no FP work can move across the control-word write
+([determinism-profile.md](determinism-profile.md), "A full control-word guard on every
+engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
 rewrite").
 
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
@@ -760,7 +760,10 @@ boundaries.
    with every render split at the freeze event's frame; onsets that actually fire, asserted
    with `ConsumeOnsetCount() > 0`, so that `POS_MARK` and the onset trigger are exercised; a
    grain position on the far rail of the ring; and a freeze held past the re-anchor point.
-   Mid-render events in general are covered once frame-stamped event delivery lands.
+   Mid-render events in general are frame-stamped events, which `Process` applies by
+   splitting its block at their frames (determinism-profile.md, "Frame-stamped event
+   delivery"); the suite checks parameter, freeze, trigger and Spillover-load events at odd
+   frames against a wrapper that splits there, at block sizes 1 to 512.
    **Status: holds (fixed 2026-10-05).** The parity investigation found, on `main` at
    `e86e971`, three independent mechanisms that made output depend on the block grid, because
    a grain could read ring frames that `Process` had already written ahead of the live write
@@ -801,8 +804,8 @@ boundaries.
 
    *Replaced 2026-10-05 with the text of determinism-profile.md §2.6, verbatim.* **Status: not
    met by today's code; builds diverge** ([determinism-profile.md](determinism-profile.md),
-   "Why a tolerance is not enough"). The package compiler, `LoadPreset` and the exact-restart
-   state (`Restart`) do not exist yet. The contract's preconditions (same sound revision,
+   "Why a tolerance is not enough"). `LoadPreset` and the exact-restart state (`Restart`)
+   exist; the package compiler does not yet. The contract's preconditions (same sound revision,
    canonical `EngineConfig`, identical input bits and frame-stamped events, exact plain
    parameter values, execution inside the floating-point-environment guard) are listed in
    determinism-profile.md, "The parity contract"; independence from block size additionally

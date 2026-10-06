@@ -493,8 +493,10 @@ made 48- and 512-frame renders differ; splitting at the event's frame made them 
 (*measured* [preset], [challenge]). So every event the app generates (scripted UI edits, MIDI,
 macro moves, freeze, triggers, taps, Spillover loads) carries an **absolute frame stamp** and
 takes effect exactly there, with the semantics of profile §5.11; a macro's fan-out applies in
-target-list order. Profile §5.11 moves the split into `dsp/`; until then the wrapper splits host
-blocks and calls `SetParam`, `Trigger` and `SetFreeze` between sub-blocks.
+target-list order. Profile §5.11 moves the split into `dsp/`: `Process` takes the block's
+events (`ProcessContext::events`) and splits there itself. A wrapper that splits host blocks
+and calls `SetParam`, `Trigger` and `SetFreeze` between sub-blocks, as the plugin skeleton
+still does, renders the same bits.
 
 - The engine's SPSC queue (`grain-engine.md` §9, threading contract) is **not a prerequisite
   for the app**. On the pedal it is the transport from the engine's single producer, the

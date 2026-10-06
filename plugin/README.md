@@ -51,8 +51,8 @@ The build never copies plugins into system folders.
    line at the bottom says **48 kHz pedal rate · host blocks**, or **Not pedal rate: host at
    44.1 kHz** if the device refused. The pedal's rate is not yet "pedal-exact": the engine is
    bit-identical across builds and host block sizes, but the parity contract also needs the
-   exact-restart state, exact preset loads and frame-stamped events, which are not built yet
-   (see [Current limitations](#current-limitations)).
+   exact-restart state, exact preset loads and frame-stamped events, which the engine has and
+   the wrapper does not use yet (see [Current limitations](#current-limitations)).
 2. Input is muted until you open **Options → Audio/MIDI Settings…** and untick **Mute audio
    input** (JUCE's guard against feedback through speakers). Pick the input channels there; on
    Windows, ASIO devices are listed too.
@@ -124,9 +124,10 @@ its control, `dsp_fp_profile_check` and the golden harness's `golden_report`):
 - **Not pedal-exact yet.** The engine side of the determinism profile has landed: the FP build
   profile, in-tree math, the full control-word guard, the denormal flush, the NaN-free boundary
   and the block-split fix, so Release and Debug, MSVC, GCC, Clang and the emulated Cortex-M7
-  render the golden corpus bit-identically on any block size. The parity contract still needs
-  the exact-restart state (`Restart`), exact preset loads (`LoadPreset`) and frame-stamped
-  events from the host and the editor, which apply at the start of the next host block today.
+  render the golden corpus bit-identically on any block size. The engine now offers the
+  exact-restart state (`Restart`), exact preset loads (`LoadPreset`) and frame-stamped events
+  (`ProcessContext::events`); the wrapper does not use them yet, and events from the host and
+  the editor apply at the start of the next host block.
   Live playing is outside the parity contract.
 - **Other host rates run the engine natively,** so delay periods and pitch differ slightly; the
   resampled 48 kHz mode (companion §4.2) is still to come.
