@@ -207,6 +207,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // claims it first.
   std::atomic<int>        spareState_{0};
   Values                  spareSnapshot_{};  // worker: what the Ready spare was loaded with
+  Values                  lastSnapshot_{};   // worker: the preset at its previous pass
   // For the status: hashes of the Ready spare's preset and of the values sent to the live
   // engine.
   std::atomic<uint64_t>   spareHash_{0}, sentHash_{0};

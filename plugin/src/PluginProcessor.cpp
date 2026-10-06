@@ -26,7 +26,9 @@ static_assert(kNumParams < 32, "touched_ holds one bit per parameter");
 enum SpareState : int { kSpareEmpty, kSparePreparing, kSpareReady, kSpareSwapping, kSpareRetired };
 
 // While the restart option is on, the worker re-checks the spare this often: after a
-// transport start used it, and whenever the preset moved away from it.
+// transport start used it, and whenever the preset moved away from it. It restarts the
+// spare only with a preset that held still for one interval, not at every step of a knob
+// drag (each restart clears 17 MiB).
 constexpr auto kSparePoll = std::chrono::milliseconds(10);
 
 // Every Process call's events fit, whatever the producers queued (three queues' worth,
@@ -395,7 +397,9 @@ void BrainscapeProcessor::SpareWorkerLoop() {
   std::unique_lock<std::mutex> lock(spareMutex_);
   while (!spareQuit_) {
     PrepareSpare();
-    if (restartOnStart_.load(std::memory_order_acquire)) {
+    // A spare still allocated is freed on a later pass once the audio thread lets go of it.
+    if (restartOnStart_.load(std::memory_order_acquire) ||
+        spareState_.load(std::memory_order_acquire) != kSpareEmpty) {
       spareWake_.wait_for(lock, kSparePoll);
     } else {
       spareWake_.wait(lock);
@@ -419,7 +423,9 @@ void BrainscapeProcessor::PrepareSpare() {
   // plays at the transport start is never swapped in.
   Values snapshot;
   for (size_t i = 0; i < kNumParams; ++i) snapshot[i] = params_[i]->Plain();
-  if (state == kSpareReady && SameBits(snapshot, spareSnapshot_)) return;
+  const bool settled = SameBits(snapshot, lastSnapshot_);
+  lastSnapshot_      = snapshot;
+  if (!settled || (state == kSpareReady && SameBits(snapshot, spareSnapshot_))) return;
   if (state != kSpareEmpty && state != kSpareReady && state != kSpareRetired) return;
   if (!spareState_.compare_exchange_strong(state, kSparePreparing, std::memory_order_acq_rel)) return;
   if (spare_ == nullptr) {
