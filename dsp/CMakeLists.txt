@@ -3,6 +3,7 @@ add_library(brainscape_dsp STATIC
   src/Granular.cpp
   src/OnsetDetector.cpp
   src/PostChain.cpp
+  src/TestSignal.cpp
 )
 target_include_directories(brainscape_dsp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(brainscape_dsp PUBLIC cxx_std_17)
