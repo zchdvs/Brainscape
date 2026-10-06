@@ -26,7 +26,7 @@ jobs:
       - name: Render smoke test
         shell: bash
         run: |
-          BIN=$(find build -name "brainscape_render*" -type f | head -1)
+          BIN=$(find build -type f \( -name brainscape_render -o -name brainscape_render.exe \) | head -1)
           "$BIN" smoke.wav && test -s smoke.wav
 
   # Debug leg: the design's maxBlockSize contract is enforced by assert (design §9),
