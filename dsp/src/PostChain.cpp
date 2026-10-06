@@ -50,7 +50,8 @@ constexpr uint32_t kTamerAp32k[4] = {101, 189, 137, 251};  // L0, L1, R0, R1
 
 // Post-delay ceiling: 2 s (the Space-knob delay never needs more; design §2.6).
 constexpr double kPostDelayMaxSeconds = 2.0;
-// Each of the tap glide's two poles (TapGlide): a 100 ms change settles in about 0.4 s.
+// Each of the tap glide's two poles (TapGlide): a 100 ms change comes within a frame of
+// its target in 0.55 s, a 1 s change (at the speed cap) in 2.3 s.
 constexpr double kPostDelayGlideSeconds = 0.05;
 // Mod line: 25 ms, center tap 10 ms, max excursion 4 ms (8 ms at full depth read
 // as seasick vibrato; review finding).
