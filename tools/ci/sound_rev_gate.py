@@ -7,7 +7,8 @@ first parent and the merge commit), and fails (exit 1) when:
   * hard trigger: a golden hash changed (dsp/tests/golden/golden.json: a preset's hash or
     per-second hashes differ, or a preset was dropped) and kSoundRevision was not bumped.
     No label overrides it;
-  * path trigger: the diff touches dsp/src/, dsp/include/, cmake/BrainscapeFpProfile.cmake,
+  * path trigger: the diff touches dsp/src/, dsp/include/, the CMake files that build the
+    engine (dsp/CMakeLists.txt, the root CMakeLists.txt, cmake/BrainscapeFpProfile.cmake),
     cmake/fp-forbidden-flags.txt or the arm toolchain file, and kSoundRevision was not
     bumped, unless the pull request carries the "sound-neutral" label (refactors, comments,
     tests; restricting who may apply it is the repository's job, not this script's);
@@ -28,8 +29,8 @@ import sys
 REVISION_HEADER = "dsp/include/brainscape/SoundRevision.h"
 GOLDEN = "dsp/tests/golden/golden.json"
 TRIGGER_DIRS = ("dsp/src/", "dsp/include/")
-TRIGGER_FILES = ("cmake/BrainscapeFpProfile.cmake", "cmake/fp-forbidden-flags.txt",
-                 "tools/cmake/arm-none-eabi-toolchain.cmake")
+TRIGGER_FILES = ("CMakeLists.txt", "dsp/CMakeLists.txt", "cmake/BrainscapeFpProfile.cmake",
+                 "cmake/fp-forbidden-flags.txt", "tools/cmake/arm-none-eabi-toolchain.cmake")
 NEUTRAL_LABEL = "sound-neutral"
 REVISION = re.compile(r"\bkSoundRevision\s*=\s*(\d+)\s*;")
 

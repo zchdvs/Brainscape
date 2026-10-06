@@ -34,23 +34,9 @@ else()
 endif()
 add_test(NAME dsp_unit COMMAND brainscape_tests)
 
-# The engine built again with the FP guard's test hooks (determinism profile §6.4):
-# flushing forced on inside the guard, and the exception flags each call raised. A
-# separate library, so no shipping build carries the hooks' global state.
+# The forced-flush tests, on the engine built with the guard's test hooks
+# (dsp/CMakeLists.txt).
 get_filename_component(_bs_dsp_dir .. ABSOLUTE BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-get_target_property(_bs_dsp_sources brainscape_dsp SOURCES)
-list(TRANSFORM _bs_dsp_sources PREPEND ${_bs_dsp_dir}/)
-add_library(brainscape_dsp_fpenv_hooks STATIC ${_bs_dsp_sources})
-target_include_directories(brainscape_dsp_fpenv_hooks
-  PUBLIC ${_bs_dsp_dir}/include PRIVATE ${_bs_dsp_dir}/src)
-target_compile_features(brainscape_dsp_fpenv_hooks PUBLIC cxx_std_17)
-target_link_libraries(brainscape_dsp_fpenv_hooks PUBLIC brainscape::fp_profile)
-target_compile_options(brainscape_dsp_fpenv_hooks
-  PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_OPTIONS>)
-target_compile_definitions(brainscape_dsp_fpenv_hooks
-  PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_DEFINITIONS>)
-target_compile_definitions(brainscape_dsp_fpenv_hooks PUBLIC BRAINSCAPE_FPENV_TEST_HOOKS=1)
-
 add_executable(brainscape_fpenv_tests test_main.cpp test_flush.cpp)
 target_link_libraries(brainscape_fpenv_tests PRIVATE brainscape_dsp_fpenv_hooks)
 target_include_directories(brainscape_fpenv_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor

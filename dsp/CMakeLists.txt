@@ -80,14 +80,33 @@ if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
     VERBATIM)
 endif()
 
-if(BRAINSCAPE_BUILD_TESTS)
-  add_subdirectory(tests)
-endif()
-
 # The golden-hash harness cross-built for the Cortex-M7 with the firmware flags and run
 # under qemu-arm user mode (docs/design/determinism-profile.md §6.2, the M7 leg). Needs
 # the arm-none-eabi toolchain file; the host harness builds with the tests.
 option(BRAINSCAPE_BUILD_M7_ORACLE "Build the golden harness as a Cortex-M7 ELF for qemu-arm" OFF)
+
+# The engine built again with the FP guard's test hooks (determinism profile §6.4):
+# flushing forced on inside the guard, and the exception flags each call raised. A
+# separate library, so no shipping build carries the hooks' global state; the host tests
+# and the forced-flush harness, the M7's included, link it.
+if(BRAINSCAPE_BUILD_TESTS OR BRAINSCAPE_BUILD_M7_ORACLE)
+  get_target_property(_bs_dsp_sources brainscape_dsp SOURCES)
+  add_library(brainscape_dsp_fpenv_hooks STATIC ${_bs_dsp_sources})
+  target_include_directories(brainscape_dsp_fpenv_hooks
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_features(brainscape_dsp_fpenv_hooks PUBLIC cxx_std_17)
+  target_link_libraries(brainscape_dsp_fpenv_hooks PUBLIC brainscape::fp_profile)
+  target_compile_options(brainscape_dsp_fpenv_hooks
+    PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_OPTIONS>)
+  target_compile_definitions(brainscape_dsp_fpenv_hooks
+    PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_DEFINITIONS>)
+  target_compile_definitions(brainscape_dsp_fpenv_hooks PUBLIC BRAINSCAPE_FPENV_TEST_HOOKS=1)
+endif()
+
+if(BRAINSCAPE_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
+
 if(BRAINSCAPE_BUILD_M7_ORACLE)
   if(BRAINSCAPE_BUILD_TESTS)
     message(FATAL_ERROR "BRAINSCAPE_BUILD_M7_ORACLE needs BRAINSCAPE_BUILD_TESTS=OFF (the tests are host-only)")

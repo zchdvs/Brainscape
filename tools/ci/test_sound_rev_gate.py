@@ -36,6 +36,10 @@ BASE = {
     GOLDEN: golden(1, BASE_PRESETS),
     "dsp/src/PostChain.cpp": "// post chain\n",
     "dsp/tests/test_engine.cpp": "// tests\n",
+    "dsp/tests/CMakeLists.txt": "# tests\n",
+    "dsp/CMakeLists.txt": "# engine\n",
+    "CMakeLists.txt": "# superbuild\n",
+    "plugin/CMakeLists.txt": "# plugin\n",
     "cmake/BrainscapeFpProfile.cmake": "# profile\n",
     "cmake/fp-forbidden-flags.txt": "-ffast-math\n",
     "tools/cmake/arm-none-eabi-toolchain.cmake": "# arm\n",
@@ -67,6 +71,11 @@ CASES = [
     ("profile CMake without a bump", {"cmake/BrainscapeFpProfile.cmake": "# changed\n"}, "", PATH),
     ("forbidden-flag list without a bump", {"cmake/fp-forbidden-flags.txt": "-Ofast\n"}, "", PATH),
     ("arm toolchain file without a bump", {ARM: "# -O2\n"}, "", PATH),
+    ("engine CMake file without a bump", {"dsp/CMakeLists.txt": "# a definition\n"}, "", PATH),
+    ("root CMake file without a bump", {"CMakeLists.txt": "# a definition\n"}, "", PATH),
+    ("engine CMake file, sound-neutral", {"dsp/CMakeLists.txt": "# a definition\n"}, "sound-neutral", 0),
+    ("test and plugin CMake files only",
+     {"dsp/tests/CMakeLists.txt": "# a test\n", "plugin/CMakeLists.txt": "# a format\n"}, "", 0),
     ("arm toolchain file, sound-neutral", {ARM: "# -O2\n"}, "sound-neutral", 0),
     ("dsp/src with a bump and a regenerated golden file",
      {"dsp/src/PostChain.cpp": SOUND, HEADER: header(2), GOLDEN: REGOLDEN2}, "", 0),
@@ -94,8 +103,13 @@ def git(repo, *args):
 def tree(repo, files):
     """Writes exactly `files` into the work tree and returns the tree object id."""
     for name in os.listdir(repo):
-        if name != ".git":
-            shutil.rmtree(os.path.join(repo, name))
+        path = os.path.join(repo, name)
+        if name == ".git":
+            continue
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
     for path, text in files.items():
         full = os.path.join(repo, path)
         os.makedirs(os.path.dirname(full), exist_ok=True)

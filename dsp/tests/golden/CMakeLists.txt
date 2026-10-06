@@ -1,28 +1,34 @@
 # Golden-hash harness (docs/design/determinism-profile.md §6.1). One source for every
-# leg: the host build registers it with ctest in report mode; the M7 oracle build
-# (BRAINSCAPE_BUILD_M7_ORACLE) links the same brainscape_dsp archive the firmware
-# links into an ELF that qemu-arm user mode runs.
-add_executable(brainscape_golden
-  golden_main.cpp
-  Corpus.cpp
-  EventScript.cpp
-  Render.cpp
-)
-target_link_libraries(brainscape_golden PRIVATE brainscape_dsp)
-# The engine's private FP-environment header, for the hostile-environment renders.
-target_include_directories(brainscape_golden PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
-target_compile_definitions(brainscape_golden PRIVATE
-  BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
-
+# leg: the host build registers it with ctest in check mode (report mode in a
+# negative-control build); the M7 oracle build (BRAINSCAPE_BUILD_M7_ORACLE) links the same
+# brainscape_dsp archive the firmware links into an ELF that qemu-arm user mode runs.
+# brainscape_golden_flush is the harness again on the engine built with the guard's test
+# hooks, for the forced-flush control (profile §6.4), on the host and the M7 alike.
 if(BRAINSCAPE_BUILD_M7_ORACLE)
   enable_language(C)
-  target_sources(brainscape_golden PRIVATE m7/syscalls.c)
-  target_compile_options(brainscape_golden PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-Wno-psabi>")
-  # qemu-user cannot map a segment at address 0, where the bare-metal default puts .text.
-  target_link_options(brainscape_golden PRIVATE
-    -nostartfiles -static -Wl,-Ttext-segment=0x400000 -Wl,--gc-sections)
-  set_target_properties(brainscape_golden PROPERTIES SUFFIX .elf)
-else()
+endif()
+
+function(_brainscape_golden_harness name engine)
+  add_executable(${name} golden_main.cpp Corpus.cpp EventScript.cpp Render.cpp)
+  target_link_libraries(${name} PRIVATE ${engine})
+  # The engine's private FP-environment header, for the hostile-environment renders.
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+  target_compile_definitions(${name} PRIVATE
+    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
+  if(BRAINSCAPE_BUILD_M7_ORACLE)
+    target_sources(${name} PRIVATE m7/syscalls.c)
+    target_compile_options(${name} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-Wno-psabi>")
+    # qemu-user cannot map a segment at address 0, where the bare-metal default puts .text.
+    target_link_options(${name} PRIVATE
+      -nostartfiles -static -Wl,-Ttext-segment=0x400000 -Wl,--gc-sections)
+    set_target_properties(${name} PROPERTIES SUFFIX .elf)
+  endif()
+endfunction()
+
+_brainscape_golden_harness(brainscape_golden brainscape_dsp)
+_brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks)
+
+if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
   # Check mode (profile §6.1): every hash, per-second hash and counter must equal
   # golden.json for this build's kSoundRevision, and a render failure or missing coverage
   # fails too. A negative-control build cannot check (the harness refuses), so it
@@ -38,20 +44,19 @@ else()
             --report ${CMAKE_CURRENT_BINARY_DIR}/golden-report-$<CONFIG>.json
             $<IF:$<CONFIG:Debug>,--no-ablate,--ablate>)
 
+  # Check mode against edited copies of golden.json: each edit must fail it.
+  if(NOT BRAINSCAPE_FP_NEGATIVE_CONTROL)
+    add_test(NAME golden_check_edits
+      COMMAND ${CMAKE_COMMAND} -DHARNESS=$<TARGET_FILE:brainscape_golden>
+              -DGOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/golden.json
+              -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/edits-$<CONFIG>
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/GoldenEdits.cmake)
+  endif()
+
   # The forced-flush control (profile §6.4): the harness again, on the engine built with
   # the guard's test hooks, checks the golden file and renders every preset with flushing
   # forced on. Every vector must reproduce but the subnormal-input one, which must change.
   # Debug skips the long vectors.
-  add_executable(brainscape_golden_flush
-    golden_main.cpp
-    Corpus.cpp
-    EventScript.cpp
-    Render.cpp
-  )
-  target_link_libraries(brainscape_golden_flush PRIVATE brainscape_dsp_fpenv_hooks)
-  target_include_directories(brainscape_golden_flush PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
-  target_compile_definitions(brainscape_golden_flush PRIVATE
-    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
   add_test(NAME golden_forced_flush
     COMMAND brainscape_golden_flush --mode ${golden_mode} --force-flush-control --no-ablate
             --tag ctest-flush-$<CONFIG>

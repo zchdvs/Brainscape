@@ -3,9 +3,13 @@ name: sound-rev
 # companion-app.md §3.4's sound-rev-gate, the two triggers of determinism-profile.md §5.12.
 # Hard trigger: a pull request that changes a golden hash fails unless it bumps
 # kSoundRevision, whatever its labels. Path trigger: one that touches dsp/src, dsp/include,
-# cmake/BrainscapeFpProfile.cmake, cmake/fp-forbidden-flags.txt or the arm toolchain file
-# must bump it or carry the "sound-neutral" label, which a code owner justifies in review.
+# dsp/CMakeLists.txt, the root CMakeLists.txt, cmake/BrainscapeFpProfile.cmake,
+# cmake/fp-forbidden-flags.txt or the arm toolchain file must bump it or carry the
+# "sound-neutral" label, which a code owner justifies in review.
 # Its own workflow, so adding or removing the label re-runs this job and not the parity legs.
+# The gate runs the pull request's own copy of this file and of the script, so it holds
+# only while code owners review changes to .github/workflows/ and tools/ci/ and branch
+# protection requires this check (docs/STATUS.md, Known gaps).
 
 on:
   pull_request:

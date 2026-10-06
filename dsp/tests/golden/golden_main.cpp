@@ -3,20 +3,24 @@
 // and checks every preset exercised what it claims to.
 //
 //   brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]
-//                     [--block N | --pattern A,B,...] [--ring LOG2] [--only NAME,...]
-//                     [--delivery engine|split] [--fresh-engine] [--fp-env clean|hostile]
-//                     [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]
-//                     [--wav-dir DIR] [--list]
+//                     [--block N | --pattern A,B,... | --random-blocks SEED] [--ring LOG2]
+//                     [--only NAME,...] [--delivery engine|split] [--fresh-engine]
+//                     [--fp-env clean|hostile] [--ablate | --no-ablate] [--quick]
+//                     [--tag TAG] [--note KEY=VALUE] [--wav-dir DIR] [--list]
 //
 // report (default) never compares against anything it must match: it fails only when
 //        a render cannot run, a preset's coverage is missing or an invariance check
 //        changes its output (exit 1).
-// check  also requires every hash, per-second hash and counter to equal the golden
-//        file for this build's kSoundRevision (exit 2 on any difference).
+// check  also requires every hash, per-second hash and counter, each vector's input
+//        hash and ring sizes, and the header's revision, versions and engine
+//        configuration to equal the golden file for this build's kSoundRevision (exit 2
+//        on any difference).
 // mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, events
 //        through the engine's transport, one restarted engine, a clean FP environment,
 //        whole corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
 //        minted until the engine stops changing (profile §8.4 step 10).
+// --random-blocks cycles 257 block sizes of 1-512 frames drawn from the integer-only
+// SplitMix32 stream at SEED, so every target derives the same pattern (profile §6.4).
 // --delivery split applies events through SetParam, SetFreeze, Trigger and LoadPreset
 // (Spillover) with blocks split at their frames instead of as stamped events (profile
 // §5.11); --fresh-engine Inits an engine per render instead of restarting one (§5.8);
@@ -85,10 +89,11 @@ constexpr const char* kReportFormat = "brainscape-golden-report/1";
 constexpr const char* kGoldenFormat = "brainscape-golden/1";
 constexpr const char* kUsage =
     "usage: brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]\n"
-    "       [--block N | --pattern A,B,...] [--ring LOG2] [--only VECTOR[/PRESET],...]\n"
-    "       [--delivery engine|split] [--fresh-engine] [--fp-env clean|hostile]\n"
-    "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]\n"
-    "       [--wav-dir DIR] [--list] [--force-flush-control (brainscape_golden_flush only)]\n";
+    "       [--block N | --pattern A,B,... | --random-blocks SEED] [--ring LOG2]\n"
+    "       [--only VECTOR[/PRESET],...] [--delivery engine|split] [--fresh-engine]\n"
+    "       [--fp-env clean|hostile] [--ablate | --no-ablate] [--quick] [--tag TAG]\n"
+    "       [--note KEY=VALUE] [--wav-dir DIR] [--list]\n"
+    "       [--force-flush-control (brainscape_golden_flush only)]\n";
 
 struct Options {
   std::string              mode   = "report";
@@ -97,6 +102,7 @@ struct Options {
   std::string              tag = "local";
   std::string              wavDir;
   std::vector<uint32_t>    pattern{48};
+  int64_t                  blockSeed = -1;  // --random-blocks
   uint32_t                 ring = 22;
   std::vector<std::string> only;
   std::vector<std::pair<std::string, std::string>> notes;
@@ -174,6 +180,12 @@ std::vector<std::string> Split(const char* s) {
 
 uint32_t Count(const char* s) { return static_cast<uint32_t>(std::atoi(s)); }
 
+std::vector<uint32_t> RandomBlocks(uint32_t seed) {
+  std::vector<uint32_t> out;
+  for (uint32_t n = 0; n < 257; ++n) out.push_back(1u + testsignal::SplitMix32(seed, n) % 512u);
+  return out;
+}
+
 bool Parse(int argc, char** argv, Options* o) {
   for (int i = 1; i < argc; ++i) {
     const char* a    = argv[i];
@@ -204,9 +216,14 @@ bool Parse(int argc, char** argv, Options* o) {
       o->notes.emplace_back(kv.substr(0, kv.find('=')), kv.substr(kv.find('=') + 1));
     } else if ((!std::strcmp(a, "--block") || !std::strcmp(a, "--pattern")) && more) {
       o->pattern.clear();
+      o->blockSeed = -1;
       for (const std::string& b : Split(argv[++i])) {
         o->pattern.push_back(Count(b.c_str()));
       }
+    } else if (!std::strcmp(a, "--random-blocks") && more) {
+      const auto seed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+      o->blockSeed    = seed;
+      o->pattern      = RandomBlocks(seed);
     } else if (!std::strcmp(a, "--ablate")) o->ablate = true;
     else if (!std::strcmp(a, "--no-ablate")) o->ablate = false;
     else if (!std::strcmp(a, "--quick")) o->quick = true;
@@ -319,6 +336,7 @@ Json ReportHeader(const Options& o, uint32_t historyFrames) {
   Json pattern = Json::Arr();
   for (uint32_t b : o.pattern) pattern.Push(Json::Int(b));
   build.Set("blockPattern", pattern);
+  if (o.blockSeed >= 0) build.Set("blockSeed", Json::Int(o.blockSeed));
   build.Set("delivery", Json::Str(DeliveryName(o.delivery)));
   build.Set("start", Json::Str(o.freshEngine ? "init" : "restart"));
   build.Set("fpEnv", Json::Str(FpEnvName(o.fpEnv)));
@@ -524,11 +542,28 @@ Json GoldenFrom(const Json& report) {
   return g;
 }
 
+bool SameInts(const Json* a, const Json* b) {
+  if (a == nullptr || b == nullptr || a->items.size() != b->items.size()) return false;
+  for (size_t i = 0; i < a->items.size(); ++i) {
+    if (a->items[i].integer != b->items[i].integer) return false;
+  }
+  return true;
+}
+
+std::vector<std::string> Strings(const Json* list) {
+  std::vector<std::string> out;
+  if (list != nullptr) {
+    for (const Json& s : list->items) out.push_back(s.string);
+  }
+  return out;
+}
+
 // Compares a run against a golden file; returns the differences, empty when equal.
 // A run of the whole corpus must also have rendered everything the golden file has.
 std::vector<std::string> Compare(const Json& golden, const Json& run, bool wholeCorpus) {
   std::vector<std::string> diffs;
-  for (const char* key : {"soundRevision", "corpusVersion", "sampleRate", "historyFrames"}) {
+  for (const char* key : {"soundRevision", "generatorVersion", "corpusVersion", "sampleRate",
+                          "historyFrames"}) {
     const Json* g = golden.Find(key);
     const Json* r = run.Find(key);
     if (g == nullptr || r == nullptr || g->integer != r->integer) {
@@ -562,6 +597,9 @@ std::vector<std::string> Compare(const Json& golden, const Json& run, bool whole
     if (StrOf(*g, "inputHash") != StrOf(v, "inputHash")) {
       diffs.push_back(name + ": inputHash differs (generator)");
     }
+    if (!SameInts(g->Find("ringSizes"), v.Find("ringSizes"))) {
+      diffs.push_back(name + ": ringSizes differ");
+    }
     for (const Json& p : v.Find("presets")->items) {
       const std::string pname = name + "/" + StrOf(p, "name");
       const Json*       gp    = Named(g->Find("presets"), StrOf(p, "name"));
@@ -569,22 +607,30 @@ std::vector<std::string> Compare(const Json& golden, const Json& run, bool whole
         diffs.push_back(pname + ": not in the golden file");
         continue;
       }
+      const int64_t second =
+          FirstDiff(Strings(gp->Find("secondHashes")), Strings(p.Find("secondHashes")));
       if (StrOf(*gp, "hash") != StrOf(p, "hash")) {
-        std::vector<std::string> a, b;
-        if (const Json* s = gp->Find("secondHashes")) {
-          for (const Json& h : s->items) a.push_back(h.string);
-        }
-        for (const Json& h : p.Find("secondHashes")->items) b.push_back(h.string);
-        diffs.push_back(pname + ": hash differs from second " + std::to_string(FirstDiff(a, b)));
+        diffs.push_back(pname + ": hash differs from second " + std::to_string(second));
+      } else if (second >= 0) {
+        diffs.push_back(pname + ": per-second hashes differ from second " +
+                        std::to_string(second));
       }
       const Json* gc = gp->Find("counters");
-      for (const auto& m : p.Find("counters")->members) {
+      const Json* rc = p.Find("counters");
+      for (const auto& m : rc->members) {
         const Json* want = gc != nullptr ? gc->Find(m.first) : nullptr;
         if (want == nullptr || want->integer != m.second.integer) {
           diffs.push_back(pname + ": counter " + m.first + " = " +
                           std::to_string(m.second.integer) +
                           (want != nullptr ? ", golden " + std::to_string(want->integer)
                                            : ", not in golden"));
+        }
+      }
+      if (gc != nullptr) {
+        for (const auto& m : gc->members) {
+          if (rc->Find(m.first) == nullptr) {
+            diffs.push_back(pname + ": counter " + m.first + " is in golden but not counted");
+          }
         }
       }
     }
@@ -726,6 +772,10 @@ int main(int argc, char** argv) {
 
   std::string pattern;
   for (uint32_t b : o.pattern) pattern += (pattern.empty() ? "" : ",") + std::to_string(b);
+  if (o.blockSeed >= 0) {
+    pattern = "random 1-512 (seed " + std::to_string(o.blockSeed) + ", " +
+              std::to_string(o.pattern.size()) + " sizes)";
+  }
   std::printf("# brainscape golden: soundRevision %u, generator v%u, corpus v%u, ring 2^%u, "
               "blocks %s, events %s, %s, %s FP environment\n# toolchain: %s (fp flags %s)\n",
               static_cast<unsigned>(kSoundRevision), static_cast<unsigned>(testsignal::kVersion),

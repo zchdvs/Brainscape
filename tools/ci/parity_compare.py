@@ -10,8 +10,8 @@ Markdown summary:
   * input hashes, which must agree on every leg (the generator is integer-only);
   * coverage failures reported by any leg;
   * perturbations: a leg's non-canonical runs (other block sizes, wrapper-side event
-    splitting, an engine Init'd per render, a hostile caller FP environment) against
-    its own canonical run;
+    splitting, an engine Init'd per render, a hostile caller FP environment, the
+    forced-flush control) against its own canonical run;
   * negative controls (tags starting "negctl-", or reports from a build configured
     with -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON), which are EXPECTED to differ from the
     reference: matching it would mean the corpus lost coverage.
@@ -55,18 +55,24 @@ def is_canonical(r):
     b = r.get("build", {})
     return (b.get("blockPattern") == [48] and r.get("historyFrames") == 1 << 22
             and b.get("delivery") == "engine-events" and b.get("start") == "restart"
-            and b.get("fpEnv", "clean") == "clean" and not is_negative_control(r))
+            and b.get("fpEnv", "clean") == "clean" and not b.get("forcedFlushControl")
+            and not is_negative_control(r))
 
 
 def run_label(b):
     """Blocks, and the delivery, start and FP environment when they are not the canonical ones."""
-    label = "blocks " + ",".join(map(str, b.get("blockPattern", [])))
+    if "blockSeed" in b:
+        label = f'random blocks 1-512 (seed {b["blockSeed"]})'
+    else:
+        label = "blocks " + ",".join(map(str, b.get("blockPattern", [])))
     if b.get("delivery") != "engine-events":
         label += f', {b.get("delivery")}'
     if b.get("start") != "restart":
         label += f', start {b.get("start")}'
     if b.get("fpEnv", "clean") != "clean":
         label += f', {b.get("fpEnv")} FP environment'
+    if b.get("forcedFlushControl"):
+        label += ", forced-flush control"
     return label
 
 
@@ -137,7 +143,7 @@ def main():
     head = reports[0]
     lines.append(f'Sound revision {head.get("soundRevision")}, generator v{head.get("generatorVersion")}, '
                  f'corpus v{head.get("corpusVersion")}. Mode: '
-                 f'{"gating" if args.gate else "report-only (nothing is minted yet)"}.')
+                 f'{"gating" if args.gate else "report-only (PARITY_HASHES_GATING off)"}.')
     lines.append("")
     if ref_tag is None:
         lines.append("No canonical (48-frame, 2^22 ring, engine events, restarted engine, clean FP "

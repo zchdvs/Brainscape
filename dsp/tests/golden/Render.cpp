@@ -225,6 +225,10 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   for (const RestartPoint& r : restarts) {
     if (r.frame <= 0 || r.frame >= frames) return false;
   }
+  if (capture != nullptr) {  // 47 MB for 123 s, in the M7 oracle's fixed 160 MiB heap
+    capture->l.reserve(static_cast<size_t>(frames));
+    capture->r.reserve(static_cast<size_t>(frames));
+  }
 
   int32_t qL[512], qR[512];
   float   inL[512], inR[512], outL[512], outR[512];
