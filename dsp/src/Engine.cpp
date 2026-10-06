@@ -63,11 +63,10 @@ inline bool IsPowerOfTwo(uint32_t v) noexcept { return v != 0 && (v & (v - 1)) =
 // so int16 rounding has no fixed points in the feedback loop — without it a single
 // impulse leaves a permanent tone (measured −70 dBFS at fb 0.95; review finding).
 // Keys use the shared grainmath purpose stride so dither draws never collide with
-// grain-birth draws.
+// grain-birth draws, and fold the full 64-bit counter as RandUnit does (determinism
+// profile §5.6): the truncated key repeated the dither every 2^29 samples.
 inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
-  const auto key =
-      static_cast<uint32_t>(absSample) * static_cast<uint32_t>(grainmath::Draw::kCount) +
-      static_cast<uint32_t>(purpose);
+  const uint32_t key = grainmath::DrawKey(absSample, purpose);
   const float u1 =
       static_cast<float>(grainmath::Hash32(key) >> 8) * (1.0f / 16777216.0f);
   const float u2 =

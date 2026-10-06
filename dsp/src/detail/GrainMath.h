@@ -37,14 +37,19 @@ enum class Draw : uint32_t {
   kCount   = 8,  // key stride (power of two)
 };
 
-// Uniform [0, 1) from an absolute sample index and a purpose. The 64-bit counter
-// is folded in full — truncating it first would repeat the whole draw stream
-// every 2^29 samples (~3 h at 48 kHz; review finding).
-inline float RandUnit(int64_t absSample, Draw purpose) noexcept {
+// Hash key of the draw for an absolute sample index and a purpose. The 64-bit
+// counter is folded in full — truncating it first would repeat the whole draw
+// stream every 2^29 samples (~3 h at 48 kHz; review finding). Below 2^29 the key
+// equals the truncated one.
+inline uint32_t DrawKey(int64_t absSample, Draw purpose) noexcept {
   const auto k64 = static_cast<uint64_t>(absSample) * static_cast<uint32_t>(Draw::kCount) +
                    static_cast<uint32_t>(purpose);
-  const auto key = static_cast<uint32_t>(k64) ^ static_cast<uint32_t>(k64 >> 32);
-  return static_cast<float>(Hash32(key) >> 8) * (1.0f / 16777216.0f);
+  return static_cast<uint32_t>(k64) ^ static_cast<uint32_t>(k64 >> 32);
+}
+
+// Uniform [0, 1) from an absolute sample index and a purpose.
+inline float RandUnit(int64_t absSample, Draw purpose) noexcept {
+  return static_cast<float>(Hash32(DrawKey(absSample, purpose)) >> 8) * (1.0f / 16777216.0f);
 }
 
 inline float SemitonesToRatio(float st) noexcept {

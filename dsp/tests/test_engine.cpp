@@ -174,6 +174,12 @@ TEST_CASE("counter RNG is deterministic and in range") {
   // draw stream every 2^29 samples (~3 h at 48 kHz; review finding).
   REQUIRE(RandUnit(0, grainmath::Draw::Spray) !=
           RandUnit(int64_t{1} << 29, grainmath::Draw::Spray));
+  // The ring dither shares the folded key; below 2^29 samples it equals the old
+  // truncated key, so renders shorter than ~3 h are unchanged.
+  using grainmath::DrawKey;
+  REQUIRE(DrawKey(0, Draw::DitherL) != DrawKey(int64_t{1} << 29, Draw::DitherL));
+  REQUIRE(DrawKey(12345, Draw::DitherR) == 12345u * 8u + 6u);
+  REQUIRE(DrawKey((int64_t{1} << 29) - 1, Draw::DitherL) == 0xFFFFFFF8u + 5u);
   REQUIRE(grainmath::SemitonesToRatio(12.0f) == 2.0f);
   REQUIRE(grainmath::SemitonesToRatio(0.0f) == 1.0f);
 }
