@@ -87,17 +87,20 @@ PresetCase AutomationOffGrid(int64_t frames) {
   return p;
 }
 
-// Strum-style marks and onset triggering, the starting point of the load chain.
-const ParamList kStrumMarks = {
-    {P::DelayMs, 250.0f}, {P::Feedback, 0.5f},     {P::GrainSizeMs, 80.0f},   {P::Overlap, 0.6f},
-    {P::Jitter, 0.5f},    {P::SprayMs, 30.0f},     {P::ReverseProb, 0.2f},    {P::OnsetTrigger, 1.0f},
-    {P::PositionSource, 1.0f}, {P::TriggerSens, 0.6f}};
+// Strum-style marks and onset triggering, the starting point of the load chain. A function,
+// not a global: the M7 harness has no static destructors (no __dso_handle).
+ParamList StrumMarks() {
+  return {{P::DelayMs, 250.0f},       {P::Feedback, 0.5f},    {P::GrainSizeMs, 80.0f},
+          {P::Overlap, 0.6f},         {P::Jitter, 0.5f},      {P::SprayMs, 30.0f},
+          {P::ReverseProb, 0.2f},     {P::OnsetTrigger, 1.0f}, {P::PositionSource, 1.0f},
+          {P::TriggerSens, 0.6f}};
+}
 
 // Spillover loads as stamped events at odd frames (profile §5.10, §5.11): history, grains,
 // marks, pending triggers and the scheduler phase carry over each load, the random-number
 // epoch restarts at it, and events after a load at its frame apply after it.
 PresetCase SpilloverChain() {
-  PresetCase p = Preset("spillover_chain", kStrumMarks);
+  PresetCase p = Preset("spillover_chain", StrumMarks());
   Script&    s = p.script;
   // Into a reverse loop above unity feedback, so the trails are loud when the next load lands.
   s.Spillover(S(2) + 4321,
@@ -111,7 +114,7 @@ PresetCase SpilloverChain() {
        {P::Feedback, 0.3f}});
   s.Param(S(5) + 1, P::Mix, 0.8f);
   s.Param(S(5) + 1, P::FilterCutoffHz, 1500.0f);
-  s.Spillover(S(8) + 77, kStrumMarks);
+  s.Spillover(S(8) + 77, StrumMarks());
   s.Trigger(S(8) + 77);
   p.require   = {{C::Loads, 3, 3},         {C::Triggers, 2, 2}, {C::Events, 7},
                  {C::OffGridEvents, 7},    {C::Onsets, 10},     {C::FbAbove1Frames, S(2)}};
