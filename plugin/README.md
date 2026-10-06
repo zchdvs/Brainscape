@@ -64,6 +64,8 @@ The build never copies plugins into system folders.
    value to type one in its units (`250`, `1.2 s`, `2.5k`, `40%`, `-3 dB`, `Off`, `Mark`,
    `LP`…). Typed values are stored exactly as typed. **Window → Skew** is centred: −100 % is
    percussive, 0 % symmetric, +100 % a reverse swell. **Reverb → Time** is a 0–100 scale.
+   Changing **Post delay → Time** glides the delay to the new time, bending the repeats' pitch
+   like tape (at most 0.5–1.5× speed) instead of clicking; **Grain delay → Time** still jumps.
 5. **FREEZE** pins the grain position (host-automatable); **TRIGGER** fires one grain, as does
    any MIDI note-on (enable a MIDI input in the settings). The **ONSET** light flashes for every
    onset the detector hears; **Trigger → Sense** sets its threshold, **Trigger → Onset** makes
@@ -127,8 +129,8 @@ ring.
 ## Tests
 
 `ctest` runs, besides the `dsp/` tests (`dsp_unit`, `dsp_fpenv_forced_flush`, `dsp_symbol_audit` and
-its control, `dsp_fp_profile_check` and the golden harness's `golden_report` and
-`golden_forced_flush`):
+its control, `dsp_fp_profile_check` and the golden harness's `golden_check`, which requires every
+golden hash of sound revision 1, and `golden_forced_flush`):
 
 - `plugin_wrapper` (`tests/plugin_tests.cpp`): the processor driven as hosts drive it, compared
   bit for bit with the engine driven directly from `LoadPreset(…, Exact)` in 48-frame blocks,
@@ -158,8 +160,9 @@ its control, `dsp_fp_profile_check` and the golden harness's `golden_report` and
 ## Current limitations
 
 - **Pedal-exact only for renders.** The engine is bit-identical across builds and block sizes
-  (Release and Debug, MSVC, GCC, Clang and the emulated Cortex-M7 render the golden corpus
-  alike), and the wrapper hands it frame-stamped events and loads presets through `LoadPreset`.
+  (Release and Debug, MSVC, GCC, Clang and the emulated Cortex-M7 reproduce the golden hashes of
+  internal sound revision 1, which CI enforces), and the wrapper hands it frame-stamped events
+  and loads presets through `LoadPreset`.
   A render matches the pedal when it starts from the exact-restart state at 48 kHz: the
   audition render, or a bounce with Restart on play and no automation. Live playing is outside
   the parity contract, and so is a preset recalled while playing, which loads Spillover so the

@@ -1168,6 +1168,14 @@ Each risk is stated with its mitigation.
 The merged milestone sequence is companion §8.1; the profile's steps fall into it as below.
 Every sound-changing change lands before revision 1 is **published** (§1.5).
 
+**Status, 2026-10-06: steps 1–10 are done**, in `a30aa9d` through `26917d3`
+(`git log ce005eb..26917d3`): merged step 1 up to `b114b07`, which merged the state API
+(step 9) and the post-delay glide (step 8's smoothing decision); internal revision 1 minted in
+`06557f3` and its gates turned on in `26917d3` (STATUS.md, "Internal sound revision 1"). One
+finding for §5.12: a one-ULP binary64 change to a DetMath coefficient changed no corpus output
+bit, because every DetMath result is rounded to binary32 first, so only the path trigger sees
+it. Step 11 and the hardware-gated work of step 13 remain.
+
 - **Merged step 1, no hardware (profile steps 1–9; the JUCE skeleton runs in parallel):**
   (1) build profile (§5.2); (2) header hygiene (§3.5); (3) parity harness — generator,
   hashes, counters, host matrix report-only — grown from the evidence probes already committed

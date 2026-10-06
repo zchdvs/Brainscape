@@ -26,11 +26,12 @@ Two deliverables from one shared DSP core:
 
 **Core DSP engine complete (v1 scope)** — granular scheduler and 64-voice pool, post chain
 with above-unity feedback taming, and the spectral-flux trigger layer, deterministic and
-block-size-invariant. **The engine side of the determinism profile has landed:** a
-golden-hash corpus renders bit-identically with MSVC, GCC, Clang and the Cortex-M7 build run
-under emulation (report-only until the first sound revision is minted). **In progress:** the
-engine's restart, preset-load and stamped-event API, and the JUCE plugin and companion app,
-whose skeleton builds ([plugin/README.md](plugin/README.md)). See
+block-size-invariant. **The engine side of the determinism profile has landed**, with the
+engine's restart, preset-load and stamped-event API, and **internal sound revision 1 is
+minted:** MSVC, GCC, Clang and the Cortex-M7 build run under emulation reproduce its golden
+hashes bit for bit, and CI fails any change that alters them without a revision bump. **In
+progress:** the JUCE plugin and companion app, whose skeleton builds
+([plugin/README.md](plugin/README.md)). See
 **[docs/STATUS.md](docs/STATUS.md)** for the full picture and next steps. Research lives in
 [docs/research/](docs/research/), the designs in [docs/design/](docs/design/). Build and test
 the engine on Linux/macOS/Windows (no JUCE download):
