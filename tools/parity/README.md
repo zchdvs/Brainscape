@@ -9,6 +9,11 @@ in [docs/design/reviews/](../../docs/design/reviews/) cite them.
 The probes ran against `dsp/` at commit `e86e971`. Each modified engine copy is stored as a patch
 against that tree rather than as a full copy.
 
+The production parity tooling grown from them lives elsewhere: the test-signal generator in
+`dsp/include/brainscape/TestSignal.h`, the golden-hash harness in `dsp/tests/golden/` (ctest
+`golden_report`; `brainscape_golden --help`), the CI legs in `.github/workflows/parity.yml` and the
+static audits and report comparison in `tools/ci/`.
+
 | Directory | What it shows |
 | --- | --- |
 | [`prototype/`](prototype/) | The determinism-profile prototype: in-tree math (`DetMath.h`) replacing every libm transcendental, plus `-ffp-contract=off`, giving one SHA-256 across 32 builds (MSVC, GCC 11/12/14, Clang 14, LTO variants, and Cortex-M7 code from arm-none-eabi-gcc 10.3/12.3 run under `qemu-arm -cpu cortex-m7`). Also the accuracy checker for the in-tree math and the explicit-FMA variant. |
