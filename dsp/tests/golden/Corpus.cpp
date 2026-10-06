@@ -194,6 +194,7 @@ const char* CounterName(Counter c) noexcept {
     case C::SilentInFrames: return "silentInFrames";
     case C::OutActiveFrames: return "outActiveFrames";
     case C::TailActiveFrames: return "tailActiveFrames";
+    case C::SubnormalOutFrames: return "subnormalOutFrames";
     case C::LastActiveFrame: return "lastActiveFrame";
     case C::LastNonzeroFrame: return "lastNonzeroFrame";
     case C::kCount: break;
@@ -503,7 +504,10 @@ std::vector<VectorCase> BuildCorpus() {
     int64_t k = 0;
     for (const float fb : kFb) decay.script.Param(S(4) + 24000 * k++ + 17, P::Feedback, fb);
     decay.require   = {{C::FbAbove1Frames, 1}, {C::Events, 14}, {C::TailActiveFrames, S(2)}};
-    decay.invariant = {Invariance::HostileFpEnv};  // decays through the subnormal range to 0
+    // A long decay to exact silence under the hostile rounding mode. It never passes through
+    // the subnormal range (the int16 ring and the in-code flush of profile §4.3 end it), so
+    // flushing cannot reach it; plucks_subnormal_6s covers that.
+    decay.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(decay);
     corpus.push_back(std::move(v));
   }
@@ -568,6 +572,25 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(SpilloverChain());
     v.presets.push_back(RestartKeptParams());
     v.presets.push_back(ExactLoadMid());
+    corpus.push_back(std::move(v));
+  }
+
+  {  // Subnormal input where the plucks are silent: every flush mode changes the output.
+    VectorCase v{"plucks_subnormal_6s", Vector::Plucks, Frames(3), Frames(6), false, {}, true};
+    // Mix 0 passes the dry signal through the mix arithmetic (dry * 1 * 1), so every
+    // subnormal input sample is an output sample: DAZ or Arm FZ zeroes it on the way in,
+    // FTZ on the way out.
+    PresetCase dry = Preset("subnormal_dry", {{P::Mix, 0.0f}});
+    dry.require   = {{C::SubnormalOutFrames, S(3)}};
+    dry.invariant = {Invariance::HostileFpEnv};
+    v.presets.push_back(dry);
+    // Subnormal input through the ring write, the onset detector and a scaled dry path,
+    // under a wet path that decays to exact zero.
+    PresetCase wet = Preset("subnormal_wet",
+        {{P::Mix, 0.5f}, {P::OutTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
+    wet.require   = {{C::SubnormalOutFrames, S(1)}, {C::Onsets, 4}};
+    wet.invariant = {Invariance::HostileFpEnv};
+    v.presets.push_back(wet);
     corpus.push_back(std::move(v));
   }
 

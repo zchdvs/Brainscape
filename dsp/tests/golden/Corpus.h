@@ -20,7 +20,8 @@ namespace brainscape::golden {
 // 3: strums_16s/freeze_retoggle_spill (same-frame freeze events, Spillover loads).
 // 4: plucks_state_14s (Spillover loads, a Restart and an Exact load mid-render), the
 // loads and restarts counters, and the invariance checks.
-inline constexpr uint32_t kCorpusVersion = 4;
+// 5: plucks_subnormal_6s (subnormal input) and the subnormalOutFrames counter.
+inline constexpr uint32_t kCorpusVersion = 5;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -38,6 +39,9 @@ enum class Counter : uint8_t {
   SilentInFrames,     // input frames exactly zero on both channels
   OutActiveFrames,    // output frames with |out| > 2^-16 on either channel
   TailActiveFrames,   // ... among the silent-input frames
+  // Output frames with a subnormal sample on either channel: arithmetic under any flush
+  // mode (x86 FTZ, Arm FZ) cannot produce one.
+  SubnormalOutFrames,
   LastActiveFrame,    // last output frame with |out| > 2^-16, or -1
   LastNonzeroFrame,   // last output frame with a nonzero sample, or -1
   kCount
@@ -89,6 +93,11 @@ struct VectorCase {
   uint32_t           frames;        // render length; later frames are silent input
   bool               longRender;    // skipped by --quick
   std::vector<PresetCase> presets;
+  // Every input sample the generator leaves at exactly zero is a subnormal instead,
+  // ±k·2^-149 keyed on its frame and channel (profile §2.3 #4 allows them). Such a vector
+  // is the one a flushing FP environment changes: it gives the hostile-environment check
+  // and the forced-flush control something to see (profile §6.4).
+  bool               subnormalInput = false;
 };
 
 std::vector<VectorCase> BuildCorpus();

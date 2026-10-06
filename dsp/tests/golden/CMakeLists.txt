@@ -31,4 +31,22 @@ else()
     COMMAND brainscape_golden --mode report --tag ctest-$<CONFIG>
             --report ${CMAKE_CURRENT_BINARY_DIR}/golden-report-$<CONFIG>.json
             $<IF:$<CONFIG:Debug>,--no-ablate,--ablate>)
+
+  # The forced-flush control (profile §6.4): the harness again, on the engine built with
+  # the guard's test hooks, renders every preset with flushing forced on. Every vector must
+  # reproduce but the subnormal-input one, which must change. Debug skips the long vectors.
+  add_executable(brainscape_golden_flush
+    golden_main.cpp
+    Corpus.cpp
+    EventScript.cpp
+    Render.cpp
+  )
+  target_link_libraries(brainscape_golden_flush PRIVATE brainscape_dsp_fpenv_hooks)
+  target_include_directories(brainscape_golden_flush PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+  target_compile_definitions(brainscape_golden_flush PRIVATE
+    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
+  add_test(NAME golden_forced_flush
+    COMMAND brainscape_golden_flush --force-flush-control --no-ablate --tag ctest-flush-$<CONFIG>
+            --report ${CMAKE_CURRENT_BINARY_DIR}/golden-flush-$<CONFIG>.json
+            $<IF:$<CONFIG:Debug>,--quick,--no-ablate>)
 endif()

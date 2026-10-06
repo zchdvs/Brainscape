@@ -36,6 +36,35 @@ bool Nonzero(float x) {  // on the bits: DAZ makes a subnormal compare equal to 
   return (u & 0x7FFFFFFFu) != 0;
 }
 
+bool Subnormal(float x) {
+  uint32_t u;
+  std::memcpy(&u, &x, sizeof u);
+  return (u & 0x7F800000u) == 0 && (u & 0x007FFFFFu) != 0;
+}
+
+// ±k·2^-149, k in [1, 2^23): built from bits, so no FP mode can change it.
+float SubnormalNoise(int64_t frame, uint32_t channel) {
+  const uint32_t h    = testsignal::SplitMix32(0x5B0A0000u + channel, static_cast<uint32_t>(frame));
+  const uint32_t bits = (h & 0x80000000u) | (h & 0x007FFFFFu) | 1u;
+  float          x;
+  std::memcpy(&x, &bits, sizeof x);
+  return x;
+}
+
+// The vector's input for frames [frame, frame + n): the generator's samples (q: their Q23
+// values), with subnormal noise in place of exact zeros for a subnormal-input vector.
+void RenderInput(const VectorCase& v, testsignal::Generator& gen, int64_t frame, uint32_t n,
+                 int32_t* qL, int32_t* qR, float* l, float* r) {
+  gen.RenderQ23(qL, qR, n);
+  for (uint32_t i = 0; i < n; ++i) {
+    l[i] = testsignal::Q23ToFloat(qL[i]);
+    r[i] = testsignal::Q23ToFloat(qR[i]);
+    if (!v.subnormalInput) continue;
+    if (qL[i] == 0) l[i] = SubnormalNoise(frame + i, 0);
+    if (qR[i] == 0) r[i] = SubnormalNoise(frame + i, 1);
+  }
+}
+
 // How far behind its position's reference a grain can read, at the parameter maxima
 // (profile §6.4): base delay, spray, an attack offset and the read span L * (1 + r)
 // at r = 4, plus the 64-frame guard margin, §5.7's 512-frame write-ahead and one
@@ -105,12 +134,13 @@ std::vector<testsignal::Note> VectorNotes(const VectorCase& v) {
 std::string InputHash(const VectorCase& v, const std::vector<testsignal::Note>& notes) {
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(notes.data(), static_cast<uint32_t>(notes.size()));
+  int32_t qL[512], qR[512];
   float   l[512], r[512];
   uint8_t bytes[512 * 8];
   Sha256  sha;
   for (uint32_t pos = 0; pos < v.frames;) {
     const uint32_t n = v.frames - pos < 512u ? v.frames - pos : 512u;
-    gen->Render(l, r, n);
+    RenderInput(v, *gen, pos, n, qL, qR, l, r);
     PackFrames(l, r, n, bytes);
     sha.Update(bytes, 8u * n);
     pos += n;
@@ -320,10 +350,8 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
     closeSegment(end);
     if (!frozenAtHopSeen) frozenAtHop = frozen;
 
-    gen->RenderQ23(qL, qR, n);
+    RenderInput(v, *gen, inputStart + pos, n, qL, qR, inL, inR);
     for (uint32_t i = 0; i < n; ++i) {
-      inL[i] = testsignal::Q23ToFloat(qL[i]);
-      inR[i] = testsignal::Q23ToFloat(qR[i]);
       if (qL[i] == testsignal::kQ23Max || qL[i] == testsignal::kQ23Min ||
           qR[i] == testsignal::kQ23Max || qR[i] == testsignal::kQ23Min) {
         ++At(out, Counter::InClipFrames);
@@ -359,7 +387,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
       const float l = outL[i], r = outR[i];
       const bool  active =
           l > kActiveLevel || l < -kActiveLevel || r > kActiveLevel || r < -kActiveLevel;
-      const bool silent = qL[i] == 0 && qR[i] == 0;
+      const bool silent = !Nonzero(inL[i]) && !Nonzero(inR[i]);
       if (silent) ++At(out, Counter::SilentInFrames);
       if (active) {
         ++At(out, Counter::OutActiveFrames);
@@ -367,6 +395,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
         At(out, Counter::LastActiveFrame) = pos + i;
       }
       if (Nonzero(l) || Nonzero(r)) At(out, Counter::LastNonzeroFrame) = pos + i;
+      if (Subnormal(l) || Subnormal(r)) ++At(out, Counter::SubnormalOutFrames);
     }
     hasher.Add(outL, outR, n);
     if (capture != nullptr) {

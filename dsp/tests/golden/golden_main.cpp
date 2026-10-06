@@ -30,6 +30,11 @@
 // A negative-control build (-DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON: contraction on, test
 // only) is not profile-conforming: it reports, marks the report, and refuses check and
 // mint (exit 3).
+// brainscape_golden_flush is this harness on the engine built with the guard's test hooks
+// (dsp/tests/CMakeLists.txt). Its --force-flush-control renders every preset again with
+// flushing forced on inside the guard (profile §6.4): that must reproduce every vector but
+// a subnormal-input one, which it must change, or the corpus cannot see a flushing FP
+// environment. It refuses mint.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -49,6 +54,9 @@
 #include "Render.h"
 #include "brainscape/SoundRevision.h"
 #include "brainscape/TestSignal.h"
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+#include "detail/FpEnvGuard.h"
+#endif
 
 using namespace brainscape;
 using namespace brainscape::golden;
@@ -65,6 +73,14 @@ constexpr bool kNegativeControl = true;
 constexpr bool kNegativeControl = false;
 #endif
 
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+constexpr bool kTestHooks = true;
+void SetForceFlush(bool on) { brainscape::detail::fpenv_test::forceFlush = on; }
+#else
+constexpr bool kTestHooks = false;
+void SetForceFlush(bool) {}
+#endif
+
 constexpr const char* kReportFormat = "brainscape-golden-report/1";
 constexpr const char* kGoldenFormat = "brainscape-golden/1";
 constexpr const char* kUsage =
@@ -72,7 +88,7 @@ constexpr const char* kUsage =
     "       [--block N | --pattern A,B,...] [--ring LOG2] [--only VECTOR[/PRESET],...]\n"
     "       [--delivery engine|split] [--fresh-engine] [--fp-env clean|hostile]\n"
     "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]\n"
-    "       [--wav-dir DIR] [--list]\n";
+    "       [--wav-dir DIR] [--list] [--force-flush-control (brainscape_golden_flush only)]\n";
 
 struct Options {
   std::string              mode   = "report";
@@ -90,10 +106,11 @@ struct Options {
   bool                     ablate      = true;
   bool                     quick       = false;
   bool                     list        = false;
+  bool                     flushControl = false;
 
   bool Canonical() const {
     return pattern.size() == 1 && pattern[0] == 48 && ring == 22 && only.empty() && !quick &&
-           delivery == Delivery::Engine && !freshEngine && fpEnv == FpEnv::Clean;
+           delivery == Delivery::Engine && !freshEngine && fpEnv == FpEnv::Clean && !flushControl;
   }
 };
 
@@ -194,6 +211,7 @@ bool Parse(int argc, char** argv, Options* o) {
     else if (!std::strcmp(a, "--no-ablate")) o->ablate = false;
     else if (!std::strcmp(a, "--quick")) o->quick = true;
     else if (!std::strcmp(a, "--list")) o->list = true;
+    else if (!std::strcmp(a, "--force-flush-control") && kTestHooks) o->flushControl = true;
     else {
       std::fprintf(stderr, "unknown or incomplete argument: %s\n", a);
       return false;
@@ -307,6 +325,7 @@ Json ReportHeader(const Options& o, uint32_t historyFrames) {
   build.Set("ablations", Json::Bool(o.ablate));
   build.Set("canonical", Json::Bool(o.Canonical() && !kNegativeControl));
   build.Set("negativeControl", Json::Bool(kNegativeControl));
+  build.Set("forcedFlushControl", Json::Bool(o.flushControl));
   Json notes = Json::Obj();
   for (const auto& kv : o.notes) notes.Set(kv.first, Json::Str(kv.second));
   build.Set("notes", notes);
@@ -414,6 +433,33 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
   }
   e.Set("invariances", invariances);
 
+  // The forced-flush control (profile §6.4), on a fresh engine like the hostile check.
+  if (o.flushControl) {
+    RenderConfig rc = renderer.Config();
+    rc.freshEngine  = true;
+    Renderer     forced(rc);
+    RenderOutput rf;
+    SetForceFlush(true);
+    const bool rendered = forced.ok() && forced.Render(v, notes, p, &rf);
+    SetForceFlush(false);
+    const bool    changed = rendered && rf.hash != r.hash;
+    const int64_t first   = rendered ? FirstDiff(r.secondHashes, rf.secondHashes) : -1;
+    Json          f       = Json::Obj();
+    f.Set("expectChange", Json::Bool(v.subnormalInput));
+    f.Set("changed", Json::Bool(changed));
+    f.Set("firstDiffSecond", Json::Int(first));
+    f.Set("ok", Json::Bool(rendered && changed == v.subnormalInput));
+    e.Set("forcedFlush", f);
+    if (!rendered) {
+      failures.push_back("forced flush did not render");
+    } else if (changed && !v.subnormalInput) {
+      failures.push_back("forced flush changed the output from s" + std::to_string(first) +
+                         ": a golden vector must reproduce it");
+    } else if (!changed && v.subnormalInput) {
+      failures.push_back("forced flush changed nothing: the vector cannot see flushing");
+    }
+  }
+
   Json cov = Json::Obj();
   cov.Set("ok", Json::Bool(failures.empty()));
   Json list = Json::Arr();
@@ -461,7 +507,8 @@ Json GoldenFrom(const Json& report) {
         for (const Json& p : vm.second.items) {
           Json po = Json::Obj();
           for (const auto& pm : p.members) {
-            if (pm.first != "coverage" && pm.first != "ablations" && pm.first != "invariances") {
+            if (pm.first != "coverage" && pm.first != "ablations" && pm.first != "invariances" &&
+                pm.first != "forcedFlush") {
               po.Set(pm.first, pm.second);
             }
           }
@@ -661,6 +708,10 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "%s refused: a negative-control build only reports\n", o.mode.c_str());
       return 3;
     }
+  }
+  if (o.mode == "mint" && kTestHooks) {
+    std::fprintf(stderr, "mint refused: this harness runs the engine built with test hooks\n");
+    return 3;
   }
   if (o.mode == "mint" && kSoundRevision == 0) {
     std::fprintf(stderr, "mint refused: kSoundRevision is 0, so there is no revision to mint\n");
