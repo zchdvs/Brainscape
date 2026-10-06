@@ -298,6 +298,20 @@ bool SameCounters(const RenderOutput& a, const RenderOutput& b) {
   return true;
 }
 
+// What an invariance render changed: the output, the counters, or both.
+std::string InvarianceDiff(const RenderOutput& ref, const RenderOutput& got) {
+  std::string d;
+  if (got.hash != ref.hash || got.secondHashes != ref.secondHashes) {
+    d += "output from s" + std::to_string(FirstDiff(ref.secondHashes, got.secondHashes));
+  }
+  for (size_t i = 0; i < static_cast<size_t>(Counter::kCount); ++i) {
+    if (got.counters[i] == ref.counters[i]) continue;
+    d += (d.empty() ? "" : ", ") + std::string(CounterName(static_cast<Counter>(i))) + " " +
+         std::to_string(ref.counters[i]) + " -> " + std::to_string(got.counters[i]);
+  }
+  return d;
+}
+
 std::string StrOf(const Json& j, const char* key) {
   const Json* v = j.Find(key);
   return v != nullptr ? v->string : std::string();
@@ -446,7 +460,9 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
     if (!rendered) {
       failures.push_back(name + " did not render");
     } else if (!same) {
-      failures.push_back(name + " changed the output");
+      const std::string diff =
+          inv == Invariance::HostileFpEnv ? InvarianceDiff(r, ri) : "output from the restart";
+      failures.push_back(name + " changed " + diff);
     }
   }
   e.Set("invariances", invariances);

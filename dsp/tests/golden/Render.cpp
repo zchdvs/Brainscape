@@ -30,15 +30,23 @@ constexpr detail::FpWord kModeMask = ~detail::kFpFlagBits;
 
 int64_t& At(RenderOutput* out, Counter c) { return out->counters[static_cast<size_t>(c)]; }
 
-bool Nonzero(float x) {  // on the bits: DAZ makes a subnormal compare equal to 0
+// The counters run under the hostile control word, where x86 DAZ and Arm FZ make a
+// subnormal compare equal to 0. LLVM 21 folds a masked bit test of a float back into a
+// floating-point compare (valid only in the default environment), so the bits are
+// passed through an empty asm the optimizer cannot see into.
+uint32_t BitsOf(float x) {
   uint32_t u;
   std::memcpy(&u, &x, sizeof u);
-  return (u & 0x7FFFFFFFu) != 0;
+#if defined(__GNUC__) || defined(__clang__)
+  __asm__("" : "+r"(u));
+#endif
+  return u;
 }
 
+bool Nonzero(float x) { return (BitsOf(x) & 0x7FFFFFFFu) != 0; }
+
 bool Subnormal(float x) {
-  uint32_t u;
-  std::memcpy(&u, &x, sizeof u);
+  const uint32_t u = BitsOf(x);
   return (u & 0x7F800000u) == 0 && (u & 0x007FFFFFu) != 0;
 }
 

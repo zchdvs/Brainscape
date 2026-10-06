@@ -33,7 +33,9 @@ elseif(FLAVOR STREQUAL "arm")
     "|__aeabi_(u?idiv|u?idivmod|u?ldivmod|llsl|llsr|lasr|lmul|u?lcmp|[df]2u?lz|u?l2[df]|mem(cpy|move|set|clr)[48]?)")
   set(allow_debug "__assert_func")
 elseif(FLAVOR STREQUAL "gnu")
+  # GCC on AArch64 calls libgcc's outline-atomics helpers (integer atomics only).
   string(APPEND allow "|__stack_chk_fail|__stack_chk_guard|__(memset|memmove|memcpy)_chk")
+  string(APPEND allow "|__aarch64_(cas|swp|ldadd|ldclr|ldeor|ldset)(1|2|4|8|16)_(relax|acq|rel|acq_rel|sync)")
   set(allow_debug "__assert_fail")
 elseif(FLAVOR STREQUAL "apple")
   string(APPEND allow "|__stack_chk_fail|__stack_chk_guard|__chkstk_darwin|bzero|__bzero")
@@ -83,9 +85,13 @@ foreach(line IN LISTS lines)
     set(name "${CMAKE_MATCH_1}")
     string(REGEX MATCH "^[Uwv]$" undef "${CMAKE_MATCH_2}")
   endif()
-  string(REGEX REPLACE "^__imp_" "" name "${name}")  # MSVC dllimport thunk
-  if(FLAVOR STREQUAL "apple")
-    string(REGEX REPLACE "^_" "" name "${name}")
+  # string(REGEX REPLACE "^_" ...) would strip every leading underscore (CMake re-anchors
+  # after each match), turning Darwin's ___stack_chk_fail into stack_chk_fail.
+  if(name MATCHES "^__imp_(.+)$")  # MSVC dllimport thunk
+    set(name "${CMAKE_MATCH_1}")
+  endif()
+  if(FLAVOR STREQUAL "apple" AND name MATCHES "^_(.+)$")
+    set(name "${CMAKE_MATCH_1}")
   endif()
   if(undef)
     list(APPEND undefined "${name}")

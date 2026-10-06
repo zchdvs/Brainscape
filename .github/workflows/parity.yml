@@ -63,6 +63,11 @@ jobs:
           - leg: macos-arm64-appleclang
             os: macos-14
             symbols: appleclang
+          # The newest Apple toolchain users' plugin builds meet (AppleClang 21 at the time
+          # of writing), which optimizes bit tests more aggressively than the pinned image.
+          - leg: macos-arm64-appleclang-latest
+            os: macos-latest
+            symbols: appleclang
     runs-on: ${{ matrix.os }}
     defaults:
       run:

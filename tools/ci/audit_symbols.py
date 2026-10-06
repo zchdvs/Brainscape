@@ -34,8 +34,13 @@ EXTRA = {
     "gcc": {"__stack_chk_fail", "__stack_chk_guard", "_GLOBAL_OFFSET_TABLE_", "__assert_fail"},
     "clang": {"__stack_chk_fail", "__stack_chk_guard", "_GLOBAL_OFFSET_TABLE_", "__assert_fail"},
     # Names as C spells them; Mach-O's leading underscore is stripped before matching.
-    "appleclang": {"__stack_chk_fail", "__stack_chk_guard", "__assert_rtn"},
+    # Darwin lowers zeroing memsets to bzero and probes large frames with __chkstk_darwin.
+    "appleclang": {"__stack_chk_fail", "__stack_chk_guard", "__assert_rtn", "bzero", "__bzero",
+                   "__chkstk_darwin"},
 }
+# GCC on AArch64 calls libgcc's outline-atomics helpers (integer atomics only).
+OUTLINE_ATOMICS = re.compile(
+    r"^__aarch64_(cas|swp|ldadd|ldclr|ldeor|ldset)(1|2|4|8|16)_(relax|acq|rel|acq_rel|sync)$")
 LIBM = re.compile(
     r"^_?(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|exp2|expm1|exp10|"
     r"log|log2|log10|log1p|logb|pow|sqrt|cbrt|hypot|ceil|floor|round|lround|llround|lrint|llrint|"
@@ -111,9 +116,11 @@ def main():
         defined |= d
 
     findings = libm = 0
+    atomics = args.toolchain in ("gcc", "clang")
     for obj in sorted(undef):
         bad = sorted(s for s in undef[obj]
-                     if s not in defined and s not in allowed and plain(s, macho) not in allowed)
+                     if s not in defined and s not in allowed and plain(s, macho) not in allowed
+                     and not (atomics and OUTLINE_ATOMICS.match(s)))
         if not bad:
             print(f"ok    {obj}")
             continue
