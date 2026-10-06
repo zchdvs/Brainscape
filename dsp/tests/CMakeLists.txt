@@ -4,6 +4,7 @@
 add_executable(brainscape_tests
   test_main.cpp
   test_engine.cpp
+  test_detmath.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
 # The engine's private headers: the unit tests exercise its internals directly.

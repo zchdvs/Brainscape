@@ -2,7 +2,7 @@
 
 #include "detail/Granular.h"
 
-#include <cmath>
+#include "detail/DetMath.h"
 
 namespace brainscape::detail {
 
@@ -113,9 +113,10 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   }
 
   Grain& g = grains_[slot];
-  const auto startFrame = (anchorFrame - static_cast<uint32_t>(std::lround(d))) & mask_;
+  const auto startFrame =
+      (anchorFrame - static_cast<uint32_t>(detmath::RoundHalfAwayI32(d))) & mask_;
   g.pos    = static_cast<uint64_t>(startFrame) << 32;
-  auto inc = static_cast<int64_t>(std::llround(static_cast<double>(ratio) * kFix));
+  auto inc = detmath::RoundHalfAwayI64(static_cast<double>(ratio) * kFix);
   if (reverse) inc = -inc;
   g.inc        = inc;
   g.unity      = (inc == static_cast<int64_t>(1) << 32);
@@ -128,8 +129,10 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
 
   // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
   const float pan = 0.5f + p.panSpread * (RandUnit(birthAbs, Draw::Pan) - 0.5f);
-  g.gainL = std::cos(pan * 1.5707963267948966f);
-  g.gainR = std::sin(pan * 1.5707963267948966f);
+  double panSin, panCos;
+  detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &panSin, &panCos);
+  g.gainL = static_cast<float>(panCos);
+  g.gainR = static_cast<float>(panSin);
   // Exact unity at center pan so the degenerate-delay null holds bit-exactly.
   if (p.panSpread == 0.0f) {
     g.gainL = 1.0f;
@@ -317,7 +320,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
       float interval = spacing;
       if (p.jitter > 0.f) {
         const float u   = RandUnit(abs, Draw::Interval);
-        const float exp = -std::log(1.0f - u * 0.999f) * spacing;
+        const float exp = -detmath::LogF(1.0f - u * 0.999f) * spacing;
         interval        = spacing + p.jitter * (exp - spacing);
       }
       intervalRemaining_ += (interval >= 1.0f ? interval : 1.0f);

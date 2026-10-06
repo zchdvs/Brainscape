@@ -1,8 +1,9 @@
 #pragma once
 #include "detail/FpProfilePrivate.h"
 
-#include <cmath>
 #include <cstdint>
+
+#include "detail/DetMath.h"
 
 // Pure grain arithmetic (docs/design/grain-engine.md §3-§4): counter-based RNG,
 // pitch ratios, write-head guards, and envelope geometry. Everything here is a
@@ -47,11 +48,10 @@ inline float RandUnit(int64_t absSample, Draw purpose) noexcept {
 }
 
 inline float SemitonesToRatio(float st) noexcept {
-  // exp2f at grain-birth rate. TODO(contract #7): replace with an in-tree LUT+lerp
-  // before any cross-build null is attempted — a 1-ULP libm difference here was
-  // measured to null at only -108.7 dBFS across builds (review finding), and the
-  // design (§3) mandates LUT+lerp on the M7 for the §8 budget anyway.
-  return std::exp2(st * (1.0f / 12.0f));
+  // exp2 at grain-birth rate, in-tree: a 1-ULP libm difference here was measured to
+  // null at only -108.7 dBFS across builds (review finding). Polynomial kernel or
+  // DetMath-built table is decided by DWT of ScheduleGrain (determinism profile §3.9).
+  return detmath::Exp2F(st * (1.0f / 12.0f));
 }
 
 // Write-head guard bounds (design §3, per-direction table). d = scheduled delay in

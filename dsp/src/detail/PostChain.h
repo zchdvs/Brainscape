@@ -10,8 +10,8 @@
 //
 // Determinism rules (design §10 contracts #1/#7): every per-sample nonlinearity
 // and oscillator here is in-tree arithmetic (parabolic sine, Padé tanh) or an
-// IEEE-exact operation (sqrtf) — no libm in the audio path. Control-rate
-// coefficient math (sinf/expm1) runs at Init or when a parameter changes.
+// IEEE-exact operation (sqrtf) — no libm anywhere. Control-rate coefficient
+// math (DetMath sin/expm1) runs at Init or when a parameter changes.
 namespace brainscape::detail {
 
 // ── Small primitives ────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 #pragma once
 #include "detail/FpProfilePrivate.h"
 
-#include <cmath>
+#include "detail/DetMath.h"
 
 namespace brainscape::detail {
 
@@ -14,7 +14,7 @@ struct Smoother {
 
   void SetTau(float tauMs, double sr) noexcept {
     // expm1, not 1-exp: the subtraction cancels to ~18 mantissa bits (review finding).
-    coef = -static_cast<float>(std::expm1(-1.0 / (tauMs * 0.001 * sr)));
+    coef = -static_cast<float>(detmath::Expm1D(-1.0 / (tauMs * 0.001 * sr)));
   }
   void  Prime(float v) noexcept { value = target = v; }
   float Next() noexcept {

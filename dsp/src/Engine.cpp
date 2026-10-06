@@ -4,12 +4,12 @@
 
 #include <atomic>
 #include <cassert>
-#include <cmath>
 #include <cstring>
 #include <new>
 #include <type_traits>
 
 #include "detail/DenormalGuard.h"
+#include "detail/DetMath.h"
 #include "detail/GrainMath.h"
 #include "detail/Granular.h"
 #include "detail/OnsetDetector.h"
@@ -275,7 +275,9 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   // raw leg — which is what makes the (1+sustain)/2 window mean exact (GrainMath.h).
   for (uint32_t i = 0; i < detail::kWindowLutSize; ++i) {
     const double x = static_cast<double>(i) / static_cast<double>(detail::kWindowLutSize - 1);
-    windowLut_[i]  = static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * x)));
+    const double c  = detmath::CosPi(x);  // cos(pi*x): exact half-turn reduction
+    const double om = 1.0 - c;
+    windowLut_[i]   = static_cast<float>(0.5 * om);
   }
 
   granular_.Init(ring_, mask_, windowLut_);
@@ -352,9 +354,9 @@ void Engine::Impl::ApplyParam(size_t index, float value) noexcept {
       tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
       break;
     case ParamId::OutTrimDb:
-      // exp2f, not powf (cheaper, and the pattern to copy is LUT+lerp when
-      // SemitonesToRatio lands — schedule-time transcendentals are charged in §8).
-      outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
+      // exp2, not pow: one kernel instead of two (schedule-time transcendentals are
+      // charged in design §8).
+      outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
       break;
     case ParamId::TriggerSens:
       detector_.SetSensitivity(value);
@@ -405,7 +407,8 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // ONE rounded integer drives grain length, spacing, and the voice budget —
   // spacing from the unrounded float opened duty-cycle holes across 80% of the
   // size_ms range (review finding, up to 48.8% silence).
-  auto total = static_cast<uint32_t>(std::lround(get(ParamId::GrainSizeMs) * 0.001 * sr));
+  auto total = static_cast<uint32_t>(
+      detmath::RoundHalfAwayI32(get(ParamId::GrainSizeMs) * 0.001 * sr));
   if (total < 1u) total = 1u;
   gp_.totalFrames = total;
 
@@ -442,9 +445,9 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   const float kDecorrFrames = static_cast<float>(0.003 * sr);  // ~3 ms of divergence = full
   auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
   float decorr = 0.f;
-  decorr += clamp01(std::fabs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
+  decorr += clamp01(detmath::Abs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
   decorr += clamp01(get(ParamId::SprayMs) * (1.0f / 30.0f));  // ms-based: rate-independent
-  decorr += clamp01(std::fabs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
+  decorr += clamp01(detmath::Abs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
                     static_cast<float>(total) / kDecorrFrames);
   decorr += gp_.reverseProb;
   // Freeze pins the anchor, turning identical grains into time-shifted copies of
@@ -456,7 +459,7 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   if (frozen_ || gp_.posFromMark) decorr = 1.0f;
   decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
-  norm_.target  = std::pow(gp_.targetVoices, -p);
+  norm_.target  = detmath::PowF(gp_.targetVoices, -p);
 }
 
 void Engine::Impl::SetParam(ParamId id, float value) noexcept {

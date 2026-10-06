@@ -2,7 +2,7 @@
 
 #include "detail/PostChain.h"
 
-#include <cmath>
+#include "detail/DetMath.h"
 
 namespace brainscape::detail {
 
@@ -10,11 +10,12 @@ namespace {
 
 // One-pole LP coefficient at control rate only (expm1 for precision — Smoother.h).
 inline float LpCoef(double cutoffHz, double sr) noexcept {
-  return -static_cast<float>(std::expm1(-6.283185307179586 * cutoffHz / sr));
+  return -static_cast<float>(detmath::Expm1D(-6.283185307179586 * cutoffHz / sr));
 }
 
 inline uint32_t ScaleLen(uint32_t base32k, double sr) noexcept {
-  const auto n = static_cast<uint32_t>(std::lround(static_cast<double>(base32k) * sr / 32000.0));
+  const auto n =
+      static_cast<uint32_t>(detmath::RoundHalfAwayI32(static_cast<double>(base32k) * sr / 32000.0));
   return n < 2u ? 2u : n;
 }
 
@@ -111,7 +112,7 @@ void FeedbackTamer::ProcessSample(float& l, float& r) noexcept {
 
 uint32_t PostChain::WarmFloats(double sr) noexcept {
   uint32_t total = 0;
-  total += 2u * static_cast<uint32_t>(std::lround(kModLineSeconds * sr));  // mod L+R
+  total += 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));  // mod L+R
   for (uint32_t b : kRvAp) total += ScaleLen(b, sr);
   for (uint32_t b : kRvDap) total += ScaleLen(b, sr);
   for (uint32_t b : kRvDel) {
@@ -121,13 +122,13 @@ uint32_t PostChain::WarmFloats(double sr) noexcept {
 }
 
 uint32_t PostChain::BulkFloats(double sr) noexcept {
-  return 2u * static_cast<uint32_t>(std::lround(kPostDelayMaxSeconds * sr));
+  return 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
 }
 
 void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
   sr_      = sr;
   float* p = warm;
-  auto modLen = static_cast<uint32_t>(std::lround(kModLineSeconds * sr));
+  auto modLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));
   if (modLen < 2u) modLen = 2u;
   modL_.Init(p, modLen);
   p += modLen;
@@ -150,7 +151,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
     p += n;
   }
 
-  auto pdLen = static_cast<uint32_t>(std::lround(kPostDelayMaxSeconds * sr));
+  auto pdLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
   if (pdLen < 2u) pdLen = 2u;
   pdL_.Init(bulk, pdLen);
   pdR_.Init(bulk + pdLen, pdLen);
@@ -214,14 +215,16 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
   // DaisySP-style double-sampled SVF coefficients (MIT; post-fx doc §3.1).
   // Control rate only — sinf/cosf never run per sample.
   const double f = static_cast<double>(cutoff) / (sr_ * 2.0);
-  svfFreq_ = static_cast<float>(2.0 * std::sin(3.14159265358979 * (f < 0.25 ? f : 0.25)));
+  svfFreq_ = static_cast<float>(2.0 * detmath::SinD(3.14159265358979 * (f < 0.25 ? f : 0.25)));
   float r = res < 0.f ? 0.f : (res > 1.f ? 1.f : res);
   // Floor the damping: at res exactly 1 damp hits 0 and (with the reference's
   // cubic drive term not ported) nothing bounds the resonator — measured +76 dB
   // runaway at the knob stop (review finding). 0.995 is already an extreme
   // (+52 dB) resonance.
   if (r > 0.995f) r = 0.995f;
-  float damp      = 2.0f * (1.0f - std::pow(r, 0.25f));
+  // r^0.25 as sqrt(sqrt(r)) in binary64 (both correctly rounded), one final rounding.
+  const float r4  = static_cast<float>(detmath::SqrtD(detmath::SqrtD(static_cast<double>(r))));
+  float damp      = 2.0f * (1.0f - r4);
   const float lim = 2.0f / svfFreq_ - svfFreq_ * 0.5f;
   if (damp > lim) damp = lim;
   if (damp > 2.0f) damp = 2.0f;
@@ -232,8 +235,10 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
   const float m   = morph < 0.f ? 0.f : (morph > 3.f ? 3.f : morph);
   svfSeg_         = m >= 3.f ? 2u : static_cast<uint32_t>(m);
   const float fr  = m - static_cast<float>(svfSeg_);
-  svfWa_          = std::cos(fr * 1.5707963267948966f);
-  svfWb_          = std::sin(fr * 1.5707963267948966f);
+  double ws, wc;
+  detmath::SinCosD(static_cast<double>(fr * 1.5707963267948966f), &ws, &wc);
+  svfWa_ = static_cast<float>(wc);
+  svfWb_ = static_cast<float>(ws);
 }
 
 void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept {
@@ -289,8 +294,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           // Equal-power crossfade: delay wet is decorrelated from dry, and the
           // linear law scooped the Space macro 5 dB mid-knob (review finding).
           // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.
-          const float gw   = std::sqrt(mix);
-          const float gd   = std::sqrt(1.0f - mix);
+          const float gw   = detmath::SqrtF(mix);
+          const float gd   = detmath::SqrtF(1.0f - mix);
           const float tapL = pdL_.ReadBack(back);
           const float tapR = pdR_.ReadBack(back);
           // Damped, DC-blocked regeneration (bare recirculation measured x9.9 DC
@@ -314,8 +319,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
         for (uint32_t n = 0; n < numFrames; ++n) {
           const float mix = reverbMixSm_.Next();
           if (mix == 0.0f && reverbMixSm_.target == 0.0f) continue;  // per-sample gate
-          const float gw  = std::sqrt(mix);
-          const float gd  = std::sqrt(1.0f - mix);
+          const float gw  = detmath::SqrtF(mix);
+          const float gd  = detmath::SqrtF(1.0f - mix);
           rvBandwidth_ += rvBw_ * (0.5f * (l[n] + r[n]) - rvBandwidth_);
           float x = rvBandwidth_;
           x       = rvAp_[0].Process(x, 0.75f);

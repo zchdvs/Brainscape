@@ -2,13 +2,9 @@
 
 #include "detail/OnsetDetector.h"
 
-#include <cmath>
+#include "detail/DetMath.h"
 
 namespace brainscape::detail {
-
-namespace {
-constexpr double kPi = 3.14159265358979323846;
-}
 
 void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
   float* p = warm;
@@ -33,21 +29,26 @@ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
   sr_ = sampleRate;
   // aubio's 20 ms min-IOI, rounded UP to whole hops so the constant matches the
   // realized behavior (the gate only runs at hop boundaries).
-  const auto ioiHops = static_cast<int64_t>(std::ceil(0.020 * sampleRate / kOnsetHop));
+  const auto ioiHops = static_cast<int64_t>(detmath::CeilSmall(0.020 * sampleRate / kOnsetHop));
   minIoi_            = ioiHops * kOnsetHop;
   // Whitening memory ~0.4 s in TIME regardless of rate (review: the fixed 0.997
   // constant was a 1.78 s memory that suppressed quiet notes after loud ones).
-  whitenDecay_ = static_cast<float>(std::exp(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
+  whitenDecay_ =
+      static_cast<float>(detmath::ExpD(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
 
-  // Tables at Init only (libm at init is fine; cross-build 1-ULP table drift is
-  // covered by the same contract-#7 TODO as SemitonesToRatio).
+  // Tables built in-tree at Init: libm tables differ by a ULP across builds, and
+  // compilers fold constant libm calls differently (determinism profile §3.9). The
+  // half-turn argument 2i/N is dyadic, so the reduction is exact.
   for (uint32_t i = 0; i < kOnsetFftSize; ++i) {
-    hann_[i] = static_cast<float>(
-        0.5 * (1.0 - std::cos(2.0 * kPi * static_cast<double>(i) / kOnsetFftSize)));
+    const double c  = detmath::CosPi(static_cast<double>(2u * i) / kOnsetFftSize);
+    const double om = 1.0 - c;
+    hann_[i]        = static_cast<float>(0.5 * om);
   }
   for (uint32_t k = 0; k < kOnsetFftSize / 2; ++k) {
-    twCos_[k] = static_cast<float>(std::cos(2.0 * kPi * k / kOnsetFftSize));
-    twSin_[k] = static_cast<float>(-std::sin(2.0 * kPi * k / kOnsetFftSize));
+    double s, c;
+    detmath::SinCosPi(static_cast<double>(2u * k) / kOnsetFftSize, &s, &c);
+    twCos_[k] = static_cast<float>(c);
+    twSin_[k] = static_cast<float>(-s);
   }
   Reset();
 }
@@ -135,7 +136,7 @@ void OnsetDetector::AnalyzeHop() noexcept {
   // level independence is preserved.
   float frameMax = 1e-6f;
   for (uint32_t k = 1; k < kOnsetBins; ++k) {
-    const float mag = std::sqrt(re_[k] * re_[k] + im_[k] * im_[k]);
+    const float mag = detmath::SqrtF(re_[k] * re_[k] + im_[k] * im_[k]);
     re_[k]          = mag;  // stash magnitudes (re_ is scratch after the FFT)
     if (mag > frameMax) frameMax = mag;
   }
