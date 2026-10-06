@@ -624,9 +624,21 @@ test (§3.7).
   dither repeats every 2²⁹ samples (3.1 h). Fold the 64-bit counter as `RandUnit` does
   (`GrainMath.h:37-44`). Golden vectors keep their hashes (derived; to confirm), but longer
   renders change, so it needs a bump (§5.12), free before internal revision 1.
-- **Time-parameter clicks** (`PostChain.cpp:280-282`, `DelayMs` splices) are identical on both
-  sides, so not a parity defect. A smoothed or crossfaded tap is recommended and decided in
-  §8.4 step 8 (as companion §4.11 says); if adopted it lands before revision 1 is published.
+- **Time-parameter clicks** (the post-delay tap and `DelayMs` splices) are identical on both
+  sides, so not a parity defect. *Decided in §8.4 step 8 and landed before revision 1:* the
+  post-delay tap glides (`TapGlide`, `detail/PostChain.h`). Two cascaded 50 ms one-poles, a
+  critically damped pair, carry a cubic-interpolated (Catmull-Rom) head to the new integer
+  target, its speed continuous and capped at 0.5 frames per frame (0.5–1.5× playback), so a
+  change bends pitch like tape instead of splicing; a settled head reads the integer tap
+  exactly, and a silent stage jumps, also when it re-engages on the frame the time changes. A
+  100 ms step that spliced at 190× the static second difference now measures at most the
+  glide's own pitch, s² at read speed s (2.25× at the cap), and static settings keep their
+  golden hashes (**measured**, record §5.6). Two colourings remain for the owner to judge by
+  ear: a moving head loses up to 0.54 dB at 10 kHz (2.5 dB at 15 kHz) between frames, and at
+  high feedback every pass repitches the repeats again, so a 2 s → 10 ms throw at 0.9 swoops
+  the repeats up nearly three octaves over 4 s before it lands (**measured**, record §5.6).
+  `DelayMs` still splices (86× for a 100 ms step, **measured**): that is the grain engine's
+  glide feature, not built yet.
 
 ### 5.7 The block-split bug: three verified mechanisms — sound-changing
 

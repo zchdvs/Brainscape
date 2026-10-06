@@ -101,7 +101,8 @@ implementing:
   self-oscillation feature**, with counter-keyed TPDF dither so the loop decays to
   *exact* silence.
 - **Post chain** — ordered, bypassable stages: stereo chorus-class mod, the Space-knob
-  stereo delay (damped, DC-blocked regeneration), a Clouds-style Dattorro/Griesinger
+  stereo delay (damped, DC-blocked regeneration; a time change glides the tap and bends
+  pitch like tape instead of clicking), a Clouds-style Dattorro/Griesinger
   reverb with multi-tap early output, and a double-sampled SVF with continuous
   LP→BP→HP→Notch morph (equal-power laws throughout).
 - **Trigger layer** — spectral-flux onset detection (512/256, in-tree FFT) with
@@ -194,7 +195,7 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (98 test cases / ~2.61M assertions in Release, 97 in Debug),
+**Suite** (`ctest`): `dsp_unit` (106 test cases / ~2.61M assertions in Release, 105 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test, `golden_report` and the corpus's forced-flush control
 `golden_forced_flush`; a plugin build adds the wrapper tests (29 test cases), the editor
@@ -232,10 +233,9 @@ records live in [docs/design/reviews/](design/reviews/).
 - **Engine API still to come:** `PresetState` holds the STAT leaves only (the mode blob,
   macros and the stored performance state arrive with the mode system, and the `.bsp`
   decoder with the package format); tap/tempo, mode-switch, macro and expression events;
-  `SaveState`/`LoadState` (which will carry the epoch). Smaller items: the time-parameter
-  smoothing decision (automating delay times clicks: no smoothing on the post-delay tap),
-  input above 0 dBFS hard-clips in the int16 ring, and a trigger's source and velocity are
-  carried but unread.
+  `SaveState`/`LoadState` (which will carry the epoch). Smaller items: automating `DelayMs`
+  still splices clean delays (the grain engine's glide, below), input above 0 dBFS
+  hard-clips in the int16 ring, and a trigger's source and velocity are carried but unread.
 - **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
   natively), the wrapper bypass with crossfade, the pedal-faithful live input option
   (`ConditionInput24`; the audition render applies it), event scripts in the audition, MIDI CC
@@ -261,7 +261,7 @@ records live in [docs/design/reviews/](design/reviews/).
   modifiers, dual layers, step tables, `POS_GRID`, CLOCK-quantized triggering, scale
   quantization of the pitch set, intermittency.
 - **Post chain**: reverb damping/bandwidth as parameters, tempo-synced delay time,
-  runtime stage reordering, delay-time change crossfade.
+  runtime stage reordering.
 - **The central product risk is unchanged**: mode *feel*. No amount of architecture
   replaces the curation effort on the 44 factory modes — and no mode exists yet.
 
@@ -274,10 +274,10 @@ Steps 1–4 need no hardware.
 
 1. **Determinism profile and the `dsp/` API.** Landed: the build profile, header hygiene,
    in-tree math with the symbol audit, the full control-word guard and denormal flush, the
-   NaN-free boundary, the block-split fix, mono aliasing and the dither key, the parity
-   harness and its M7 leg (report-only), the JUCE skeleton, and `Restart`, the random-number
-   epoch, `LoadPreset` and frame-stamped events (profile step 9). Remaining: the
-   time-parameter smoothing decision.
+   NaN-free boundary, the block-split fix, mono aliasing and the dither key, the post-delay
+   time glide, the parity harness and its M7 leg (report-only), the JUCE skeleton, and
+   `Restart`, the random-number epoch, `LoadPreset` and frame-stamped events (profile
+   step 9).
 2. **Mint internal sound revision 1.** Golden hashes and CI gates turn on, including the
    emulated Cortex-M7 parity job on every pull request; then the nightly legs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and

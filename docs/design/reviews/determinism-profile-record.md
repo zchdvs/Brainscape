@@ -575,6 +575,52 @@ now follows the profile's rule.
 - **Time-parameter clicks:** `post.delay.time_ms` moves the post-delay tap by whole frames, and
   `DelayMs` makes hard splices on clean-delay presets; maximum second difference 0.115 and
   0.68 respectively, against 0.0018 static (**measured** [challenge]).
+- **The post-delay glide** (2026-10-06, branch `claude/time-smoothing`; **measured**, MSVC
+  19.40): a clean 10 ms grain path, the post delay alone at mix 1,
+  dither off, 48-frame blocks, the change at an odd frame. Each figure is the largest second
+  difference after the change over the larger of the two static renders, for three steady
+  tones (233, 587 and 1,319 Hz; the unit test's input) / the generator's SoftNotes vector:
+
+  | Change | Integer tap | Glide |
+  |---|---|---|
+  | step 300 → 400 ms | 190× / 202× | 1.00× / 1.00× |
+  | step 400 → 300 ms | 189× / 203× | 2.19× / 1.65× |
+  | 100 ms/s ramp, 48-frame steps, up / down | 52×, 46× / 82×, 83× | 1.00×, 1.21× / 1.00×, 1.00× |
+  | 100 ms/s ramp, 512-frame steps | 279× / 610× | 1.00× / 1.00× |
+  | 300 → 1,300 ms in 0.25 s, up / down | 158×, 156× / 442×, 439× | 1.00×, 2.23× / 1.00×, 2.00× |
+  | 10 ms ↔ 2 s steps | 137× / 227× | ≤ 2.23× |
+
+  Above 1× is pitch, not a click: a shrinking delay plays at up to 1.5× speed, and the cubic
+  read scales a smooth input's second difference by s² at speed s (2.25 at the cap). With
+  feedback 0.5 the global figures reach 6.7× (the loop beats against its own repitched copy),
+  yet no 32-frame block exceeds 1.40× the largest block 2–16 blocks away (static renders
+  1.05–1.40×, the integer tap up to 290×). A 100 ms step lands bit-identical to a static render
+  after 54,743 frames (1.14 s), 10 ms → 2 s after 232,285 (4.8 s). `DelayMs`, unchanged: 86× /
+  71× for a 100 ms step and 281× / 617× for the 48-frame ramp. Golden corpus: `post_sweep` and
+  `automation_offgrid` change from second 0, the other 20 presets keep their hashes.
+- **The glide's review** (2026-10-06; **measured**, MSVC 19.40, probes in 72 further
+  scenarios): the first cut read the moving head linearly and had three gaps, now fixed.
+  - *Re-engaging with a time change on the same frame* (a preset load, the Space macro) glided
+    from the stale time for 54,743 frames: only a silent stage whose target was also 0 jumped,
+    and `automation_offgrid` hits exactly this. Every block start where the mix is exactly 0
+    now jumps; the mix reaches 0 only at the per-sample gate and leaves it only at an event,
+    so splits agree (the gate's own jump became redundant: removing it changes no golden,
+    probe or fuzz hash).
+  - *The linear read* low-passed the moving head by up to cos(πf/fs): −2.01 dB at 10 kHz and
+    −5.11 dB at 15 kHz at frac 0.5, swept into a tremolo (78 dips below −1 dB at 10 kHz for a
+    1 ms/s ramp) and held for as long as a target hovers across a frame boundary. Catmull-Rom
+    (Granular's `ReadHermite`, gain ≤ 1 at every fraction) measures −0.54 dB and −2.53 dB, no
+    dip below −1 dB at 10 kHz, −0.04 dB at 5 kHz (was −0.48).
+  - *Feedback 0.9*, the parameter's maximum: every pass repitches the repeats again. A 2 s →
+    10 ms throw climbs from about 300 Hz to 2,100 Hz effective over 4 s, its maximum second
+    difference 125× static at the top of the swoop, yet no 32-frame block stands out by more
+    than 1.57× (static 1.04–1.43×; an isolated splice of the old tap measured 118–564×), and
+    40 s of continuous automation on Strums peaks at 0.82–1.08 against 0.83–1.11 static.
+  - Test gaps closed: a fractional time that truncation and rounding tell apart, landing frames
+    pinned per move, a gate-then-fade-in split check, the same-frame re-engage, the top octave
+    and the 0.9 leg. Ten mutants (rounding, one pole's rate, the time constant, the snap, read
+    side and gain, the linear read, no glide, and both older silent-jump rules) each fail a
+    test.
 
 ### 5.7 The block-split bug: the verification in full
 

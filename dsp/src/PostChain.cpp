@@ -50,6 +50,9 @@ constexpr uint32_t kTamerAp32k[4] = {101, 189, 137, 251};  // L0, L1, R0, R1
 
 // Post-delay ceiling: 2 s (the Space-knob delay never needs more; design §2.6).
 constexpr double kPostDelayMaxSeconds = 2.0;
+// Each of the tap glide's two poles (TapGlide): a 100 ms change comes within a frame of
+// its target in 0.55 s, a 1 s change (at the speed cap) in 2.3 s.
+constexpr double kPostDelayGlideSeconds = 0.05;
 // Mod line: 25 ms, center tap 10 ms, max excursion 4 ms (8 ms at full depth read
 // as seasick vibrato; review finding).
 constexpr double kModLineSeconds   = 0.025;
@@ -193,6 +196,8 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
     rvTapL_[i] = ScaleLen(kRvTapL32k[i], sr);
     rvTapR_[i] = ScaleLen(kRvTapR32k[i], sr);
   }
+  pdGlideCoef_ = -static_cast<float>(detmath::Expm1D(-1.0 / (kPostDelayGlideSeconds * sr)));
+  pdGlideKeep_ = 1.0f - pdGlideCoef_;
 
   modDepthSm_.SetTau(10.0f, sr);
   delayMixSm_.SetTau(10.0f, sr);
@@ -227,8 +232,20 @@ void PostChain::Reset(const PostParams& p) noexcept {
   // (review finding).
   modDepthSm_.Prime(p.modDepth * 0.5f);
   delayMixSm_.Prime(p.delayMix);
+  pdTap_.Prime(DelayTarget(p.delayFrames));
   reverbMixSm_.Prime(p.reverbMix);
   filterMixSm_.Prime(p.filterBypass ? 0.f : 1.f);
+}
+
+uint32_t PostChain::DelayTarget(float delayFrames) const noexcept {
+  // Profile §3.10: a conversion in range. Init primes from PostParams{}, whose 48 kHz
+  // default overruns the line below 8.4 kHz, so the clamp holds it. The floor keeps
+  // TapGlide's cubic read inside the line (10 ms is 80 frames even at 8 kHz).
+  assert(delayFrames >= 0.f && delayFrames < 0x1p32f);
+  auto back = static_cast<uint32_t>(delayFrames);
+  if (back < 2u) back = 2u;
+  if (back > pdL_.len - 1u) back = pdL_.len - 1u;
+  return back;
 }
 
 void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept {
@@ -304,12 +321,19 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
         break;
       }
       case Stage::Delay: {
-        if (delayMixSm_.target == 0.f && delayMixSm_.value == 0.f) break;
+        // A silent stage has nothing to glide, so its head jumps to the target, including
+        // when it re-engages and the time changes on the same frame. The mix reaches 0
+        // only at the per-sample gate and leaves it only at an event, so every split sees
+        // the same silent block starts (contract #1).
+        const uint32_t tap = DelayTarget(p.delayFrames);
+        if (delayMixSm_.value == 0.f) {
+          pdTap_.Prime(tap);
+          if (delayMixSm_.target == 0.f) break;
+        } else {
+          pdTap_.Retarget(tap);
+        }
         // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
         assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pdL_.len));
-        auto back = static_cast<uint32_t>(p.delayFrames);
-        if (back < 1u) back = 1u;
-        if (back > pdL_.len - 1u) back = pdL_.len - 1u;
         const float dfb = p.delayFb;
         for (uint32_t n = 0; n < numFrames; ++n) {
           const float mix = delayMixSm_.Next();
@@ -317,10 +341,17 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           // Equal-power crossfade: delay wet is decorrelated from dry, and the
           // linear law scooped the Space macro 5 dB mid-knob (review finding).
           // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.
-          const float gw   = detmath::SqrtF(mix);
-          const float gd   = detmath::SqrtF(1.0f - mix);
-          const float tapL = pdL_.ReadBack(back);
-          const float tapR = pdR_.ReadBack(back);
+          const float gw = detmath::SqrtF(mix);
+          const float gd = detmath::SqrtF(1.0f - mix);
+          float       tapL, tapR;
+          if (pdTap_.moving) {
+            pdTap_.Step(pdGlideCoef_, pdGlideKeep_);
+            tapL = pdTap_.Read(pdL_);
+            tapR = pdTap_.Read(pdR_);
+          } else {
+            tapL = pdL_.ReadBack(pdTap_.base);
+            tapR = pdR_.ReadBack(pdTap_.base);
+          }
           // Damped, DC-blocked regeneration (bare recirculation measured x9.9 DC
           // gain and full-bandwidth repeats forever; review finding).
           pdDcL_ += pdDcCoef_ * (tapL - pdDcL_);
@@ -435,7 +466,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
   }
   // Determinism profile §3.7: smoother states stay finite (checked once per block).
   assert(detmath::IsFinite(modDepthSm_.value) && detmath::IsFinite(delayMixSm_.value) &&
-         detmath::IsFinite(reverbMixSm_.value) && detmath::IsFinite(filterMixSm_.value));
+         detmath::IsFinite(reverbMixSm_.value) && detmath::IsFinite(filterMixSm_.value) &&
+         detmath::IsFinite(pdTap_.lead) && detmath::IsFinite(pdTap_.frac));
 }
 
 }  // namespace brainscape::detail

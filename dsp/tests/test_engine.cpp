@@ -906,6 +906,451 @@ TEST_CASE("feedback loop rejects DC") {
   REQUIRE(std::fabs(atHigh - atZero) < 0.05 * atZero);
 }
 
+// ── Post-delay time changes (determinism profile §5.6, companion §4.11) ────────
+
+namespace {
+
+struct ParamEvent {
+  size_t  frame;
+  ParamId id;
+  float   value;
+};
+
+// Each event applies from its frame: blocks follow the pattern, clamped to what remains,
+// and end early at event frames, as the golden harness's EventCursor splits them.
+std::vector<float> RenderScripted(const EngineConfig& cfg, const std::vector<float>& input,
+                                  const std::vector<std::pair<ParamId, float>>& params,
+                                  const std::vector<ParamEvent>& events,  // by frame
+                                  const std::vector<uint32_t>& pattern) {
+  host::HeapArenas arenas(PlanMemory(cfg));
+  REQUIRE(arenas.ok());
+  Engine engine;
+  REQUIRE(engine.Init(cfg, arenas.get()));
+  for (auto& p : params) engine.SetParam(p.first, p.second);
+  engine.Reset();
+  std::vector<float> l(input.size()), r(input.size());
+  size_t pos = 0, bi = 0, ei = 0;
+  while (pos < input.size()) {
+    for (; ei < events.size() && events[ei].frame <= pos; ++ei) {
+      engine.SetParam(events[ei].id, events[ei].value);
+    }
+    size_t n = std::min<size_t>(pattern[bi++ % pattern.size()], input.size() - pos);
+    if (ei < events.size() && events[ei].frame < pos + n) n = events[ei].frame - pos;
+    const float* ins[2]  = {input.data() + pos, input.data() + pos};
+    float*       outs[2] = {l.data() + pos, r.data() + pos};
+    Engine::ProcessContext ctx;
+    ctx.in        = ins;
+    ctx.out       = outs;
+    ctx.numFrames = static_cast<uint32_t>(n);
+    engine.Process(ctx);
+    pos += n;
+  }
+  l.insert(l.end(), r.begin(), r.end());
+  return l;
+}
+
+// post.delay.time_ms stepped in `every`-frame increments from `start`, on odd frames.
+std::vector<ParamEvent> TimeRamp(float fromMs, float toMs, size_t start, size_t frames,
+                                 size_t every) {
+  std::vector<ParamEvent> ev;
+  for (size_t f = 0; f < frames; f += every) {
+    ev.push_back({start + f, ParamId::DelayTimeMs,
+                  fromMs + (toMs - fromMs) * static_cast<float>(f) / static_cast<float>(frames)});
+  }
+  ev.push_back({start + frames, ParamId::DelayTimeMs, toMs});
+  return ev;
+}
+
+// Largest |second difference| of the left channel over [from, to).
+double MaxSecondDiff(const std::vector<float>& y, size_t from, size_t to) {
+  double m = 0;
+  for (size_t n = std::max<size_t>(from, 2); n < to; ++n) {
+    m = std::max(m, std::fabs(double(y[n]) - 2.0 * double(y[n - 1]) + double(y[n - 2])));
+  }
+  return m;
+}
+
+// Only the post delay is heard: the 10 ms clean-delay grain path, every other stage
+// off, the delay stage at mix 1.
+std::vector<std::pair<ParamId, float>> PostDelayOnly(float timeMs, float fb) {
+  auto params = DegenerateDelay(10.0f);
+  params.push_back({ParamId::DelayMix, 1.0f});
+  params.push_back({ParamId::DelayFb, fb});
+  params.push_back({ParamId::DelayTimeMs, timeMs});
+  return params;
+}
+
+}  // namespace
+
+TEST_CASE("post-delay tap glide: continuous capped speed, exact landing") {
+  using detail::TapGlide;
+  const auto  coef = static_cast<float>(-std::expm1(-1.0 / (0.05 * 48000.0)));
+  const float keep = 1.0f - coef;
+  auto head = [](const TapGlide& g) { return double(g.base) + double(g.frac); };
+
+  // 100 ms each way, 10 ms -> 2 s, and 2 s -> 10 ms (the line's extremes at 48 kHz).
+  for (const auto& leg : std::vector<std::pair<uint32_t, uint32_t>>{
+           {14400, 19200}, {19200, 14400}, {480, 95999}, {95999, 480}}) {
+    INFO("glide " << leg.first << " -> " << leg.second);
+    TapGlide g;
+    g.Prime(leg.first);
+    g.Retarget(leg.second);
+    REQUIRE(head(g) == double(leg.first));  // a retarget never moves the head
+    const double dir = leg.second > leg.first ? 1.0 : -1.0;
+    double prev = head(g), speed = 0, maxSpeed = 0, maxAccel = 0, maxFrac = 0;
+    bool   onward = true;  // no overshoot, no reversal
+    size_t frames = 0;
+    while (g.moving && frames < 48000u * 10u) {
+      g.Step(coef, keep);
+      ++frames;
+      const double s = head(g) - prev;
+      prev           = head(g);
+      onward         = onward && s * dir >= 0.0;
+      maxFrac        = std::max(maxFrac, std::fabs(double(g.frac)));
+      maxSpeed       = std::max(maxSpeed, std::fabs(s));
+      maxAccel       = std::max(maxAccel, std::fabs(s - speed));
+      speed          = s;
+    }
+    INFO("frames " << frames << ", max speed " << maxSpeed << ", max accel " << maxAccel);
+    REQUIRE(onward);
+    REQUIRE(maxFrac <= 0.5);
+    REQUIRE(maxSpeed <= double(TapGlide::kMaxSpeed));
+    // Speed is continuous: per frame it changes by at most coef * (coef * |dT| + cap),
+    // the first frame included, so the read speed never steps.
+    const double dT = std::fabs(double(leg.second) - double(leg.first));
+    REQUIRE(maxAccel <= double(coef) * (double(coef) * dT + 0.5) * 1.001);
+    // Lands exactly on the integer target and stops moving.
+    REQUIRE(g.base == leg.second);
+    REQUIRE(g.frac == 0.0f);
+    REQUIRE(g.lead == 0.0f);
+  }
+
+  SECTION("retargeting mid-glide keeps the head and its speed") {
+    TapGlide g;
+    g.Prime(14400);
+    g.Retarget(19200);
+    for (int i = 0; i < 2000; ++i) g.Step(coef, keep);
+    const double before = head(g);
+    g.Step(coef, keep);
+    const double speedBefore = head(g) - before;
+    const double at          = head(g);
+    g.Retarget(9600);  // reverse
+    REQUIRE(head(g) == at);
+    g.Step(coef, keep);
+    const double accel = (head(g) - at) - speedBefore;
+    REQUIRE(std::fabs(accel) <= double(coef) * (double(coef) * 9600.0 + 0.5));
+    while (g.moving) g.Step(coef, keep);
+    REQUIRE(g.base == 9600u);
+    REQUIRE(g.frac == 0.0f);
+  }
+}
+
+// The probe that motivated the glide: an integer tap recomputed per change spliced the
+// line. On this input the old tap gave 190x the static second difference for a 100 ms
+// step, 52x for a 100 ms/s ramp in 48-frame steps and 279x in 512-frame (DAW) steps.
+//
+// Now the only excess is the glide's own pitch bend. The cubic read follows these tones
+// closely, so reading at speed s scales their second difference by s^2: 2.25 while the
+// head runs at the 1.5x cap, 1.21 for a 100 ms/s ramp at 1.1x, and nothing when the
+// head slows. The 5% covers the speed changes and the interpolation error. With
+// feedback the loop beats against its own repitched copy, which raises the global
+// maximum without a click, so those renders are held to a local measure instead: no
+// 32-frame block may stand out from its neighbourhood. At the 0.9 maximum every pass
+// repitches the repeats again, and their beating stands out by up to 1.53x here (1.57x
+// over 72 wider probe cases, static renders up to 1.43x) where a lone splice in a loop
+// this long measured 118-564x. The cubic's gain is at most 1 at any fraction, so the
+// moving loop stays passive: on noise its peak stays within the spread of a static
+// render's (measured 0.89-1.10x).
+TEST_CASE("post-delay time automation is click-free") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+
+  const size_t total = 5 * 48000, at = 48000 + 1;  // the change lands on no block grid
+  std::vector<float> input(total);
+  for (size_t i = 0; i < total; ++i) {
+    const double t = double(i) / 48000.0, w = 2.0 * 3.14159265358979;
+    input[i] = static_cast<float>(std::min(1.0, t / 0.05) *
+                                  (0.25 * std::sin(w * 233.0 * t) + 0.08 * std::sin(w * 587.0 * t) +
+                                   0.04 * std::sin(w * 1319.0 * t)));
+  }
+  struct Move {
+    const char*             name;
+    float                   fromMs, toMs;
+    std::vector<ParamEvent> events;
+    double                  speed;  // the head's largest read speed
+    size_t                  lands;  // frames from the first event until the head is on target
+  };
+  const double cap = 1.0 + double(detail::TapGlide::kMaxSpeed);
+  const std::vector<Move> moves = {
+      {"step 300 -> 400 ms", 300.f, 400.f, {{at, ParamId::DelayTimeMs, 400.f}}, 1.0, 54743},
+      {"step 400 -> 300 ms", 400.f, 300.f, {{at, ParamId::DelayTimeMs, 300.f}}, cap, 54743},
+      {"ramp 300 -> 400 ms, 1 s, 48-frame steps", 300.f, 400.f,
+       TimeRamp(300.f, 400.f, at, 48000, 48), 1.0, 95177},
+      {"ramp 400 -> 300 ms, 1 s, 48-frame steps", 400.f, 300.f,
+       TimeRamp(400.f, 300.f, at, 48000, 48), 1.1, 95169},
+      {"ramp 300 -> 400 ms, 1 s, 512-frame steps", 300.f, 400.f,
+       TimeRamp(300.f, 400.f, at, 48000, 512), 1.0, 95396},
+      {"twist 1300 -> 300 ms, 0.25 s, 48-frame steps", 1300.f, 300.f,
+       TimeRamp(1300.f, 300.f, at, 12000, 48), cap, 138180},
+  };
+
+  std::vector<float> noise(total);
+  Rng rng;
+  for (auto& x : noise) x = 0.5f * rng.Next();
+  auto peak = [&](const std::vector<float>& y) {
+    float m = 0.f;
+    for (size_t n = at; n < total; ++n) m = std::max(m, std::fabs(y[n]));
+    return m;
+  };
+
+  // The largest ratio of a 32-frame block's max |second difference| to the largest of
+  // the blocks 2 to 16 away on either side.
+  auto localSpike = [&](const std::vector<float>& y) {
+    std::vector<double> m;
+    for (size_t b = at - 1024; b + 32 <= total; b += 32) m.push_back(MaxSecondDiff(y, b, b + 32));
+    double worst = 0;
+    for (size_t b = 16; b + 16 < m.size(); ++b) {
+      double near = 0;
+      for (size_t k = 2; k <= 16; ++k) near = std::max(near, std::max(m[b - k], m[b + k]));
+      worst = std::max(worst, m[b] / near);
+    }
+    return worst;
+  };
+
+  for (const Move& mv : moves) {
+    INFO(mv.name);
+    const auto moved = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.f), mv.events, {48});
+    const auto from  = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.f), {}, {48});
+    const auto to    = RenderScripted(cfg, input, PostDelayOnly(mv.toMs, 0.f), {}, {48});
+    const double still = std::max(MaxSecondDiff(from, at, total), MaxSecondDiff(to, at, total));
+    REQUIRE(still > 1e-4);
+    const double excess = MaxSecondDiff(moved, at, total) / still;
+    INFO("max second difference " << excess << "x static");
+    REQUIRE(excess <= mv.speed * mv.speed * 1.05);
+    // Fed back nothing, the head on its target reads what a static render reads, bit
+    // for bit, from the frame the glide lands on, which pins the glide's time constant.
+    size_t lands = 0;
+    for (size_t n = at; n < total; ++n) {
+      if (std::memcmp(&moved[n], &to[n], sizeof(float)) != 0) lands = n + 1 - at;
+    }
+    REQUIRE(lands == mv.lands);
+
+    const auto fed = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.5f), mv.events, {48});
+    const double spike = localSpike(fed);
+    INFO("feedback 0.5: largest local outlier " << spike << "x its neighbourhood");
+    REQUIRE(spike <= 1.5);
+
+    const auto fed9 = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.9f), mv.events, {48});
+    const double spike9 = localSpike(fed9);
+    const auto   loud   = RenderScripted(cfg, noise, PostDelayOnly(mv.fromMs, 0.9f), mv.events, {48});
+    const auto   loudA  = RenderScripted(cfg, noise, PostDelayOnly(mv.fromMs, 0.9f), {}, {48});
+    const auto   loudB  = RenderScripted(cfg, noise, PostDelayOnly(mv.toMs, 0.9f), {}, {48});
+    const double louder = double(peak(loud)) / double(std::max(peak(loudA), peak(loudB)));
+    INFO("feedback 0.9: largest local outlier " << spike9 << "x, peak " << louder << "x static");
+    REQUIRE(spike9 <= 2.0);
+    REQUIRE(louder <= 1.25);
+  }
+}
+
+// Static settings read the same integer tap as before the glide existed: the stage at
+// mix 1 is an exact delay of the grain path's output, through truncation of a
+// fractional time (333.35 ms is 16,000.8 frames, which rounding would make 16,001).
+TEST_CASE("a static post-delay time is an exact integer delay") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  Rng rng;
+  std::vector<float> input(120000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+  for (const float ms : {100.0f, 333.3f, 333.35f, 2000.0f}) {
+    INFO("time " << ms << " ms");
+    const auto out = RenderScripted(cfg, input, PostDelayOnly(ms, 0.f), {}, {256});
+    // 10 ms of grain delay, then the post delay's frames as the engine derives them,
+    // truncated (2 s caps at the line length less one).
+    const auto post =
+        std::min<size_t>(static_cast<size_t>(static_cast<float>(ms * 0.001 * 48000.0)), 95999);
+    const size_t d = 480 + post;
+    size_t mismatches = 0;
+    for (size_t n = 0; n < input.size(); ++n) {
+      const float want =
+          n < d ? 0.0f : static_cast<float>(Quantize(input[n - d])) * (1.0f / 32767.0f);
+      if (out[n] != want) ++mismatches;
+    }
+    REQUIRE(input.size() > d);
+    REQUIRE(mismatches == 0);
+  }
+}
+
+// A bypassed stage is silent, so a time change made there takes effect at once: the
+// stage comes back on the new tap, not gliding from the old one, also when the change
+// arrives on the fade-in's own frame, as a preset load or the Space macro sends it. Fed
+// back nothing, its line holds the same audio either way, so the output matches a
+// render that had the new time all along from the moment the stage re-engages.
+TEST_CASE("a bypassed post delay takes a new time without gliding") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  Rng rng;
+  std::vector<float> input(3 * 48000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+  const size_t off = 48001, change = off + 48000, on = change + 4801;  // gate shut by `change`
+  auto params = [](float ms) {
+    auto p = PostDelayOnly(ms, 0.f);
+    for (auto& v : p) {
+      if (v.first == ParamId::DelayMix) v.second = 0.5f;
+    }
+    return p;
+  };
+  const auto moved = RenderScripted(cfg, input, params(300.f),
+                                    {{off, ParamId::DelayMix, 0.0f},
+                                     {change, ParamId::DelayTimeMs, 120.f},
+                                     {on, ParamId::DelayMix, 0.5f}},
+                                    {48});
+  const auto fixed = RenderScripted(cfg, input, params(120.f),
+                                    {{off, ParamId::DelayMix, 0.0f}, {on, ParamId::DelayMix, 0.5f}},
+                                    {48});
+  const auto together = RenderScripted(cfg, input, params(300.f),
+                                       {{off, ParamId::DelayMix, 0.0f},
+                                        {on, ParamId::DelayTimeMs, 120.f},
+                                        {on, ParamId::DelayMix, 0.5f}},
+                                       {48});
+  REQUIRE(std::memcmp(moved.data(), fixed.data(), off * sizeof(float)) != 0);
+  REQUIRE(std::memcmp(moved.data() + on, fixed.data() + on,
+                      (input.size() - on) * sizeof(float)) == 0);
+  REQUIRE(std::memcmp(together.data() + on, fixed.data() + on,
+                      (input.size() - on) * sizeof(float)) == 0);
+}
+
+// Contract #1 when the gate shuts a glide: the mix reaches an exact 0 on a frame no
+// block grid marks, and a fade-in before the next block start of a coarse split must
+// find the head where a fine split leaves it, on its target, as a render that had the
+// new time all along.
+TEST_CASE("a post-delay glide shut by the gate re-engages on its target") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  Rng rng;
+  std::vector<float> input(32000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+  const size_t step = 1001, off = 3001;  // 300 -> 400 ms glides for 54,743 frames
+  // Replays the delay mix's smoother: the frame whose value first reaches an exact 0.
+  detail::Smoother mix;
+  mix.SetTau(10.0f, 48000.0);
+  mix.Prime(1.0f);
+  mix.target  = 0.0f;
+  size_t gate = off;
+  while (mix.Next() != 0.0f) ++gate;
+  const size_t grid = off + 512 * ((gate - off) / 512 + 1);  // a 512-frame split's next start
+  REQUIRE(grid - gate >= 5);
+  REQUIRE(grid + 1000 < input.size());
+  for (size_t k = 0; k < 4; ++k) {
+    const size_t on = gate + 1 + k * (grid - gate - 2) / 3;
+    INFO("fade-in " << on - gate << " frames after the gate");
+    const std::vector<ParamEvent> events = {{step, ParamId::DelayTimeMs, 400.f},
+                                            {off, ParamId::DelayMix, 0.0f},
+                                            {on, ParamId::DelayMix, 1.0f}};
+    const auto fine   = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f), events, {1});
+    const auto coarse = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f), events, {512});
+    const auto fixed  = RenderScripted(cfg, input, PostDelayOnly(400.f, 0.f),
+                                       {{off, ParamId::DelayMix, 0.0f}, {on, ParamId::DelayMix, 1.0f}},
+                                       {512});
+    REQUIRE(std::memcmp(fine.data(), coarse.data(), fine.size() * sizeof(float)) == 0);
+    REQUIRE(std::memcmp(fine.data() + on, fixed.data() + on,
+                        (input.size() - on) * sizeof(float)) == 0);
+  }
+}
+
+// The moving head reads through a cubic: a linear read low-passed a 10 kHz tone by up
+// to 2 dB whenever the head sat between frames, and as a tremolo while it crossed them
+// (review finding). Catmull-Rom's worst is 0.54 dB.
+TEST_CASE("a gliding post-delay head keeps the top octave") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  const size_t total = 3 * 48000, at = 48000 + 1, lands = at + 54743;
+  std::vector<float> input(total);
+  for (size_t i = 0; i < total; ++i) {
+    const double t = double(i) / 48000.0;
+    input[i] = static_cast<float>(std::min(1.0, t / 0.05) * 0.25 *
+                                  std::sin(2.0 * 3.14159265358979 * 10000.0 * t));
+  }
+  const auto moved = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f),
+                                    {{at, ParamId::DelayTimeMs, 400.f}}, {48});
+  const auto still = RenderScripted(cfg, input, PostDelayOnly(400.f, 0.f), {}, {48});
+  auto rms = [](const std::vector<float>& y, size_t from, size_t n) {
+    double s = 0;
+    for (size_t i = from; i < from + n; ++i) s += double(y[i]) * double(y[i]);
+    return std::sqrt(s / double(n));
+  };
+  const double ref = rms(still, total - 48000, 48000);
+  double worst = 1.0;
+  // From half a second on the head runs near 1x, so 96 frames hold 20 cycles.
+  for (size_t w = at + 24000; w + 96 <= lands; w += 96) worst = std::min(worst, rms(moved, w, 96) / ref);
+  INFO("quietest 96-frame window while gliding " << 20.0 * std::log10(worst) << " dB");
+  REQUIRE(worst >= 0.92);  // -0.72 dB; the linear read measured -2.0 dB here
+}
+
+// Init primes the post chain from PostParams{}, whose delay time is a 48 kHz frame count
+// longer than the whole line at 8 kHz: the supported extremes must still start, glide and
+// read inside the line (Debug builds assert every tap).
+TEST_CASE("the post-delay glide at the edge sample rates") {
+  for (const double sr : {8000.0, 384000.0}) {
+    INFO("sample rate " << sr);
+    EngineConfig cfg = SmallConfig();
+    cfg.sampleRate   = sr;
+    Rng rng;
+    std::vector<float> input(static_cast<size_t>(sr));
+    for (auto& x : input) x = 0.5f * rng.Next();
+    const size_t quarter = input.size() / 4;
+    const auto   out     = RenderScripted(
+        cfg, input, {{ParamId::DelayMix, 0.5f}, {ParamId::DelayTimeMs, 2000.f}},
+        {{quarter + 1, ParamId::DelayTimeMs, 10.f}, {2 * quarter + 1, ParamId::DelayTimeMs, 1000.f}},
+        {512});
+    REQUIRE(std::all_of(out.begin(), out.end(), [](float v) { return std::isfinite(v); }));
+  }
+}
+
+// Contract #1 with post-delay time automation on frames that are no block size's
+// multiple: a ramp, a step that lands, a reversal mid-glide, a glide cut off by the
+// stage's gate and a time change while it is bypassed (its head jumps there), with
+// dither, feedback and the other stages on.
+TEST_CASE("post-delay time automation is split-invariant") {
+  EngineConfig cfg = SmallConfig();
+  Rng rng;
+  const size_t total = 4 * 48000;
+  std::vector<float> input(total);
+  for (size_t i = 0; i < total; ++i) {
+    const bool   burst = (i / 4800) % 3 == 0;
+    const double tone  = 0.2 * std::sin(2.0 * 3.14159265358979 * 311.0 * double(i) / 48000.0);
+    input[i]           = (burst ? 0.5f : 0.01f) * rng.Next() + static_cast<float>(tone);
+  }
+  auto params = DegenerateDelay(30.0f, 0.3f, 0.8f);
+  for (const auto& p : std::vector<std::pair<ParamId, float>>{
+           {ParamId::DelayMix, 0.6f}, {ParamId::DelayFb, 0.6f}, {ParamId::DelayTimeMs, 120.0f},
+           {ParamId::ModDepth, 0.2f}, {ParamId::ReverbMix, 0.3f}}) {
+    params.push_back(p);
+  }
+  std::vector<ParamEvent> events = TimeRamp(120.f, 180.f, 4801, 12000, 37);
+  for (const ParamEvent& e : std::vector<ParamEvent>{
+           {24013, ParamId::DelayTimeMs, 150.f},    // lands (snaps) about 50,000 frames on
+           {80021, ParamId::DelayTimeMs, 300.f},
+           {83007, ParamId::DelayTimeMs, 90.f},     // reversed mid-glide
+           {100009, ParamId::DelayMix, 0.0f},       // ramps to an exact, gated 0...
+           {104017, ParamId::DelayTimeMs, 250.f},   // ...while this glide runs
+           {130021, ParamId::DelayTimeMs, 40.f},    // bypassed: the head jumps
+           {140001, ParamId::DelayMix, 0.5f},
+           {150003, ParamId::DelayTimeMs, 1500.f},  // still gliding at the end
+       }) {
+    events.push_back(e);
+  }
+
+  const auto ref = RenderScripted(cfg, input, params, events, {1});
+  REQUIRE(std::memcmp(ref.data(), RenderScripted(cfg, input, params, {}, {1}).data(),
+                      ref.size() * sizeof(float)) != 0);
+  for (const auto& pattern : std::vector<std::vector<uint32_t>>{
+           {7}, {48}, {127}, {512}, {48, 1, 127, 32}}) {
+    INFO("block pattern starting " << pattern[0]);
+    const auto other = RenderScripted(cfg, input, params, events, pattern);
+    REQUIRE(std::memcmp(ref.data(), other.data(), ref.size() * sizeof(float)) == 0);
+  }
+}
+
 // ── Onset detector and trigger layer (design §4) ───────────────────────────────
 
 namespace {

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
 #include "detail/Smoother.h"
 
@@ -109,6 +110,87 @@ struct DelaySlice {
   }
 };
 
+// The post delay's read head (determinism profile §5.6, companion §4.11). A time change
+// glides the tap to its new integer target instead of splicing it, bending pitch like
+// tape: two one-poles in cascade, a critically damped pair, keep the read speed continuous
+// (a speed step is a kink in the waveform), and the speed cap holds a large change to
+// 0.5x-1.5x playback instead of racing through the line. At rest the head sits exactly
+// on the target and reads the integer tap, so static settings sound as they did before
+// the glide existed.
+//
+// The head is base + frac with frac in [-0.5, 0.5): the fraction keeps full float
+// precision anywhere in a 2 s line, a retarget never moves the head, and the head lands
+// from either side without the stall a fraction just below 1 would hit.
+struct TapGlide {
+  static constexpr float kMaxSpeed = 0.5f;      // frames of head movement per frame
+  static constexpr float kSnap     = 0x1p-16f;  // frames from the target that count as on it
+
+  uint32_t target = 2;    // frames behind the write head, in [2, len - 1]
+  uint32_t base   = 2;    // the head: base + frac frames behind the write head
+  float    frac   = 0.f;
+  float    lead   = 0.f;  // the first pole's position minus target
+  bool     moving = false;
+
+  void Prime(uint32_t t) noexcept {
+    target = base = t;
+    frac = lead = 0.f;
+    moving = false;
+  }
+  void Retarget(uint32_t t) noexcept {
+    if (t == target) return;
+    // Integers below 2^24, so the difference is exact; the first pole stays put.
+    lead += static_cast<float>(target) - static_cast<float>(t);
+    target = t;
+    moving = true;
+  }
+  // One frame. coef is each pole's one-pole coefficient and keep is 1 - coef.
+  void Step(float coef, float keep) noexcept {
+    lead *= keep;
+    FlushTiny(lead);
+    const float pos = (static_cast<float>(base) - static_cast<float>(target)) + frac;
+    float speed     = coef * (lead - pos);
+    if (speed > kMaxSpeed) speed = kMaxSpeed;
+    if (speed < -kMaxSpeed) speed = -kMaxSpeed;
+    float f = frac + speed;  // in [-1, 1); the carries below are exact (Sterbenz)
+    if (f >= 0.5f) {
+      f -= 1.0f;
+      ++base;
+    } else if (f < -0.5f) {
+      f += 1.0f;
+      --base;
+    }
+    frac = f;
+    if (base == target && detmath::Abs(frac) <= kSnap && detmath::Abs(lead) <= kSnap) {
+      Prime(target);
+    }
+  }
+  // Catmull-Rom (Granular's ReadHermite) toward the neighbour on frac's side; exactly the
+  // integer tap at frac 0. A linear read low-passed the moving head by up to cos(pi f/fs),
+  // -2 dB at 10 kHz, as a tremolo while frac cycles (review finding); this is -0.54 dB.
+  float Read(const DelaySlice& d) const noexcept {
+    // Targets are in [2, len - 1] and the head stays between them, so every tap is a frame
+    // of the line.
+    assert(base >= 2u && base <= d.len - 1u);
+    const float x0 = d.ReadBack(base);
+    if (frac == 0.0f) return x0;
+    const bool     up  = frac > 0.0f;
+    const uint32_t i1  = up ? base + 1u : base - 1u;
+    const uint32_t im1 = up ? base - 1u : base + 1u;
+    const uint32_t i2  = up ? base + 2u : base - 2u;
+    assert(i2 >= 1u && i2 <= d.len);
+    const float xm1  = d.ReadBack(im1);
+    const float x1   = d.ReadBack(i1);
+    const float x2   = d.ReadBack(i2);
+    const float t    = detmath::Abs(frac);
+    const float c    = (x1 - xm1) * 0.5f;
+    const float v    = x0 - x1;
+    const float w    = c + v;
+    const float a    = w + v + (x2 - x0) * 0.5f;
+    const float bNeg = w + a;
+    return (((a * t) - bNeg) * t + c) * t + x0;
+  }
+};
+
 // ── Feedback taming chain (design §2.3; fixed order, not user-reorderable) ─────
 // DC block -> HP ~100 Hz -> LP 8k->4k (feedback-dependent) -> soft saturation ->
 // 2-stage allpass diffusion per channel. This is what makes feedback > 1.0 a
@@ -141,7 +223,7 @@ struct PostParams {
   float modDepth     = 0.0f;   // drives excursion AND a wet mix capped at 0.5 so a
                                // dry term always survives (chorus, not vibrato);
                                // 0 = exactly transparent
-  float delayFrames  = 16800;  // post.delay.time_ms in frames (snaps; crossfade TODO)
+  float delayFrames  = 16800;  // post.delay.time_ms in frames; the tap glides to it (TapGlide)
   float delayFb      = 0.3f;
   float delayMix     = 0.0f;   // equal-power; 0 = exactly transparent
   float reverbTime   = 0.5f;
@@ -173,7 +255,8 @@ class PostChain {
   void Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept;
 
  private:
-  void UpdateFilterCoefs(float cutoff, float res, float morph) noexcept;  // control rate
+  void     UpdateFilterCoefs(float cutoff, float res, float morph) noexcept;  // control rate
+  uint32_t DelayTarget(float delayFrames) const noexcept;
 
   double sr_ = 48000.0;
 
@@ -185,6 +268,8 @@ class PostChain {
 
   // Post delay (stereo, Bulk) with damped, DC-blocked regeneration.
   DelaySlice pdL_{}, pdR_{};
+  TapGlide   pdTap_{};
+  float      pdGlideCoef_ = 1.f, pdGlideKeep_ = 0.f;  // fixed at Init
   float      pdLpL_ = 0.f, pdLpR_ = 0.f;  // loop damping LP state
   float      pdDcL_ = 0.f, pdDcR_ = 0.f;  // loop DC-blocker state
   float      pdLpCoef_ = 1.f, pdDcCoef_ = 0.f;
