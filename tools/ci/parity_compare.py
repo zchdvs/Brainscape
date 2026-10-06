@@ -123,11 +123,12 @@ def main():
     ref_presets, ref_vectors = presets(ref)
 
     # Toolchains.
-    lines += ["## Legs", "", "| leg | toolchain | blocks | report |", "|---|---|---|---|"]
+    lines += ["## Legs", "", "| leg | toolchain | blocks | notes | report |", "|---|---|---|---|---|"]
     for r in reports:
         b = r.get("build", {})
+        notes = "; ".join(f"{k}: {v}" for k, v in b.get("notes", {}).items())
         lines.append(f'| {b.get("tag")} | {b.get("toolchain")} | {",".join(map(str, b.get("blockPattern", [])))} '
-                     f'| {os.path.basename(r["_path"])} |')
+                     f'| {notes} | {os.path.basename(r["_path"])} |')
     lines.append("")
 
     # Canonical legs against the reference.

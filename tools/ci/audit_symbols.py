@@ -7,7 +7,7 @@ allowlist. libm calls are flagged as such: a conforming build imports no libm at
 all, because DetMath replaces every transcendental (§3.9) and inline square roots
 need -fno-math-errno.
 
-  audit_symbols.py --toolchain gcc|clang|arm|msvc [--nm NM | --dumpbin DUMPBIN] FILES...
+  audit_symbols.py --toolchain gcc|clang|appleclang|arm|msvc [--nm NM | --dumpbin DUMPBIN] FILES...
 
 Pass MSVC objects (.obj), not the .lib: dumpbin does not name archive members.
 """
@@ -17,16 +17,24 @@ import subprocess
 import sys
 
 ALWAYS = {"memset", "memmove", "memcpy"}
+# The EABI run-time helpers a hard-float Cortex-M7 build may call: integer division,
+# 64-bit shifts, multiplies and compares, the memory helpers, and the two 64-bit
+# integer <-> double conversions the FPU lacks. Soft-float arithmetic (__aeabi_dadd,
+# __aeabi_f2d, ...) means a wrong -mfpu or -mfloat-abi and must fail.
+AEABI = {"__aeabi_" + h for h in (
+    "idiv", "uidiv", "idivmod", "uidivmod", "ldivmod", "uldivmod", "llsl", "llsr", "lasr",
+    "lmul", "lcmp", "ulcmp", "memcpy", "memcpy4", "memcpy8", "memmove", "memmove4", "memmove8",
+    "memset", "memset4", "memset8", "memclr", "memclr4", "memclr8", "d2lz", "l2d")}
 EXTRA = {
-    # Plus every __aeabi_* EABI integer/conversion helper (__aeabi_uldivmod,
-    # __aeabi_d2lz, __aeabi_l2d, ...); __assert_func appears in Debug builds.
-    "arm": {"__assert_func"},
+    # __assert_func appears in Debug builds.
+    "arm": AEABI | {"__assert_func"},
     "msvc": {"_fltused", "__security_cookie", "__security_check_cookie", "__GSHandlerCheck",
              "__ImageBase", "_wassert"},
     # Distribution compilers add stack protection and PIE by default.
     "gcc": {"__stack_chk_fail", "__stack_chk_guard", "_GLOBAL_OFFSET_TABLE_", "__assert_fail"},
-    "clang": {"__stack_chk_fail", "__stack_chk_guard", "_GLOBAL_OFFSET_TABLE_", "__assert_fail",
-              "__assert_rtn"},
+    "clang": {"__stack_chk_fail", "__stack_chk_guard", "_GLOBAL_OFFSET_TABLE_", "__assert_fail"},
+    # Names as C spells them; Mach-O's leading underscore is stripped before matching.
+    "appleclang": {"__stack_chk_fail", "__stack_chk_guard", "__assert_rtn"},
 }
 LIBM = re.compile(
     r"^_?(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|exp2|expm1|exp10|"
@@ -35,8 +43,10 @@ LIBM = re.compile(
     r"sincos|erf|erfc|tgamma|lgamma|copysign|nan)[fl]?$|^__(sin|cos|exp|log|pow)\w*|^__libm\w*")
 
 
-def plain(name):
+def plain(name, macho=False):
     """The C name behind a Mach-O underscore or an MSVC DLL-import thunk (__imp_)."""
+    if macho:
+        return name[1:] if name.startswith("_") else name
     if name.startswith("__imp_"):
         name = name[len("__imp_"):]
     return name[1:] if name.startswith("_") and name[1:2] != "_" else name
@@ -93,6 +103,7 @@ def main():
     args = ap.parse_args()
 
     allowed = ALWAYS | EXTRA[args.toolchain]
+    macho = args.toolchain == "appleclang"
     undef, defined = {}, set()
     for f in args.files:
         u, d = dumpbin_symbols(args.dumpbin, f) if args.dumpbin else nm_symbols(args.nm, f)
@@ -102,13 +113,12 @@ def main():
     findings = libm = 0
     for obj in sorted(undef):
         bad = sorted(s for s in undef[obj]
-                     if s not in defined and s not in allowed and plain(s) not in allowed
-                     and not (args.toolchain == "arm" and s.startswith("__aeabi_")))
+                     if s not in defined and s not in allowed and plain(s, macho) not in allowed)
         if not bad:
             print(f"ok    {obj}")
             continue
         for s in bad:
-            kind = "libm " if LIBM.match(plain(s)) else "other"
+            kind = "libm " if LIBM.match(plain(s, macho)) else "other"
             libm += kind == "libm "
             print(f"FAIL  {obj}: {kind} {s}")
         findings += len(bad)
