@@ -179,15 +179,27 @@ TEST_CASE("DetMath half-turn tables are within 1 ULP and exact at quarter turns"
     tw.Add(static_cast<float>(c), rc, x);
     tw.Add(static_cast<float>(s), rs, x);
   }
+  for (double x : {0x1p29 - 0.25, -0x1p29 + 0.25}) {  // the ends of the domain |x| < 2^29
+    RefSinCosPi(x, &rs, &rc);
+    double s, c;
+    detmath::SinCosPi(x, &s, &c);
+    tw.Add(static_cast<float>(c), rc, x);
+    tw.Add(static_cast<float>(s), rs, x);
+  }
   REQUIRE(win.worst <= 1);
   REQUIRE(hann.worst <= 1);
   REQUIRE(tw.worst <= 1);
-  for (int32_t k = -8; k <= 8; ++k) {
+  auto quarterTurn = [](int32_t k) {
     double s, c;
     detmath::SinCosPi(static_cast<double>(k) * 0.5, &s, &c);
     const int32_t q = ((k % 4) + 4) % 4;
     REQUIRE(s == (q == 1 ? 1.0 : (q == 3 ? -1.0 : 0.0)));
     REQUIRE(c == (q == 0 ? 1.0 : (q == 2 ? -1.0 : 0.0)));
+  };
+  for (int32_t k = -8; k <= 8; ++k) quarterTurn(k);
+  for (int32_t k = (1 << 30) - 4; k < (1 << 30); ++k) {
+    quarterTurn(k);
+    quarterTurn(-k);
   }
 }
 

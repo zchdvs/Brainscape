@@ -9,6 +9,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE AND NOT MSVC)
 endif()
 
 add_library(brainscape_dsp STATIC
+  src/DetMath.cpp
   src/Engine.cpp
   src/Granular.cpp
   src/OnsetDetector.cpp
