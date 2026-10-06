@@ -26,17 +26,23 @@ Two deliverables from one shared DSP core:
 
 **Core DSP engine complete (v1 scope)** — granular scheduler and 64-voice pool, post chain
 with above-unity feedback taming, and the spectral-flux trigger layer, deterministic and
-block-size-invariant within one build (one known block-split defect has a verified fix that
-has not landed yet). **Designed, next:** the determinism profile that makes pedal and desktop
-output sample-identical, and the JUCE companion app. See **[docs/STATUS.md](docs/STATUS.md)**
-for the full picture and next steps. Research lives in [docs/research/](docs/research/), the
-designs in [docs/design/](docs/design/). Build and test on Linux/macOS/Windows:
+block-size-invariant. **The engine side of the determinism profile has landed:** a
+golden-hash corpus renders bit-identically with MSVC, GCC, Clang and the Cortex-M7 build run
+under emulation (report-only until the first sound revision is minted). **In progress:** the
+engine's restart, preset-load and stamped-event API, and the JUCE plugin and companion app,
+whose skeleton builds ([plugin/README.md](plugin/README.md)). See
+**[docs/STATUS.md](docs/STATUS.md)** for the full picture and next steps. Research lives in
+[docs/research/](docs/research/), the designs in [docs/design/](docs/design/). Build and test
+the engine on Linux/macOS/Windows (no JUCE download):
 
 ```bash
 cmake -B build -DBRAINSCAPE_BUILD_TESTS=ON
 cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
+
+Add `-DBRAINSCAPE_BUILD_PLUGIN=ON` to build the plugin and standalone app as well; it fetches
+the pinned JUCE 9.0.3 archive on the first configure.
 
 ## License
 

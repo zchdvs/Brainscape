@@ -1,6 +1,6 @@
 # Brainscape — Project Status
 
-> Snapshot as of **2026-10-05**.
+> Snapshot as of **2026-10-06**.
 > Brainscape is an open-source granular delay — a spiritual successor to the Hologram
 > Microcosm — targeting a Daisy Seed3 hardware pedal **and** a JUCE desktop plugin and
 > companion app from one shared C++ DSP core. Licensed [GPLv3](../LICENSE).
@@ -9,9 +9,14 @@
 
 ## Where the project is
 
-The project has completed its **research**, the **core DSP engine** (v1 scope), and the
-**designs for pedal/desktop parity and the companion app**. The engine runs today as a host
-library with a full contract-test suite; it has not yet touched real hardware or a DAW.
+The project has completed its **research**, the **core DSP engine** (v1 scope), the
+**designs for pedal/desktop parity and the companion app**, and the **engine side of the
+determinism profile**: one `dsp/` build profile, in-tree math, a full floating-point
+control-word guard, a deterministic denormal flush, a NaN-free boundary and the block-split
+fix. A golden-hash harness renders a 22-preset corpus bit-identically with MSVC, GCC, Clang
+and the Cortex-M7 code run under emulation, at any block size; it reports and does not yet
+gate. A JUCE plugin and standalone skeleton hosts the engine. Nothing has touched real
+hardware, and the parity and plugin CI workflows have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -21,8 +26,8 @@ library with a full contract-test suite; it has not yet touched real hardware or
 | `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (block-split defect found and fixed 2026-10-05) |
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
-| Determinism profile (sample-identical pedal ↔ desktop) | 📐 Designed and prototyped ([determinism-profile.md](design/determinism-profile.md)) — **next** |
-| Companion app + plugin (JUCE: VST3, AU, standalone) | 📐 Designed ([companion-app.md](design/companion-app.md)) — skeleton can start alongside the profile |
+| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Engine side landed; golden harness report-only ([determinism-profile.md](design/determinism-profile.md)). `Restart`, epoch, `LoadPreset` and stamped events are **next**, then minting sound revision 1 |
+| Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper, plain-value parameters, test-bench editor; no presets, library or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | ⬜ Not started — needs its own design doc |
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
@@ -52,8 +57,12 @@ The parity investigation showed requirement 3 is achievable. A prototype that re
 standard-library transcendental with in-tree math and disabled compiler multiply-add fusion
 produced **one identical SHA-256 across 32 builds** — MSVC, GCC 11, 12 and 14 and Clang on
 x86, and the real firmware code generation for the Cortex-M7 run under emulation — over 10
-presets × 30 s. The current code does not have this property: the same comparison today
-decorrelates within seconds on any preset with timing jitter.
+presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (11
+vectors, 22 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
+(SSE2 and AVX2), GCC 11 and 14 (also at `-march=x86-64-v3`, and in Debug), Clang 14 and the
+Cortex-M7 build from the pinned arm-none-eabi 10.3 run under `qemu-arm -cpu cortex-m7`, and
+the prototype's 10-preset battery agrees across the same builds. A build with contraction
+turned back on (the negative control) differs on 20 of the 22 presets.
 
 What the guarantee covers is precise. Two conforming builds of the same sound revision,
 restarted into the exact-restart state, loading the same compiled preset with an Exact load,
@@ -61,14 +70,18 @@ and fed the same 48 kHz float32 input and the same frame-stamped events, write i
 float32 output, whatever block sizes each side uses. Not
 covered: the pedal's analog path, live playing, preset loads that keep trails (Spillover),
 DAW sessions at other sample rates, and DAW automation. The full contract is in
-[determinism-profile.md](design/determinism-profile.md).
+[determinism-profile.md](design/determinism-profile.md). The exact-restart state, the exact
+preset load and frame-stamped events are not built yet, so today the guarantee holds for
+renders that start from a fresh `Init`, set every parameter and apply events at block
+boundaries, which is how the golden harness renders.
 
 ## What the engine does today
 
-One `brainscape::Engine` (≈2,500 lines of platform-agnostic C++17; no allocation and no locks
-in the audio path, and no transcendental libm calls in the per-sample loops — only IEEE-exact
-square roots; transcendentals still run at grain birth and parameter changes, which the
-determinism profile replaces with in-tree math) implementing:
+One `brainscape::Engine` (`dsp/`: ≈4,400 lines of platform-agnostic C++17, the test-signal
+generator and the parameter display table included; no allocation and no locks in the audio
+path; no libm at all, with in-tree math (`DetMath`) for every transcendental and the IEEE
+square root; an opaque engine object whose floating-point code stays in private headers)
+implementing:
 
 - **Granular core** — 64 POD voices, split-32.32 phase, resolve-once-at-birth
   scheduling, periodic↔Poisson jitter morph, overlap-referenced cubic density with a
@@ -93,7 +106,24 @@ determinism profile replaces with in-tree math) implementing:
   the trigger LED. End-to-end onset→grain latency: **5.3 ms** (measured).
 - **28 permanent-ID plain-value parameters.** They do not yet match the design's leaf list
   exactly; reconciling them gates the first public plugin release (companion-app.md,
-  "Identities to freeze before the first public release").
+  "Identities to freeze before the first public release"). Tapers, step counts and display
+  text live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a pedal pot and a plugin
+  knob at the same position give the same plain bits.
+- **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
+  - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
+    `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
+    configure-time check, with a self-test, that rejects forbidden FP and LTO settings on
+    every target that compiles or links the engine, the JUCE targets included;
+  - a full control-word guard (`dsp/src/detail/FpEnvGuard.h`): every entry point (`Init`,
+    `Reset`, `ClearHistory`, `Process`, `SetParam`, `PlanMemory`, `Canonicalize` and the
+    taper and display functions) writes the complete word and restores the caller's;
+  - gradual underflow with a deterministic in-code flush of every recursive state, so FTZ
+    hosts and the M7's FZ give the same bits and silent tails raise no subnormal flags;
+  - a NaN-free boundary: canonical parameter values decided on the bit pattern,
+    `SanitizeInput` and `ConditionInput24` for input, and finite input giving finite output;
+  - the engine defects the profile listed, fixed: mono in-place aliasing, the dither key
+    (it now folds the whole 64-bit sample counter), and the three block-split mechanisms,
+    with pin-eligible marks (a frozen grain positions only at marks recorded before the pin).
 
 ### Verified behavioral contracts (the test suite enforces these)
 
@@ -101,26 +131,42 @@ determinism profile replaces with in-tree math) implementing:
   chops the stream into 1-, 7-, 48-, 127- or 512-frame blocks, for the configurations the
   suite exercises — dither, jitter, spray, reverse, pitch, onset-mark positioning with onsets
   that actually fire, freeze engaged mid-render and held past the re-anchor point, grain
-  positions on the ring's far rail, and queued manual triggers. A Debug assertion checks
-  that no grain reads a ring frame the current block has already written ahead of the live
-  write head. The freeze/onset-mark/far-rail defect found on 2026-10-05 is fixed (see
-  determinism-profile.md, "The block-split bug").
+  positions on the ring's far rail, and queued manual triggers; the golden corpus agrees at
+  1-, 37-, 48- and 512-frame blocks and a mixed pattern on every build. A Debug assertion
+  checks that no grain reads a ring frame the current block has already written ahead of the
+  live write head (for every grain the ring can hold: a ring shorter than one block plus a
+  grain's span cannot be invariant, determinism-profile.md §5.7). The freeze/onset-mark/
+  far-rail defect found on 2026-10-05 is fixed (see determinism-profile.md, "The block-split
+  bug").
 - **Bit-exact degenerate-delay null** through the int16 ring (the one-engine proof).
 - **Level consistency** within ±1 dB across the whole overlap sweep, including
   coherent, decorrelated, frozen, and mark-anchored populations.
 - **Feedback decays to exact zero** (not just quiet) and self-oscillates bounded
   above unity.
-- **Deterministic, reproducible renders within one build** — every random draw is keyed on a
-  free-running counter, never on block structure or call history. Across builds (pedal vs
-  desktop) output is *not* identical yet; that is the determinism profile's job.
+- **Deterministic, reproducible renders** — every random draw is keyed on a free-running
+  counter, never on block structure or call history.
+- **Bit-identical across conforming builds** on the golden corpus (above), whatever the
+  host's floating-point environment: renders under FTZ|DAZ with round-toward-zero, or with
+  every exception unmasked, match the clean render, and flushing forced on inside the guard
+  reproduces the IEEE result.
+- **NaN-free boundary**: a fuzz test feeds NaN, ±inf, subnormal and ±`FLT_MAX` input and
+  parameters under a hostile environment; the output stays finite and equals the run fed
+  sanitized input and canonical values.
 - Onset acceptance: plucks count once each (including 200 ms decays and −30 dB
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite: 41 test cases / ~633k assertions**, green in Release and Debug.
-**CI**: Linux/macOS/Windows host matrix with `-Werror`, a Debug+ASan/UBSan leg, a
-Release+ASan leg (for NDEBUG-gated contract tests), and a compile-only
-**Cortex-M7 cross build** of `dsp/`.
+**Suite** (`ctest`): `dsp_unit` (78 test cases / ~2.54M assertions in Release, 77 in Debug),
+the forced-flush tests, the undefined-symbol audit and its negative control, the
+configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
+editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with
+MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC (Linux and macOS plugin
+builds are left to CI).
+**CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
+compile-only Cortex-M7 build), `parity.yml` (golden reports from six host legs and the
+emulated M7, block-size perturbations and a contraction-on negative control; the static
+audits gate, the hashes only report) and `plugin.yml` (every format on three OSes, Release
+and Debug). `parity.yml` and `plugin.yml` have not yet run on GitHub.
 
 ## How it was built (methodology)
 
@@ -139,22 +185,22 @@ records live in [docs/design/reviews/](design/reviews/).
 
 ## Known gaps and deferred work
 
-- **Pedal ↔ desktop output is not identical today.** The firmware and Apple Silicon builds
-  fuse multiply-adds that x86 builds do not, and standard-library math differs between
-  toolchains. The determinism profile fixes both (contraction off everywhere, in-tree math)
-  and adds a full floating-point control-word guard, a deterministic denormal policy,
-  golden-hash CI and an emulated Cortex-M7 parity job.
-- **Engine defects to fix before the first sound revision:** a mono in-place aliasing bug
-  (`dsp/src/Engine.cpp:526-527`: with mono input and a host that shares input and output
-  buffers, every right-channel sample is wrong); the dither key truncating the sample counter
-  (the pattern repeats every 2²⁹ samples); and non-finite input passing through, plus a NaN
-  path in the grain envelope setup once denormals are no longer flushed. The determinism
-  profile lists them ("A NaN-free boundary", "Output-changing fixes").
+- **Parity is measured, not yet enforced.** Nothing is minted: `kSoundRevision` is 0, the
+  golden harness only reports, and `PARITY_HASHES_GATING` stays off until internal sound
+  revision 1 (profile §8.4 step 10). The parity and plugin workflows have never run on
+  GitHub; the AArch64, macOS and Ubuntu-QEMU legs are untested, and the QEMU and toolchain
+  pins still need their first CI run to record checksums. Apple Silicon parity is unmeasured.
 - **Engine API the companion needs:** an exact `Restart`, a random-number epoch for
   preset loads that keep trails, one `LoadPreset` entry point with a fixed order, and
-  frame-stamped events. Smaller items: automating delay times clicks (no smoothing on the
-  post-delay tap), input above 0 dBFS hard-clips in the int16 ring, and `Trigger()`'s
+  frame-stamped events with an overflow counter; each must follow the guard pattern. Smaller
+  items: the time-parameter smoothing decision (automating delay times clicks: no smoothing on
+  the post-delay tap), input above 0 dBFS hard-clips in the int16 ring, and `Trigger()`'s
   source/velocity/offset are accepted but unread.
+- **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
+  natively), Restart on transport start and the spare engine, the wrapper bypass with
+  crossfade, the pedal-faithful input option (`ConditionInput24`), MIDI CC mapping, pluginval
+  in CI, CLAP and LV2, `.bsp` session state, and the freeze of parameter IDs and tapers. The
+  In/Out level controls are wrapper code outside the guard and never part of a preset.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs
@@ -168,7 +214,8 @@ records live in [docs/design/reviews/](design/reviews/).
   birth rate, denormal flush sites, subnormal timing); **hardware measurement gates
   everything**.
 - **Trigger layer**: no sidechain input; detector constants are calibrated for 44.1/48 kHz
-  (the plugin always runs the engine at 48 kHz and resamples at other host rates).
+  (the plugin design runs the engine at 48 kHz and resamples at other host rates; until that
+  mode lands, the skeleton runs it at the host rate).
 - **Engine features from the design not yet built**: glide, per-grain SVF/crush
   modifiers, dual layers, step tables, `POS_GRID`, CLOCK-quantized triggering, scale
   quantization of the pitch set, intermittency.
@@ -184,12 +231,13 @@ These are the six steps of the merged sequence in
 determinism profile's own steps; the numbers match the designs' "merged step" references.
 Steps 1–4 need no hardware.
 
-1. **Determinism profile and the `dsp/` API.** Contraction off on every toolchain, in-tree
-   math replacing libm, the full control-word guard and denormal flush, a NaN-free input
-   boundary, the remaining output-changing fixes (mono aliasing, the dither key; the
-   block-split fix has landed), then `Restart`, the random-number epoch, `LoadPreset` and
-   frame-stamped events. The JUCE skeleton (build, plain-value parameter layer, forced-48 kHz
-   standalone shell) runs in parallel.
+1. **Determinism profile and the `dsp/` API.** Landed: the build profile, header hygiene,
+   in-tree math with the symbol audit, the full control-word guard and denormal flush, the
+   NaN-free boundary, the block-split fix, mono aliasing and the dither key, the parity
+   harness and its M7 leg (report-only), and the JUCE skeleton. Remaining: `Restart`, the
+   random-number epoch, `LoadPreset` and frame-stamped events (profile steps 8–9, before
+   minting because golden scripts place events at odd frames), and the time-parameter
+   smoothing decision.
 2. **Mint internal sound revision 1.** Golden hashes and CI gates turn on, including the
    emulated Cortex-M7 parity job on every pull request; then the nightly legs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and

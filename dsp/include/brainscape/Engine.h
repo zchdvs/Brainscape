@@ -31,7 +31,7 @@ inline constexpr size_t kEngineImplAlign = 16;
 struct EngineConfig {
   double   sampleRate    = 48000.0;   // fixed for the Engine's lifetime (design §9);
                                       // rate changes re-run PlanMemory + Init
-  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, plugin the host max.
+  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, the plugin 512.
                                       // Must be <= kFeedbackDelayFrames (Init enforces) —
                                       // a wrapper facing larger host buffers chunks them.
   uint32_t historyFrames = 1u << 22;  // power of two in [8, 2^26]; masked indexing

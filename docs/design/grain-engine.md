@@ -327,7 +327,7 @@ emission rate is the grid; `overlap` then acts as a don't-fire ceiling, document
 | Source | Meaning | Notes |
 |---|---|---|
 | `POS_LIVE(d, spray)` | `d` ms behind the write head, ± spray (exp law) | plus optional per-step ms offsets (taps) |
-| `POS_MARK(k, walk, jit)` | k-th most recent onset mark, optionally walking a cascade | mark ring holds 16 marks, enough for a 16-entry step table to address one mark per step (`kMaxMarks`, `dsp/include/brainscape/detail/Granular.h:99`; amended 2026-10-05 from 64 to match the code) |
+| `POS_MARK(k, walk, jit)` | k-th most recent onset mark, optionally walking a cascade | mark ring holds 16 marks, enough for a 16-entry step table to address one mark per step (`kMaxMarks`, `dsp/src/detail/Granular.h:109`; amended 2026-10-05 from 64 to match the code) |
 | `POS_PIN{anchor, rearm_ms \| rearm_src}` | pinned reference; re-armed periodically, on onset, or manually | rearm is a schema field (v1 said "per Repeats" with no field) |
 | `POS_GRID(slice)` | quantized slice of the last bar | may reduce to quantized `POS_LIVE` — prototype decides |
 
@@ -715,19 +715,22 @@ a DWT measurement.
 Two lines of the listing were amended on the same date. **`maxBlockSize`:** the earlier
 comment had the plugin pass the host's maximum. The plugin passes 512 whatever the host's
 maximum and splits larger host buffers into calls of at most 512 frames, because `Init`
-rejects a larger value (`dsp/src/Engine.cpp:118`) and the engine is initialized once per
+rejects a larger value (`dsp/src/Engine.cpp:278`) and the engine is initialized once per
 instance ([companion-app.md](companion-app.md), "Canonical configuration and lifecycle" and
-"Host blocks"); the same stale comment remains in `dsp/include/brainscape/Engine.h:29`.
-**The denormal guard:** the listing used to export a `ScopedDenormalGuard` for callers.
-Today's `dsp/include/brainscape/DenormalGuard.h` ORs flush-to-zero bits into the caller's
-control word and guards only `Process` (`dsp/src/Engine.cpp:394`). The determinism profile
-replaces it with a private guard, `dsp/src/detail/FpEnvGuard.h`, that writes the complete
-control word (round-to-nearest, gradual underflow, which keeps subnormals rather than
-flushing them to zero) on `Init`, `Reset`, `Restart`, `ClearHistory`, `Process`,
-`LoadPreset`, `SetParam` and the exported helpers whose results reach the engine, and
-restores the caller's word on exit ([determinism-profile.md](determinism-profile.md), "A
-full control-word guard on every engine entry point", "The denormal decision: gradual
-underflow everywhere" and "Guard rewrite").
+"Host blocks"); the comment in `dsp/include/brainscape/Engine.h:34` now says so too.
+**The denormal guard:** the listing used to export a `ScopedDenormalGuard` for callers, and
+`dsp/include/brainscape/DenormalGuard.h` ORed flush-to-zero bits into the caller's control
+word around `Process` only. That header is gone. Its replacement is private,
+`dsp/src/detail/FpEnvGuard.h`: it writes the complete control word (round-to-nearest,
+gradual underflow, which keeps subnormals rather than flushing them to zero) and restores
+the caller's word on exit, on `Init`, `Reset`, `ClearHistory`, `Process`, `SetParam`,
+`PlanMemory`, `Canonicalize` and the exported taper and display functions whose results
+reach the engine (`PlainFromNormalized`, `NormalizedFromPlain`, `FormatPlain`). Each public
+entry point is a thin wrapper around a `BRAINSCAPE_FP_BODY` function, so no FP work can move
+across the control-word write; `Restart` and `LoadPreset` will follow the same pattern when
+they land ([determinism-profile.md](determinism-profile.md), "A full control-word guard on
+every engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
+rewrite").
 
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
 ambiguous and collides): a Philox/Squares-class counter PRNG keyed on the tuple

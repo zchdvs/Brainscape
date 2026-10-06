@@ -3,17 +3,22 @@
 These are the probe programs behind [determinism-profile.md](../../docs/design/determinism-profile.md)
 and [companion-app.md](../../docs/design/companion-app.md), kept so every measured number in those
 documents can be reproduced. They are **evidence, not production code**: nothing here is built by the
-root CMake project, and apart from the block-split fix (`bugcheck/`) the engine changes they test have
-not landed in `dsp/` yet. The review records
-in [docs/design/reviews/](../../docs/design/reviews/) cite them.
+root CMake project. The engine changes they test have since landed in `dsp/` in their production form
+(the build profile, in-tree math, the control-word guard and flush, the NaN-free boundary and the
+block-split fix), so these probes describe the engine as it was, not as it is. The review records in
+[docs/design/reviews/](../../docs/design/reviews/) cite them.
 
-The probes ran against `dsp/` at commit `e86e971`. Each modified engine copy is stored as a patch
-against that tree rather than as a full copy.
+The probes ran against `dsp/` at commit `e86e971`, before that work: the layout they patch
+(`dsp/include/brainscape/detail/`, `DenormalGuard.h`) no longer exists. Each modified engine copy is
+stored as a patch against that tree rather than as a full copy; recreate them from a checkout of
+`e86e971`.
 
 The production parity tooling grown from them lives elsewhere: the test-signal generator in
 `dsp/include/brainscape/TestSignal.h`, the golden-hash harness in `dsp/tests/golden/` (ctest
 `golden_report`; `brainscape_golden --help`), the CI legs in `.github/workflows/parity.yml` and the
-static audits and report comparison in `tools/ci/`. [`testsignal_ref.py`](testsignal_ref.py) here is
+static audits and report comparison in `tools/ci/`. The contraction-on negative control builds through
+the test-only `-DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON` (`cmake/BrainscapeFpProfile.cmake`), under which the
+harness only reports. [`testsignal_ref.py`](testsignal_ref.py) here is
 the separate Python implementation of the generator that derives the known-answer hashes in
 `dsp/tests/test_testsignal.cpp` (`python3 tools/parity/testsignal_ref.py 480000`).
 
@@ -44,8 +49,8 @@ cp -r dsp tools/parity/prototype/dsp_fma && git apply --directory=tools/parity/p
 
 The oracle uses `oracle/dsp_orig` (unmodified) and `oracle/dsp_det` (`oracle/oracle-det.patch`, an
 earlier, equivalent in-tree math variant), created the same way. The block-split fix
-(`bugcheck/fix.diff`, then `fixB-over-fix.diff`) has landed in `dsp/`; the patches apply to a `dsp/`
-tree at `e86e971`.
+(`bugcheck/fix.diff`, then `fixB-over-fix.diff`) has landed in `dsp/` (parts A, B and C with
+pin-eligible marks); the patches apply to a `dsp/` tree at `e86e971`.
 Do not commit the recreated trees.
 
 ## Running
@@ -62,9 +67,11 @@ Do not commit the recreated trees.
   enough for the original runs.
 - **Block-split checker.** `bugcheck/CMakeLists.txt` builds `bugcheck` against `../../../dsp`
   (override with `-DBUGCHECK_DSP_DIR=...` to test another tree; `dsp/` from `e86e971` reproduces the
-  defects). `bugcheck matrix` runs all 32
-  feature subsets; `bugcheck all` runs every named case. Logs from the original runs are in
-  `bugcheck/results/`.
+  defects). Today's `dsp/` includes `../cmake/BrainscapeFpProfile.cmake`, so the directory you point
+  at needs the repository's `cmake/` beside it. `bugcheck matrix` runs all 32 feature subsets;
+  `bugcheck all` runs every named case; `bugcheck hashes` prints one hash per case to compare two
+  trees. Logs from the original runs are in `bugcheck/results/`; against today's tree both modes
+  report 0 broken cases (Release, and `all` in Debug with the write-ahead assertion live).
 
 Always clamp each rendered block to `min(block, remaining)`: a fixed block size over a length that is
 not a multiple of it overruns the output buffers and crashes later with a heap-corruption error.
