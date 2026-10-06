@@ -14,7 +14,7 @@ The project has completed its **research**, the **core DSP engine** (v1 scope), 
 determinism profile**: one `dsp/` build profile, in-tree math, a full floating-point
 control-word guard, a deterministic denormal flush, a NaN-free boundary, the block-split
 fix, and the engine state API (an exact `Restart`, a random-number epoch, one `LoadPreset`
-entry point and frame-stamped events). A golden-hash harness renders a 22-preset corpus
+entry point and frame-stamped events). A golden-hash harness renders a 23-preset corpus
 bit-identically with MSVC, GCC, Clang and the Cortex-M7 code run under emulation, at any
 block size; it reports and does not yet gate. A JUCE plugin and standalone skeleton hosts the engine. Nothing has touched real
 hardware, and the parity and plugin CI workflows have not yet run on GitHub.
@@ -59,11 +59,11 @@ standard-library transcendental with in-tree math and disabled compiler multiply
 produced **one identical SHA-256 across 32 builds** — MSVC, GCC 11, 12 and 14 and Clang on
 x86, and the real firmware code generation for the Cortex-M7 run under emulation — over 10
 presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (11
-vectors, 22 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
+vectors, 23 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
 (SSE2 and AVX2), GCC 11 and 14 (also at `-march=x86-64-v3`, and in Debug), Clang 14 and the
 Cortex-M7 build from the pinned arm-none-eabi 10.3 run under `qemu-arm -cpu cortex-m7`, and
 the prototype's 10-preset battery agrees across the same builds. A build with contraction
-turned back on (the negative control) differs on 20 of the 22 presets.
+turned back on (the negative control) differs on 21 of the 23 presets.
 
 What the guarantee covers is precise. Two conforming builds of the same sound revision,
 restarted into the exact-restart state, loading the same compiled preset with an Exact load,
@@ -131,8 +131,10 @@ implementing:
     random-number epoch that Spillover loads restart, `LoadPreset(PresetState, Exact or
     Spillover)` in the profile's fixed order with a report of inexact loads, frame-stamped
     events in `ProcessContext` (parameter, freeze, trigger and Spillover load) applied at
-    their frames by splitting the block inside `Process`, the `EventQueue` transport with its
-    overflow count, and a toolchain ID (compiler, version, target, FP-flag hash).
+    their frames by splitting the block inside `Process` (freeze settling once per frame),
+    the `EventQueue` transport (it refuses and counts overflows and out-of-order stamps, is
+    cleared with a restart, and retires events so a staged preset can be reused), and a
+    toolchain ID (compiler, version, target, FP-flag hash).
 
 ### Verified behavioral contracts (the test suite enforces these)
 
@@ -157,7 +159,8 @@ implementing:
 - **Exact restart and stamped events**: a used engine after `Restart` renders exactly what a
   fresh `Init` renders (feedback, freeze, marks, every post stage, a Spillover epoch and
   queued triggers left behind), and events at odd frames render what a wrapper splitting its
-  blocks there renders, at block sizes 1 to 512. A Spillover load never reconverges with the
+  blocks there renders, at block sizes 1 to 512, a freeze released and re-engaged at one
+  frame and Spillover loads while frozen included. A Spillover load never reconverges with the
   Exact render (4 s measured, as the profile states); followed by `Reset` it reconverges after
   0.250–0.264 s, the record's figures.
 - **Bit-identical across conforming builds** on the golden corpus (above), whatever the
@@ -171,7 +174,7 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (94 test cases / ~2.59M assertions in Release, 93 in Debug),
+**Suite** (`ctest`): `dsp_unit` (97 test cases / ~2.61M assertions in Release, 96 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
 editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with

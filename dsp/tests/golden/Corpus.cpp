@@ -137,12 +137,16 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
   auto  drop   = [&](auto pred) {
     events.erase(std::remove_if(events.begin(), events.end(), pred), events.end());
   };
-  auto neutral = [&](ParamId id, float value) {
+  auto set = [](ParamList& params, ParamId id, float value) {
     bool found = false;
-    for (auto& p : out.params) {
+    for (auto& p : params) {
       if (p.first == id) { p.second = value; found = true; }
     }
-    if (!found) out.params.emplace_back(id, value);
+    if (!found) params.emplace_back(id, value);
+  };
+  auto neutral = [&](ParamId id, float value) {
+    set(out.params, id, value);
+    for (ParamList& staged : out.script.MutableStaged()) set(staged, id, value);
     drop([id](const Event& e) { return e.type == EventType::SetParam && e.id == id; });
   };
   switch (f) {
@@ -244,6 +248,29 @@ std::vector<VectorCase> BuildCorpus() {
     pitch.require = {{C::Events, 9}, {C::OffGridEvents, 9}};
     pitch.ablate  = {Feature::Pitch};
     v.presets.push_back(pitch);
+
+    // Freeze is a level settled per frame (profile §5.11): a release and a re-engage at
+    // one frame keep the pin, and a Spillover load's freeze-off is immediate, so a freeze
+    // after it at its frame pins anew. Live positioning, so every pin reaches the output.
+    PresetCase retoggle = Preset("freeze_retoggle_spill",
+        {{P::DelayMs, 150.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 40.0f}, {P::Overlap, 0.8f},
+         {P::SprayMs, 10.0f}, {P::PitchSt, 5.0f}, {P::Jitter, 0.5f}, {P::Feedback, 0.3f}});
+    retoggle.script.Freeze(S(3) + 101, true);
+    retoggle.script.Freeze(S(6) + 4999, false);
+    retoggle.script.Freeze(S(6) + 4999, true);
+    retoggle.script.Spillover(S(9) + 23,  // while frozen
+        {{P::DelayMs, 333.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 20.0f}, {P::Overlap, 1.0f},
+         {P::PitchSt, -7.0f}, {P::Feedback, 0.5f}, {P::ReverbMix, 0.4f}});
+    retoggle.script.Freeze(S(10) + 77, true);
+    retoggle.script.Spillover(S(12) + 5,
+        {{P::DelayMs, 90.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 60.0f}, {P::SprayMs, 0.0f},
+         {P::PitchSt, 12.0f}, {P::Feedback, 0.2f}});
+    retoggle.script.Freeze(S(12) + 5, true);
+    retoggle.script.Freeze(S(14) + 31, false);
+    retoggle.require = {{C::Events, 8},          {C::OffGridEvents, 8}, {C::FreezeEngages, 3, 3},
+                        {C::FrozenFrames, S(9)}, {C::FrozenOnsets, 3}};
+    retoggle.ablate  = {Feature::Freeze};
+    v.presets.push_back(retoggle);
     corpus.push_back(std::move(v));
   }
 

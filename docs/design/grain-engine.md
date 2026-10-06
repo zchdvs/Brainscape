@@ -701,7 +701,7 @@ namespace modes {  // non-realtime, host-callable, never from Process
 | Methods | Context | Mechanism |
 |---|---|---|
 | `Process` | audio thread only | direct |
-| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | one producer per engine: the firmware control loop, or the desktop wrapper's audio-thread side; other threads post to that producer | lock-free SPSC event queue, 256 entries, carrying frame-stamped events that take effect at their exact frame inside `Process`; an overflow is counted, never coalesced, and a render with a nonzero count is outside the parity contract |
+| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | one producer per engine: the firmware control loop, or the desktop wrapper's audio-thread side; other threads post to that producer | lock-free SPSC event queue, 256 entries, carrying frame-stamped events that take effect at their exact frame inside `Process`; an overflow is counted, never coalesced, and a render with a nonzero count is outside the parity contract; a stamp below the last accepted one is refused and counted the same way, and the queue is cleared with every `Restart` |
 | `ConsumeOnsetCount`, `GetParam`, `ActiveModeInfo` | any thread | atomics / value copies |
 | `PublishMode` | non-RT thread | release-store publish; acquire-load in `Process`; the switch takes effect at its stamped frame (§5) |
 | `Init`, `Reset`*, `ClearHistory`, `ClearLooper`, `SaveState`, `LoadState`, `modes::*` | non-RT (`Reset` is RT-safe) | — |

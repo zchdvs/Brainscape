@@ -16,9 +16,10 @@
 //        delivered to the engine, one restarted engine, whole corpus, ablations on). It
 //        refuses while kSoundRevision is 0: nothing is minted until the engine stops
 //        changing (profile §8.4 step 10).
-// --delivery split applies events through SetParam, SetFreeze and Trigger with blocks
-// split at their frames instead of as stamped events (profile §5.11); --fresh-engine
-// Inits an engine per render instead of restarting one (§5.8). Neither may change a hash.
+// --delivery split applies events through SetParam, SetFreeze, Trigger and LoadPreset
+// (Spillover) with blocks split at their frames instead of as stamped events (profile
+// §5.11); --fresh-engine Inits an engine per render instead of restarting one (§5.8).
+// Neither may change a hash.
 // With a golden file for this revision, report and check write a WAV of every preset
 // that misses it into --wav-dir (profile §6.1: WAV files only on mismatch).
 // --note records a fact about the build that the binary cannot see (the archive's

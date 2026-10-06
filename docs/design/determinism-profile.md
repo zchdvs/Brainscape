@@ -800,7 +800,15 @@ amended in that section's threading table: a single-producer queue cannot serve 
 thread", so each engine has one producer — the pedal's control loop, or the desktop wrapper's
 audio thread fed by the wrapper's own queue (companion §4.7) [plan-of-record]; and an
 overflow is never coalesced but counted, and a render with a nonzero count is outside the
-contract, so scripted renders size queues to avoid it.
+contract, so scripted renders size queues to avoid it. A stamp below the last one accepted
+is refused and counted the same way, since it would apply out of order. `Restart` begins a
+new timeline at frame 0, so the queue is cleared with it and producers stamp from the
+restarted counter; and a Spillover event's staged preset is reused only once the queue
+reports the event retired (companion §6.1).
+
+Freeze is a level, not an edge: the events at one frame leave it on or off, so a release and
+a re-engage at one frame keep the pin, as `SetFreeze` between split blocks does. A Spillover
+load turns it off at once, so a freeze after the load at its frame pins anew.
 
 On the pedal, pot (after soft takeover), footswitch and MIDI events are stamped with the
 48-frame block start where they apply, and can be logged (§6.7); untouched pots emit nothing

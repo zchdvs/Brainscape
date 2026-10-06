@@ -16,7 +16,8 @@ namespace brainscape::golden {
 
 // Bump when any vector, preset, script or requirement changes. 2: automation_offgrid's
 // DelayFb events hold the canonical 0.9f, not 9 * 0.1f (SetParam stored 0.9f either way).
-inline constexpr uint32_t kCorpusVersion = 2;
+// 3: strums_16s/freeze_retoggle_spill (same-frame freeze events, Spillover loads).
+inline constexpr uint32_t kCorpusVersion = 3;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered

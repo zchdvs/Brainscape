@@ -141,16 +141,16 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     }
   }
   Engine& engine = *engine_;
-  // A complete preset (companion §6.1): every leaf, the preset's values over the defaults.
-  auto preset = std::make_unique<PresetState>();
-  for (uint32_t i = 0; i < kNumParams; ++i) {
-    preset->leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
+  // Inexact presets are corpus bugs.
+  if (!engine.LoadPreset(*CompletePreset(p.params), LoadMode::Exact)) return false;
+  StagedPresets staged;
+  for (const ParamList& s : p.script.Staged()) {
+    staged.push_back(CompletePreset(s));
+    if (!CheckPreset(*staged.back())) return false;
   }
-  preset->leafCount = static_cast<uint32_t>(kNumParams);
-  for (const auto& kv : p.params) {
-    preset->leaves[static_cast<uint32_t>(kv.first) - 1u].value = kv.second;
-  }
-  if (!engine.LoadPreset(*preset, LoadMode::Exact)) return false;  // inexact: a corpus bug
+  const auto stagedFeedback = [&staged](uint32_t i) {
+    return staged[i]->leaves[static_cast<uint32_t>(ParamId::Feedback) - 1u].value;
+  };
 
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(notes.data(), static_cast<uint32_t>(notes.size()));
@@ -164,6 +164,7 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
   const int64_t pinReach    = reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack;
   const int64_t frames      = v.frames;
   bool          frozen      = false;
+  bool          freezeLevel = false;  // what the events at the current frame leave
   int64_t       pinAbs      = 0;
   float         feedback    = engine.GetParam(ParamId::Feedback);  // the smoother's target
   int64_t       reach       = slack >= ring ? 0 : frames;
@@ -192,14 +193,23 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     const auto n = static_cast<uint32_t>(end - pos);
 
     // The block's events: their counters, and the frozen and feedback state of each
-    // stretch between them.
+    // stretch between them. Freeze is a level settled after each frame's events, as the
+    // engine settles it; a Spillover load's freeze-off is immediate.
     const Event*   evs = nullptr;
     const uint32_t nev = cursor.Take(end, &evs);
     blockEvents.clear();
     int64_t segStart        = pos;
     bool    frozenAtHop     = false;
     bool    frozenAtHopSeen = false;
-    auto    closeSegment    = [&](int64_t segEnd) {
+    auto    settleFreeze    = [&] {
+      if (freezeLevel && !frozen) {
+        ++At(out, Counter::FreezeEngages);
+        pinAbs = segStart;
+      }
+      frozen = freezeLevel;
+    };
+    auto closeSegment = [&](int64_t segEnd) {
+      settleFreeze();
       if (frozen) {
         At(out, Counter::FrozenFrames) += segEnd - segStart;
         if (pinAbs + pinReach < segEnd) reachBy(pinAbs + pinReach);
@@ -215,23 +225,23 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
         frozenAtHopSeen = true;
       }
       if (cfg_.delivery == Delivery::Split) {
-        ApplyUnstamped(engine, ev);
+        ApplyUnstamped(engine, ev, staged);
       } else {
-        blockEvents.push_back(ToBlockEvent(ev, pos));
+        blockEvents.push_back(ToBlockEvent(ev, pos, staged));
       }
       ++At(out, Counter::Events);
       if (ev.frame % kPedalBlock != 0) ++At(out, Counter::OffGridEvents);
-      if (ev.type == EventType::Trigger) ++At(out, Counter::Triggers);
-      if (ev.type == EventType::Freeze) {
-        const bool on = ev.value != 0.f;
-        if (on && !frozen) {
-          ++At(out, Counter::FreezeEngages);
-          pinAbs = ev.frame;
-        }
-        frozen = on;
-      }
-      if (ev.type == EventType::SetParam && ev.id == ParamId::Feedback) {
-        feedback = Canonicalize(ev.id, ev.value);
+      switch (ev.type) {
+        case EventType::SetParam:
+          if (ev.id == ParamId::Feedback) feedback = Canonicalize(ev.id, ev.value);
+          break;
+        case EventType::Freeze: freezeLevel = ev.value != 0.f; break;
+        case EventType::Trigger: ++At(out, Counter::Triggers); break;
+        case EventType::SpilloverLoad:
+          freezeLevel = false;
+          frozen      = false;
+          feedback    = stagedFeedback(ev.staged);
+          break;
       }
     }
     closeSegment(end);
