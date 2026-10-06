@@ -132,8 +132,9 @@ without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp
 `dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
 forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
 bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
-None of this binds until branch protection requires the checks and code owners review the
-files that define them (Known gaps).
+Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
+(every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
+an up-to-date branch and code-owner review (Known gaps has the caveats).
 
 **The gates were shown to fail.** A one-ULP change to a binary32 filter constant fails check
 on MSVC and on the emulated M7 (the feedback tamer's diffuser gain: 16 of 28 presets; a reverb
@@ -308,27 +309,29 @@ records live in [docs/design/reviews/](design/reviews/).
 
 ## Known gaps and deferred work
 
-- **Parity is enforced on x86 and on emulation only.** The parity, sound-revision and plugin
-  workflows have never run on GitHub. Their AArch64 legs (Linux arm64 GCC, macOS arm64
-  AppleClang, and `host.yml`'s and `plugin.yml`'s macOS jobs, which now run `golden_check`)
-  and the Ubuntu-QEMU M7 leg gate on a golden file no AArch64 build or CI runner has ever
-  rendered; a first failure there is a parity finding to root-cause, not a golden to
-  regenerate. The QEMU and toolchain pins still need their first CI run to record checksums.
-  The nightly legs (full-system QEMU with the interrupt `FPDSCR`, exhaustive DetMath
-  accuracy, toolchain drift) are not built.
-- **The gates do not bind yet.** Every gate runs the pull request's own code: the harness and
-  its exit codes, `parity.yml` and its `PARITY_HASHES_GATING` switch, `sound-rev.yml` and
-  `tools/ci/sound_rev_gate.py`. A pull request that edits them passes them whatever it does to
-  the sound, and the "sound-neutral" label waives the path trigger. They bind only when
-  branch protection on `main` requires `parity-summary`, every `parity-host` and `parity-m7`
-  leg, `parity-audits`, `parity-negative-control` and `sound-rev-gate`, and requires review
-  from code owners. [`.github/CODEOWNERS`](../.github/CODEOWNERS) names @zchdvs for `dsp/`
-  (`dsp/tests/golden/golden.json` included), `cmake/`, the root `CMakeLists.txt`, the arm
-  toolchain file, `.github/workflows/` and `tools/ci/`, as profile §5.12 and §6.1 require; the
-  branch protection itself is still to be configured, and repository settings must also limit
-  who may apply the label. Running `sound-rev-gate` from the base
-  branch (`pull_request_target`) would not close this alone, since a pull request can add a
-  workflow whose job has the same name.
+- **Parity is proven on emulation, not yet on Seed3 silicon.** The first GitHub runs
+  (2026-10-06) rendered the golden corpus bit-identically on every leg: Windows x64 (MSVC,
+  MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
+  `macos-14` and AppleClang 21 on `macos-latest`) and the Cortex-M7 under QEMU 10.2.3, whose
+  engine archive was byte-identical to a local build (`4f4ddaa3…`). The ARM toolchain's MD5
+  passed against Arm's download and QEMU is now pinned to the commit that run recorded. The
+  run's failures were all in tooling (fixed in #1; see the record there): LLVM 21 folding
+  the harness's subnormal bit tests into floating-point compares under the hostile control
+  word, two symbol-audit allowlist gaps, and a Windows smoke-test path. Hardware-in-the-loop
+  on a Seed3 and the nightly legs (full-system QEMU with the interrupt `FPDSCR`, exhaustive
+  DetMath accuracy, toolchain drift) are not built.
+- **How far the gates bind.** Branch protection on `main` requires all 23 CI checks, an
+  up-to-date branch and code-owner review; [`.github/CODEOWNERS`](../.github/CODEOWNERS)
+  names @zchdvs for `dsp/` (`dsp/tests/golden/golden.json` included), `cmake/`, the root
+  `CMakeLists.txt`, the arm toolchain file, `.github/workflows/` and `tools/ci/`, as profile
+  §5.12 and §6.1 require. Only collaborators can apply the "sound-neutral" label, so today
+  only the owner can waive the path trigger. Caveats: every gate runs the pull request's own
+  code (a pull request that edits the harness or a workflow can pass its own checks), so
+  code-owner review of those paths is the real control; and the owner is the only code owner
+  and cannot approve their own pull requests, so owner merges go through the administrator
+  bypass, which the protection allows on purpose. Running `sound-rev-gate` from the base
+  branch (`pull_request_target`) would not close the first caveat alone, since a pull request
+  can add a workflow whose job has the same name.
 - **Profile step 10 is not finished** (determinism-profile.md §8.4 lists it). Not yet built:
   the engine-side coverage counters (births, steals, reverse and mark-positioned births,
   re-anchors, far-rail clamps, blocks with an underflow flag, the write-ahead counter) and the
@@ -390,9 +393,10 @@ Steps 1–4 need no hardware.
    time glide, the parity harness and its M7 leg, the JUCE skeleton, and `Restart`, the
    random-number epoch, `LoadPreset` and frame-stamped events (profile steps 1–9).
 2. **Mint internal sound revision 1.** *Minted* (profile step 10): golden hashes, the
-   sound-revision gate and the emulated Cortex-M7 parity job check every pull request.
-   Remaining: branch protection (CODEOWNERS exists), the rest of step 10 (Known gaps), the nightly
-   legs (profile step 11) and their first CI runs.
+   sound-revision gate and the emulated Cortex-M7 parity job check every pull request, and
+   branch protection makes them required on `main`; every leg, AArch64 included, matched the
+   golden file on its first GitHub run. Remaining: the rest of step 10 (Known gaps) and the
+   nightly legs (profile step 11).
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and
    the `.bsp` preset package with its desktop compiler.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.

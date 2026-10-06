@@ -1167,7 +1167,7 @@ Each risk is stated with its mitigation.
 | 3 | While frozen, pin-eligible marks (recommended) or live-head marks, under which freeze does nothing to mark-positioned grains? | A Strum listening test (§5.7) |
 | 4 | Spillover loads: make the onset hop grid epoch-relative with a detector reset, or stamp loads at multiples of 256 frames? Only the 256-frame hop grid matters; the 512-frame FIFO phase does not (§5.9; record §5.9), so the companion's earlier 512-frame alignment proposal is withdrawn (companion record §5). If aligned, the producer stamps the aligned frame; the engine never defers events. | Whether Spillover convergence with onset modes matters |
 | 5 | A cheaper deterministic per-sample flush? | DWT of the flush |
-| 6 | Toolchain 10.3-2021.10 or libDaisy v9's? Packaged QEMU 8.2.2 or a pinned 10.x? | libDaisy v9's docs; a first CI run |
+| 6 | Toolchain 10.3-2021.10 or libDaisy v9's? *QEMU closed:* pinned 10.2.3 at commit `2e7e8b7e…`, built from source; its first CI run matched the golden file and the local M7 archive byte for byte. | libDaisy v9's docs |
 | 7 | *Decided for v1:* native Windows on Arm is not a v1 target (companion §2.1); the guard refuses `_M_ARM64` until phase F adds its branch (§4.1), and the x64 build under Prism is covered by §6.2's leg. ARM64EC stays out of profile unless a test shows that its `_mm_setcsr` reaches the real `FPCR`. | Product decision, taken; phase F needs a Windows-on-Arm test machine |
 | 8 | *Closed:* libDaisy's int24 → float is exactly *i* × 2⁻²³ while `postgain` is 1 (§2.2). | — |
 | 9 | Pedal default load: Spillover (recommended) or Exact? A user-experience choice. | DWT of the `Restart` clear; the watermark (§5.8) |
@@ -1195,8 +1195,9 @@ with `dsp/` and plugin objects linked in swapped order (§6.3, §6.4); (d) the l
 `compile_commands.json` (§6.3; the configure check already rejects forbidden flags on them);
 (f) the second negative control, a DetMath function swapped back to libm, as a hash control
 (§6.4; its symbol-audit form runs); (g) the Rosetta 2 and Prism host legs (§6.2); (h) a mint
-job (§6.1 records the deviation); (i) the branch protection that makes the gates binding
-(§5.12, §6.1; `.github/CODEOWNERS` exists). One finding for §5.12: a one-ULP binary64 change to a DetMath
+job (§6.1 records the deviation). The branch protection that makes the gates binding
+(§5.12, §6.1) is in place since 2026-10-06, with `.github/CODEOWNERS`; STATUS.md lists its
+caveats. One finding for §5.12: a one-ULP binary64 change to a DetMath
 coefficient changed no corpus output bit, because every DetMath result is rounded to binary32
 first, so only the path trigger sees it. The rest of step 10, step 11 and the hardware-gated
 work of step 13 remain.
