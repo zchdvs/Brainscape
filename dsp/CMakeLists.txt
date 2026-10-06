@@ -30,9 +30,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(brainscape_dsp PRIVATE -Werror)
   endif()
 elseif(MSVC)
-  # MSVC: RTTI off; exception flags stay at the toolchain default for the static lib —
-  # the code uses neither, and the GCC/Clang CI jobs enforce -fno-exceptions.
-  target_compile_options(brainscape_dsp PRIVATE /GR- /W4)
+  # RTTI and exceptions off, as above. Under CMake's default /EHsc the out-of-line
+  # constructors get unwind tables and pull in the C++ EH runtime, which the symbol
+  # audit rejects (determinism-profile.md §6.3).
+  target_compile_options(brainscape_dsp PRIVATE /EHs-c- /GR- /W4)
   if(BRAINSCAPE_WERROR)
     target_compile_options(brainscape_dsp PRIVATE /WX)
   endif()

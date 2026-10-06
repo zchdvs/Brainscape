@@ -19,6 +19,42 @@ add_test(NAME dsp_unit COMMAND brainscape_tests)
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)
 
+# Undefined-symbol audit of the engine archive (determinism profile §6.3), and its
+# negative control (§6.4): a library left on libm must fail it.
+if(MSVC)
+  get_filename_component(_bs_cl_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  find_program(BRAINSCAPE_DUMPBIN dumpbin HINTS "${_bs_cl_dir}")
+  set(_bs_audit_tool "${BRAINSCAPE_DUMPBIN}")
+  set(_bs_audit_flavor msvc)
+elseif(APPLE)
+  set(_bs_audit_tool "${CMAKE_NM}")
+  set(_bs_audit_flavor apple)
+else()
+  set(_bs_audit_tool "${CMAKE_NM}")
+  set(_bs_audit_flavor gnu)
+endif()
+set(_bs_flags "${CMAKE_CXX_FLAGS}")
+foreach(c IN LISTS CMAKE_CONFIGURATION_TYPES CMAKE_BUILD_TYPE)
+  string(TOUPPER "${c}" c)
+  string(APPEND _bs_flags " ${CMAKE_CXX_FLAGS_${c}}")
+endforeach()
+set(_bs_sanitizers OFF)
+if(_bs_flags MATCHES "-fsanitize=")
+  set(_bs_sanitizers ON)
+endif()
+set(_bs_audit ${CMAKE_COMMAND} "-DTOOL=${_bs_audit_tool}" -DFLAVOR=${_bs_audit_flavor}
+    "-DDEBUG=$<NOT:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>>" "-DSANITIZERS=${_bs_sanitizers}")
+set(_bs_audit_script ${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/BrainscapeSymbolAudit.cmake)
+
+add_test(NAME dsp_symbol_audit
+         COMMAND ${_bs_audit} -DLIB=$<TARGET_FILE:brainscape_dsp> -P ${_bs_audit_script})
+
+add_library(brainscape_audit_control STATIC audit_control.cpp)
+add_test(NAME dsp_symbol_audit_control
+         COMMAND ${_bs_audit} -DLIB=$<TARGET_FILE:brainscape_audit_control> -P ${_bs_audit_script})
+set_tests_properties(dsp_symbol_audit_control PROPERTIES
+                     PASS_REGULAR_EXPRESSION "rejected: [^\n]*exp2")
+
 # Self-test of the configure-time forbidden-flag check (§6.3), with this build's
 # generator and compiler.
 get_filename_component(_bs_dsp_dir .. ABSOLUTE BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
