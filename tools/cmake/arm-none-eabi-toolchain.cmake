@@ -12,8 +12,12 @@ set(CMAKE_CXX_COMPILER arm-none-eabi-g++)
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
 set(BRAINSCAPE_M7_FLAGS "-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard")
-set(CMAKE_C_FLAGS_INIT   "${BRAINSCAPE_M7_FLAGS}")
-set(CMAKE_CXX_FLAGS_INIT "${BRAINSCAPE_M7_FLAGS}")
+# Determinism profile (docs/design/determinism-profile.md §3.2): firmware code outside
+# dsp/ gets the profile too. Without -ffp-contract=off this toolchain fused 152
+# multiply-adds in dsp/.
+set(BRAINSCAPE_M7_FP_FLAGS "-ffp-contract=off -fno-math-errno")
+set(CMAKE_C_FLAGS_INIT   "${BRAINSCAPE_M7_FLAGS} ${BRAINSCAPE_M7_FP_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${BRAINSCAPE_M7_FLAGS} ${BRAINSCAPE_M7_FP_FLAGS} -fno-exceptions -fno-rtti")
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)

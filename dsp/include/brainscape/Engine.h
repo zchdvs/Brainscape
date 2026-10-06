@@ -1,19 +1,16 @@
 #pragma once
-#include <atomic>
+#include <cstddef>
 #include <cstdint>
 
+#include "brainscape/FpProfile.h"
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
-#include "brainscape/detail/Granular.h"
-#include "brainscape/detail/OnsetDetector.h"
-#include "brainscape/detail/PostChain.h"
-#include "brainscape/detail/Smoother.h"
 
 namespace brainscape {
 
 // Shared build constants (docs/design/grain-engine.md §3): mode files are authored
 // against these; they are deliberately NOT EngineConfig fields.
-inline constexpr uint32_t kMaxGrains = detail::kGranularMaxGrains;
+inline constexpr uint32_t kMaxGrains = 64;
 
 // The feedback path re-enters the ring through a FIFO of exactly this many frames,
 // so the loop period is base_ms + kFeedbackDelayFrames/sr on EVERY target. Sizing
@@ -22,6 +19,14 @@ inline constexpr uint32_t kMaxGrains = detail::kGranularMaxGrains;
 // Power of two so the slot index is a mask, not a 64-bit modulo (which compiled to
 // two __aeabi_uldivmod calls per sample on Cortex-M7).
 inline constexpr uint32_t kFeedbackDelayFrames = 512;
+
+// Opaque storage for the engine state (docs/design/determinism-profile.md §3.5): no
+// floating-point code may live in a public header, where a consumer's flags would
+// compile it, yet the Engine must not allocate and must fit DTCM on the pedal. Sized
+// per pointer width (measured 6,032 B on the M7, 6,168 B on x86-64, plus headroom);
+// Engine.cpp static_asserts the fit.
+inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 6656 : 6912;
+inline constexpr size_t kEngineImplAlign = 16;
 
 struct EngineConfig {
   double   sampleRate    = 48000.0;   // fixed for the Engine's lifetime (design §9);
@@ -48,7 +53,7 @@ MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 // the design predicts (§5 Pattern A): rectangular window, abutting unity grains.
 class Engine {
  public:
-  Engine() noexcept = default;
+  Engine() noexcept;
   Engine(const Engine&) = delete;
   Engine& operator=(const Engine&) = delete;
 
@@ -100,8 +105,8 @@ class Engine {
   // position anchor (design §2.4) — the ring keeps recording, so a freeze held
   // longer than the ring length (~87 s at the default config) is overwritten by
   // wraparound (documented ceiling).
-  void SetFreeze(bool on) noexcept { freezePending_.store(on, std::memory_order_relaxed); }
-  bool GetFreeze() const noexcept { return freezePending_.load(std::memory_order_relaxed); }
+  void SetFreeze(bool on) noexcept;
+  bool GetFreeze() const noexcept;
 
   // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
   // the guaranteed-working fallback when onset detection can't hear the source.
@@ -112,17 +117,13 @@ class Engine {
   // yet read: source routing, velocity, and sample-accurate delivery land with
   // the mode system and SPSC event queue. A SIDECHAIN audio input is not yet
   // expressible through ProcessContext at all (reserved, like tempoBpm).
-  void Trigger(TriggerSource /*src*/ = TriggerSource::Footswitch, float /*velocity*/ = 1.f,
-               uint32_t /*sampleOffset*/ = 0) noexcept {
-    manualTriggers_.fetch_add(1u, std::memory_order_relaxed);
-  }
+  void Trigger(TriggerSource src = TriggerSource::Footswitch, float velocity = 1.f,
+               uint32_t sampleOffset = 0) noexcept;
 
   // Any thread; atomic exchange(0). Counts onsets since the last call — counted,
   // not boolean, so fast passages stay individually visible on the trigger LED
   // (design §9; the LED driver stretches each to a visible minimum).
-  uint32_t ConsumeOnsetCount() noexcept {
-    return onsetCount_.exchange(0u, std::memory_order_relaxed);
-  }
+  uint32_t ConsumeOnsetCount() noexcept;
 
   // Shared descriptor table (design §9): also available as brainscape::Descriptors().
   static const ParamDescriptor* Descriptors(size_t* count) noexcept;
@@ -131,50 +132,17 @@ class Engine {
   // Cortex-M7, so cross-thread readers wait for SaveState to land instead).
   // Free-running, advanced by numFrames every Process regardless of transport —
   // keys every random draw (design §9) including the ring-write dither.
-  int64_t SampleCounter() const noexcept { return sampleCounter_; }
+  int64_t SampleCounter() const noexcept;
 
   // Dry path is never block-delayed (design §2.5).
   uint32_t LatencySamples() const noexcept { return 0; }
 
  private:
-  using Smoother = detail::Smoother;
+  struct Impl;
+  Impl&       impl() noexcept;
+  const Impl& impl() const noexcept;
 
-  void ApplyParam(size_t index, float value) noexcept;
-  void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
-                                          // param actually changed (keeps exp2/pow
-                                          // off the steady-state audio path)
-  void RebuildPostParams() noexcept;      // same discipline for the post chain
-
-  EngineConfig cfg_{};
-  int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
-  float*       windowLut_  = nullptr;  // Hot arena: kWindowLutSize half-cosine entries
-  float*       wetL_       = nullptr;  // Hot arena: maxBlockSize each
-  float*       wetR_       = nullptr;
-  float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo,
-                                       // kFeedbackDelayFrames frames (NOT maxBlockSize —
-                                       // see the constant's rationale above)
-  uint32_t     mask_       = 0;
-  uint32_t     writeFrame_ = 0;
-  Smoother     mix_, outGain_, feedback_, norm_;
-  int64_t      sampleCounter_ = 0;
-  bool         ready_         = false;
-  bool         granularDirty_ = true;
-  bool         postDirty_     = true;
-  bool         frozen_        = false;
-  uint32_t     frozenAnchor_  = 0;
-
-  detail::GranularCore   granular_;
-  detail::GranularParams gp_{};
-  detail::PostChain      post_;
-  detail::PostParams     pp_{};
-  detail::FeedbackTamer  tamer_;
-  detail::OnsetDetector  detector_;
-
-  std::atomic<float>    pending_[kNumParams]{};
-  std::atomic<bool>     freezePending_{false};
-  std::atomic<uint32_t> onsetCount_{0};
-  std::atomic<uint32_t> manualTriggers_{0};
-  float                 active_[kNumParams]{};
+  alignas(kEngineImplAlign) unsigned char impl_[kEngineImplBytes];
 };
 
 }  // namespace brainscape

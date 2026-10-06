@@ -1,10 +1,12 @@
 #pragma once
+#include "detail/FpProfilePrivate.h"
+
 #include <cstdint>
 
-#include "brainscape/detail/Smoother.h"
+#include "detail/Smoother.h"
 
 // Post chain (docs/design/grain-engine.md §2.6) and the fixed feedback taming
-// chain (§2.3). Internal — included by Engine.h; free to change.
+// chain (§2.3). Internal; free to change.
 //
 // Determinism rules (design §10 contracts #1/#7): every per-sample nonlinearity
 // and oscillator here is in-tree arithmetic (parabolic sine, Padé tanh) or an

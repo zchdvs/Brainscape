@@ -1,11 +1,20 @@
+#include "detail/FpProfilePrivate.h"
+
 #include "brainscape/Engine.h"
 
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <new>
+#include <type_traits>
 
-#include "brainscape/DenormalGuard.h"
-#include "brainscape/GrainMath.h"
+#include "detail/DenormalGuard.h"
+#include "detail/GrainMath.h"
+#include "detail/Granular.h"
+#include "detail/OnsetDetector.h"
+#include "detail/PostChain.h"
+#include "detail/Smoother.h"
 
 namespace brainscape {
 
@@ -30,6 +39,8 @@ static_assert(std::atomic<float>::is_always_lock_free,
 static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
                   detail::TriggerEvents::kMaxOnsets,
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
+
+static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
 
 constexpr float kInvScale = 1.0f / 32767.0f;
 
@@ -65,6 +76,99 @@ inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
 }
 
 }  // namespace
+
+// The engine state behind Engine's opaque storage. Its methods are the Engine's
+// entry points; Engine forwards to them.
+struct Engine::Impl {
+  bool  Init(const EngineConfig&, const Arenas&) noexcept;
+  void  Reset() noexcept;
+  void  ClearHistory() noexcept;
+  void  Process(const ProcessContext&) noexcept;
+  void  SetParam(ParamId id, float plainValue) noexcept;
+  float GetParam(ParamId id) const noexcept;
+
+  using Smoother = detail::Smoother;
+
+  void ApplyParam(size_t index, float value) noexcept;
+  void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
+                                          // param actually changed (keeps exp2/pow
+                                          // off the steady-state audio path)
+  void RebuildPostParams() noexcept;      // same discipline for the post chain
+
+  EngineConfig cfg_{};
+  int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
+  float*       windowLut_  = nullptr;  // Hot arena: kWindowLutSize half-cosine entries
+  float*       wetL_       = nullptr;  // Hot arena: maxBlockSize each
+  float*       wetR_       = nullptr;
+  float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo,
+                                       // kFeedbackDelayFrames frames (NOT maxBlockSize —
+                                       // see the constant's rationale in Engine.h)
+  uint32_t     mask_       = 0;
+  uint32_t     writeFrame_ = 0;
+  Smoother     mix_, outGain_, feedback_, norm_;
+  int64_t      sampleCounter_ = 0;
+  bool         ready_         = false;
+  bool         granularDirty_ = true;
+  bool         postDirty_     = true;
+  bool         frozen_        = false;
+  uint32_t     frozenAnchor_  = 0;
+
+  detail::GranularCore   granular_;
+  detail::GranularParams gp_{};
+  detail::PostChain      post_;
+  detail::PostParams     pp_{};
+  detail::FeedbackTamer  tamer_;
+  detail::OnsetDetector  detector_;
+
+  std::atomic<float>    pending_[kNumParams]{};
+  std::atomic<bool>     freezePending_{false};
+  std::atomic<uint32_t> onsetCount_{0};
+  std::atomic<uint32_t> manualTriggers_{0};
+  float                 active_[kNumParams]{};
+};
+
+Engine::Engine() noexcept {
+  static_assert(sizeof(Impl) <= kEngineImplBytes, "raise kEngineImplBytes in Engine.h");
+  static_assert(alignof(Impl) <= kEngineImplAlign, "raise kEngineImplAlign in Engine.h");
+  // Engine's implicit destructor never runs ~Impl.
+  static_assert(std::is_trivially_destructible<Impl>::value,
+                "Impl must stay trivially destructible");
+  ::new (static_cast<void*>(impl_)) Impl();
+}
+
+Engine::Impl& Engine::impl() noexcept { return *std::launder(reinterpret_cast<Impl*>(impl_)); }
+const Engine::Impl& Engine::impl() const noexcept {
+  return *std::launder(reinterpret_cast<const Impl*>(impl_));
+}
+
+bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+  return impl().Init(cfg, arenas);
+}
+void Engine::Reset() noexcept { impl().Reset(); }
+void Engine::ClearHistory() noexcept { impl().ClearHistory(); }
+void Engine::Process(const ProcessContext& ctx) noexcept { impl().Process(ctx); }
+void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+  impl().SetParam(id, value);
+}
+float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
+
+void Engine::SetFreeze(bool on) noexcept {
+  impl().freezePending_.store(on, std::memory_order_relaxed);
+}
+bool Engine::GetFreeze() const noexcept {
+  return impl().freezePending_.load(std::memory_order_relaxed);
+}
+
+void Engine::Trigger(TriggerSource /*src*/, float /*velocity*/,
+                     uint32_t /*sampleOffset*/) noexcept {
+  impl().manualTriggers_.fetch_add(1u, std::memory_order_relaxed);
+}
+
+uint32_t Engine::ConsumeOnsetCount() noexcept {
+  return impl().onsetCount_.exchange(0u, std::memory_order_relaxed);
+}
+
+int64_t Engine::SampleCounter() const noexcept { return impl().sampleCounter_; }
 
 const ParamDescriptor* Descriptors(size_t* count) noexcept {
   if (count != nullptr) *count = kNumParams;
@@ -108,7 +212,7 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   return plan;
 }
 
-bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
   // Rate bounds: below ~40 Hz the ms-sized post buffers round to zero length and
   // a DelaySlice write walks off its arena (review finding); above 384 kHz is
@@ -200,7 +304,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   return true;
 }
 
-void Engine::Reset() noexcept {
+void Engine::Impl::Reset() noexcept {
   if (!ready_) return;
   granular_.Reset();
   tamer_.Reset();
@@ -227,7 +331,7 @@ void Engine::Reset() noexcept {
   norm_.Prime(norm_.target);
 }
 
-void Engine::ClearHistory() noexcept {
+void Engine::Impl::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
   post_.ClearBuffers();  // the post delay/reverb tails are history too
@@ -238,7 +342,7 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
-void Engine::ApplyParam(size_t index, float value) noexcept {
+void Engine::Impl::ApplyParam(size_t index, float value) noexcept {
   switch (kParamTable[index].id) {
     case ParamId::Mix:
       mix_.target = value;
@@ -268,7 +372,7 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
   }
 }
 
-void Engine::RebuildPostParams() noexcept {
+void Engine::Impl::RebuildPostParams() noexcept {
   const auto get = [&](ParamId id) {
     return active_[static_cast<uint32_t>(id) - 1u];
   };
@@ -290,7 +394,7 @@ void Engine::RebuildPostParams() noexcept {
   pp_.filterMorph  = get(ParamId::FilterMorph);
 }
 
-void Engine::RebuildGranularParams() noexcept {
+void Engine::Impl::RebuildGranularParams() noexcept {
   const auto get = [&](ParamId id) {
     return active_[static_cast<uint32_t>(id) - 1u];
   };
@@ -355,7 +459,7 @@ void Engine::RebuildGranularParams() noexcept {
   norm_.target  = std::pow(gp_.targetVoices, -p);
 }
 
-void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   const ParamDescriptor* d = FindParam(id);
   if (d == nullptr) return;
   // Negated comparisons: NaN fails both, so a non-finite value maps to the minimum
@@ -366,13 +470,13 @@ void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexce
   pending_[static_cast<uint32_t>(id) - 1u].store(value, std::memory_order_relaxed);
 }
 
-float Engine::GetParam(ParamId id) const noexcept {
+float Engine::Impl::GetParam(ParamId id) const noexcept {
   const ParamDescriptor* d = FindParam(id);
   if (d == nullptr) return 0.f;
   return pending_[static_cast<uint32_t>(id) - 1u].load(std::memory_order_relaxed);
 }
 
-void Engine::Process(const ProcessContext& ctx) noexcept {
+void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   // No assert on ready_: the documented contract IS the zero-fill below, and an
   // assert here killed the whole suite on the Debug/sanitizer CI leg (review
   // finding). The block-size assert stays — that one is a genuine caller bug.

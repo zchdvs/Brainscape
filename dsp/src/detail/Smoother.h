@@ -1,4 +1,6 @@
 #pragma once
+#include "detail/FpProfilePrivate.h"
+
 #include <cmath>
 
 namespace brainscape::detail {

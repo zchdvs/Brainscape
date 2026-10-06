@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdlib>
 
+#include "brainscape/FpProfile.h"
 #include "brainscape/Memory.h"
 
 #if defined(_WIN32)

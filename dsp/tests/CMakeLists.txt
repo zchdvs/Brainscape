@@ -6,7 +6,9 @@ add_executable(brainscape_tests
   test_engine.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
-target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
+# The engine's private headers: the unit tests exercise its internals directly.
+target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor
+                                                    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()

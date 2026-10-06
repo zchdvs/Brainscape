@@ -1,4 +1,6 @@
-#include "brainscape/detail/Granular.h"
+#include "detail/FpProfilePrivate.h"
+
+#include "detail/Granular.h"
 
 #include <cmath>
 

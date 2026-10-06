@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "brainscape/FpProfile.h"
+
 namespace brainscape {
 
 // Permanent parameter identities (docs/design/grain-engine.md §6): IDs and names are

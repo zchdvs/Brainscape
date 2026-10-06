@@ -1,4 +1,6 @@
-#include "brainscape/detail/PostChain.h"
+#include "detail/FpProfilePrivate.h"
+
+#include "detail/PostChain.h"
 
 #include <cmath>
 

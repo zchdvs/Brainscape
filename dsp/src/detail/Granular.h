@@ -1,11 +1,11 @@
 #pragma once
 #include <cstdint>
 
-#include "brainscape/GrainMath.h"
+#include "detail/GrainMath.h"
 
-// Internal granular core (docs/design/grain-engine.md §3-§4). Included by
-// Engine.h so the pool can live inside the Engine object (which firmware places
-// in DTCM); not part of the public API surface and free to change.
+// Internal granular core (docs/design/grain-engine.md §3-§4). The pool lives inside
+// the Engine's opaque storage (which firmware places in DTCM); not part of the
+// public API surface and free to change.
 namespace brainscape::detail {
 
 inline constexpr uint32_t kGranularMaxGrains = 64;

@@ -5,11 +5,14 @@
 #include <utility>
 #include <vector>
 
-#include "brainscape/DenormalGuard.h"
 #include "brainscape/Engine.h"
-#include "brainscape/GrainMath.h"
 #include "brainscape/HostArenas.h"
 #include "catch.hpp"
+#include "detail/DenormalGuard.h"
+#include "detail/GrainMath.h"
+#include "detail/Granular.h"
+#include "detail/OnsetDetector.h"
+#include "detail/PostChain.h"
 
 using namespace brainscape;
 

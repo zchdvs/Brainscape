@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "brainscape/FpProfile.h"
+
 namespace brainscape {
 
 // Memory seam (docs/design/grain-engine.md §9): dsp/ never allocates and never names

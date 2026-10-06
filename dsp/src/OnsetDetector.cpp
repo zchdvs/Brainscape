@@ -1,4 +1,6 @@
-#include "brainscape/detail/OnsetDetector.h"
+#include "detail/FpProfilePrivate.h"
+
+#include "detail/OnsetDetector.h"
 
 #include <cmath>
 
