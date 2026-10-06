@@ -8,6 +8,7 @@
 #include <new>
 #include <type_traits>
 
+#include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
@@ -100,20 +101,7 @@ inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
   return (u1 + u2 - 1.0f) * kInvScale;
 }
 
-// The canonical plain value (determinism profile §3.7), decided on the bit pattern:
-// under DAZ, which hosts set, comparisons treat subnormals as zero, and a
-// comparison-based rule stored different bits and changed every grain's first sample.
-// Once non-finite and subnormal values are gone, the clamp compares normal numbers.
-inline float CanonicalValue(const ParamDescriptor& d, float v) noexcept {
-  uint32_t u;
-  std::memcpy(&u, &v, sizeof u);
-  const uint32_t exponent = u & 0x7F800000u;
-  if (exponent == 0x7F800000u) return d.min;  // NaN, ±inf
-  if (exponent == 0u) v = 0.0f;               // ±0, subnormals
-  if (v < d.min) v = d.min;
-  if (v > d.max) v = d.max;
-  return v;
-}
+using detail::CanonicalValue;  // detail/Canonical.h: the one canonicalization rule
 
 // Bodies of the free-function entry points; the public functions below only add the
 // guard (detail/FpEnvGuard.h explains the split).
