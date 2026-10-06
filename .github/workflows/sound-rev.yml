@@ -1,0 +1,33 @@
+name: sound-rev
+
+# companion-app.md §3.4's sound-rev-gate, the two triggers of determinism-profile.md §5.12.
+# Hard trigger: a pull request that changes a golden hash fails unless it bumps
+# kSoundRevision, whatever its labels. Path trigger: one that touches dsp/src, dsp/include,
+# cmake/BrainscapeFpProfile.cmake, cmake/fp-forbidden-flags.txt or the arm toolchain file
+# must bump it or carry the "sound-neutral" label, which a code owner justifies in review.
+# Its own workflow, so adding or removing the label re-runs this job and not the parity legs.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  sound-rev-gate:
+    name: sound-rev-gate
+    runs-on: ubuntu-24.04
+    steps:
+      # The pull request's merge commit and its first parent, the base it merges into.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Self-test the gate on synthetic pull requests
+        run: python3 tools/ci/test_sound_rev_gate.py
+      - name: Check the sound revision against the pull request
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: >
+          python3 tools/ci/sound_rev_gate.py --base HEAD^1 --head HEAD --labels "$LABELS"
+          --summary "$GITHUB_STEP_SUMMARY"

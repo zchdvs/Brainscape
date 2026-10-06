@@ -1,11 +1,15 @@
 name: parity
 
 # Golden-hash parity legs (docs/design/determinism-profile.md §6.1-§6.4, §6.8).
-# REPORT-ONLY until a sound revision is minted (profile §8.4 step 10): every leg
-# renders the golden corpus and uploads its hash report, and parity-summary compares
-# them and reports mismatches without failing. A leg still fails when a render
-# crashes or a preset's coverage is missing: that is a broken corpus, not a parity
-# result.
+# GATING since internal sound revision 1 (profile §8.4 step 10): every leg renders the
+# golden corpus in --mode check against dsp/tests/golden/golden.json, on the pedal's
+# 48-frame grid and under the perturbations of §6.4, and fails on any hash, per-second
+# hash or counter that differs, on a render that crashes and on missing coverage.
+# parity-summary compares the legs' reports with each other and fails on any canonical
+# mismatch or a negative control that matches. A golden file is minted from one build
+# (brainscape_golden --mode mint) and committed with the kSoundRevision bump; the pull
+# request then needs every x86 leg and the emulated M7 to agree with it in one run
+# (§6.1), and sound-rev.yml holds the bump rule (§5.12).
 
 on:
   push:
@@ -16,11 +20,9 @@ permissions:
   contents: read
 
 env:
-  # TODO(determinism-profile §8.4 step 10): set to "true" once internal sound revision
-  # 1 is minted and dsp/tests/golden/golden.json is committed. The legs then run
-  # --mode check and parity-summary fails on any mismatch. The mint job that step
-  # adds writes golden.json only when the x86 and emulated-M7 reports agree (§6.1).
-  PARITY_HASHES_GATING: "false"
+  # The hashes gate (profile §8.4 step 10): the legs run --mode check and parity-summary
+  # --gate. Set to "false" only to triage a toolchain change; the legs then report.
+  PARITY_HASHES_GATING: "true"
   # The static audits (profile §6.3) gate: the build profile, header hygiene and DetMath
   # have landed, so a libm import, a fused instruction or a missing or forbidden FP
   # flag fails its leg. Set to "false" only to triage a toolchain change.
@@ -28,7 +30,8 @@ env:
 
 jobs:
   # Host matrix (profile §6.2): one Release build per toolchain renders the corpus on
-  # the pedal's 48-frame grid, then once more at another block size. CXXFLAGS seeds
+  # the pedal's 48-frame grid, then again at 512-frame blocks and from a hostile caller
+  # FP environment, each checked against the golden file. CXXFLAGS seeds
   # CMAKE_CXX_FLAGS ahead of the platform defaults, so /arch:AVX2 keeps /EHsc.
   parity-host:
     name: parity-host (${{ matrix.leg }})
@@ -74,53 +77,54 @@ jobs:
           if [ -n "$LEG_CXX" ]; then export CXX="$LEG_CXX"; fi
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=ON
       - name: Build the golden harness
+        id: build
         run: cmake --build build --config Release --target brainscape_golden
-      - name: Render the corpus (48-frame grid)
+      - name: Select the harness mode
         run: |
-          BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)
-          MODE=report
-          if [ "$PARITY_HASHES_GATING" = true ]; then MODE=check; fi
+          echo "BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)" >> "$GITHUB_ENV"
+          if [ "$PARITY_HASHES_GATING" = true ]; then echo MODE=check; else echo MODE=report; fi >> "$GITHUB_ENV"
           mkdir -p parity-report
-          "$BIN" --mode "$MODE" --tag "$LEG" --report "parity-report/$LEG.json"
+      - name: Render the corpus (48-frame grid)
+        run: '"$BIN" --mode "$MODE" --tag "$LEG" --report "parity-report/$LEG.json"'
+      # Each perturbation below runs even when a render before it failed, for triage.
       # Profile §6.4's block perturbations: with §5.7's block-split fix landed, each must
-      # match this leg's 48-frame run (contract #1); parity-summary reports any that
-      # does not, and gates it with the hashes.
-      - name: Render at 512-frame blocks (report-only)
-        continue-on-error: true
-        run: |
-          BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)
-          "$BIN" --no-ablate --block 512 --tag "$LEG" --report "parity-report/$LEG-b512.json"
+      # reproduce the golden hashes (contract #1).
+      - name: Render at 512-frame blocks
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
+        run: '"$BIN" --mode "$MODE" --no-ablate --block 512 --tag "$LEG" --report "parity-report/$LEG-b512.json"'
       # Profile §6.4: the whole corpus rendered from a thread whose control word is FTZ|DAZ
-      # (Arm FZ|DN) with round toward zero must match the clean run; the engine's guard
-      # owns the word at every entry point, Init included.
-      - name: Render under a hostile caller FP environment (report-only)
-        continue-on-error: true
+      # (Arm FZ|DN) with round toward zero must reproduce the golden hashes; the engine's
+      # guard owns the word at every entry point, Init included.
+      - name: Render under a hostile caller FP environment
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
+        run: '"$BIN" --mode "$MODE" --no-ablate --fp-env hostile --tag "$LEG" --report "parity-report/$LEG-hostile.json"'
+      - name: Render at the other block sizes of profile §6.4
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.leg == 'linux-x64-gcc' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
         run: |
-          BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)
-          "$BIN" --no-ablate --fp-env hostile --tag "$LEG" --report "parity-report/$LEG-hostile.json"
-      - name: Render at the other block sizes of profile §6.4 (report-only)
-        if: matrix.leg == 'linux-x64-gcc'
-        continue-on-error: true
-        run: |
-          BIN=$(find build -type f -name brainscape_golden | head -n 1)
-          for b in 1 7 32 37 64 127 48,1,127,32; do
-            "$BIN" --no-ablate --pattern "$b" --tag "$LEG" --report "parity-report/$LEG-b${b//,/-}.json" ||
-              echo "blocks $b: exit $?"
+          rc=0
+          for b in 1 7 32 37 64 127 48,1,127,32 300,512,5,64; do
+            "$BIN" --mode "$MODE" --no-ablate --pattern "$b" --tag "$LEG" \
+              --report "parity-report/$LEG-b${b//,/-}.json" || { echo "blocks $b: exit $?"; rc=1; }
           done
+          exit $rc
       # Profile §5.11 and §5.8: the same events applied by a wrapper that splits blocks at
       # their frames, and an engine Init'd per render instead of restarted, must render
-      # the canonical run's bits.
-      - name: Render with wrapper-side event splitting and fresh engines (report-only)
-        if: matrix.leg == 'linux-x64-gcc'
-        continue-on-error: true
+      # the golden bits.
+      - name: Render with wrapper-side event splitting and fresh engines
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.leg == 'linux-x64-gcc' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
         run: |
-          BIN=$(find build -type f -name brainscape_golden | head -n 1)
-          for b in 48 512; do
-            "$BIN" --no-ablate --delivery split --pattern "$b" --tag "$LEG" \
-              --report "parity-report/$LEG-split-b$b.json" || echo "split blocks $b: exit $?"
+          rc=0
+          for b in 48 512 300,512,5,64; do
+            "$BIN" --mode "$MODE" --no-ablate --delivery split --pattern "$b" --tag "$LEG" \
+              --report "parity-report/$LEG-split-b${b//,/-}.json" || { echo "split blocks $b: exit $?"; rc=1; }
           done
-          "$BIN" --no-ablate --fresh-engine --tag "$LEG" --report "parity-report/$LEG-fresh.json" ||
-            echo "fresh engine: exit $?"
+          "$BIN" --mode "$MODE" --no-ablate --fresh-engine --tag "$LEG" \
+            --report "parity-report/$LEG-fresh.json" || { echo "fresh engine: exit $?"; rc=1; }
+          exit $rc
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
@@ -130,11 +134,11 @@ jobs:
           if-no-files-found: warn
       # Static audits that need this leg's toolchain (profile §6.3).
       - name: Audit imported symbols (no libm)
-        if: runner.os != 'Windows'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && runner.os != 'Windows' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: python3 tools/ci/audit_symbols.py --toolchain "$LEG_SYMBOLS" build/dsp/libbrainscape_dsp.a
       - name: Audit imported symbols (MSVC, no libm)
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && runner.os == 'Windows' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         shell: pwsh
         run: |
@@ -146,7 +150,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Only an AVX2 build can contain x86 fused instructions; the SSE2 leg cannot fail.
       - name: Audit fused instructions (MSVC /arch:AVX2)
-        if: matrix.cxxflags == '/arch:AVX2'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.cxxflags == '/arch:AVX2' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         shell: pwsh
         run: |
@@ -159,7 +163,7 @@ jobs:
           python tools/ci/audit_fused.py --dumpbin "$bin\dumpbin.exe" --arch x86 --self-test build/fused_selftest.obj @objects
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Audit fused instructions (AArch64)
-        if: contains(matrix.leg, 'arm64')
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(matrix.leg, 'arm64') }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: |
           ${LEG_CXX:-c++} -O2 -ffp-contract=fast -c tools/ci/fused_selftest.cpp -o build/fused_selftest.o
@@ -196,11 +200,13 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=OFF -DBRAINSCAPE_BUILD_M7_ORACLE=ON
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
       - name: Build the golden harness ELF
+        id: build
         run: cmake --build build-m7 --target brainscape_golden
+      - name: Select the harness mode
+        run: |
+          if [ "$PARITY_HASHES_GATING" = true ]; then echo MODE=check; else echo MODE=report; fi >> "$GITHUB_ENV"
       - name: Render the corpus under qemu-arm -cpu cortex-m7
         run: |
-          MODE=report
-          if [ "$PARITY_HASHES_GATING" = true ]; then MODE=check; fi
           mkdir -p parity-report
           ARCHIVE_SHA256=$(sha256sum build-m7/dsp/libbrainscape_dsp.a | cut -d' ' -f1)
           EMULATOR="$(qemu-arm --version | head -n 1) commit $(cat "$HOME/qemu-arm/COMMIT")"
@@ -208,12 +214,25 @@ jobs:
           qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf \
             --mode "$MODE" --no-ablate --tag m7-qemu --report parity-report/m7-qemu.json \
             --note "archiveSha256=$ARCHIVE_SHA256" --note "emulator=$EMULATOR"
-      # Profile §6.4 on the M7: FPSCR = FZ|DN with round toward zero in the calling code.
-      - name: Render under a hostile caller FPSCR (report-only)
-        continue-on-error: true
+      # Profile §6.4 on the M7: FPSCR = FZ|DN with round toward zero in the calling code,
+      # and the pedal's block grid replaced by 512-frame blocks and an odd pattern.
+      - name: Render under a hostile caller FPSCR
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
         run: |
-          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf \
+          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf --mode "$MODE" \
             --no-ablate --fp-env hostile --tag m7-qemu --report parity-report/m7-qemu-hostile.json
+      - name: Render at other block sizes
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
+        run: |
+          rc=0
+          for b in 512 48,1,127,32; do
+            qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf --mode "$MODE" \
+              --no-ablate --pattern "$b" --tag m7-qemu --report "parity-report/m7-qemu-b${b//,/-}.json" ||
+              { echo "blocks $b: exit $?"; rc=1; }
+          done
+          exit $rc
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
@@ -222,6 +241,7 @@ jobs:
           path: parity-report/
           if-no-files-found: warn
       - name: Audit fused instructions (Armv7-M)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: |
           arm-none-eabi-g++ -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -O3 -ffp-contract=fast \
@@ -229,9 +249,11 @@ jobs:
           python3 tools/ci/audit_fused.py --objdump arm-none-eabi-objdump --arch armv7 \
             --self-test build-m7/fused_selftest.o build-m7/dsp/libbrainscape_dsp.a
       - name: Audit imported symbols (arm-none-eabi, no libm)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: python3 tools/ci/audit_symbols.py --toolchain arm --nm arm-none-eabi-nm build-m7/dsp/libbrainscape_dsp.a
       - name: Audit compile flags (firmware build)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: python3 tools/ci/audit_flags.py build-m7/compile_commands.json
 
@@ -276,14 +298,19 @@ jobs:
           -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON -DCMAKE_CXX_FLAGS=-march=x86-64-v3
       - name: Build the golden harness
         run: cmake --build build --target brainscape_golden
-      - name: Render the corpus (expected to differ from linux-x64-gcc)
+      # Report mode compares with the golden file without failing; the contracting build
+      # must miss it, or the corpus cannot see contraction (parity-summary gates that too).
+      - name: Render the corpus (expected to differ from the golden file)
         run: |
           mkdir -p parity-report
           build/dsp/tests/golden/brainscape_golden --no-ablate --tag negctl-gcc-contract \
-            --report parity-report/negctl-gcc-contract.json
-      # Exit 3 with the negative-control message: check and mint also fail in a conforming
-      # build today (no golden file, no revision to mint), so a non-zero exit alone proves
-      # nothing.
+            --report parity-report/negctl-gcc-contract.json | tee negctl.txt
+          if ! grep -q "^# golden: MISMATCH" negctl.txt; then
+            echo "::error::the contracting build reproduced the golden hashes"
+            exit 1
+          fi
+      # Exit 3 with the negative-control message, not a check failure (exit 2): the build
+      # must refuse to compare at all.
       - name: The harness refuses check and mint in this build
         run: |
           for mode in check mint; do
@@ -306,7 +333,7 @@ jobs:
           if-no-files-found: warn
 
   parity-summary:
-    name: parity-summary (report-only)
+    name: parity-summary
     needs: [parity-host, parity-m7, parity-negative-control]
     if: always()
     runs-on: ubuntu-24.04
