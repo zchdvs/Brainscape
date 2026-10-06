@@ -5,12 +5,13 @@ Reads every brainscape-golden-report/1 JSON under the given paths and prints a
 Markdown summary:
 
   * canonical legs (48-frame grid, 2^22 ring, events delivered to the engine, one
-    restarted engine) against a reference leg, preset by preset, with the first
-    differing second and any counter that differs;
+    restarted engine, a clean FP environment) against a reference leg, preset by
+    preset, with the first differing second and any counter that differs;
   * input hashes, which must agree on every leg (the generator is integer-only);
   * coverage failures reported by any leg;
   * perturbations: a leg's non-canonical runs (other block sizes, wrapper-side event
-    splitting, an engine Init'd per render) against its own canonical run;
+    splitting, an engine Init'd per render, a hostile caller FP environment) against
+    its own canonical run;
   * negative controls (tags starting "negctl-", or reports from a build configured
     with -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON), which are EXPECTED to differ from the
     reference: matching it would mean the corpus lost coverage.
@@ -54,16 +55,18 @@ def is_canonical(r):
     b = r.get("build", {})
     return (b.get("blockPattern") == [48] and r.get("historyFrames") == 1 << 22
             and b.get("delivery") == "engine-events" and b.get("start") == "restart"
-            and not is_negative_control(r))
+            and b.get("fpEnv", "clean") == "clean" and not is_negative_control(r))
 
 
 def run_label(b):
-    """Blocks, and the delivery and start when they are not the canonical ones."""
+    """Blocks, and the delivery, start and FP environment when they are not the canonical ones."""
     label = "blocks " + ",".join(map(str, b.get("blockPattern", [])))
     if b.get("delivery") != "engine-events":
         label += f', {b.get("delivery")}'
     if b.get("start") != "restart":
         label += f', start {b.get("start")}'
+    if b.get("fpEnv", "clean") != "clean":
+        label += f', {b.get("fpEnv")} FP environment'
     return label
 
 
@@ -137,8 +140,8 @@ def main():
                  f'{"gating" if args.gate else "report-only (nothing is minted yet)"}.')
     lines.append("")
     if ref_tag is None:
-        lines.append("No canonical (48-frame, 2^22 ring, engine events, restarted engine) report "
-                     "to compare against.")
+        lines.append("No canonical (48-frame, 2^22 ring, engine events, restarted engine, clean FP "
+                     "environment) report to compare against.")
         return finish(lines, args, problems + 1)
     ref = canon[ref_tag]
     ref_presets, ref_vectors = presets(ref)
@@ -204,7 +207,8 @@ def main():
 
     # Perturbations (profile §6.4): with §5.7's block-split fix landed, every block size
     # must match its leg's 48-frame run (contract #1); so must wrapper-side event
-    # splitting (§5.11) and an engine Init'd per render instead of restarted (§5.8).
+    # splitting (§5.11), an engine Init'd per render instead of restarted (§5.8) and a
+    # hostile caller FP environment (§4.1).
     lines += ["## Perturbations (against the same leg's canonical run)", ""]
     any_pert = False
     for r in reports:

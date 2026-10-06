@@ -4,19 +4,24 @@
 
 namespace brainscape::golden {
 
-void Script::Add(int64_t frame, EventType type, ParamId id, float value, uint32_t staged) {
+void Script::Add(int64_t frame, EventType type, uint32_t id, float value) {
   Event ev;
-  ev.frame  = frame;
-  ev.seq    = seq_++;
-  ev.type   = type;
-  ev.id     = id;
-  ev.value  = value;
-  ev.staged = staged;
+  ev.frame = frame;
+  ev.seq   = seq_++;
+  ev.type  = type;
+  ev.id    = id;
+  ev.value = value;
   // Sequence numbers rise with insertion, so inserting after every event at or
   // before `frame` keeps the (frame, seq) order.
   const auto at = std::upper_bound(events_.begin(), events_.end(), frame,
                                    [](int64_t f, const Event& e) { return f < e.frame; });
   events_.insert(at, ev);
+}
+
+void Script::AddRestart(const RestartPoint& r) {
+  const auto at = std::upper_bound(restarts_.begin(), restarts_.end(), r.frame,
+                                   [](int64_t f, const RestartPoint& p) { return f < p.frame; });
+  restarts_.insert(at, r);
 }
 
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
@@ -56,36 +61,25 @@ uint32_t EventCursor::Take(int64_t end, const Event** first) {
 
 void ApplyUnstamped(Engine& engine, const Event& e, const StagedPresets& staged) {
   switch (e.type) {
-    case EventType::SetParam: engine.SetParam(e.id, e.value); break;
+    case EventType::SetParam: engine.SetParam(static_cast<ParamId>(e.id), e.value); break;
     case EventType::Freeze: engine.SetFreeze(e.value != 0.f); break;
-    case EventType::Trigger: engine.Trigger(); break;
+    case EventType::Trigger:
+      engine.Trigger(static_cast<Engine::TriggerSource>(e.id), e.value);
+      break;
     case EventType::SpilloverLoad:
-      engine.LoadPreset(*staged[e.staged], LoadMode::Spillover);
+      engine.LoadPreset(*staged[e.id], LoadMode::Spillover);
       break;
   }
 }
 
-Engine::BlockEvent ToBlockEvent(const Event& e, int64_t blockStart, const StagedPresets& staged) {
-  Engine::BlockEvent b;
-  b.offset = static_cast<uint32_t>(e.frame - blockStart);
-  b.seq    = e.seq;
-  switch (e.type) {
-    case EventType::SetParam:
-      b.type = Engine::EventType::SetParam;
-      b.id   = static_cast<uint32_t>(e.id);
-      break;
-    case EventType::Freeze: b.type = Engine::EventType::Freeze; break;
-    case EventType::Trigger:
-      b.type = Engine::EventType::Trigger;
-      b.id   = static_cast<uint32_t>(Engine::TriggerSource::Footswitch);
-      break;
-    case EventType::SpilloverLoad:
-      b.type   = Engine::EventType::SpilloverLoad;
-      b.preset = staged[e.staged].get();
-      break;
+Event ToEngineEvent(const Event& e, int64_t base, const StagedPresets& staged) {
+  Event out = e;
+  out.frame = e.frame - base;
+  if (e.type == EventType::SpilloverLoad) {
+    out.id     = 0;
+    out.preset = staged[e.id].get();
   }
-  b.value = e.type == EventType::Trigger ? 1.f : e.value;
-  return b;
+  return out;
 }
 
 }  // namespace brainscape::golden

@@ -9,6 +9,8 @@ add_executable(brainscape_golden
   Render.cpp
 )
 target_link_libraries(brainscape_golden PRIVATE brainscape_dsp)
+# The engine's private FP-environment header, for the hostile-environment renders.
+target_include_directories(brainscape_golden PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_compile_definitions(brainscape_golden PRIVATE
   BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
 

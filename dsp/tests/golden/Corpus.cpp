@@ -81,8 +81,94 @@ PresetCase AutomationOffGrid(int64_t frames) {
     if (k % 17 == 9) s.Freeze(f, false);
     if (k % 6 == 3) s.Trigger(f + 5);
   }
-  p.require = {{C::Events, 1000},     {C::OffGridEvents, 1000}, {C::Triggers, 5},
-               {C::FreezeEngages, 2}, {C::Onsets, 5}};
+  p.require   = {{C::Events, 1000},     {C::OffGridEvents, 1000}, {C::Triggers, 5},
+                 {C::FreezeEngages, 2}, {C::Onsets, 5}};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Strum-style marks and onset triggering, the starting point of the load chain.
+const ParamList kStrumMarks = {
+    {P::DelayMs, 250.0f}, {P::Feedback, 0.5f},     {P::GrainSizeMs, 80.0f},   {P::Overlap, 0.6f},
+    {P::Jitter, 0.5f},    {P::SprayMs, 30.0f},     {P::ReverseProb, 0.2f},    {P::OnsetTrigger, 1.0f},
+    {P::PositionSource, 1.0f}, {P::TriggerSens, 0.6f}};
+
+// Spillover loads as stamped events at odd frames (profile §5.10, §5.11): history, grains,
+// marks, pending triggers and the scheduler phase carry over each load, the random-number
+// epoch restarts at it, and events after a load at its frame apply after it.
+PresetCase SpilloverChain() {
+  PresetCase p = Preset("spillover_chain", kStrumMarks);
+  Script&    s = p.script;
+  // Into a reverse loop above unity feedback, so the trails are loud when the next load lands.
+  s.Spillover(S(2) + 4321,
+      {{P::DelayMs, 700.0f}, {P::Feedback, 1.05f}, {P::GrainSizeMs, 120.0f}, {P::Overlap, 0.3f},
+       {P::Jitter, 0.0f}, {P::SprayMs, 0.0f}, {P::PitchSt, -12.0f}, {P::ReverseProb, 0.5f},
+       {P::DelayMix, 0.4f}, {P::DelayTimeMs, 333.0f}, {P::DelayFb, 0.5f}});
+  s.Trigger(S(5) + 1);
+  s.Spillover(S(5) + 1,
+      {{P::GrainSizeMs, 5.0f}, {P::Overlap, 1.0f}, {P::Jitter, 1.0f}, {P::SprayMs, 200.0f},
+       {P::PitchSt, 7.0f}, {P::PanSpread, 1.0f}, {P::ReverbMix, 0.5f}, {P::ReverbTime, 0.8f},
+       {P::Feedback, 0.3f}});
+  s.Param(S(5) + 1, P::Mix, 0.8f);
+  s.Param(S(5) + 1, P::FilterCutoffHz, 1500.0f);
+  s.Spillover(S(8) + 77, kStrumMarks);
+  s.Trigger(S(8) + 77);
+  p.require   = {{C::Loads, 3, 3},         {C::Triggers, 2, 2}, {C::Events, 7},
+                 {C::OffGridEvents, 7},    {C::Onsets, 10},     {C::FbAbove1Frames, S(2)}};
+  p.ablate    = {Feature::Spillover};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Restart mid-render with the parameters kept (profile §5.8): the engine is frozen, holds
+// marks and a Spillover epoch, has two triggers still due and feedback ringing through
+// every post stage, and must come back exactly as a fresh engine with those values.
+PresetCase RestartKeptParams() {
+  const ParamList base = {
+      {P::DelayMs, 180.0f},     {P::Feedback, 0.8f},       {P::GrainSizeMs, 70.0f},
+      {P::Overlap, 0.7f},       {P::SprayMs, 40.0f},       {P::PitchSt, 5.0f},
+      {P::ReverseProb, 0.3f},   {P::Jitter, 0.6f},         {P::OnsetTrigger, 1.0f},
+      {P::PositionSource, 1.0f}, {P::DelayMix, 0.3f},      {P::DelayTimeMs, 420.0f},
+      {P::DelayFb, 0.6f},       {P::ReverbMix, 0.3f},      {P::ReverbTime, 0.7f}};
+  ParamList loaded = base;
+  loaded.emplace_back(P::PitchSt, -7.0f);
+  loaded.emplace_back(P::GrainSizeMs, 40.0f);
+  loaded.emplace_back(P::Feedback, 0.9f);
+  PresetCase p = Preset("restart_kept_params", base);
+  Script&    s = p.script;
+  s.Param(S(1) + 17, P::DelayMs, 333.0f);
+  s.Freeze(S(2) + 101, true);
+  s.Spillover(S(3) + 55, loaded);
+  s.Param(S(3) + 2000, P::Mix, 0.7f);
+  s.Freeze(S(4) + 7, true);
+  for (int i = 0; i < 3; ++i) s.Trigger(S(6) + 9);  // one per frame from S(6) + 9
+  s.Restart(S(6) + 10);
+  s.Param(S(6) + 10, P::PitchSt, 12.0f);  // frame 0 of the restarted timeline
+  s.Freeze(S(9) + 3, true);
+  s.Trigger(S(10) + 5);
+  p.require   = {{C::Restarts, 1, 1},     {C::Loads, 1, 1},  {C::Triggers, 4, 4},
+                 {C::FreezeEngages, 3},   {C::Onsets, 10},   {C::OffGridEvents, 10}};
+  p.ablate    = {Feature::Restart};
+  p.invariant = {Invariance::RestartTail, Invariance::HostileFpEnv};
+  return p;
+}
+
+// An Exact load mid-render (profile §5.10): it cuts a self-oscillating loop and starts a
+// different preset from the exact-restart state.
+PresetCase ExactLoadMid() {
+  PresetCase p = Preset("exact_load_mid",
+      {{P::Feedback, 1.1f}, {P::ReverseProb, 1.0f}, {P::DelayMs, 300.0f}, {P::GrainSizeMs, 100.0f},
+       {P::Overlap, 0.25f}, {P::SprayMs, 0.0f}, {P::Jitter, 0.0f}, {P::WindowSustain, 1.0f},
+       {P::WindowSmooth, 0.0f}, {P::PanSpread, 0.0f}});
+  p.script.ExactLoad(S(7) + 12345,
+      {{P::GrainSizeMs, 30.0f}, {P::Overlap, 0.9f}, {P::Jitter, 1.0f}, {P::SprayMs, 60.0f},
+       {P::PitchSt, 12.0f}, {P::SpreadCents, 30.0f}, {P::OnsetTrigger, 1.0f},
+       {P::PositionSource, 1.0f}, {P::ModDepth, 0.5f}, {P::FilterCutoffHz, 2500.0f},
+       {P::FilterMorph, 1.0f}});
+  p.script.Param(S(7) + 12345, P::Feedback, 0.6f);
+  p.require   = {{C::Restarts, 1, 1}, {C::FbAbove1Frames, S(7)}, {C::Onsets, 10}};
+  p.ablate    = {Feature::Restart};
+  p.invariant = {Invariance::RestartTail};
   return p;
 }
 
@@ -94,6 +180,8 @@ const char* CounterName(Counter c) noexcept {
     case C::Events: return "events";
     case C::OffGridEvents: return "offGridEvents";
     case C::Triggers: return "triggers";
+    case C::Loads: return "loads";
+    case C::Restarts: return "restarts";
     case C::Onsets: return "onsets";
     case C::FrozenOnsets: return "frozenOnsets";
     case C::FrozenFrames: return "frozenFrames";
@@ -125,6 +213,16 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::Freeze: return "freeze";
     case Feature::Triggers: return "triggers";
     case Feature::RingLength: return "ringLength";
+    case Feature::Spillover: return "spillover";
+    case Feature::Restart: return "restart";
+  }
+  return "unknown";
+}
+
+const char* InvarianceName(Invariance i) noexcept {
+  switch (i) {
+    case Invariance::HostileFpEnv: return "hostileFpEnv";
+    case Invariance::RestartTail: return "restartTail";
   }
   return "unknown";
 }
@@ -133,6 +231,7 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
   PresetCase out = in;
   out.require.clear();
   out.ablate.clear();
+  out.invariant.clear();
   auto& events = out.script.MutableEvents();
   auto  drop   = [&](auto pred) {
     events.erase(std::remove_if(events.begin(), events.end(), pred), events.end());
@@ -147,7 +246,9 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
   auto neutral = [&](ParamId id, float value) {
     set(out.params, id, value);
     for (ParamList& staged : out.script.MutableStaged()) set(staged, id, value);
-    drop([id](const Event& e) { return e.type == EventType::SetParam && e.id == id; });
+    drop([id](const Event& e) {
+      return e.type == EventType::SetParam && e.id == static_cast<uint32_t>(id);
+    });
   };
   switch (f) {
     case Feature::MarkPosition: neutral(P::PositionSource, 0.0f); break;
@@ -167,8 +268,60 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
       drop([](const Event& e) { return e.type == EventType::Trigger; });
       break;
     case Feature::RingLength: break;  // same preset; the harness doubles the ring
+    case Feature::Spillover:
+      drop([](const Event& e) { return e.type == EventType::SpilloverLoad; });
+      break;
+    case Feature::Restart: out.script.MutableRestarts().clear(); break;
   }
   return out;
+}
+
+ParamList ParamsAt(const PresetCase& p, int64_t frame) {
+  float values[kNumParams];
+  auto  load = [&values](const ParamList& params) {
+    const std::unique_ptr<PresetState> preset = CompletePreset(params);
+    for (size_t i = 0; i < kNumParams; ++i) values[i] = preset->leaves[i].value;
+  };
+  load(p.params);
+  const auto& events   = p.script.Events();
+  const auto& restarts = p.script.Restarts();
+  size_t      e = 0, r = 0;
+  // In time order; a restart comes before the events stamped at its frame.
+  for (;;) {
+    const bool eventDue   = e < events.size() && events[e].frame < frame;
+    const bool restartDue = r < restarts.size() && restarts[r].frame < frame;
+    if (!eventDue && !restartDue) break;
+    if (restartDue && (!eventDue || restarts[r].frame <= events[e].frame)) {
+      if (restarts[r].load) load(p.script.Staged()[restarts[r].staged]);
+      ++r;
+      continue;
+    }
+    const Event& ev = events[e++];
+    if (ev.type == EventType::SetParam) {
+      values[ev.id - 1u] = Canonicalize(static_cast<ParamId>(ev.id), ev.value);
+    } else if (ev.type == EventType::SpilloverLoad) {
+      load(p.script.Staged()[ev.id]);
+    }
+  }
+  ParamList out;
+  for (size_t i = 0; i < kNumParams; ++i) out.emplace_back(kParamTable[i].id, values[i]);
+  return out;
+}
+
+PresetCase TailAfterRestart(const PresetCase& p, int64_t* start) {
+  const RestartPoint& last = p.script.Restarts().back();
+  *start                   = last.frame;
+  PresetCase tail;
+  tail.name   = p.name;
+  tail.params = last.load ? p.script.Staged()[last.staged] : ParamsAt(p, last.frame);
+  tail.script.MutableStaged() = p.script.Staged();
+  for (const Event& e : p.script.Events()) {
+    if (e.frame < last.frame) continue;
+    Event moved = e;
+    moved.frame -= last.frame;
+    tail.script.MutableEvents().push_back(moved);
+  }
+  return tail;
 }
 
 // Not yet in the corpus: profile §6.1's committed guitar DI recordings, which enter
@@ -267,9 +420,10 @@ std::vector<VectorCase> BuildCorpus() {
          {P::PitchSt, 12.0f}, {P::Feedback, 0.2f}});
     retoggle.script.Freeze(S(12) + 5, true);
     retoggle.script.Freeze(S(14) + 31, false);
-    retoggle.require = {{C::Events, 8},          {C::OffGridEvents, 8}, {C::FreezeEngages, 3, 3},
-                        {C::FrozenFrames, S(9)}, {C::FrozenOnsets, 3}};
-    retoggle.ablate  = {Feature::Freeze};
+    retoggle.require   = {{C::Events, 8},          {C::OffGridEvents, 8}, {C::FreezeEngages, 3, 3},
+                          {C::FrozenFrames, S(9)}, {C::FrozenOnsets, 3},  {C::Loads, 2, 2}};
+    retoggle.ablate    = {Feature::Freeze};
+    retoggle.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(retoggle);
     corpus.push_back(std::move(v));
   }
@@ -291,8 +445,9 @@ std::vector<VectorCase> BuildCorpus() {
         {{P::Feedback, 0.3f}, {P::ModDepth, 1.0f}, {P::ModRateHz, 10.0f}, {P::DelayMix, 1.0f},
          {P::DelayFb, 0.9f}, {P::DelayTimeMs, 2000.0f}, {P::ReverbMix, 1.0f}, {P::ReverbTime, 1.0f},
          {P::FilterCutoffHz, 40.0f}, {P::FilterRes, 1.0f}, {P::FilterMorph, 2.0f}});
-    postMax.ablate = {Feature::PostMod, Feature::PostDelay, Feature::PostReverb,
-                      Feature::PostFilter};
+    postMax.ablate    = {Feature::PostMod, Feature::PostDelay, Feature::PostReverb,
+                         Feature::PostFilter};
+    postMax.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(postMax);
 
     PresetCase sweep = Preset("post_sweep",
@@ -344,7 +499,8 @@ std::vector<VectorCase> BuildCorpus() {
                          0.5f,  0.4f, 0.3f,  0.2f, 0.1f, 0.05f, 0.0f};
     int64_t k = 0;
     for (const float fb : kFb) decay.script.Param(S(4) + 24000 * k++ + 17, P::Feedback, fb);
-    decay.require = {{C::FbAbove1Frames, 1}, {C::Events, 14}, {C::TailActiveFrames, S(2)}};
+    decay.require   = {{C::FbAbove1Frames, 1}, {C::Events, 14}, {C::TailActiveFrames, S(2)}};
+    decay.invariant = {Invariance::HostileFpEnv};  // decays through the subnormal range to 0
     v.presets.push_back(decay);
     corpus.push_back(std::move(v));
   }
@@ -401,6 +557,14 @@ std::vector<VectorCase> BuildCorpus() {
   {  // Dense automation off the pedal's block grid.
     VectorCase v{"plucks_automation_12s", Vector::Plucks, Frames(12), Frames(12), false, {}};
     v.presets.push_back(AutomationOffGrid(S(12)));
+    corpus.push_back(std::move(v));
+  }
+
+  {  // The state API mid-render: Spillover loads, a Restart and an Exact load.
+    VectorCase v{"plucks_state_14s", Vector::Plucks, Frames(12), Frames(14), false, {}};
+    v.presets.push_back(SpilloverChain());
+    v.presets.push_back(RestartKeptParams());
+    v.presets.push_back(ExactLoadMid());
     corpus.push_back(std::move(v));
   }
 
