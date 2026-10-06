@@ -1,0 +1,53 @@
+# Compiler flags the determinism profile forbids (docs/design/determinism-profile.md,
+# sections 3.2, 3.4 and 3.6), one regular expression per line. Both flag gates read this
+# file, so they cannot drift: the configure-time check (cmake/BrainscapeFpProfile.cmake)
+# and the CI audit of the real command lines (tools/ci/audit_flags.py). Each wraps a
+# pattern the same way, (^|[ ;:>,"'])(pattern)($|[ ;>,"']), so it also matches inside a
+# generator expression, between commas (JUCE's juce_recommended_lto_flags writes
+# $<IF:...,-GL,-flto>), or after clang-cl's /clang: prefix.
+#
+# Rules for entries: plain characters, [...] classes, (a|b) groups, ? and *, and \ escapes,
+# which CMake and Python read the same way. No semicolons (CMake's list separator) and
+# ASCII only, comments included (CMake's file(STRINGS) splits lines at other bytes).
+# CMake's regex engine allows nine groups and the combined pattern has at most seven, so
+# new entries avoid parentheses.
+#
+# Contraction (-ffp-contract=fast|on|fast-honor-pragmas, /fp:contract) is not listed:
+# each gate judges it itself (audit_flags.py by the flag that wins), and the test-only
+# negative control admits it.
+
+# The fast-math family.
+-ffast-math
+-Ofast
+-funsafe-math-optimizations
+-fassociative-math
+-freciprocal-math
+-ffinite-math-only
+-fno-signed-zeros
+-fno-honor-nans
+-fno-honor-infinities
+-fapprox-func
+-menable-unsafe-fp-math
+-ffp-model=(fast|aggressive)
+[/-]fp:fast
+
+# Narrows every double literal, DetMath's coefficients included. No tripwire macro sees it.
+-fsingle-precision-constant
+
+# A non-IEEE denormal mode lets the compiler fold as if subnormals flushed, against the
+# profile's gradual underflow (section 4.2). -mdaz-ftz turns FTZ and DAZ on for the whole
+# process.
+-fdenormal-fp-math[-f32]*=[a-z,]*preserve-sign
+-fdenormal-fp-math[-f32]*=[a-z,]*positive-zero
+-fdenormal-fp-math[-f32]*=[a-z,]*dynamic
+-mdaz-ftz
+
+# x87 arithmetic and 32-bit x86 (section 3.6).
+-mfpmath=(387|sse\+387|both)
+-m32
+[/-]arch:IA32
+
+# Engine code inlined or optimized across the library boundary (section 3.4).
+-flto(=[a-z0-9]*)?
+-fwhole-program
+[/-]GL

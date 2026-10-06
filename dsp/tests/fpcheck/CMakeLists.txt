@@ -42,6 +42,14 @@ if(BRAINSCAPE_FPCHECK_VIOLATIONS)
   consumer(via_daz_ftz)
   target_compile_options(via_daz_ftz PRIVATE -mdaz-ftz)
 
+  # A compiler launcher carrying a flag.
+  consumer(via_launcher)
+  set_property(TARGET via_launcher PROPERTY CXX_COMPILER_LAUNCHER "launcher;-fapprox-func")
+
+  # Arguments that came with the compiler: CXX="g++ -fsingle-precision-constant" puts the
+  # flag in CMAKE_CXX_COMPILER_ARG1, which no flag variable or target property shows.
+  set(CMAKE_CXX_COMPILER_ARG1 " -fsingle-precision-constant")
+
   consumer(via_source_options)
   set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/via_source_options.cpp"
                               PROPERTIES COMPILE_OPTIONS "-ffp-contract=fast")

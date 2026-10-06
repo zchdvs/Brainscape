@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Floating-point flag audit over compile_commands.json (determinism profile §3.2, §3.4).
 
-Every translation unit is checked for forbidden flags (fast-math family, contraction
-on, LTO); engine translation units (dsp/src/) must also carry the profile's required
-flags, judged by the LAST occurrence where a later flag overrides an earlier one. A
--ffp-model= sets contraction too (precise means on), so -ffp-contract=off must follow
-every one of them (§3.2).
+Every translation unit is checked for forbidden flags (the fast-math family, narrowed
+literals, non-IEEE denormal modes, x87, LTO: cmake/fp-forbidden-flags.txt, the list the
+configure-time check reads too) and for contraction on; engine translation units
+(dsp/src/) must also carry the profile's required flags, judged by the LAST occurrence
+where a later flag overrides an earlier one. A -ffp-model= sets contraction too (precise
+means on), so -ffp-contract=off must follow every one of them (§3.2).
 compile_commands.json comes from the Ninja and Makefile generators only
 (-DCMAKE_EXPORT_COMPILE_COMMANDS=ON). Exit 1 on any finding.
 
@@ -14,11 +15,24 @@ compile_commands.json comes from the Ninja and Makefile generators only
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 
-FORBIDDEN_GNU = {"-ffast-math", "-Ofast", "-funsafe-math-optimizations", "-fassociative-math",
-                 "-freciprocal-math", "-ffinite-math-only", "-fno-signed-zeros", "-ffp-model=fast"}
+FORBIDDEN_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir,
+                              "cmake", "fp-forbidden-flags.txt")
+
+
+def load_forbidden(path=FORBIDDEN_LIST):
+    """One regex per line; wrapped exactly as cmake/BrainscapeFpProfile.cmake wraps them."""
+    with open(path, encoding="ascii") as fh:
+        patterns = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+    if not patterns:
+        sys.exit(f"audit_flags: no entries in {path}")
+    return re.compile("(^|[ ;:>,\"'])(" + "|".join(patterns) + ")($|[ ;>,\"'])")
+
+
+FORBIDDEN = load_forbidden()
 REQUIRED = {
     "gcc": ["-fno-math-errno", "-fno-fast-math"],
     "clang": ["-fno-math-errno"],
@@ -60,18 +74,21 @@ def contraction(argv):
 def audit(argv, engine):
     fam = family(argv)
     found = []
+    for a in argv[1:]:
+        m = FORBIDDEN.search(a)
+        if m:
+            found.append(f"forbidden {m.group(2)}")
     if fam == "msvc":
         flags = [a.lower().replace("-", "/", 1) if a.startswith("-") else a.lower() for a in argv]
+        # Any spelling cl accepts, unless the shared list already reported it.
+        seen = {x.split()[-1].lower().replace("-", "/", 1) for x in found}
         for f in ("/fp:fast", "/fp:contract", "/gl"):
-            if f in flags:
+            if f in flags and f not in seen:
                 found.append(f"forbidden {f}")
         model = [f for f in flags if f.startswith("/fp:")]
         if engine and model and model[-1] not in ("/fp:precise", "/fp:strict"):
             found.append(f"{model[-1]} is not /fp:precise or /fp:strict")
         return fam, found
-    for a in argv:
-        if a in FORBIDDEN_GNU or a.startswith("-flto"):
-            found.append(f"forbidden {a}")
     contract, model_after = contraction(argv)
     if contract not in (None, "off"):  # fast, on, fast-honor-pragmas
         found.append(f"forbidden -ffp-contract={contract} (effective)")

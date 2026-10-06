@@ -13,6 +13,10 @@
 using namespace brainscape;
 
 int main(int argc, char** argv) {
+#if defined(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+  std::fprintf(stderr, "*** NEGATIVE CONTROL BUILD (BRAINSCAPE_FP_NEGATIVE_CONTROL): contraction is "
+                       "ON, so this render is not the pedal's output. ***\n");
+#endif
   const char* path    = argc > 1 ? argv[1] : "brainscape_render.wav";
   const double sr     = 48000.0;
   const size_t frames = static_cast<size_t>(sr * 4.0);  // 4 s

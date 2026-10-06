@@ -18,7 +18,8 @@ The production parity tooling grown from them lives elsewhere: the test-signal g
 `golden_report`; `brainscape_golden --help`), the CI legs in `.github/workflows/parity.yml` and the
 static audits and report comparison in `tools/ci/`. The contraction-on negative control builds through
 the test-only `-DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON` (`cmake/BrainscapeFpProfile.cmake`), under which the
-harness only reports. [`testsignal_ref.py`](testsignal_ref.py) here is
+harness only reports. The option is never cached, so it lasts one configure, and it refuses plugin and
+firmware builds: give it its own build directory. [`testsignal_ref.py`](testsignal_ref.py) here is
 the separate Python implementation of the generator that derives the known-answer hashes in
 `dsp/tests/test_testsignal.cpp` (`python3 tools/parity/testsignal_ref.py 480000`).
 

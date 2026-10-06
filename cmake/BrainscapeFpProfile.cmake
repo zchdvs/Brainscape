@@ -22,10 +22,25 @@ add_library(brainscape::fp_profile ALIAS brainscape_fp_profile)
 # the profile's contraction flag for its opposite, lets the configure check below accept
 # contraction (and nothing else it forbids), skips the private headers' FP_CONTRACT
 # pragmas, and defines BRAINSCAPE_FP_NEGATIVE_CONTROL for every consumer: the golden
-# harness then refuses check and mint and only reports. Never for anything shipped.
-option(BRAINSCAPE_FP_NEGATIVE_CONTROL
-       "TEST ONLY: build the engine with floating-point contraction ON (parity negative control)"
-       OFF)
+# harness then refuses check and mint and only reports, and the render tool says so.
+# Never for anything shipped, so it is test-only by construction:
+#  - it is read from -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON and never cached, so it lasts
+#    one configure: a build directory reconfigured without the -D conforms again;
+#  - it refuses plugin and firmware builds, and the plugin's sources (and the firmware's,
+#    when they land) refuse the macro with #error, so a hand-defined one fails too;
+#  - brainscape_dsp prints it at build time (dsp/CMakeLists.txt).
+if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+  set(BRAINSCAPE_FP_NEGATIVE_CONTROL ON)
+else()
+  set(BRAINSCAPE_FP_NEGATIVE_CONTROL OFF)
+endif()
+unset(BRAINSCAPE_FP_NEGATIVE_CONTROL CACHE)
+if(BRAINSCAPE_FP_NEGATIVE_CONTROL AND (BRAINSCAPE_BUILD_PLUGIN OR BRAINSCAPE_BUILD_FIRMWARE))
+  message(FATAL_ERROR "brainscape determinism profile: BRAINSCAPE_FP_NEGATIVE_CONTROL is "
+                      "test-only and cannot build the plugin or the firmware; configure the "
+                      "negative control in its own build directory with BRAINSCAPE_BUILD_PLUGIN "
+                      "and BRAINSCAPE_BUILD_FIRMWARE off")
+endif()
 if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
   set(_bs_contract_gnu -ffp-contract=fast)
   set(_bs_contract_msvc /fp:contract)
@@ -37,6 +52,7 @@ if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
     "  *  This build is NOT profile-conforming (determinism-profile.md     *\n"
     "  *  §3.2). Its output must DIFFER from every conforming build. The   *\n"
     "  *  golden harness only reports; never ship, mint or check with it.  *\n"
+    "  *  Not cached: reconfigure without the -D to conform again.         *\n"
     "  ********************************************************************\n")
 else()
   set(_bs_contract_gnu -ffp-contract=off)
@@ -64,26 +80,21 @@ else()
                       "'${CMAKE_CXX_COMPILER_ID}' (determinism-profile.md §3.2)")
 endif()
 
-# Flags that break identity (§3.2) or inline engine code across the boundary (§3.4).
-# -fsingle-precision-constant has no tripwire macro: it silently narrows every double
-# literal, DetMath's coefficients included. A non-IEEE -fdenormal-fp-math lets the
-# compiler fold and transform code as if subnormals flushed, against the profile's
-# gradual underflow (§4.2); -mdaz-ftz turns FTZ/DAZ on for the whole process. A flag
-# may sit inside a generator expression, between commas: JUCE's
-# juce_recommended_lto_flags writes $<IF:...,-GL,-flto>. A global property, because the
-# check runs deferred in the top-level directory's scope. CMake's regex engine allows
-# nine groups and the pattern below has at most seven, so new entries avoid parentheses.
-set(_forbidden
-  "-ffast-math" "-Ofast" "-funsafe-math-optimizations" "-fassociative-math"
-  "-freciprocal-math" "-ffinite-math-only" "-fno-signed-zeros" "-fno-honor-nans"
-  "-fno-honor-infinities" "-fapprox-func" "-menable-unsafe-fp-math"
-  "-fsingle-precision-constant"
-  "-fdenormal-fp-math[-f32]*=[a-z,]*preserve-sign"
-  "-fdenormal-fp-math[-f32]*=[a-z,]*positive-zero"
-  "-fdenormal-fp-math[-f32]*=[a-z,]*dynamic" "-mdaz-ftz"
-  "-ffp-model=(fast|aggressive)"
-  "-mfpmath=(387|sse\\+387|both)" "-m32" "-flto(=[^ ;>,\"']*)?" "-fwhole-program"
-  "[/-]fp:fast" "[/-]GL" "[/-]arch:IA32")
+# Flags that break identity (§3.2, §3.6) or inline engine code across the boundary
+# (§3.4): one list, fp-forbidden-flags.txt, which tools/ci/audit_flags.py reads too, so
+# the configure check and the command-line audit cannot drift. A flag may sit inside a
+# generator expression, between commas: JUCE's juce_recommended_lto_flags writes
+# $<IF:...,-GL,-flto>. A global property, because the check runs deferred in the
+# top-level directory's scope.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/fp-forbidden-flags.txt" _forbidden REGEX "^[^#]")
+list(TRANSFORM _forbidden STRIP)
+list(REMOVE_ITEM _forbidden "")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_LIST_DIR}/fp-forbidden-flags.txt")
+if(NOT _forbidden)
+  message(FATAL_ERROR "brainscape determinism profile: no entries read from "
+                      "${CMAKE_CURRENT_LIST_DIR}/fp-forbidden-flags.txt")
+endif()
 if(NOT BRAINSCAPE_FP_NEGATIVE_CONTROL)  # the escape above admits contraction only
   list(APPEND _forbidden "-ffp-contract=(fast|on|fast-honor-pragmas)" "[/-]fp:contract")
 endif()
@@ -144,7 +155,9 @@ function(_brainscape_fp_link_closure tgt outvar)
 endfunction()
 
 # Configure-time check (§3.2, §3.4): no target that compiles or links the engine may
-# carry a forbidden flag or interprocedural optimization, from any source.
+# carry a forbidden flag or interprocedural optimization, from any source: the flag
+# variables, arguments that came with the compiler (CXX="g++ -flag" lands in
+# CMAKE_CXX_COMPILER_ARG1), compiler launchers, and target and source options.
 function(_brainscape_fp_check)
   set(configs DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
   foreach(c IN LISTS CMAKE_CONFIGURATION_TYPES CMAKE_BUILD_TYPE)
@@ -152,7 +165,7 @@ function(_brainscape_fp_check)
     list(APPEND configs "${c}")
   endforeach()
   list(REMOVE_DUPLICATES configs)
-  set(flagvars CMAKE_CXX_FLAGS)
+  set(flagvars CMAKE_CXX_FLAGS CMAKE_CXX_COMPILER_ARG1 CMAKE_CXX_COMPILER_LAUNCHER)
   set(ipoprops INTERPROCEDURAL_OPTIMIZATION)
   foreach(c IN LISTS configs)
     list(APPEND flagvars CMAKE_CXX_FLAGS_${c})
@@ -171,7 +184,7 @@ function(_brainscape_fp_check)
       get_directory_property(v DIRECTORY "${dir}" DEFINITION ${var})
       _brainscape_fp_scan("${v}" "${var} (${dir})" hits)
     endforeach()
-    foreach(prop COMPILE_OPTIONS COMPILE_FLAGS)
+    foreach(prop COMPILE_OPTIONS COMPILE_FLAGS CXX_COMPILER_LAUNCHER)
       get_target_property(v "${t}" ${prop})
       if(v)
         _brainscape_fp_scan("${v}" "${t} ${prop}" hits)

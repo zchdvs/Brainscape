@@ -253,12 +253,19 @@ jobs:
           mkdir -p parity-report
           build/dsp/tests/golden/brainscape_golden --no-ablate --tag negctl-gcc-contract \
             --report parity-report/negctl-gcc-contract.json
+      # Exit 3 with the negative-control message: check and mint also fail in a conforming
+      # build today (no golden file, no revision to mint), so a non-zero exit alone proves
+      # nothing.
       - name: The harness refuses check and mint in this build
         run: |
           for mode in check mint; do
-            if build/dsp/tests/golden/brainscape_golden --mode "$mode" --only plucks_12s/default \
-                 --no-ablate > /dev/null; then
-              echo "::error::a negative-control build accepted --mode $mode"
+            rc=0
+            build/dsp/tests/golden/brainscape_golden --mode "$mode" --only plucks_12s/default \
+              --no-ablate > /dev/null 2> "refusal-$mode.txt" || rc=$?
+            if [ "$rc" -ne 3 ] ||
+               ! grep -q "$mode refused: a negative-control build only reports" "refusal-$mode.txt"; then
+              echo "::error::the negative-control build did not refuse --mode $mode (exit $rc)"
+              cat "refusal-$mode.txt"
               exit 1
             fi
           done

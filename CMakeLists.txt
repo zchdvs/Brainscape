@@ -14,7 +14,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # The floating-point build profile (docs/design/determinism-profile.md §3): defines
 # brainscape::fp_profile, which brainscape_dsp links PUBLIC, the test-only
-# BRAINSCAPE_FP_NEGATIVE_CONTROL option, and the configure-time check that rejects
+# -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON escape (never cached, and refused together with
+# the plugin or firmware options above), and the configure-time check that rejects
 # forbidden FP and LTO settings on every target that compiles or links the engine, the
 # plugin's JUCE targets included. dsp/ includes it as well (include_guard), for projects
 # that add dsp/ on its own.

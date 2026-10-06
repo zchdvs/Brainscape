@@ -42,6 +42,15 @@ elseif(MSVC)
   endif()
 endif()
 
+# The test-only negative control (cmake/BrainscapeFpProfile.cmake) says so whenever the
+# engine is rebuilt, not only at configure time, where --log-level=ERROR hides warnings.
+if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+  add_custom_command(TARGET brainscape_dsp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo
+            "brainscape_dsp: NEGATIVE CONTROL BUILD (BRAINSCAPE_FP_NEGATIVE_CONTROL): floating-point contraction ON, not profile-conforming, never ship it"
+    VERBATIM)
+endif()
+
 if(BRAINSCAPE_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
