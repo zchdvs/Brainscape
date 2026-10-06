@@ -39,17 +39,22 @@ else()
 endif()
 
 # Flags that break identity (§3.2) or inline engine code across the boundary (§3.4).
-# A global property, because the check runs deferred in the top-level directory's scope.
+# -fsingle-precision-constant has no tripwire macro: it silently narrows every double
+# literal, DetMath's coefficients included. A flag may sit inside a generator
+# expression, between commas: JUCE's juce_recommended_lto_flags writes
+# $<IF:...,-GL,-flto>. A global property, because the check runs deferred in the
+# top-level directory's scope.
 set(_forbidden
   "-ffast-math" "-Ofast" "-funsafe-math-optimizations" "-fassociative-math"
   "-freciprocal-math" "-ffinite-math-only" "-fno-signed-zeros" "-fno-honor-nans"
   "-fno-honor-infinities" "-fapprox-func" "-menable-unsafe-fp-math"
+  "-fsingle-precision-constant"
   "-ffp-contract=(fast|on|fast-honor-pragmas)" "-ffp-model=(fast|aggressive)"
-  "-mfpmath=(387|sse\\+387|both)" "-m32" "-flto(=[^ ;>\"']*)?" "-fwhole-program"
+  "-mfpmath=(387|sse\\+387|both)" "-m32" "-flto(=[^ ;>,\"']*)?" "-fwhole-program"
   "[/-]fp:(fast|contract)" "[/-]GL" "[/-]arch:IA32")
 list(JOIN _forbidden "|" _forbidden)
 set_property(GLOBAL PROPERTY BRAINSCAPE_FP_FORBIDDEN_RE
-             "(^|[ ;:>\"'])(${_forbidden})($|[ ;>\"'])")
+             "(^|[ ;:>,\"'])(${_forbidden})($|[ ;>,\"'])")
 unset(_forbidden)
 
 function(_brainscape_fp_scan text where outvar)
@@ -136,6 +141,22 @@ function(_brainscape_fp_check)
       if(v)
         _brainscape_fp_scan("${v}" "${t} ${prop}" hits)
       endif()
+    endforeach()
+    # Per-source options follow the profile flags on the command line, so they win.
+    get_target_property(srcs "${t}" SOURCES)
+    foreach(src IN LISTS srcs)
+      if(src MATCHES "\\$<")
+        continue()
+      endif()
+      if(NOT IS_ABSOLUTE "${src}")
+        set(src "${dir}/${src}")
+      endif()
+      foreach(prop COMPILE_OPTIONS COMPILE_FLAGS)
+        get_source_file_property(v "${src}" TARGET_DIRECTORY "${t}" ${prop})
+        if(v)
+          _brainscape_fp_scan("${v}" "${t} ${src} ${prop}" hits)
+        endif()
+      endforeach()
     endforeach()
     foreach(dep IN LISTS closure)
       get_target_property(v "${dep}" INTERFACE_COMPILE_OPTIONS)
