@@ -51,6 +51,12 @@ MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 // inside the lifecycle / memory / parameter / process contracts of
 // docs/design/grain-engine.md §9-§10. The clean delay is the degenerate config
 // the design predicts (§5 Pattern A): rectangular window, abutting unity grains.
+//
+// Every entry point that runs floating-point code (Init, Reset, ClearHistory,
+// Process, SetParam, and PlanMemory) installs the determinism profile's complete FP
+// control word for its duration and restores the caller's
+// (docs/design/determinism-profile.md §4.1): round to nearest, gradual underflow.
+// Callers need not set flush modes (JUCE's ScopedNoDenormals is redundant here).
 class Engine {
  public:
   Engine() noexcept;

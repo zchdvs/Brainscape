@@ -30,6 +30,12 @@ if(BRAINSCAPE_FPCHECK_VIOLATIONS)
   consumer(via_single_precision)
   target_compile_options(via_single_precision PRIVATE -fsingle-precision-constant)
 
+  consumer(via_denormal_math)
+  target_compile_options(via_denormal_math PRIVATE -fdenormal-fp-math=preserve-sign)
+
+  consumer(via_daz_ftz)
+  target_compile_options(via_daz_ftz PRIVATE -mdaz-ftz)
+
   consumer(via_source_options)
   set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/via_source_options.cpp"
                               PROPERTIES COMPILE_OPTIONS "-ffp-contract=fast")

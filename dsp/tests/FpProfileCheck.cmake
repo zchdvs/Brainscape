@@ -41,6 +41,8 @@ set(missed "")
 foreach(route "(via via_juce_lto): '-GL'|(via via_juce_lto): '-flto'"
               "via_ipo INTERPROCEDURAL_OPTIMIZATION"
               "via_single_precision COMPILE_OPTIONS: '-fsingle-precision-constant'"
+              "via_denormal_math COMPILE_OPTIONS: '-fdenormal-fp-math=preserve-sign'"
+              "via_daz_ftz COMPILE_OPTIONS: '-mdaz-ftz'"
               "via_source_options.cpp COMPILE_OPTIONS: '-ffp-contract=fast'"
               "src/PostChain.cpp COMPILE_FLAGS: '/fp:contract'")
   set(found FALSE)

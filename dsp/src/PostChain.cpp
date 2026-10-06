@@ -3,6 +3,7 @@
 #include "detail/PostChain.h"
 
 #include "detail/DetMath.h"
+#include "detail/FlushTiny.h"
 
 namespace brainscape::detail {
 
@@ -91,14 +92,20 @@ void FeedbackTamer::SetFeedback(float fbAmount, double sr) noexcept {
 void FeedbackTamer::ProcessSample(float& l, float& r) noexcept {
   dcL_ += dcCoef_ * (l - dcL_);
   dcR_ += dcCoef_ * (r - dcR_);
+  FlushTiny(dcL_);
+  FlushTiny(dcR_);
   float xl = l - dcL_;
   float xr = r - dcR_;
   hpL_ += hpCoef_ * (xl - hpL_);
   hpR_ += hpCoef_ * (xr - hpR_);
+  FlushTiny(hpL_);
+  FlushTiny(hpR_);
   xl -= hpL_;
   xr -= hpR_;
   lpL_ += lpCoef_ * (xl - lpL_);
   lpR_ += lpCoef_ * (xr - lpR_);
+  FlushTiny(lpL_);
+  FlushTiny(lpR_);
   xl = SoftSat(lpL_);
   xr = SoftSat(lpR_);
   constexpr float kG = 0.6f;
@@ -302,8 +309,12 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           // gain and full-bandwidth repeats forever; review finding).
           pdDcL_ += pdDcCoef_ * (tapL - pdDcL_);
           pdDcR_ += pdDcCoef_ * (tapR - pdDcR_);
+          FlushTiny(pdDcL_);
+          FlushTiny(pdDcR_);
           pdLpL_ += pdLpCoef_ * ((tapL - pdDcL_) - pdLpL_);
           pdLpR_ += pdLpCoef_ * ((tapR - pdDcR_) - pdLpR_);
+          FlushTiny(pdLpL_);
+          FlushTiny(pdLpR_);
           pdL_.Write(l[n] + pdLpL_ * dfb);
           pdR_.Write(r[n] + pdLpR_ * dfb);
           l[n] = l[n] * gd + tapL * gw;
@@ -322,6 +333,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           const float gw  = detmath::SqrtF(mix);
           const float gd  = detmath::SqrtF(1.0f - mix);
           rvBandwidth_ += rvBw_ * (0.5f * (l[n] + r[n]) - rvBandwidth_);
+          FlushTiny(rvBandwidth_);
           float x = rvBandwidth_;
           x       = rvAp_[0].Process(x, 0.75f);
           x       = rvAp_[1].Process(x, 0.75f);
@@ -335,6 +347,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           // was a proven-dead store and branch A ran undamped (review finding).
           rvLp_[0] += rvDamp_ * (t0 - rvLp_[0]);
           rvLp_[1] += rvDamp_ * (t1 - rvLp_[1]);
+          FlushTiny(rvLp_[0]);
+          FlushTiny(rvLp_[1]);
           float a = x + rvLp_[1] * decay;
           a       = rvDap_[0].Process(a, 0.70f);
           a       = rvDap_[1].Process(a, 0.50f);
@@ -385,8 +399,10 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
             for (int pass = 0; pass < 2; ++pass) {
               const float notch = in - dp * s[1];
               s[0] += fq * s[1];
+              FlushTiny(s[0]);
               const float high = notch - s[0];
               s[1] += fq * high;
+              FlushTiny(s[1]);
               outs[0] += 0.5f * s[0];
               outs[1] += 0.5f * s[1];
               outs[2] += 0.5f * high;

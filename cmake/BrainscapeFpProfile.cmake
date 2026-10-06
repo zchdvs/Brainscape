@@ -40,15 +40,21 @@ endif()
 
 # Flags that break identity (§3.2) or inline engine code across the boundary (§3.4).
 # -fsingle-precision-constant has no tripwire macro: it silently narrows every double
-# literal, DetMath's coefficients included. A flag may sit inside a generator
-# expression, between commas: JUCE's juce_recommended_lto_flags writes
-# $<IF:...,-GL,-flto>. A global property, because the check runs deferred in the
-# top-level directory's scope.
+# literal, DetMath's coefficients included. A non-IEEE -fdenormal-fp-math lets the
+# compiler fold and transform code as if subnormals flushed, against the profile's
+# gradual underflow (§4.2); -mdaz-ftz turns FTZ/DAZ on for the whole process. A flag
+# may sit inside a generator expression, between commas: JUCE's
+# juce_recommended_lto_flags writes $<IF:...,-GL,-flto>. A global property, because the
+# check runs deferred in the top-level directory's scope. CMake's regex engine allows
+# nine groups and the pattern below has eight, so new entries avoid parentheses.
 set(_forbidden
   "-ffast-math" "-Ofast" "-funsafe-math-optimizations" "-fassociative-math"
   "-freciprocal-math" "-ffinite-math-only" "-fno-signed-zeros" "-fno-honor-nans"
   "-fno-honor-infinities" "-fapprox-func" "-menable-unsafe-fp-math"
   "-fsingle-precision-constant"
+  "-fdenormal-fp-math[-f32]*=[a-z,]*preserve-sign"
+  "-fdenormal-fp-math[-f32]*=[a-z,]*positive-zero"
+  "-fdenormal-fp-math[-f32]*=[a-z,]*dynamic" "-mdaz-ftz"
   "-ffp-contract=(fast|on|fast-honor-pragmas)" "-ffp-model=(fast|aggressive)"
   "-mfpmath=(387|sse\\+387|both)" "-m32" "-flto(=[^ ;>,\"']*)?" "-fwhole-program"
   "[/-]fp:(fast|contract)" "[/-]GL" "[/-]arch:IA32")

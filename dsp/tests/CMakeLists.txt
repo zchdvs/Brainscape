@@ -4,6 +4,7 @@
 add_executable(brainscape_tests
   test_main.cpp
   test_engine.cpp
+  test_boundary.cpp
   test_detmath.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
@@ -14,6 +15,30 @@ if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()
 add_test(NAME dsp_unit COMMAND brainscape_tests)
+
+# The engine built again with the FP guard's test hooks (determinism profile §6.4):
+# flushing forced on inside the guard, and the exception flags each call raised. A
+# separate library, so no shipping build carries the hooks' global state.
+get_filename_component(_bs_dsp_dir .. ABSOLUTE BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+get_target_property(_bs_dsp_sources brainscape_dsp SOURCES)
+list(TRANSFORM _bs_dsp_sources PREPEND ${_bs_dsp_dir}/)
+add_library(brainscape_dsp_fpenv_hooks STATIC ${_bs_dsp_sources})
+target_include_directories(brainscape_dsp_fpenv_hooks
+  PUBLIC ${_bs_dsp_dir}/include PRIVATE ${_bs_dsp_dir}/src)
+target_compile_features(brainscape_dsp_fpenv_hooks PUBLIC cxx_std_17)
+target_link_libraries(brainscape_dsp_fpenv_hooks PUBLIC brainscape::fp_profile)
+target_compile_options(brainscape_dsp_fpenv_hooks
+  PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_OPTIONS>)
+target_compile_definitions(brainscape_dsp_fpenv_hooks PUBLIC BRAINSCAPE_FPENV_TEST_HOOKS=1)
+
+add_executable(brainscape_fpenv_tests test_main.cpp test_flush.cpp)
+target_link_libraries(brainscape_fpenv_tests PRIVATE brainscape_dsp_fpenv_hooks)
+target_include_directories(brainscape_fpenv_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor
+                                                          ${_bs_dsp_dir}/src)
+if(MSVC)
+  target_compile_options(brainscape_fpenv_tests PRIVATE /EHsc)
+endif()
+add_test(NAME dsp_fpenv_forced_flush COMMAND brainscape_fpenv_tests)
 
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
@@ -57,7 +82,6 @@ set_tests_properties(dsp_symbol_audit_control PROPERTIES
 
 # Self-test of the configure-time forbidden-flag check (§6.3), with this build's
 # generator and compiler.
-get_filename_component(_bs_dsp_dir .. ABSOLUTE BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(_bs_probe_args "-DGENERATOR=${CMAKE_GENERATOR}" "-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
                    "-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}")
 if(NOT CMAKE_GENERATOR MATCHES "^(Visual Studio|Xcode)")

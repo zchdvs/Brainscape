@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "detail/FlushTiny.h"
 #include "detail/Smoother.h"
 
 // Post chain (docs/design/grain-engine.md §2.6) and the fixed feedback taming
@@ -32,7 +33,8 @@ inline float SoftSat(float x) noexcept {
   return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
-// Schroeder allpass over a caller-provided buffer slice.
+// Schroeder allpass over a caller-provided buffer slice. The stored state is flushed
+// (determinism profile §4.3).
 struct Allpass {
   float*   buf = nullptr;
   uint32_t len = 0, pos = 0;
@@ -48,7 +50,9 @@ struct Allpass {
   float Process(float x, float g) noexcept {
     const float v = buf[pos];
     const float y = v - g * x;
-    buf[pos]      = x + g * y;
+    float       w = x + g * y;
+    FlushTiny(w);
+    buf[pos] = w;
     if (++pos == len) pos = 0;
     return y;
   }
@@ -60,7 +64,8 @@ struct Allpass {
 };
 
 // Plain delay line over a caller-provided slice, with an optional modulated
-// (linearly interpolated) read for the reverb tank.
+// (linearly interpolated) read for the reverb tank. Written values are flushed
+// (determinism profile §4.3): the post delay and reverb tank recirculate.
 struct DelaySlice {
   float*   buf = nullptr;
   uint32_t len = 0, pos = 0;
@@ -74,6 +79,7 @@ struct DelaySlice {
     pos = 0;
   }
   void  Write(float x) noexcept {
+    FlushTiny(x);
     buf[pos] = x;
     if (++pos == len) pos = 0;
   }

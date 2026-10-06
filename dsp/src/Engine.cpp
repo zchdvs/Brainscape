@@ -8,8 +8,8 @@
 #include <new>
 #include <type_traits>
 
-#include "detail/DenormalGuard.h"
 #include "detail/DetMath.h"
+#include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
 #include "detail/Granular.h"
 #include "detail/OnsetDetector.h"
@@ -45,9 +45,10 @@ static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice c
 constexpr float kInvScale = 1.0f / 32767.0f;
 
 // Rounding-mode-independent, NaN-safe int16 quantizer. Not lrintf: lrintf follows
-// the dynamic FP rounding mode (which the denormal guard deliberately does not pin)
-// and is a libm call in the hot loop on Cortex-M7 (review finding, verified with
-// arm-none-eabi-gcc). Round-half-away-from-zero via a plain truncating convert.
+// the dynamic FP rounding mode and is a libm call in the hot loop on Cortex-M7
+// (review finding, verified with arm-none-eabi-gcc). The guard now pins round to
+// nearest, but the quantizer stays independent of the mode regardless (determinism
+// profile §5.3). Round-half-away-from-zero via a plain truncating convert.
 // Clamp is symmetric at ±32767 so the ring's float range stays exactly [-1, 1],
 // and the negated comparisons map NaN to a defined endpoint on every platform.
 inline int16_t QuantizeS16(float x) noexcept {
@@ -74,17 +75,46 @@ inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
   return (u1 + u2 - 1.0f) * kInvScale;
 }
 
+// Body of PlanMemory; the public function below only adds the guard
+// (detail/FpEnvGuard.h explains the split).
+BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
+  MemoryPlan plan{};
+  // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
+  // inside the Engine object — firmware places the Engine instance in DTCM.
+  plan.bytes[static_cast<size_t>(Tier::Hot)] =
+      (static_cast<size_t>(detail::kWindowLutSize) + 2u * cfg.maxBlockSize) * sizeof(float);
+  plan.align[static_cast<size_t>(Tier::Hot)] = 16;
+  // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
+  // + onset-detector analysis/FFT/whitening state.
+  plan.bytes[static_cast<size_t>(Tier::Warm)] =
+      (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
+       detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
+       detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
+      sizeof(float);
+  plan.align[static_cast<size_t>(Tier::Warm)] = 16;
+  // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
+  // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
+  // cannot overflow a 32-bit size_t on the embedded target.
+  plan.bytes[static_cast<size_t>(Tier::Bulk)] =
+      static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t) +
+      static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u +
+      static_cast<size_t>(detail::PostChain::BulkFloats(cfg.sampleRate)) * sizeof(float);
+  // Cache-line aligned: the SD/DMA coherency rule needs 32-byte-aligned ranges (design §7).
+  plan.align[static_cast<size_t>(Tier::Bulk)] = 32;
+  return plan;
+}
+
 }  // namespace
 
-// The engine state behind Engine's opaque storage. Its methods are the Engine's
-// entry points; Engine forwards to them.
+// The engine state behind Engine's opaque storage. Its methods are the bodies of the
+// Engine's entry points; Engine forwards to them inside the FP environment guard.
 struct Engine::Impl {
-  bool  Init(const EngineConfig&, const Arenas&) noexcept;
-  void  Reset() noexcept;
-  void  ClearHistory() noexcept;
-  void  Process(const ProcessContext&) noexcept;
-  void  SetParam(ParamId id, float plainValue) noexcept;
-  float GetParam(ParamId id) const noexcept;
+  BRAINSCAPE_FP_BODY bool Init(const EngineConfig&, const Arenas&) noexcept;
+  BRAINSCAPE_FP_BODY void Reset() noexcept;
+  BRAINSCAPE_FP_BODY void ClearHistory() noexcept;
+  BRAINSCAPE_FP_BODY void Process(const ProcessContext&) noexcept;
+  BRAINSCAPE_FP_BODY void SetParam(ParamId id, float plainValue) noexcept;
+  float GetParam(ParamId id) const noexcept;  // a load, no FP arithmetic
 
   using Smoother = detail::Smoother;
 
@@ -140,13 +170,26 @@ const Engine::Impl& Engine::impl() const noexcept {
   return *std::launder(reinterpret_cast<const Impl*>(impl_));
 }
 
+// Entry points that run floating-point code: the guard writes the profile's control
+// word and restores the caller's on return (determinism profile §4.1).
 bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+  const detail::FpEnvGuard guard;
   return impl().Init(cfg, arenas);
 }
-void Engine::Reset() noexcept { impl().Reset(); }
-void Engine::ClearHistory() noexcept { impl().ClearHistory(); }
-void Engine::Process(const ProcessContext& ctx) noexcept { impl().Process(ctx); }
+void Engine::Reset() noexcept {
+  const detail::FpEnvGuard guard;
+  impl().Reset();
+}
+void Engine::ClearHistory() noexcept {
+  const detail::FpEnvGuard guard;
+  impl().ClearHistory();
+}
+void Engine::Process(const ProcessContext& ctx) noexcept {
+  const detail::FpEnvGuard guard;
+  impl().Process(ctx);
+}
 void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+  const detail::FpEnvGuard guard;
   impl().SetParam(id, value);
 }
 float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
@@ -185,30 +228,8 @@ const ParamDescriptor* FindParam(ParamId id) noexcept {
 }
 
 MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
-  MemoryPlan plan{};
-  // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
-  // inside the Engine object — firmware places the Engine instance in DTCM.
-  plan.bytes[static_cast<size_t>(Tier::Hot)] =
-      (static_cast<size_t>(detail::kWindowLutSize) + 2u * cfg.maxBlockSize) * sizeof(float);
-  plan.align[static_cast<size_t>(Tier::Hot)] = 16;
-  // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
-  // + onset-detector analysis/FFT/whitening state.
-  plan.bytes[static_cast<size_t>(Tier::Warm)] =
-      (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
-       detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
-       detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
-      sizeof(float);
-  plan.align[static_cast<size_t>(Tier::Warm)] = 16;
-  // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
-  // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
-  // cannot overflow a 32-bit size_t on the embedded target.
-  plan.bytes[static_cast<size_t>(Tier::Bulk)] =
-      static_cast<size_t>(cfg.historyFrames) * 2u * sizeof(int16_t) +
-      static_cast<size_t>(cfg.looperFrames) * 2u * sizeof(int16_t) * 2u +
-      static_cast<size_t>(detail::PostChain::BulkFloats(cfg.sampleRate)) * sizeof(float);
-  // Cache-line aligned: the SD/DMA coherency rule needs 32-byte-aligned ranges (design §7).
-  plan.align[static_cast<size_t>(Tier::Bulk)] = 32;
-  return plan;
+  const detail::FpEnvGuard guard;
+  return PlanMemoryBody(cfg);
 }
 
 bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
@@ -227,7 +248,7 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   if (cfg.historyFrames < 8u || cfg.historyFrames > (1u << 26)) return false;
   if (cfg.looperFrames > (1u << 26)) return false;
 
-  const MemoryPlan plan = PlanMemory(cfg);
+  const MemoryPlan plan = PlanMemoryBody(cfg);
   for (size_t t = 0; t < kNumTiers; ++t) {
     if (plan.bytes[t] == 0) continue;
     if (arenas.base[t] == nullptr || arenas.bytes[t] < plan.bytes[t]) return false;
@@ -496,8 +517,6 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     }
     return;
   }
-
-  ScopedDenormalGuard guard;
 
   // Drain pending parameter changes at block start (sample-accurate queue lands
   // with the scheduler's event queue). Freeze drains FIRST because the

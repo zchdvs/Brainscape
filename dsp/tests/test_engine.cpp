@@ -7,8 +7,9 @@
 
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
+#include "FpEnvTestUtil.h"
 #include "catch.hpp"
-#include "detail/DenormalGuard.h"
+#include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
 #include "detail/Granular.h"
 #include "detail/OnsetDetector.h"
@@ -1287,27 +1288,24 @@ TEST_CASE("in-place mono input is bit-identical to separate buffers") {
   }
 }
 
-#if defined(BRAINSCAPE_DENORMAL_SSE)
-TEST_CASE("denormal guard sets and restores FTZ/DAZ (SSE)") {
-  const unsigned before = _mm_getcsr();
-  {
-    ScopedDenormalGuard guard;
-    REQUIRE((_mm_getcsr() & 0x8040u) == 0x8040u);
+// Determinism profile §4.1 (replaces the old guard's test, which required flush bits
+// to be SET): the guard writes the complete control word — round to nearest, gradual
+// underflow, exceptions masked, flags clear — whatever the caller left, and restores the
+// caller's word exactly.
+TEST_CASE("FP guard writes the complete control word and restores the caller's") {
+  using namespace detail;
+  for (const FpWord host : {testing::kHostileFpWord, testing::kFtzDazFpWord, kFpProfileWord}) {
+    FpWord inside = 0, after = 0;
+    {
+      const testing::HostileFpScope scope(host);
+      {
+        const FpEnvGuard guard;
+        inside = ReadFpControl();
+      }
+      after = ReadFpControl();
+    }
+    INFO("host word " << host);
+    REQUIRE(inside == kFpProfileWord);
+    REQUIRE(after == host);
   }
-  REQUIRE(_mm_getcsr() == before);
 }
-#elif defined(BRAINSCAPE_DENORMAL_AARCH64)
-TEST_CASE("denormal guard sets and restores FZ (AArch64 FPCR)") {
-  auto readFpcr = [] {
-    uint64_t v;
-    __asm__ __volatile__("mrs %0, fpcr" : "=r"(v));
-    return v;
-  };
-  const uint64_t before = readFpcr();
-  {
-    ScopedDenormalGuard guard;
-    REQUIRE((readFpcr() & (1ull << 24)) != 0);
-  }
-  REQUIRE(readFpcr() == before);
-}
-#endif
