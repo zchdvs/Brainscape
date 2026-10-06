@@ -4,16 +4,25 @@
 //
 //   brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]
 //                     [--block N | --pattern A,B,...] [--ring LOG2] [--only NAME,...]
+//                     [--delivery engine|split] [--fresh-engine] [--fp-env clean|hostile]
 //                     [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]
 //                     [--wav-dir DIR] [--list]
 //
 // report (default) never compares against anything it must match: it fails only when
-//        a render cannot run or a preset's coverage is missing (exit 1).
+//        a render cannot run, a preset's coverage is missing or an invariance check
+//        changes its output (exit 1).
 // check  also requires every hash, per-second hash and counter to equal the golden
 //        file for this build's kSoundRevision (exit 2 on any difference).
-// mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, whole
-//        corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
+// mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, events
+//        through the engine's transport, one restarted engine, a clean FP environment,
+//        whole corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
 //        minted until the engine stops changing (profile §8.4 step 10).
+// --delivery split applies events through SetParam, SetFreeze, Trigger and LoadPreset
+// (Spillover) with blocks split at their frames instead of as stamped events (profile
+// §5.11); --fresh-engine Inits an engine per render instead of restarting one (§5.8);
+// --fp-env hostile renders from a calling thread whose control word is FTZ|DAZ (Arm
+// FZ|DN) with round toward zero (§6.4). None may change a hash. Each preset's
+// invariance checks (Corpus.h) run in every mode.
 // With a golden file for this revision, report and check write a WAV of every preset
 // that misses it into --wav-dir (profile §6.1: WAV files only on mismatch).
 // --note records a fact about the build that the binary cannot see (the archive's
@@ -21,6 +30,11 @@
 // A negative-control build (-DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON: contraction on, test
 // only) is not profile-conforming: it reports, marks the report, and refuses check and
 // mint (exit 3).
+// brainscape_golden_flush is this harness on the engine built with the guard's test hooks
+// (dsp/tests/CMakeLists.txt). Its --force-flush-control renders every preset again with
+// flushing forced on inside the guard (profile §6.4): that must reproduce every vector but
+// a subnormal-input one, which it must change, or the corpus cannot see a flushing FP
+// environment. It refuses mint.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +54,9 @@
 #include "Render.h"
 #include "brainscape/SoundRevision.h"
 #include "brainscape/TestSignal.h"
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+#include "detail/FpEnvGuard.h"
+#endif
 
 using namespace brainscape;
 using namespace brainscape::golden;
@@ -56,13 +73,22 @@ constexpr bool kNegativeControl = true;
 constexpr bool kNegativeControl = false;
 #endif
 
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+constexpr bool kTestHooks = true;
+void SetForceFlush(bool on) { brainscape::detail::fpenv_test::forceFlush = on; }
+#else
+constexpr bool kTestHooks = false;
+void SetForceFlush(bool) {}
+#endif
+
 constexpr const char* kReportFormat = "brainscape-golden-report/1";
 constexpr const char* kGoldenFormat = "brainscape-golden/1";
 constexpr const char* kUsage =
     "usage: brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]\n"
     "       [--block N | --pattern A,B,...] [--ring LOG2] [--only VECTOR[/PRESET],...]\n"
+    "       [--delivery engine|split] [--fresh-engine] [--fp-env clean|hostile]\n"
     "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]\n"
-    "       [--wav-dir DIR] [--list]\n";
+    "       [--wav-dir DIR] [--list] [--force-flush-control (brainscape_golden_flush only)]\n";
 
 struct Options {
   std::string              mode   = "report";
@@ -74,14 +100,25 @@ struct Options {
   uint32_t                 ring = 22;
   std::vector<std::string> only;
   std::vector<std::pair<std::string, std::string>> notes;
-  bool                     ablate = true;
-  bool                     quick  = false;
-  bool                     list   = false;
+  Delivery                 delivery    = Delivery::Engine;
+  bool                     freshEngine = false;
+  FpEnv                    fpEnv       = FpEnv::Clean;
+  bool                     ablate      = true;
+  bool                     quick       = false;
+  bool                     list        = false;
+  bool                     flushControl = false;
 
   bool Canonical() const {
-    return pattern.size() == 1 && pattern[0] == 48 && ring == 22 && only.empty() && !quick;
+    return pattern.size() == 1 && pattern[0] == 48 && ring == 22 && only.empty() && !quick &&
+           delivery == Delivery::Engine && !freshEngine && fpEnv == FpEnv::Clean && !flushControl;
   }
 };
+
+const char* DeliveryName(Delivery d) {
+  return d == Delivery::Engine ? "engine-events" : "split-at-event-frames";
+}
+
+const char* FpEnvName(FpEnv e) { return e == FpEnv::Clean ? "clean" : "hostile"; }
 
 // Identifies the build for triage only (profile §5.12): compiler, version, target.
 std::string Toolchain() {
@@ -148,6 +185,20 @@ bool Parse(int argc, char** argv, Options* o) {
     else if (!std::strcmp(a, "--wav-dir") && more) o->wavDir = argv[++i];
     else if (!std::strcmp(a, "--ring") && more) o->ring = Count(argv[++i]);
     else if (!std::strcmp(a, "--only") && more) o->only = Split(argv[++i]);
+    else if (!std::strcmp(a, "--delivery") && more && !std::strcmp(argv[i + 1], "engine")) {
+      o->delivery = Delivery::Engine;
+      ++i;
+    } else if (!std::strcmp(a, "--delivery") && more && !std::strcmp(argv[i + 1], "split")) {
+      o->delivery = Delivery::Split;
+      ++i;
+    } else if (!std::strcmp(a, "--fresh-engine")) o->freshEngine = true;
+    else if (!std::strcmp(a, "--fp-env") && more && !std::strcmp(argv[i + 1], "clean")) {
+      o->fpEnv = FpEnv::Clean;
+      ++i;
+    } else if (!std::strcmp(a, "--fp-env") && more && !std::strcmp(argv[i + 1], "hostile")) {
+      o->fpEnv = FpEnv::Hostile;
+      ++i;
+    }
     else if (!std::strcmp(a, "--note") && more && std::strchr(argv[i + 1], '=') != nullptr) {
       const std::string kv = argv[++i];
       o->notes.emplace_back(kv.substr(0, kv.find('=')), kv.substr(kv.find('=') + 1));
@@ -160,6 +211,7 @@ bool Parse(int argc, char** argv, Options* o) {
     else if (!std::strcmp(a, "--no-ablate")) o->ablate = false;
     else if (!std::strcmp(a, "--quick")) o->quick = true;
     else if (!std::strcmp(a, "--list")) o->list = true;
+    else if (!std::strcmp(a, "--force-flush-control") && kTestHooks) o->flushControl = true;
     else {
       std::fprintf(stderr, "unknown or incomplete argument: %s\n", a);
       return false;
@@ -215,8 +267,18 @@ int64_t NotBeforeSecond(const PresetCase& p, Feature f, const RenderOutput& r) {
     case Feature::Freeze: return firstEvent(EventType::Freeze);
     case Feature::Triggers: return firstEvent(EventType::Trigger);
     case Feature::RingLength: return r.ringReachFrame / 48000;
+    case Feature::Spillover: return firstEvent(EventType::SpilloverLoad);
+    case Feature::Restart:
+      return p.script.Restarts().empty() ? 0 : p.script.Restarts().front().frame / 48000;
     default: return 0;
   }
+}
+
+bool SameCounters(const RenderOutput& a, const RenderOutput& b) {
+  for (size_t i = 0; i < static_cast<size_t>(Counter::kCount); ++i) {
+    if (a.counters[i] != b.counters[i]) return false;
+  }
+  return true;
 }
 
 std::string StrOf(const Json& j, const char* key) {
@@ -246,13 +308,24 @@ Json ReportHeader(const Options& o, uint32_t historyFrames) {
   Json build = Json::Obj();
   build.Set("tag", Json::Str(o.tag));
   build.Set("toolchain", Json::Str(Toolchain()));
+  const ToolchainId& id = BuildToolchain();  // the engine library's own (profile §5.12)
+  Json engineToolchain  = Json::Obj();
+  engineToolchain.Set("compiler", Json::Str(id.compiler));
+  engineToolchain.Set("version", Json::Str(id.version));
+  engineToolchain.Set("target", Json::Str(id.target));
+  engineToolchain.Set("fpFlags", Json::Str(id.fpFlags));
+  engineToolchain.Set("fpFlagsHash", Json::Str(id.fpFlagsHash));
+  build.Set("engineToolchain", engineToolchain);
   Json pattern = Json::Arr();
   for (uint32_t b : o.pattern) pattern.Push(Json::Int(b));
   build.Set("blockPattern", pattern);
-  build.Set("delivery", Json::Str("split-at-event-frames"));
+  build.Set("delivery", Json::Str(DeliveryName(o.delivery)));
+  build.Set("start", Json::Str(o.freshEngine ? "init" : "restart"));
+  build.Set("fpEnv", Json::Str(FpEnvName(o.fpEnv)));
   build.Set("ablations", Json::Bool(o.ablate));
   build.Set("canonical", Json::Bool(o.Canonical() && !kNegativeControl));
   build.Set("negativeControl", Json::Bool(kNegativeControl));
+  build.Set("forcedFlushControl", Json::Bool(o.flushControl));
   Json notes = Json::Obj();
   for (const auto& kv : o.notes) notes.Set(kv.first, Json::Str(kv.second));
   build.Set("notes", notes);
@@ -324,6 +397,69 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
     }
   }
   e.Set("ablations", ablations);
+
+  // Invariances must reproduce the render (profile §6.4).
+  Json invariances = Json::Arr();
+  for (const Invariance inv : p.invariant) {
+    const std::string name = std::string("invariance ") + InvarianceName(inv);
+    RenderOutput      ri;
+    bool              rendered = false, same = false;
+    Json              a = Json::Obj();
+    a.Set("check", Json::Str(InvarianceName(inv)));
+    if (inv == Invariance::HostileFpEnv) {
+      RenderConfig rc = renderer.Config();
+      rc.fpEnv        = rc.fpEnv == FpEnv::Clean ? FpEnv::Hostile : FpEnv::Clean;
+      rc.freshEngine  = true;  // Init too, in the other environment
+      Renderer other(rc);
+      rendered = other.ok() && other.Render(v, notes, p, &ri);
+      same     = rendered && ri.hash == r.hash && ri.secondHashes == r.secondHashes &&
+             SameCounters(ri, r);
+      a.Set("fpEnv", Json::Str(FpEnvName(rc.fpEnv)));
+      a.Set("firstDiffSecond", Json::Int(rendered ? FirstDiff(r.secondHashes, ri.secondHashes) : -1));
+    } else if (!p.script.Restarts().empty()) {
+      int64_t          from = 0;
+      const PresetCase tail = TailAfterRestart(p, &from);
+      rendered = renderer.Render(v, notes, tail, &ri, nullptr, from);
+      same     = rendered && r.restartFrame == from && ri.hash == r.restartHash;
+      a.Set("fromFrame", Json::Int(from));
+    }
+    a.Set("ok", Json::Bool(same));
+    invariances.Push(a);
+    if (!rendered) {
+      failures.push_back(name + " did not render");
+    } else if (!same) {
+      failures.push_back(name + " changed the output");
+    }
+  }
+  e.Set("invariances", invariances);
+
+  // The forced-flush control (profile §6.4), on a fresh engine like the hostile check.
+  if (o.flushControl) {
+    RenderConfig rc = renderer.Config();
+    rc.freshEngine  = true;
+    Renderer     forced(rc);
+    RenderOutput rf;
+    SetForceFlush(true);
+    const bool rendered = forced.ok() && forced.Render(v, notes, p, &rf);
+    SetForceFlush(false);
+    const bool    changed = rendered && rf.hash != r.hash;
+    const int64_t first   = rendered ? FirstDiff(r.secondHashes, rf.secondHashes) : -1;
+    Json          f       = Json::Obj();
+    f.Set("expectChange", Json::Bool(v.subnormalInput));
+    f.Set("changed", Json::Bool(changed));
+    f.Set("firstDiffSecond", Json::Int(first));
+    f.Set("ok", Json::Bool(rendered && changed == v.subnormalInput));
+    e.Set("forcedFlush", f);
+    if (!rendered) {
+      failures.push_back("forced flush did not render");
+    } else if (changed && !v.subnormalInput) {
+      failures.push_back("forced flush changed the output from s" + std::to_string(first) +
+                         ": a golden vector must reproduce it");
+    } else if (!changed && v.subnormalInput) {
+      failures.push_back("forced flush changed nothing: the vector cannot see flushing");
+    }
+  }
+
   Json cov = Json::Obj();
   cov.Set("ok", Json::Bool(failures.empty()));
   Json list = Json::Arr();
@@ -331,9 +467,12 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
   cov.Set("failures", list);
   e.Set("coverage", cov);
 
-  const char* status = !failures.empty()                    ? "COVERAGE FAILED"
-                       : o.ablate && !p.ablate.empty()      ? "coverage ok (ablations ok)"
-                                                            : "coverage ok";
+  const bool  ablated = o.ablate && !p.ablate.empty();
+  const char* status  = !failures.empty()                ? "COVERAGE FAILED"
+                        : ablated && !p.invariant.empty() ? "coverage ok (ablations, invariances ok)"
+                        : ablated                         ? "coverage ok (ablations ok)"
+                        : !p.invariant.empty()            ? "coverage ok (invariances ok)"
+                                                          : "coverage ok";
   std::printf("  %-24s %s  onsets=%lld frozen=%lld events=%lld offgrid=%lld tail=%lld  %s\n",
               p.name, Short(r.hash).c_str(), static_cast<long long>(Get(r, Counter::Onsets)),
               static_cast<long long>(Get(r, Counter::FrozenFrames)),
@@ -347,7 +486,7 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
 }
 
 // The golden file is the report minus what describes one run: the build, and each
-// preset's coverage and ablation results.
+// preset's coverage, ablation and invariance results.
 Json GoldenFrom(const Json& report) {
   Json g = Json::Obj();
   for (const auto& m : report.members) {
@@ -368,7 +507,10 @@ Json GoldenFrom(const Json& report) {
         for (const Json& p : vm.second.items) {
           Json po = Json::Obj();
           for (const auto& pm : p.members) {
-            if (pm.first != "coverage" && pm.first != "ablations") po.Set(pm.first, pm.second);
+            if (pm.first != "coverage" && pm.first != "ablations" && pm.first != "invariances" &&
+                pm.first != "forcedFlush") {
+              po.Set(pm.first, pm.second);
+            }
           }
           presets.Push(po);
         }
@@ -544,7 +686,7 @@ int main(int argc, char** argv) {
       };
       for (const auto& kv : p.params) check(kv.first, kv.second);
       for (const Event& e : p.script.Events()) {
-        if (e.type == EventType::SetParam) check(e.id, e.value);
+        if (e.type == EventType::SetParam) check(static_cast<ParamId>(e.id), e.value);
       }
     }
   }
@@ -567,27 +709,37 @@ int main(int argc, char** argv) {
       return 3;
     }
   }
+  if (o.mode == "mint" && kTestHooks) {
+    std::fprintf(stderr, "mint refused: this harness runs the engine built with test hooks\n");
+    return 3;
+  }
   if (o.mode == "mint" && kSoundRevision == 0) {
     std::fprintf(stderr, "mint refused: kSoundRevision is 0, so there is no revision to mint\n");
     return 3;
   }
   if (o.mode == "mint" && (!o.Canonical() || !o.ablate)) {
     std::fprintf(stderr,
-                 "mint refused: needs the whole corpus at --block 48 --ring 22 with ablations\n");
+                 "mint refused: needs the whole corpus at --block 48 --ring 22 with ablations, "
+                 "engine delivery, a restarted engine and a clean FP environment\n");
     return 3;
   }
 
   std::string pattern;
   for (uint32_t b : o.pattern) pattern += (pattern.empty() ? "" : ",") + std::to_string(b);
   std::printf("# brainscape golden: soundRevision %u, generator v%u, corpus v%u, ring 2^%u, "
-              "blocks %s, events split at their frames\n# toolchain: %s\n",
+              "blocks %s, events %s, %s, %s FP environment\n# toolchain: %s (fp flags %s)\n",
               static_cast<unsigned>(kSoundRevision), static_cast<unsigned>(testsignal::kVersion),
               static_cast<unsigned>(kCorpusVersion), static_cast<unsigned>(o.ring),
-              pattern.c_str(), Toolchain().c_str());
+              pattern.c_str(), DeliveryName(o.delivery),
+              o.freshEngine ? "an engine Init'd per render" : "one engine restarted per render",
+              FpEnvName(o.fpEnv), Toolchain().c_str(), BuildToolchain().fpFlagsHash);
 
   RenderConfig rc;
   rc.blockPattern = o.pattern;
   rc.historyLog2  = o.ring;
+  rc.delivery     = o.delivery;
+  rc.freshEngine  = o.freshEngine;
+  rc.fpEnv        = o.fpEnv;
   Renderer renderer(rc);
   if (!renderer.ok()) {
     std::fprintf(stderr, "cannot allocate the engine arenas\n");

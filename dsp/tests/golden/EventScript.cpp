@@ -4,7 +4,7 @@
 
 namespace brainscape::golden {
 
-void Script::Add(int64_t frame, EventType type, ParamId id, float value) {
+void Script::Add(int64_t frame, EventType type, uint32_t id, float value) {
   Event ev;
   ev.frame = frame;
   ev.seq   = seq_++;
@@ -18,25 +18,68 @@ void Script::Add(int64_t frame, EventType type, ParamId id, float value) {
   events_.insert(at, ev);
 }
 
-uint32_t EventCursor::Apply(Engine& engine, int64_t frame, const Event** first) {
-  const size_t begin = next_;
-  while (next_ < events_.size() && events_[next_].frame == frame) {
-    const Event& ev = events_[next_++];
-    switch (ev.type) {
-      case EventType::SetParam: engine.SetParam(ev.id, ev.value); break;
-      case EventType::Freeze: engine.SetFreeze(ev.value != 0.f); break;
-      case EventType::Trigger: engine.Trigger(); break;
-    }
+void Script::AddRestart(const RestartPoint& r) {
+  const auto at = std::upper_bound(restarts_.begin(), restarts_.end(), r.frame,
+                                   [](int64_t f, const RestartPoint& p) { return f < p.frame; });
+  restarts_.insert(at, r);
+}
+
+std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
+  auto preset = std::make_unique<PresetState>();
+  for (uint32_t i = 0; i < kNumParams; ++i) {
+    preset->leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
   }
+  preset->leafCount = static_cast<uint32_t>(kNumParams);
+  for (const auto& kv : params) {
+    preset->leaves[static_cast<uint32_t>(kv.first) - 1u].value = kv.second;
+  }
+  return preset;
+}
+
+int64_t EventCursor::NextAfter(int64_t frame) const {
+  for (size_t i = next_; i < events_.size(); ++i) {
+    if (events_[i].frame > frame) return events_[i].frame;
+  }
+  return INT64_MAX;
+}
+
+int64_t EventCursor::NextFreeze(int64_t after, int64_t upTo) const {
+  for (size_t i = next_; i < events_.size() && events_[i].frame <= upTo; ++i) {
+    const bool toggles =
+        events_[i].type == EventType::Freeze || events_[i].type == EventType::SpilloverLoad;
+    if (toggles && events_[i].frame > after) return events_[i].frame;
+  }
+  return INT64_MAX;
+}
+
+uint32_t EventCursor::Take(int64_t end, const Event** first) {
+  const size_t begin = next_;
+  while (next_ < events_.size() && events_[next_].frame < end) ++next_;
   *first = events_.data() + begin;
   return static_cast<uint32_t>(next_ - begin);
 }
 
-int64_t EventCursor::BlockEnd(int64_t from, int64_t to) const {
-  if (next_ < events_.size() && events_[next_].frame > from && events_[next_].frame < to) {
-    return events_[next_].frame;
+void ApplyUnstamped(Engine& engine, const Event& e, const StagedPresets& staged) {
+  switch (e.type) {
+    case EventType::SetParam: engine.SetParam(static_cast<ParamId>(e.id), e.value); break;
+    case EventType::Freeze: engine.SetFreeze(e.value != 0.f); break;
+    case EventType::Trigger:
+      engine.Trigger(static_cast<Engine::TriggerSource>(e.id), e.value);
+      break;
+    case EventType::SpilloverLoad:
+      engine.LoadPreset(*staged[e.id], LoadMode::Spillover);
+      break;
   }
-  return to;
+}
+
+Event ToEngineEvent(const Event& e, int64_t base, const StagedPresets& staged) {
+  Event out = e;
+  out.frame = e.frame - base;
+  if (e.type == EventType::SpilloverLoad) {
+    out.id     = 0;
+    out.preset = staged[e.id].get();
+  }
+  return out;
 }
 
 }  // namespace brainscape::golden

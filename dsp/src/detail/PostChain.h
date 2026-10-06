@@ -118,6 +118,7 @@ class FeedbackTamer {
   static uint32_t WarmFloats(double sampleRate) noexcept;
   void Init(float* warm, double sampleRate) noexcept;
   void Reset() noexcept;
+  void ClearDiffusers() noexcept;  // the allpass buffers: Init and Restart, never Reset
   // Per-block coefficient update (control rate; fbAmount sets the LP corner).
   void SetFeedback(float fbAmount, double sampleRate) noexcept;
   void ProcessSample(float& l, float& r) noexcept;

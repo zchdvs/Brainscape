@@ -413,16 +413,20 @@ are platform code outside the profile, which limits cross-machine audition (§4.
 - **State restore is applied as a unit**, since `setStateInformation` may run during
   `processBlock` and 28 separate `SetParam` stores could straddle a block start
   (`Engine.cpp:358-367`, `:415-421`): decode on the calling thread into a `PresetState`, make a
-  generation counter odd (a sequence lock), post it; the audio thread applies it between
-  sub-blocks, updates the parameter atomics (§5.3) and makes the counter even. The atomics are
-  mirrors for host and UI, never engine input, and unread while the counter is odd.
+  generation counter odd (a sequence lock), post it; the audio thread applies it at its next
+  block's first frame (with the load mode of §6.9), updates the parameter atomics (§5.3) and
+  makes the counter even. The atomics are mirrors for host and UI, never engine input, and
+  unread while the counter is odd.
 - `SampleCounter()` and `ClearHistory()` race with `Process`; the other any-thread calls are
   race-free under ThreadSanitizer (*measured* [host]).
 - **Exact loads use a spare engine:** `Restart` clears ~17 MiB and must not run beside `Process`,
   so a worker runs `Restart` + `LoadPreset(Exact)` on the lazy spare from one consistent snapshot
   of the plain values, the audio thread swaps pointers at a block boundary, and the worker
   restarts the retired engine. The pedal has no SDRAM for a spare (`grain-engine.md` §7) and
-  mutes the wet path instead (§6.7).
+  mutes the wet path instead (§6.7). An engine that has rendered nothing since `Init`,
+  `Restart` or `ClearHistory` skips the clears, so an Exact load before its first block (a
+  project being opened, a transport start straight after `prepareToPlay`) runs in place on the
+  audio thread at the cost of `Reset`.
 - The onset LED reads `ConsumeOnsetCount()` in `processBlock` and publishes an atomic.
 
 ### 4.8 Input: sanitizing, the 24-bit grid, and mono input
@@ -481,8 +485,16 @@ pedal, on the pedal grid (§2.3) until the block-split fix lands.
 (~0.92 ms, *measured* [host]). (b) **Realtime, never block:** if the spare is not ready, keep the
 running engine and clear a **reproducible** flag that the labels read (§7.6). (c) A transport
 start is the first `processBlock` with `isPlaying` after a non-playing block, `prepareToPlay` or
-`setNonRealtime(true)`; locates and cycles do not restart. (d) A restart also resets the resampler
-and bypass crossfade. (e) The spare comes from one consistent snapshot (§4.7).
+a switch to offline; locates and cycles do not restart. The VST3, VST2 and LV2 wrappers call
+`setNonRealtime` before every block, so only a change of mode counts: re-arming at every call
+restarted an offline export every block. (d) A restart also resets the resampler
+and bypass crossfade. (e) The spare comes from one consistent snapshot (§4.7). (f) The restart
+loads the values in effect at the block's first frame: a restore, the host automation and the UI
+edits of that block are part of the Exact load, so an automation lane starts on its own value
+instead of gliding from where the last playback left the parameter. In real time the spare is
+swapped in only when it holds exactly those values; a host that sends the lane's start value
+while stopped, as on a locate, gives the worker time to prepare it. A scripted stamp made
+before the restart is void, even when its frame has already passed (§4.10).
 `AudioProcessor::reset()` maps to `Engine::Reset()` (profile §5.8) plus a resampler flush; it
 keeps the ring, so it neither silences old audio nor makes bounces reproducible.
 
@@ -493,8 +505,10 @@ made 48- and 512-frame renders differ; splitting at the event's frame made them 
 (*measured* [preset], [challenge]). So every event the app generates (scripted UI edits, MIDI,
 macro moves, freeze, triggers, taps, Spillover loads) carries an **absolute frame stamp** and
 takes effect exactly there, with the semantics of profile §5.11; a macro's fan-out applies in
-target-list order. Profile §5.11 moves the split into `dsp/`; until then the wrapper splits host
-blocks and calls `SetParam`, `Trigger` and `SetFreeze` between sub-blocks.
+target-list order. Profile §5.11 moves the split into `dsp/`: `Process` takes the block's
+events (`ProcessContext::events`) and splits there itself. A wrapper that splits host blocks
+and calls `SetParam`, `Trigger` and `SetFreeze` between sub-blocks renders the same bits; the
+plugin skeleton hands its events to `Process` with their offsets instead.
 
 - The engine's SPSC queue (`grain-engine.md` §9, threading contract) is **not a prerequisite
   for the app**. On the pedal it is the transport from the engine's single producer, the
@@ -505,6 +519,8 @@ blocks and calls `SetParam`, `Trigger` and `SetFreeze` between sub-blocks.
 - Until the block-split fix lands a split point is not neutral (§4.11), so scripted renders meant
   to match the pedal keep events on multiples of 48 frames.
 - Mode switches and Spillover loads are ordinary stamped events (§6.1).
+- Stamps count frames from the engine's last `Init` or restart. A restart begins a new
+  timeline: every stamp made before it is void, whether its frame lies ahead or has passed.
 
 ### 4.11 Engine defects that gate identity
 
@@ -837,7 +853,16 @@ live in `dsp/`.
   settings (levels, restart and pedal-grid options). If a host set changed a value (§5.3), STAT
   is rewritten and the JSON patched before saving, so the saved `sound_hash` matches the bits.
   Engine runtime state is never saved; the design's unimplemented `SaveState`/`LoadState` stays a
-  separate session artifact, never sent to the pedal.
+  separate session artifact, never sent to the pedal. A restore goes through `LoadPreset`:
+  **Exact** when nothing has played since the engine's last `Init` or restart (a project being
+  opened), because there are no trails to keep and the restore then defines the start state
+  (the engine has nothing to clear then, so the load costs what `Reset` does, §4.7);
+  **Spillover**, as a load event at the next block's first frame, when it arrives while the
+  engine runs (a host's preset recall), because an Exact load would clear 17 MiB on the audio
+  thread and cut the trails, which a delay keeps across a preset change as the pedal's
+  recommended load does (§6.7). The engine's own preset also loads Exact after every `Init`
+  (§4.1) and at a restart on transport start (§4.9). Reproducibility comes from that restart
+  option, never from a restore.
 
 ## 7. Upload and device link
 

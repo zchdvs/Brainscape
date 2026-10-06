@@ -5,6 +5,7 @@
 #include "brainscape/FpProfile.h"
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
+#include "brainscape/PresetState.h"
 
 namespace brainscape {
 
@@ -40,8 +41,9 @@ struct EngineConfig {
   bool     ditherRingWrite = true;    // TPDF dither on the int16 ring write (design §12.3):
                                       // breaks quantization fixed points in the feedback
                                       // loop so the delay decays to true silence. Keyed on
-                                      // the sample counter, so renders stay reproducible
-                                      // and block-split invariant. Disable for the
+                                      // the sample counter (from the random-number epoch),
+                                      // so renders stay reproducible and block-split
+                                      // invariant. Disable for the
                                       // bit-exact Tu null mode (design §10 contract #2).
 };
 
@@ -53,10 +55,10 @@ MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 // docs/design/grain-engine.md §9-§10. The clean delay is the degenerate config
 // the design predicts (§5 Pattern A): rectangular window, abutting unity grains.
 //
-// Every entry point that runs floating-point code (Init, Reset, ClearHistory,
-// Process, SetParam, and PlanMemory and Canonicalize) installs the determinism
-// profile's complete FP control word for its duration and restores the caller's
-// (docs/design/determinism-profile.md §4.1): round to nearest, gradual underflow.
+// Every entry point that runs floating-point code (Init, Reset, Restart, ClearHistory,
+// Process, SetParam, LoadPreset, and PlanMemory, Canonicalize and CheckPreset) installs
+// the determinism profile's complete FP control word for its duration and restores the
+// caller's (docs/design/determinism-profile.md §4.1): round to nearest, gradual underflow.
 // Callers need not set flush modes (JUCE's ScopedNoDenormals is redundant here).
 // Input must be finite: wrappers pass live input through SanitizeInput
 // (InputCondition.h); Debug builds assert that the output stays finite.
@@ -85,28 +87,108 @@ class Engine {
   // No-op until the looper subsystem lands.
   void ClearLooper() noexcept;
 
+  // Non-RT, with Process stopped (like Init): returns a running engine to the exact
+  // post-Init state, the exact-restart state of the parity contract, but KEEPS the
+  // parameter values (docs/design/determinism-profile.md §5.8). Clears the history ring,
+  // the post delay and reverb, the feedback FIFO and the tamer's diffusers; kills voices
+  // and marks and re-arms the scheduler; resets the onset detector and every filter and
+  // LFO; zeroes the sample counter, the random-number epoch, the write position and the
+  // onset and trigger counts; turns freeze off; drains pending parameters and snaps the
+  // smoothers to them. Reset is the real-time subset: it keeps the counter, the epoch,
+  // freeze and every large buffer, so a DAW's reset() maps to it. Restart begins a new
+  // timeline at frame 0: events queued against the old one are cleared with it
+  // (EventQueue::Clear), and producers stamp from the restarted counter. On an engine that
+  // has rendered no frame since Init, Restart or ClearHistory the ring and post buffers are
+  // still clear and are not cleared again: such a Restart costs about what Reset does and
+  // may run on the audio thread between Process calls (a wrapper's restore or restart
+  // before its first block).
+  void Restart() noexcept;
+
+  // Applies a decoded preset in the fixed order of determinism profile §5.10: every
+  // descriptor default; every stored leaf, canonicalized, in ascending id order; freeze
+  // off; then for Exact a Restart (Process stopped, the event queue cleared; non-RT unless
+  // the engine has rendered nothing since its buffers were cleared, see Restart), for
+  // Spillover the random-number epoch restarted at the load frame, keeping history,
+  // grains, scheduler phase and smoothers. A direct Spillover call applies at the next
+  // Process call's first frame and must not race Process (audio thread between blocks, or
+  // Process stopped); a live load is a SpilloverLoad event instead, applied as one change
+  // at its frame, never as per-parameter stores. Returns true when the load applied and
+  // was exact (*report says why not).
+  bool LoadPreset(const PresetState& preset, LoadMode mode,
+                  LoadReport* report = nullptr) noexcept;
+
+  // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
+  // the guaranteed-working fallback when onset detection can't hear the source.
+  enum class TriggerSource : uint8_t { Footswitch = 0, MidiNote = 1, Sidechain = 2 };
+
+  // Frame-stamped events (determinism profile §5.11): (absolute frame, sequence number,
+  // type, id, value). Frames before an event's frame use the old state, the event
+  // applies from its frame on, and events stamped at one frame apply in sequence order:
+  // at a block's first frame that is exactly "SetParam, then Process". So freeze is a
+  // level: the last Freeze event at a frame decides it, and a release and a re-engage at
+  // one frame keep the pin, as SetFreeze between split blocks does. The numbering is
+  // permanent (events are logged and replayed).
+  enum class EventType : uint8_t {
+    SetParam      = 0,  // id: ParamId; value: the exact binary32 plain value (canonicalized)
+    Freeze        = 1,  // value: nonzero engages, zero releases
+    Trigger       = 2,  // id: TriggerSource; value: velocity (not yet read)
+    SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies. Its
+                        // freeze-off is immediate, so a Freeze after it at its frame pins anew
+  };
+  // A stamped event, as producers, scripts and the transport (EventQueue.h) carry it.
+  struct Event {
+    int64_t            frame  = 0;  // absolute engine frame: frames since Init or Restart
+    uint32_t           seq    = 0;  // orders the events stamped at one frame
+    EventType          type   = EventType::SetParam;
+    uint32_t           id     = 0;
+    float              value  = 0.f;
+    const PresetState* preset = nullptr;  // SpilloverLoad: valid until the event is retired
+                                          // (EventQueue::Retired)
+  };
+  // The same event, stamped with its offset in the block that Process renders.
+  struct BlockEvent {
+    uint32_t           offset = 0;  // frames from the block's first frame
+    uint32_t           seq    = 0;
+    EventType          type   = EventType::SetParam;
+    uint32_t           id     = 0;
+    float              value  = 0.f;
+    const PresetState* preset = nullptr;
+  };
+
   struct ProcessContext {
     const float* const* in  = nullptr;  // planar; in[0]=L, in[1]=R (unused if !stereoInput)
     float* const*       out = nullptr;  // planar stereo
     uint32_t numFrames      = 0;        // 1..maxBlockSize, varies freely block to block
+    // The block's events in the order they apply: offsets (0..numFrames-1) never fall, and
+    // at one offset the sequence numbers rise, except at offset 0, where the transport
+    // also puts late events in stamp order. Process splits the block at each event's
+    // offset, so its output equals a wrapper that splits the block there and applies the
+    // events between the parts. An event out of order applies where it is reached, and
+    // an offset past the block after the block's last frame: both are caller errors,
+    // asserted in Debug, and never dropped. A call that renders nothing (a zero-frame or
+    // oversized block, null buffers) still applies its events, after its frames.
+    const BlockEvent* events    = nullptr;
+    uint32_t          numEvents = 0;
     // Reserved for the CLOCK trigger source (design §4) — not yet read by the engine.
     double   tempoBpm       = 120.0;
     int64_t  timelinePos    = 0;
     bool     transportPlaying = false;
   };
   // Audio thread only. No allocation, no locks, no syscalls, no exceptions, no RTTI.
-  // On an invalid call (not Init'd, null buffers) the outputs are zero-filled —
-  // never left with stale host memory.
+  // On an invalid call (not Init'd, null buffers, a block size outside 1..maxBlockSize)
+  // the outputs are zero-filled — never left with stale host memory.
   void Process(const ProcessContext&) noexcept;
 
+  // SetParam, SetFreeze and Trigger are the unstamped path: they apply at the first
+  // frame of the next Process call, before that block's events, and are kept for
+  // callers that split blocks themselves. Sample-accurate changes are events.
+  //
   // Any thread; lock-free. Stores Canonicalize(id, plainValue) (Params.h): NaN and
   // ±inf become the descriptor minimum, ±0 and subnormals +0, then the clamp.
-  // sampleOffset is accepted for API stability but the skeleton applies changes at
-  // the next Process() start — the sample-accurate SPSC event queue lands next
-  // (design §9 threading table); the hidden "[.pending-spsc]" test is its
-  // acceptance criterion. Mix / Feedback / OutTrim / normalization are smoothed
-  // per-sample; scheduler and per-grain values apply to grains born after the
-  // change (resolve-at-birth — design §6 automation semantics).
+  // sampleOffset is ignored (a SetParam event carries the offset). Mix / Feedback /
+  // OutTrim / normalization are smoothed per-sample; scheduler and per-grain values
+  // apply to grains born after the change (resolve-at-birth — design §6 automation
+  // semantics).
   void  SetParam(ParamId id, float plainValue, uint32_t sampleOffset = 0) noexcept;
   float GetParam(ParamId id) const noexcept;  // returns the pending (target) plain value
 
@@ -117,15 +199,13 @@ class Engine {
   void SetFreeze(bool on) noexcept;
   bool GetFreeze() const noexcept;
 
-  // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
-  // the guaranteed-working fallback when onset detection can't hear the source.
-  enum class TriggerSource : uint8_t { Footswitch = 0, MidiNote = 1, Sidechain = 2 };
   // Any thread; lock-free. Fires a grain (oldest-steal; a surplus beyond one
   // block's frames carries to the next block — explicit triggers never drop).
-  // src, velocity and sampleOffset are all accepted for API stability but not
-  // yet read: source routing, velocity, and sample-accurate delivery land with
-  // the mode system and SPSC event queue. A SIDECHAIN audio input is not yet
-  // expressible through ProcessContext at all (reserved, like tempoBpm).
+  // Triggers due at one frame fire on consecutive frames, one birth per frame.
+  // src and velocity are not yet read (source routing and velocity land with the
+  // mode system); sampleOffset is ignored (a Trigger event carries the offset). A
+  // SIDECHAIN audio input is not yet expressible through ProcessContext at all
+  // (reserved, like tempoBpm).
   void Trigger(TriggerSource src = TriggerSource::Footswitch, float velocity = 1.f,
                uint32_t sampleOffset = 0) noexcept;
 
@@ -139,9 +219,14 @@ class Engine {
 
   // Audio thread only (plain int64: an atomic 8-byte load is not lock-free on
   // Cortex-M7, so cross-thread readers wait for SaveState to land instead).
-  // Free-running, advanced by numFrames every Process regardless of transport —
-  // keys every random draw (design §9) including the ring-write dither.
+  // Free-running from Init or Restart, advanced by numFrames every Process regardless
+  // of transport: the absolute frame of event stamps, grain lifetimes, mark ages, the
+  // feedback FIFO slot and the onset hop grid.
   int64_t SampleCounter() const noexcept;
+  // Audio thread only. The random-number epoch (determinism profile §5.9): every random
+  // draw (design §9), the ring-write dither included, is keyed on SampleCounter() minus
+  // this frame. Init and Restart set it to 0, a Spillover load to its load frame.
+  int64_t EpochStart() const noexcept;
 
   // Dry path is never block-delayed (design §2.5).
   uint32_t LatencySamples() const noexcept { return 0; }

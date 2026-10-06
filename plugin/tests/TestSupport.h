@@ -1,7 +1,7 @@
 #pragma once
 // Shared by the wrapper tests and the hosted VST3 check: a deterministic input, a busy
-// preset, and the reference render (the engine alone, canonical configuration, 48-frame
-// blocks: the pedal's grid). No JUCE.
+// preset, and the reference render (the engine alone from the exact-restart state, its
+// events stamped at their frames, 48-frame blocks: the pedal's grid). No JUCE.
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -94,6 +94,15 @@ inline Preset Complete(const Preset& p) {
   return all;
 }
 
+// The same, decoded as LoadPreset takes it.
+inline std::unique_ptr<PresetState> CompleteState(const Preset& p) {
+  auto        state = std::make_unique<PresetState>();
+  const auto  all   = Complete(p);
+  for (size_t i = 0; i < all.size(); ++i) state->leaves[i] = {static_cast<uint32_t>(all[i].first), all[i].second};
+  state->leafCount = static_cast<uint32_t>(all.size());
+  return state;
+}
+
 inline uint64_t Hash(const Stereo& s) {  // FNV-1a over the output bits, L then R
   uint64_t h = 0xcbf29ce484222325ull;
   for (const auto* ch : {&s.l, &s.r}) {
@@ -119,14 +128,49 @@ inline size_t FirstDiff(const std::vector<float>& a, const std::vector<float>& b
   return a.size() == b.size() ? SIZE_MAX : std::min(a.size(), b.size());
 }
 
-struct RefEvent {
-  int                          frame;
-  std::function<void(Engine&)> apply;
-};
+// The reference's events: the engine's own, stamped with absolute frames, in the order
+// they apply (sequence numbers follow the list).
+using RefEvent = Engine::Event;
 
-// The engine alone in 48-frame blocks, split at each event's frame. Empty on failure.
+inline RefEvent RefParam(int64_t frame, ParamId id, float value) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = Engine::EventType::SetParam;
+  e.id    = static_cast<uint32_t>(id);
+  e.value = value;
+  return e;
+}
+inline RefEvent RefFreeze(int64_t frame, bool on) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = Engine::EventType::Freeze;
+  e.value = on ? 1.f : 0.f;
+  return e;
+}
+inline RefEvent RefTrigger(int64_t frame, Engine::TriggerSource src = Engine::TriggerSource::Footswitch,
+                           float velocity = 1.f) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = Engine::EventType::Trigger;
+  e.id    = static_cast<uint32_t>(src);
+  e.value = velocity;
+  return e;
+}
+// A Spillover load of `preset`, which must outlive the render.
+inline RefEvent RefLoad(int64_t frame, const PresetState* preset) {
+  RefEvent e;
+  e.frame  = frame;
+  e.type   = Engine::EventType::SpilloverLoad;
+  e.preset = preset;
+  return e;
+}
+
+// The engine alone, from Init and LoadPreset(preset, Exact), in 48-frame blocks with the
+// events handed to Process at their offsets. `beforeBlock` runs before each block with its
+// first frame. Empty on failure.
 inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rate = 48000.0,
-                              const std::vector<RefEvent>& events = {}) {
+                              const std::vector<RefEvent>& events = {},
+                              const std::function<void(Engine&, int)>& beforeBlock = {}) {
   EngineConfig cfg;
   cfg.sampleRate    = rate;
   cfg.maxBlockSize  = 512;
@@ -134,25 +178,36 @@ inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rat
   host::HeapArenas arenas(PlanMemory(cfg));
   auto             engine = std::make_unique<Engine>();
   if (!arenas.ok() || !engine->Init(cfg, arenas.get())) return {};
-  for (const auto& p : preset) engine->SetParam(p.first, p.second);
-  engine->Reset();
+  engine->LoadPreset(*CompleteState(preset), LoadMode::Exact);
 
   const int frames = static_cast<int>(in.l.size());
   Stereo    out;
   out.l.assign(in.l.size(), 0.f);
   out.r.assign(in.l.size(), 0.f);
-  size_t ei  = 0;
-  int    pos = 0;
-  while (pos < frames) {
-    for (; ei < events.size() && events[ei].frame <= pos; ++ei) events[ei].apply(*engine);
-    int end = std::min(frames, pos + 48);
-    if (ei < events.size()) end = std::min(end, events[ei].frame);
+  std::vector<Engine::BlockEvent> block;
+  size_t                          ei = 0;
+  for (int pos = 0; pos < frames;) {
+    const int end = std::min(frames, pos + 48);
+    if (beforeBlock) beforeBlock(*engine, pos);
+    block.clear();
+    for (; ei < events.size() && events[ei].frame < end; ++ei) {
+      Engine::BlockEvent b;
+      b.offset = static_cast<uint32_t>(std::max<int64_t>(events[ei].frame - pos, 0));
+      b.seq    = static_cast<uint32_t>(ei);
+      b.type   = events[ei].type;
+      b.id     = events[ei].id;
+      b.value  = events[ei].value;
+      b.preset = events[ei].preset;
+      block.push_back(b);
+    }
     const float*           ins[2]  = {in.l.data() + pos, in.r.data() + pos};
     float*                 outs[2] = {out.l.data() + pos, out.r.data() + pos};
     Engine::ProcessContext ctx;
     ctx.in        = ins;
     ctx.out       = outs;
     ctx.numFrames = static_cast<uint32_t>(end - pos);
+    ctx.events    = block.data();
+    ctx.numEvents = static_cast<uint32_t>(block.size());
     engine->Process(ctx);
     pos = end;
   }

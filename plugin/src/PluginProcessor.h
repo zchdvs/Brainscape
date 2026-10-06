@@ -1,12 +1,16 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <thread>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "Audition.h"
 #include "BrainscapeParam.h"
 #include "EventQueue.h"
 #include "StateCodec.h"
@@ -29,6 +33,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
   void releaseResources() override {}
   void reset() override;
+  void setNonRealtime(bool isNonRealtime) noexcept override;
   bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
   void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
   using AudioProcessor::processBlock;
@@ -60,27 +65,35 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // A momentary footswitch-style trigger (companion §5.7), applied at the next block.
   void TriggerFromUi() noexcept;
 
-  // Scripted producers: applies `e` at absolute engine frame `frame` (frames since the
-  // last Init), splitting the host block there (companion §4.10). A parameter value is
-  // canonicalized here, as every producer's is, and the mirror follows when the event
-  // applies. Any thread.
+  // Scripted producers: applies `e` at absolute engine frame `frame`, counted from the
+  // last Init or restart (companion §4.10); a stamp made before a restart is void. A
+  // parameter value is canonicalized here, as every producer's is, and the mirror follows
+  // when the event applies. Any thread.
   void PostAt(uint64_t frame, WrapperEvent e) noexcept;
 
   void            SetSettings(const WrapperSettings& s) noexcept;
   WrapperSettings GetSettings() const noexcept;
 
+  // What the last transport start did while "Restart on transport start" was on (§4.9).
+  enum class TransportStart : uint8_t { None, Restarted, SpareNotReady };
+
   struct Status {
     double   hostRate      = 0.0;  // 0 until prepareToPlay
     double   engineRate    = 0.0;
     bool     engineReady   = false;
-    // Engine at the pedal's 48 kHz. Not "pedal-exact" yet: the parity contract also needs
-    // Restart, exact preset loads and frame-stamped host and editor events (plugin/README.md,
-    // "Current limitations").
+    // Engine at the pedal's 48 kHz. Pedal-exact only for renders from the exact-restart
+    // state: an offline audition, or a bounce with the restart option (§4.9).
     bool     pedalRate     = false;
     int      lastHostBlock = 0;
     int      maxHostBlock  = 0;
     uint32_t droppedEvents = 0;  // lost events only (EventSink)
     bool     lastLoadInexact = false;
+    bool           restartOnStart = false;
+    // A spare engine restarted with the preset the live engine plays: a transport start
+    // whose first block moves no parameter now restarts.
+    bool           spareReady     = false;
+    TransportStart lastStart      = TransportStart::None;
+    uint64_t       engineCalls    = 0;  // Process calls since prepareToPlay: one per <= 512 frames
   };
   Status GetStatus() const noexcept;
 
@@ -90,58 +103,122 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   float    ConsumeInputPeak() noexcept { return inPeak_.exchange(0.f, std::memory_order_relaxed); }
   float    ConsumeOutputPeak() noexcept { return outPeak_.exchange(0.f, std::memory_order_relaxed); }
 
+  // Message thread: renders the test input (the loaded file in File loop, dsp/'s test signal
+  // otherwise) through the current preset into `wav` on a worker thread (§4.9).
+  bool                StartAudition(const juce::File& wav, juce::String& error);
+  AuditionJob::Result GetAudition() const { return audition_.Get(); }
+
+  // Tests: while the returned lock is held, the spare engine's worker does nothing.
+  std::unique_lock<std::mutex> PauseSpareWorker() { return std::unique_lock<std::mutex>(spareMutex_); }
+
  private:
-  void InitEngine(double sampleRate);
-  void PushAllAfterInit();
+  // An engine with its arenas, and the preset values its last Exact load applied.
+  struct EngineSlot {
+    Engine                            engine;
+    std::unique_ptr<host::HeapArenas> arenas;
+    std::array<float, kNumParams>     preset{};
+  };
+  using Values = std::array<float, kNumParams>;
+
+  void     InitEngine(double sampleRate);
+  void     LoadAfterRestart() noexcept;
+  void     RestartTimeline() noexcept;
   uint32_t NextGeneration() noexcept;
-  void PostStateUnit(const float* plain) noexcept;
-  void ApplyStateUnit() noexcept;
-  void DrainEvents(uint64_t blockStart) noexcept;
-  void InsertPending(const WrapperEvent& e) noexcept;
-  size_t DuePending(uint64_t frame) const noexcept;
-  void ApplyPending(size_t due, WrapperEvent::Source rank) noexcept;
-  void ErasePending(size_t due) noexcept;
-  void ApplyLive(const WrapperEvent& e) noexcept;
-  void ApplyEvent(const WrapperEvent& e) noexcept;
-  void ApplyMidi(const uint8_t* data, int numBytes) noexcept;
-  void WriteBackMirrors() noexcept;
-  void RenderChunk(const float* hostInL, const float* hostInR, float* outL, float* outR,
-                   int offset, int numFrames) noexcept;
+  void     PostStateUnit(const float* plain) noexcept;
+  void     ApplyStateUnit() noexcept;
+  void     CheckTransportStart() noexcept;
+  void     RestartAtTransportStart() noexcept;
+  void     DrainEvents() noexcept;
+  void     InsertPending(const WrapperEvent& e) noexcept;
+  void     EmitDue(uint64_t frame, uint64_t blockStart, uint64_t chunkStart, size_t* pending,
+                   const juce::MidiBuffer& midi, juce::MidiBufferIterator* midiIt, bool* frameZero) noexcept;
+  void     EmitPending(size_t from, size_t to, WrapperEvent::Source rank, uint32_t offset) noexcept;
+  bool     Applies(const WrapperEvent& e) const noexcept;
+  void     EmitLive(const WrapperEvent* events, size_t count, uint32_t offset) noexcept;
+  void     Emit(const WrapperEvent& e, uint32_t offset) noexcept;
+  void     Emit(const Engine::BlockEvent& e) noexcept;
+  void     WriteBackMirrors() noexcept;
+  void     RenderChunk(const float* hostInL, const float* hostInR, float* outL, float* outR,
+                       int offset, int numFrames) noexcept;
+
+  // The spare engine of §4.7 and §4.9, prepared by a worker thread.
+  void EnsureSpareWorker();
+  void SpareWorkerLoop();
+  void PrepareSpare();
+  void FreeSpare() noexcept;
 
   EventSink                                        sink_;
   std::array<BrainscapeParam*, kNumParams>         params_{};  // owned by AudioProcessor
   FreezeParam*                                     freeze_ = nullptr;
 
-  Engine                            engine_;
-  std::unique_ptr<host::HeapArenas> arenas_;
-  bool                              engineReady_ = false;
-  double                            engineRate_  = 0.0;
+  // Two slots at most: the live engine and, while the restart option is on, the spare. The
+  // audio thread swaps the two pointers at a transport start; slots are allocated and
+  // freed only off the audio thread, with the spare's state or the audio thread's absence
+  // ruling out a concurrent swap.
+  std::array<std::unique_ptr<EngineSlot>, 2> slots_;
+  EngineSlot*                                live_  = nullptr;
+  EngineSlot*                                spare_ = nullptr;
+  EngineConfig                               config_{};
+  bool                                       engineReady_ = false;
+  double                                     engineRate_  = 0.0;
 
   // Guards prepare/state calls against each other; never taken on the audio thread.
   // Restore generations advance only under it.
   std::mutex controlMutex_;
 
   // State restores travel as a unit (companion §4.7): a sequence lock over one slot that
-  // also holds the restore's generation.
+  // also holds the restore's generation. The audio thread applies one as a Spillover load
+  // at its next block's first frame (restore_), or folds it into an Exact load.
   std::atomic<uint32_t>                       stateSeq_{0};
   std::atomic<uint32_t>                       stateGen_{0};
   std::array<std::atomic<float>, kNumParams>  stateSlot_{};
   uint32_t                                    seqApplied_ = 0;  // audio thread
+  std::unique_ptr<PresetState>                restore_;         // audio thread
+  bool                                        loadPending_ = false;
   // Audio thread: parameter and freeze events posted before the last applied restore or
-  // Init are dropped (the restore or the Init snapshot replaced them), and so are stamped
-  // events posted before the last Init (their frames counted from the replaced engine).
+  // Init are dropped (the restore or the Init snapshot replaced them).
   uint32_t                                    generationFloor_ = 0;
-  uint32_t                                    initGeneration_  = 0;
 
-  // Audio thread: drained events, split by same-frame rank, events stamped for later
-  // frames (sorted by frame, then arrival), and the values sent.
+  // Stamps count on one engine timeline, from frame 0 at the last Init or restart.
+  std::atomic<uint32_t> timeline_{0};
+  uint64_t              framePos_ = 0;  // audio thread: the timeline's next frame
+
+  // Audio thread: live events waiting for the next block's first frame (they collect over
+  // zero-frame calls), events stamped for later frames (sorted by frame, then arrival),
+  // the block events of one Process call, and the values sent.
   std::array<WrapperEvent, WrapperQueue::capacity()> hostEvents_{};
   std::array<WrapperEvent, WrapperQueue::capacity()> uiEvents_{};
   std::array<WrapperEvent, WrapperQueue::capacity()> pending_{};
   size_t                                             hostCount_ = 0, uiCount_ = 0, pendingCount_ = 0;
-  uint64_t                                           framePos_ = 0;  // engine frames since Init
-  std::array<float, kNumParams>                      sent_{};
+  std::vector<Engine::BlockEvent>                    blockEvents_;
+  size_t                                             numBlockEvents_ = 0;
+  uint32_t                                           seq_            = 0;
+  Values                                             sent_{};
   uint32_t                                           touched_ = 0;  // bit per ParamId - 1
+  bool                                               resync_  = false;  // re-send the mirrors
+
+  // Transport starts (§4.9 c): armed by a non-playing block, prepareToPlay or a switch
+  // to offline.
+  std::atomic<bool>           restartOnStart_{false};
+  std::atomic<bool>           armRequest_{true};
+  std::atomic<bool>           offline_{false};  // what setNonRealtime last said
+  bool                        startArmed_ = true;  // audio thread
+  std::atomic<TransportStart> lastStart_{TransportStart::None};
+
+  // The spare's worker. spareState_ says who may touch spare_: the worker while Empty,
+  // Preparing or Retired, the audio thread while Swapping; Ready hands it to whichever
+  // claims it first.
+  std::atomic<int>        spareState_{0};
+  Values                  spareSnapshot_{};  // worker: what the Ready spare was loaded with
+  Values                  lastSnapshot_{};   // worker: the preset at its previous pass
+  // For the status: hashes of the Ready spare's preset and of the values sent to the live
+  // engine.
+  std::atomic<uint64_t>   spareHash_{0}, sentHash_{0};
+  std::mutex              spareMutex_;       // held through each worker pass and InitEngine
+  std::condition_variable spareWake_;
+  bool                    spareQuit_ = false;  // under spareMutex_
+  std::once_flag          spareOnce_;
+  std::thread             spareThread_;
 
   // Audio thread scratch: sanitized engine input and the right output of a mono bus.
   std::array<float, kMaxChunk> inL_{}, inR_{}, outRScratch_{};
@@ -157,9 +234,11 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<int>      lastHostBlock_{0}, maxHostBlock_{0};
   std::atomic<bool>     lastLoadInexact_{false};
   std::atomic<uint32_t> onsets_{0};
+  std::atomic<uint64_t> engineCalls_{0};
   std::atomic<float>    inPeak_{0.f}, outPeak_{0.f};
 
-  TestInput testInput_;
+  TestInput   testInput_;
+  AuditionJob audition_;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrainscapeProcessor)
 };

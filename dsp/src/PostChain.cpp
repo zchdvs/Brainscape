@@ -82,14 +82,18 @@ void FeedbackTamer::Init(float* warm, double sr) noexcept {
   hpCoef_ = LpCoef(100.0, sr);  // design §2.3: HP 80-120 Hz
   lpCoef_ = LpCoef(6000.0, sr);
   Reset();
-  for (auto& a : apL_) a.Clear();
-  for (auto& a : apR_) a.Clear();
+  ClearDiffusers();
 }
 
 void FeedbackTamer::Reset() noexcept {
   // RT-safe: filter states only (the diffuser buffers are ~4 KiB and cleared at
-  // Init; stale content decays through the loop naturally).
+  // Init and Restart; stale content decays through the loop naturally).
   dcL_ = dcR_ = hpL_ = hpR_ = lpL_ = lpR_ = 0.f;
+}
+
+void FeedbackTamer::ClearDiffusers() noexcept {
+  for (auto& a : apL_) a.Clear();
+  for (auto& a : apR_) a.Clear();
 }
 
 void FeedbackTamer::SetFeedback(float fbAmount, double sr) noexcept {

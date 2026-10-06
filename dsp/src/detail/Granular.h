@@ -91,6 +91,8 @@ class GranularCore {
   }
 
   // Schedules and renders one block. wetL/wetR are overwritten (not accumulated).
+  // drawEpoch: random draws are keyed on absSample - drawEpoch (determinism profile
+  // §5.9); lifetimes and mark ages stay absolute.
   // ringFrameAtBlockStart: the ring frame where absSample's input is written.
   // frozen/frozenAnchor: design §2.4 — positions resolve against the pinned
   // anchor instead of the advancing write position, and POS_MARK uses only marks
@@ -98,8 +100,8 @@ class GranularCore {
   // relative to the live head. *frozenAnchor is in/out: re-anchor-on-wrap
   // updates it per sample.
   void Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
-               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
-               uint32_t numFrames, float* wetL, float* wetR) noexcept;
+               int64_t drawEpoch, uint32_t ringFrameAtBlockStart, bool frozen,
+               uint32_t* frozenAnchor, uint32_t numFrames, float* wetL, float* wetR) noexcept;
 
  private:
   struct Mark {
@@ -127,6 +129,7 @@ class GranularCore {
   uint32_t       mask_ = 0;
   uint32_t       blockRingStart_ = 0;  // ring frame of the block's first sample; read
                                        // only by the Debug write-ahead assertion
+  int64_t        drawEpoch_      = 0;  // this block's random-number epoch
   float          intervalRemaining_ = 1.0f;  // frames until the next scheduled birth
   Grain          grains_[kGranularMaxGrains]{};
   uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order

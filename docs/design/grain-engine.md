@@ -701,7 +701,7 @@ namespace modes {  // non-realtime, host-callable, never from Process
 | Methods | Context | Mechanism |
 |---|---|---|
 | `Process` | audio thread only | direct |
-| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | one producer per engine: the firmware control loop, or the desktop wrapper's audio-thread side; other threads post to that producer | lock-free SPSC event queue, 256 entries, carrying frame-stamped events that take effect at their exact frame inside `Process`; an overflow is counted, never coalesced, and a render with a nonzero count is outside the parity contract |
+| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | one producer per engine: the firmware control loop, or the desktop wrapper's audio-thread side; other threads post to that producer | lock-free SPSC event queue, 256 entries, carrying frame-stamped events that take effect at their exact frame inside `Process`; an overflow is counted, never coalesced, and a render with a nonzero count is outside the parity contract; a stamp below the last accepted one is refused and counted the same way, and the queue is cleared with every `Restart` |
 | `ConsumeOnsetCount`, `GetParam`, `ActiveModeInfo` | any thread | atomics / value copies |
 | `PublishMode` | non-RT thread | release-store publish; acquire-load in `Process`; the switch takes effect at its stamped frame (§5) |
 | `Init`, `Reset`*, `ClearHistory`, `ClearLooper`, `SaveState`, `LoadState`, `modes::*` | non-RT (`Reset` is RT-safe) | — |
@@ -726,13 +726,13 @@ instance ([companion-app.md](companion-app.md), "Canonical configuration and lif
 word around `Process` only. That header is gone. Its replacement is private,
 `dsp/src/detail/FpEnvGuard.h`: it writes the complete control word (round-to-nearest,
 gradual underflow, which keeps subnormals rather than flushing them to zero) and restores
-the caller's word on exit, on `Init`, `Reset`, `ClearHistory`, `Process`, `SetParam`,
-`PlanMemory`, `Canonicalize` and the exported taper and display functions whose results
-reach the engine (`PlainFromNormalized`, `NormalizedFromPlain`, `FormatPlain`). Each public
-entry point is a thin wrapper around a `BRAINSCAPE_FP_BODY` function, so no FP work can move
-across the control-word write; `Restart` and `LoadPreset` will follow the same pattern when
-they land ([determinism-profile.md](determinism-profile.md), "A full control-word guard on
-every engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
+the caller's word on exit, on `Init`, `Reset`, `Restart`, `ClearHistory`, `Process`,
+`SetParam`, `LoadPreset`, `PlanMemory`, `Canonicalize`, `CheckPreset` and the exported taper
+and display functions whose results reach the engine (`PlainFromNormalized`,
+`NormalizedFromPlain`, `FormatPlain`). Each public entry point is a thin wrapper around a
+`BRAINSCAPE_FP_BODY` function, so no FP work can move across the control-word write
+([determinism-profile.md](determinism-profile.md), "A full control-word guard on every
+engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
 rewrite").
 
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
@@ -760,7 +760,10 @@ boundaries.
    with every render split at the freeze event's frame; onsets that actually fire, asserted
    with `ConsumeOnsetCount() > 0`, so that `POS_MARK` and the onset trigger are exercised; a
    grain position on the far rail of the ring; and a freeze held past the re-anchor point.
-   Mid-render events in general are covered once frame-stamped event delivery lands.
+   Mid-render events in general are frame-stamped events, which `Process` applies by
+   splitting its block at their frames (determinism-profile.md, "Frame-stamped event
+   delivery"); the suite checks parameter, freeze, trigger and Spillover-load events at odd
+   frames against a wrapper that splits there, at block sizes 1 to 512.
    **Status: holds (fixed 2026-10-05).** The parity investigation found, on `main` at
    `e86e971`, three independent mechanisms that made output depend on the block grid, because
    a grain could read ring frames that `Process` had already written ahead of the live write
@@ -801,8 +804,8 @@ boundaries.
 
    *Replaced 2026-10-05 with the text of determinism-profile.md §2.6, verbatim.* **Status: not
    met by today's code; builds diverge** ([determinism-profile.md](determinism-profile.md),
-   "Why a tolerance is not enough"). The package compiler, `LoadPreset` and the exact-restart
-   state (`Restart`) do not exist yet. The contract's preconditions (same sound revision,
+   "Why a tolerance is not enough"). `LoadPreset` and the exact-restart state (`Restart`)
+   exist; the package compiler does not yet. The contract's preconditions (same sound revision,
    canonical `EngineConfig`, identical input bits and frame-stamped events, exact plain
    parameter values, execution inside the floating-point-environment guard) are listed in
    determinism-profile.md, "The parity contract"; independence from block size additionally

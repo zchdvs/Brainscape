@@ -141,6 +141,47 @@ int main(int argc, char* argv[]) {
           "hosted output equals the 48-frame engine reference (first difference L " +
               juce::String(static_cast<juce::int64>(FirstDiff(io.l, ref.l))) + ")");
     host->releaseResources();
+    host.reset();
+
+    // An offline export with "Restart on transport start" on, as a DAW drives one: the
+    // transport plays throughout, real time first, then the host switches to offline and
+    // the VST3 wrapper passes the mode with every block (setNonRealtime per block). The
+    // switch is the one transport start, so the export equals the reference from there.
+    struct Playing final : juce::AudioPlayHead {
+      juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo info;
+        info.setIsPlaying(true);
+        return info;
+      }
+    } playing;
+    host = formats.createPluginInstance(*types[0], 48000.0, 512, error);
+    Check(host != nullptr && host->setBusesLayout(layout), "a second instance, stereo");
+    if (host == nullptr) return 1;
+    state.settings.restartOnStart = true;
+    EncodeState(state, blob);
+    Check(SetComponentState(*host, blob), "restart on transport start restored on");
+    host->setPlayHead(&playing);
+    host->prepareToPlay(48000.0, 512);
+    const auto render = [&](Stereo& s) {
+      for (size_t p = 0; p < s.l.size();) {
+        const size_t             n        = std::min<size_t>(512, s.l.size() - p);
+        float*                   chans[2] = {s.l.data() + p, s.r.data() + p};
+        juce::AudioBuffer<float> buffer(chans, 2, static_cast<int>(n));
+        midi.clear();
+        host->processBlock(buffer, midi);
+        p += n;
+      }
+    };
+    Stereo preroll = MakeInput(30011);
+    render(preroll);
+    host->setNonRealtime(true);
+    Stereo exported = in;
+    render(exported);
+    Check(SameBits(exported.l, ref.l) && SameBits(exported.r, ref.r),
+          "an offline export restarts once, at its start: equals the reference (first difference L " +
+              juce::String(static_cast<juce::int64>(FirstDiff(exported.l, ref.l))) + ")");
+    host->setPlayHead(nullptr);
+    host->releaseResources();
   }
   juce::DeletedAtShutdown::deleteAll();
   juce::MessageManager::deleteInstance();

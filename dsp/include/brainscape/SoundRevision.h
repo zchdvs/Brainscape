@@ -15,4 +15,18 @@ namespace brainscape {
 // refuses to mint.
 inline constexpr uint32_t kSoundRevision = 0;
 
+// The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
+// target and the floating-point flags. For triage only, carried in the parity reply and
+// in golden reports: identity is the sound revision, and every conforming toolchain
+// produces the same output.
+struct ToolchainId {
+  const char* compiler;     // "msvc", "gcc", "clang" or "appleclang"
+  const char* version;      // the compiler's own version string
+  const char* target;       // architecture and system, e.g. "x86_64-linux", "armv7e-m-none"
+  const char* fpFlags;      // the profile's flags and the FP and target flags of the
+                            // build configuration, as CMake passed them
+  const char* fpFlagsHash;  // SHA-256 of fpFlags, first 16 hex digits
+};
+const ToolchainId& BuildToolchain() noexcept;
+
 }  // namespace brainscape

@@ -1,9 +1,12 @@
 // Renders the editor offscreen (Component::createComponentSnapshot) to PNG files, so the
 // layout can be checked without a display: default, minimum and large sizes, a HiDPI
-// frame, and a frame at 44.1 kHz with freeze engaged.
+// frame, a frame at 44.1 kHz with freeze engaged and the restart option on, and the
+// Standalone's editor after an audition render.
 //   brainscape_editor_snapshot <output directory>
+#include <chrono>
 #include <cstdio>
 #include <memory>
+#include <thread>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -82,9 +85,35 @@ int main(int argc, char* argv[]) {
 
   proc.prepareToPlay(44100.0, 441);
   proc.Freeze().setValueNotifyingHost(1.0f);
+  WrapperSettings settings = proc.GetSettings();
+  settings.restartOnStart  = true;
+  proc.SetSettings(settings);
   Play(proc, 44100.0, 0.5);
   ok &= Snapshot(*editor, dir, "editor-44k1-frozen", BrainscapeEditor::kDefaultWidth,
                  BrainscapeEditor::kDefaultHeight);
   owned.reset();
+
+  // The Standalone's test-input panel offers the audition render instead.
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Standalone);
+  BrainscapeProcessor app;
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+  app.prepareToPlay(48000.0, 480);
+  app.GetTestInput().SetSource(TestInput::Source::Pluck);
+  app.Param(ParamId::PitchSt).SetPlainNotifyingHost(7.0f);
+  app.Param(ParamId::ReverbMix).SetPlainNotifyingHost(0.3f);
+  const juce::File take = dir.getChildFile("audition-take.wav");
+  juce::String     error;
+  ok &= app.StartAudition(take, error);
+  for (int i = 0; i < 3000 && app.GetAudition().state == AuditionJob::State::Running; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ok &= app.GetAudition().state == AuditionJob::State::Done;
+  std::unique_ptr<juce::AudioProcessorEditor> appOwned(app.createEditor());
+  auto* appEditor = dynamic_cast<BrainscapeEditor*>(appOwned.get());
+  if (appEditor == nullptr) return 1;
+  Play(app, 48000.0, 0.5);
+  ok &= Snapshot(*appEditor, dir, "editor-standalone-audition", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  appOwned.reset();
   return ok ? 0 : 1;
 }

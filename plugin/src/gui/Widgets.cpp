@@ -358,15 +358,18 @@ void StatusBar::Set(const BrainscapeProcessor::Status& status, const WrapperSett
                        status.lastHostBlock != status_.lastHostBlock ||
                        status.droppedEvents != status_.droppedEvents ||
                        status.lastLoadInexact != status_.lastLoadInexact ||
+                       status.restartOnStart != status_.restartOnStart ||
+                       status.lastStart != status_.lastStart ||
                        settings.inputMode != settings_.inputMode;
   status_   = status;
   settings_ = settings;
   if (!changed) return;
   setTooltip(status_.pedalRate
-                 ? "The engine runs at the pedal's 48 kHz on the host's buffers. Until the "
-                   "block-split fix lands, identity with the pedal is promised only on the 48-frame "
-                   "pedal grid, which this build does not offer yet; live input and automation are "
-                   "outside the parity contract (companion-app.md, section 2.3)."
+                 ? "The engine runs at the pedal's 48 kHz on the host's buffers, with every event "
+                   "at its exact frame. A render from a restarted engine is identical to the "
+                   "pedal's: the Standalone's audition, or a bounce with Restart on play. Live "
+                   "input and automation are outside the parity contract (companion-app.md, "
+                   "sections 2.3 and 4.9)."
                  : "The pedal runs only at 48 kHz. At this host rate the engine runs natively, so "
                    "delay times and pitch are close but not identical; the resampled 48 kHz mode "
                    "is still to come (companion-app.md, section 4.2).");
@@ -416,12 +419,18 @@ void StatusBar::paint(juce::Graphics& g) {
            << "   Host block " << status_.lastHostBlock << " (engine chunks " << kLeq << " 512)";
   }
   detail << "   " << kDot << "   Input " << (settings_.inputMode == InputMode::Mono ? "mono (R = L)" : "stereo");
+  if (status_.restartOnStart) detail << "   " << kDot << "   Restart on play";
   g.setFont(UiFont(13.0f * scale_));
   g.setColour(palette::kTextDim);
-  const juce::String right =
-      status_.droppedEvents > 0u
-          ? juce::String(status_.droppedEvents) + " control events lost"
-          : (status_.lastLoadInexact ? juce::String("Last state load was inexact") : juce::String());
+  juce::String right;
+  if (status_.droppedEvents > 0u) {
+    right = juce::String(status_.droppedEvents) + " control events lost";
+  } else if (status_.restartOnStart &&
+             status_.lastStart == BrainscapeProcessor::TransportStart::SpareNotReady) {
+    right = "Last start not restarted";
+  } else if (status_.lastLoadInexact) {
+    right = "Last state load was inexact";
+  }
   auto rightArea = r.removeFromRight(right.isEmpty() ? 0 : Scaled(240, scale_));
   g.drawText(detail, r, juce::Justification::centredLeft, true);
   if (right.isNotEmpty()) {
@@ -439,7 +448,9 @@ void TestInputPanel::StyleSegment(juce::TextButton& b, int group, juce::Colour o
   b.setColour(juce::TextButton::textColourOnId, palette::kBackground);
 }
 
-TestInputPanel::TestInputPanel(BrainscapeProcessor& processor) : processor_(processor) {
+TestInputPanel::TestInputPanel(BrainscapeProcessor& processor)
+    : processor_(processor),
+      standalone_(processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
   const auto accent = palette::kWarn;
   for (auto* b : {&live_, &file_, &pluck_}) {
     StyleSegment(*b, 1, accent);
@@ -488,6 +499,30 @@ TestInputPanel::TestInputPanel(BrainscapeProcessor& processor) : processor_(proc
   modeCaption_.setJustificationType(juce::Justification::centredLeft);
   addAndMakeVisible(modeCaption_);
 
+  // Reproducible renders (companion §4.9): the app renders offline; a plugin restarts its
+  // engine at each transport start.
+  if (standalone_) {
+    audition_.onClick = [this] { ChooseAuditionFile(); };
+    audition_.setTooltip("Render the test input (the loaded file in File loop, the plucks test signal "
+                         "otherwise) through the current preset on a restarted engine at 48 kHz, into a "
+                         "32-bit float WAV with a recipe file beside it.");
+    addAndMakeVisible(audition_);
+  } else {
+    restartOnPlay_.setClickingTogglesState(true);
+    restartOnPlay_.setColour(juce::TextButton::buttonOnColourId, palette::kIce);
+    restartOnPlay_.setColour(juce::TextButton::textColourOnId, palette::kBackground);
+    restartOnPlay_.onClick = [this] { PushSettings(); };
+    restartOnPlay_.setTooltip("Restart the engine with the current preset at every transport start, so "
+                              "two bounces of one passage are identical (and, at 48 kHz without "
+                              "automation, identical to the pedal). Off: trails continue across stops.");
+    addAndMakeVisible(restartOnPlay_);
+  }
+  renderNote_.setFont(UiFont(12.5f));
+  renderNote_.setJustificationType(juce::Justification::centredLeft);
+  renderNote_.setMinimumHorizontalScale(0.7f);
+  renderNote_.setInterceptsMouseClicks(false, false);
+  addAndMakeVisible(renderNote_);
+
   for (auto* s : {&inLevel_, &outLevel_}) {
     s->setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -519,8 +554,27 @@ void TestInputPanel::PushSettings() {
   s.inputMode       = stereo_.getToggleState() ? InputMode::Stereo : InputMode::Mono;
   s.inputGainDb     = static_cast<float>(inLevel_.getValue());
   s.outputGainDb    = static_cast<float>(outLevel_.getValue());
+  if (!standalone_) s.restartOnStart = restartOnPlay_.getToggleState();
   processor_.SetSettings(s);
   Refresh();
+}
+
+void TestInputPanel::ChooseAuditionFile() {
+  chooser_ = std::make_unique<juce::FileChooser>(
+      "Render the audition to a WAV file",
+      juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("brainscape-audition.wav"),
+      "*.wav");
+  chooser_->launchAsync(
+      juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
+          juce::FileBrowserComponent::warnAboutOverwriting,
+      [safe = juce::Component::SafePointer<TestInputPanel>(this)](const juce::FileChooser& fc) {
+        if (safe == nullptr || fc.getResult() == juce::File()) return;
+        juce::String error;
+        if (!safe->processor_.StartAudition(fc.getResult().withFileExtension(".wav"), error)) {
+          safe->renderNote_.setText(error, juce::dontSendNotification);
+        }
+        safe->Refresh();
+      });
 }
 
 void TestInputPanel::ChooseFile() {
@@ -569,12 +623,30 @@ void TestInputPanel::Refresh() {
   if (!outLevel_.isMouseButtonDown()) outLevel_.setValue(s.outputGainDb, juce::dontSendNotification);
   inValue_.setText(DbText(static_cast<float>(inLevel_.getValue())), juce::dontSendNotification);
   outValue_.setText(DbText(static_cast<float>(outLevel_.getValue())), juce::dontSendNotification);
+
+  juce::String note;
+  juce::Colour colour = palette::kTextFaint;
+  if (standalone_) {
+    const AuditionJob::Result r = processor_.GetAudition();
+    audition_.setEnabled(r.state != AuditionJob::State::Running);
+    note   = r.state == AuditionJob::State::Idle ? juce::String("48 kHz, from a restart") : r.message;
+    colour = r.state == AuditionJob::State::Failed    ? palette::kBad
+             : r.state == AuditionJob::State::Running ? palette::kWarn
+             : r.state == AuditionJob::State::Done    ? palette::kText
+                                                      : palette::kTextFaint;
+  } else {
+    restartOnPlay_.setToggleState(s.restartOnStart, juce::dontSendNotification);
+    note = s.restartOnStart ? "bounces start from a restart" : "trails continue across stops";
+  }
+  if (note != renderNote_.getText()) renderNote_.setText(note, juce::dontSendNotification);
+  renderNote_.setColour(juce::Label::textColourId, colour);
 }
 
 void TestInputPanel::SetScale(float scale) {
   if (scale == scale_) return;
   scale_ = scale;
   fileName_.setFont(UiFont(13.0f * scale));
+  renderNote_.setFont(UiFont(12.5f * scale));
   for (auto* l : {&modeCaption_, &inCaption_, &outCaption_}) l->setFont(UiFont(13.0f * scale));
   for (auto* l : {&inValue_, &outValue_}) l->setFont(UiFont(13.5f * scale));
   resized();
@@ -604,14 +676,16 @@ void TestInputPanel::resized() {
   placeKnob(levels.removeFromLeft(knobW), inLevel_, inCaption_, inValue_);
   placeKnob(levels, outLevel_, outCaption_, outValue_);
 
-  const int rowH = juce::jlimit(24, Scaled(30, scale_), (r.getHeight() - 16) / 3);
-  const int gap  = std::max(4, (r.getHeight() - 3 * rowH) / 4);
+  const int rowH = juce::jlimit(22, Scaled(30, scale_), (r.getHeight() - 20) / 4);
+  const int gap  = std::max(3, (r.getHeight() - 4 * rowH) / 5);
   r.removeFromTop(gap);
   auto row1 = r.removeFromTop(rowH);
   r.removeFromTop(gap);
   auto row2 = r.removeFromTop(rowH);
   r.removeFromTop(gap);
   auto row3 = r.removeFromTop(rowH);
+  r.removeFromTop(gap);
+  auto row4 = r.removeFromTop(rowH);
 
   const int segW = (row1.getWidth() - 8) / 3;
   live_.setBounds(row1.removeFromLeft(segW));
@@ -629,6 +703,11 @@ void TestInputPanel::resized() {
   mono_.setBounds(row3.removeFromLeft(modeW));
   row3.removeFromLeft(4);
   stereo_.setBounds(row3);
+
+  auto& renderButton = standalone_ ? audition_ : restartOnPlay_;
+  renderButton.setBounds(row4.removeFromLeft(std::min(Scaled(140, scale_), row4.getWidth() / 2)));
+  row4.removeFromLeft(8);
+  renderNote_.setBounds(row4);
 }
 
 }  // namespace brainscape::plugin

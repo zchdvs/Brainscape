@@ -12,16 +12,21 @@ namespace brainscape::plugin {
 struct WrapperEvent {
   enum class Type : uint8_t { Param, Freeze, Trigger };
   // Same-frame order is state load, host automation, MIDI, UI; Source is that rank.
-  enum class Source : uint8_t { Host = 1, Ui = 3 };
+  enum class Source : uint8_t { Host = 1, Midi = 2, Ui = 3 };
   Type     type   = Type::Param;
   Source   source = Source::Ui;
-  uint32_t id     = 0;    // ParamId for Type::Param
-  float    value  = 0.f;  // canonical plain value; 0/1 for Freeze
+  uint32_t id     = 0;    // ParamId for Type::Param; the TriggerSource for Type::Trigger
+  float    value  = 0.f;  // canonical plain value; 0/1 for Freeze; velocity for Trigger
   // Set by EventSink::Post: the restore generation the event was posted in.
   uint32_t generation = 0;
-  // Absolute engine frame (frames since the last Init) the event applies at (companion
-  // §4.10). Live producers leave 0: a stamp at or before a block's first frame applies there.
+  // Absolute engine frame (frames since the last Init or restart) the event applies at
+  // (companion §4.10). Live producers leave 0: a stamp at or before a block's first frame
+  // applies there.
   uint64_t frame = 0;
+  // Scripted producers: the engine timeline the stamp counts in. A restart begins a new
+  // one, and stamps from an older one are void.
+  bool     scripted = false;
+  uint32_t timeline = 0;
 };
 
 #if defined(_MSC_VER)

@@ -733,6 +733,9 @@ parameters drained and smoothers snapped. `Restart` does not exist yet; the equi
 sequence of today's calls (`Reset`, `ClearHistory`, counter rebase, tamer buffer clear)
 reproduced a fresh `Init` bit for bit over 1,920,000 frames on four presets (**measured**
 [preset]). `Reset` stays real-time safe and keeps the counter; a DAW's `reset()` maps to it.
+On an engine that has rendered no frame since `Init`, `Restart` or `ClearHistory`, `Restart`
+skips the ring and post-buffer clears, which would only rewrite zeros: an Exact load before
+the first block costs what `Reset` does, so a wrapper may run it on its audio thread.
 
 **Cost.** Clearing about 17.5 MB of SDRAM takes 0.92 ms on the desktop (**measured** [host])
 and an **estimated 45–160 ms** on the M7 (floor 44 ms at the 400 MB/s peak of libDaisy's
@@ -800,7 +803,15 @@ amended in that section's threading table: a single-producer queue cannot serve 
 thread", so each engine has one producer — the pedal's control loop, or the desktop wrapper's
 audio thread fed by the wrapper's own queue (companion §4.7) [plan-of-record]; and an
 overflow is never coalesced but counted, and a render with a nonzero count is outside the
-contract, so scripted renders size queues to avoid it.
+contract, so scripted renders size queues to avoid it. A stamp below the last one accepted
+is refused and counted the same way, since it would apply out of order. `Restart` begins a
+new timeline at frame 0, so the queue is cleared with it and producers stamp from the
+restarted counter; and a Spillover event's staged preset is reused only once the queue
+reports the event retired (companion §6.1).
+
+Freeze is a level, not an edge: the events at one frame leave it on or off, so a release and
+a re-engage at one frame keep the pin, as `SetFreeze` between split blocks does. A Spillover
+load turns it off at once, so a freeze after the load at its frame pins anew.
 
 On the pedal, pot (after soft takeover), footswitch and MIDI events are stamped with the
 48-frame block start where they apply, and can be logged (§6.7); untouched pots emit nothing
@@ -842,7 +853,8 @@ pull request.
 ### 6.1 The golden-hash suite
 
 **Inputs:** generator vectors (plucks, soft notes, chords, dense onset bursts, silence,
-full-scale saturation) and a few committed guitar DI recordings on the 24-bit grid.
+full-scale saturation) and a few committed guitar DI recordings on the 24-bit grid, and one
+generator vector whose silent samples are subnormals instead (§6.4).
 
 **Presets:** every factory preset, plus coverage presets — maximum delay and spray; ±24 st;
 reverse 1.0; 1 ms grains at 64 voices; jitter 1; feedback 1.05–1.1 and feedback decaying to
@@ -925,14 +937,20 @@ These must still reproduce the golden hashes:
 
 - a hostile host environment before every entry, `SetParam` included (x86 FTZ|DAZ, Arm FZ|DN,
   each with round-toward-zero);
-- flushing forced on inside the guard by a test-only option (FTZ|DAZ, or FZ on the M7 leg).
-  This control holds for golden vectors, not for every canonical input: inputs stay on the
-  24-bit grid (DAZ zeroes a subnormal dry sample), and the golden script rejects a preset with
+- flushing forced on inside the guard by a test-only option (FTZ|DAZ, or FZ on the M7 leg;
+  on the host, `brainscape_golden_flush --force-flush-control`, the `golden_forced_flush`
+  test). This control holds for golden vectors on the 24-bit grid, not for every canonical
+  input: DAZ zeroes a subnormal dry sample, and the golden script rejects a preset with
   any nonzero parameter value below 2⁻²⁴ in magnitude. A tiny gain times a tail-level signal
   is subnormal: Mix = 1e-30 flagged 21.6 % of tail blocks and changed the forced render, while
   every gain at 2⁻²⁴ left none flagged and the renders identical (**measured**, engine
   review). Parity itself holds for any canonical value, since every conforming build runs
-  gradual underflow;
+  gradual underflow. So one vector, `plucks_subnormal_6s`, is off the grid on purpose: its
+  silent input samples are subnormals and its presets must output subnormals, which no
+  flushing mode can produce. Forced flushing must change it, and its hostile-environment
+  renders, the M7's included, fail when the guard lets a caller's flush bit through; without
+  it a guard that kept the caller's FTZ|DAZ reproduced every preset (**measured**, adoption
+  review);
 - block sizes {1, 7, 32, 37, 48, 64, 127, 512}, the pattern {48, 1, 127, 32}, random sizes
   1–512 and host blocks up to 8,192 through the wrapper's chunker, split at event frames —
   after §5.7's fix; until then the 48-frame grid only;

@@ -90,6 +90,14 @@ jobs:
         run: |
           BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)
           "$BIN" --no-ablate --block 512 --tag "$LEG" --report "parity-report/$LEG-b512.json"
+      # Profile §6.4: the whole corpus rendered from a thread whose control word is FTZ|DAZ
+      # (Arm FZ|DN) with round toward zero must match the clean run; the engine's guard
+      # owns the word at every entry point, Init included.
+      - name: Render under a hostile caller FP environment (report-only)
+        continue-on-error: true
+        run: |
+          BIN=$(find build -type f \( -name brainscape_golden -o -name brainscape_golden.exe \) | head -n 1)
+          "$BIN" --no-ablate --fp-env hostile --tag "$LEG" --report "parity-report/$LEG-hostile.json"
       - name: Render at the other block sizes of profile §6.4 (report-only)
         if: matrix.leg == 'linux-x64-gcc'
         continue-on-error: true
@@ -99,6 +107,20 @@ jobs:
             "$BIN" --no-ablate --pattern "$b" --tag "$LEG" --report "parity-report/$LEG-b${b//,/-}.json" ||
               echo "blocks $b: exit $?"
           done
+      # Profile §5.11 and §5.8: the same events applied by a wrapper that splits blocks at
+      # their frames, and an engine Init'd per render instead of restarted, must render
+      # the canonical run's bits.
+      - name: Render with wrapper-side event splitting and fresh engines (report-only)
+        if: matrix.leg == 'linux-x64-gcc'
+        continue-on-error: true
+        run: |
+          BIN=$(find build -type f -name brainscape_golden | head -n 1)
+          for b in 48 512; do
+            "$BIN" --no-ablate --delivery split --pattern "$b" --tag "$LEG" \
+              --report "parity-report/$LEG-split-b$b.json" || echo "split blocks $b: exit $?"
+          done
+          "$BIN" --no-ablate --fresh-engine --tag "$LEG" --report "parity-report/$LEG-fresh.json" ||
+            echo "fresh engine: exit $?"
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
@@ -186,6 +208,12 @@ jobs:
           qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf \
             --mode "$MODE" --no-ablate --tag m7-qemu --report parity-report/m7-qemu.json \
             --note "archiveSha256=$ARCHIVE_SHA256" --note "emulator=$EMULATOR"
+      # Profile §6.4 on the M7: FPSCR = FZ|DN with round toward zero in the calling code.
+      - name: Render under a hostile caller FPSCR (report-only)
+        continue-on-error: true
+        run: |
+          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_golden.elf \
+            --no-ablate --fp-env hostile --tag m7-qemu --report parity-report/m7-qemu-hostile.json
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4

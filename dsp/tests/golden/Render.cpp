@@ -4,6 +4,7 @@
 #include <cstring>
 #include <memory>
 
+#include "../FpEnvTestUtil.h"
 #include "EventScript.h"
 #include "Sha256.h"
 #include "brainscape/Engine.h"
@@ -16,7 +17,53 @@ constexpr int64_t kSecond      = 48000;
 constexpr int64_t kPedalBlock  = 48;
 constexpr float   kActiveLevel = 0x1p-16f;  // about -96 dBFS
 
+// The control word's mode bits: what a guarded call must hand back to its caller. The
+// status bits change with the caller's own arithmetic (x86 MXCSR flags; FPSCR's cumulative
+// flags and the NZCV of its comparisons on the M7).
+#if defined(BRAINSCAPE_FPENV_ARM32)
+constexpr detail::FpWord kModeMask = ~(detail::kFpFlagBits | 0xF0000000u);
+#elif defined(BRAINSCAPE_FPENV_AARCH64)
+constexpr detail::FpWord kModeMask = ~detail::FpWord{0};  // FPCR holds no status bits
+#else
+constexpr detail::FpWord kModeMask = ~detail::kFpFlagBits;
+#endif
+
 int64_t& At(RenderOutput* out, Counter c) { return out->counters[static_cast<size_t>(c)]; }
+
+bool Nonzero(float x) {  // on the bits: DAZ makes a subnormal compare equal to 0
+  uint32_t u;
+  std::memcpy(&u, &x, sizeof u);
+  return (u & 0x7FFFFFFFu) != 0;
+}
+
+bool Subnormal(float x) {
+  uint32_t u;
+  std::memcpy(&u, &x, sizeof u);
+  return (u & 0x7F800000u) == 0 && (u & 0x007FFFFFu) != 0;
+}
+
+// ±k·2^-149, k in [1, 2^23): built from bits, so no FP mode can change it.
+float SubnormalNoise(int64_t frame, uint32_t channel) {
+  const uint32_t h    = testsignal::SplitMix32(0x5B0A0000u + channel, static_cast<uint32_t>(frame));
+  const uint32_t bits = (h & 0x80000000u) | (h & 0x007FFFFFu) | 1u;
+  float          x;
+  std::memcpy(&x, &bits, sizeof x);
+  return x;
+}
+
+// The vector's input for frames [frame, frame + n): the generator's samples (q: their Q23
+// values), with subnormal noise in place of exact zeros for a subnormal-input vector.
+void RenderInput(const VectorCase& v, testsignal::Generator& gen, int64_t frame, uint32_t n,
+                 int32_t* qL, int32_t* qR, float* l, float* r) {
+  gen.RenderQ23(qL, qR, n);
+  for (uint32_t i = 0; i < n; ++i) {
+    l[i] = testsignal::Q23ToFloat(qL[i]);
+    r[i] = testsignal::Q23ToFloat(qR[i]);
+    if (!v.subnormalInput) continue;
+    if (qL[i] == 0) l[i] = SubnormalNoise(frame + i, 0);
+    if (qR[i] == 0) r[i] = SubnormalNoise(frame + i, 1);
+  }
+}
 
 // How far behind its position's reference a grain can read, at the parameter maxima
 // (profile §6.4): base delay, spray, an attack offset and the read span L * (1 + r)
@@ -42,11 +89,13 @@ void PackFrames(const float* l, const float* r, uint32_t n, uint8_t* bytes) {
   }
 }
 
-// Streams frames into the whole-render hash and the per-second hashes.
+// Streams frames into the whole-render hash, the per-second hashes and the hash of the
+// output since the last restart.
 class OutputHasher {
  public:
   void Add(const float* l, const float* r, uint32_t n) {
     PackFrames(l, r, n, bytes_);
+    segment_.Update(bytes_, 8u * n);
     uint32_t done = 0;
     while (done < n) {
       const int64_t toSecond = kSecond - frame_ % kSecond;
@@ -58,14 +107,16 @@ class OutputHasher {
       if (frame_ % kSecond == 0) seconds_.push_back(second_.Hex());
     }
   }
+  void Restart() { segment_.Reset(); }
   void Finish(RenderOutput* out) {
     if (frame_ % kSecond != 0) seconds_.push_back(second_.Hex());
     out->hash         = all_.Hex();
     out->secondHashes = std::move(seconds_);
+    if (out->restartFrame >= 0) out->restartHash = segment_.Hex();
   }
 
  private:
-  Sha256                   all_, second_;
+  Sha256                   all_, second_, segment_;
   std::vector<std::string> seconds_;
   int64_t                  frame_ = 0;
   uint8_t                  bytes_[512 * 8];
@@ -83,12 +134,13 @@ std::vector<testsignal::Note> VectorNotes(const VectorCase& v) {
 std::string InputHash(const VectorCase& v, const std::vector<testsignal::Note>& notes) {
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(notes.data(), static_cast<uint32_t>(notes.size()));
+  int32_t qL[512], qR[512];
   float   l[512], r[512];
   uint8_t bytes[512 * 8];
   Sha256  sha;
   for (uint32_t pos = 0; pos < v.frames;) {
     const uint32_t n = v.frames - pos < 512u ? v.frames - pos : 512u;
-    gen->Render(l, r, n);
+    RenderInput(v, *gen, pos, n, qL, qR, l, r);
     PackFrames(l, r, n, bytes);
     sha.Update(bytes, 8u * n);
     pos += n;
@@ -96,7 +148,10 @@ std::string InputHash(const VectorCase& v, const std::vector<testsignal::Note>& 
   return sha.Hex();
 }
 
-Renderer::Renderer(const RenderConfig& cfg) : cfg_(cfg) {
+Renderer::Renderer(const RenderConfig& cfg)
+    : cfg_(cfg),
+      queue_(std::make_unique<EventQueue>()),
+      blockEvents_(EventQueue::kCapacity) {
   EngineConfig ec;
   ec.historyFrames      = 1u << cfg_.historyLog2;
   const MemoryPlan plan = PlanMemory(ec);
@@ -119,70 +174,184 @@ Renderer::~Renderer() {
 }
 
 bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& notes,
-                      const PresetCase& p, RenderOutput* out, Capture* capture) {
+                      const PresetCase& p, RenderOutput* out, Capture* capture,
+                      int64_t inputStart) {
   *out = RenderOutput{};
   At(out, Counter::LastActiveFrame)  = -1;
   At(out, Counter::LastNonzeroFrame) = -1;
   if (!ok_) return false;
+  if (cfg_.fpEnv == FpEnv::Clean) return RenderIn(v, notes, p, out, capture, inputStart);
+  const testing::HostileFpScope scope(testing::kHostileFpWord);
+  const bool rendered = RenderIn(v, notes, p, out, capture, inputStart);
+  // Every guarded entry point restores the caller's word on return.
+  return rendered &&
+         (detail::ReadFpControl() & kModeMask) == (testing::kHostileFpWord & kModeMask);
+}
 
-  // Exact-restart state (profile §2.3 #3): every buffer zero, a fresh engine, then
-  // today's equivalent of LoadPreset(P, Exact): set every stored leaf, then Reset()
-  // drains them and snaps the smoothers.
-  for (size_t t = 0; t < kNumTiers; ++t) {
-    if (arenas_.base[t] != nullptr) std::memset(arenas_.base[t], 0, arenas_.bytes[t]);
-  }
+bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>& notes,
+                        const PresetCase& p, RenderOutput* out, Capture* capture,
+                        int64_t inputStart) {
+  // Exact-restart state (profile §2.3 #3), then LoadPreset(P, Exact). The engine is
+  // Init'd once and every render restarts it, so each render after the first checks
+  // that Restart returns a used engine to the state Init leaves.
   EngineConfig cfg;
   cfg.historyFrames = 1u << cfg_.historyLog2;
-  auto engine       = std::make_unique<Engine>();
-  if (!engine->Init(cfg, arenas_)) return false;
-  for (const auto& kv : p.params) engine->SetParam(kv.first, kv.second);
-  engine->Reset();
+  if (engine_ == nullptr || cfg_.freshEngine) {
+    for (size_t t = 0; t < kNumTiers; ++t) {
+      if (arenas_.base[t] != nullptr) std::memset(arenas_.base[t], 0, arenas_.bytes[t]);
+    }
+    engine_ = std::make_unique<Engine>();
+    if (!engine_->Init(cfg, arenas_)) {
+      engine_.reset();
+      return false;
+    }
+  }
+  Engine& engine = *engine_;
+  // Inexact presets are corpus bugs.
+  if (!engine.LoadPreset(*CompletePreset(p.params), LoadMode::Exact)) return false;
+  queue_->Clear();  // the load restarted the engine: a new timeline
+  StagedPresets staged;
+  for (const ParamList& s : p.script.Staged()) {
+    staged.push_back(CompletePreset(s));
+    if (!CheckPreset(*staged.back())) return false;
+  }
+  const auto stagedFeedback = [&staged](uint32_t i) {
+    return staged[i]->leaves[static_cast<uint32_t>(ParamId::Feedback) - 1u].value;
+  };
 
-  auto gen = std::make_unique<testsignal::Generator>();
+  const int64_t frames   = static_cast<int64_t>(v.frames) - inputStart;
+  const auto&   restarts = p.script.Restarts();
+  if (frames <= 0) return false;
+  for (const RestartPoint& r : restarts) {
+    if (r.frame <= 0 || r.frame >= frames) return false;
+  }
+
+  int32_t qL[512], qR[512];
+  float   inL[512], inR[512], outL[512], outR[512];
+  auto    gen = std::make_unique<testsignal::Generator>();
   gen->Start(notes.data(), static_cast<uint32_t>(notes.size()));
+  for (int64_t skip = inputStart; skip > 0;) {
+    const auto n = static_cast<uint32_t>(skip < 512 ? skip : 512);
+    gen->RenderQ23(qL, qR, n);
+    skip -= n;
+  }
   EventCursor  cursor(p.script.Events());
   OutputHasher hasher;
 
   const int64_t ring        = cfg.historyFrames;
   const int64_t reanchorAge = ring - ring / 4;  // GranularCore::Process's 3/4-ring rule
   const int64_t slack       = RingSlackFrames();
-  const int64_t frames      = v.frames;
+  // The first re-anchor, or the far guard measured from the pin if that is sooner.
+  const int64_t pinReach    = reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack;
   bool          frozen      = false;
+  bool          freezeLevel = false;  // what the events at the current frame leave
   int64_t       pinAbs      = 0;
+  float         feedback    = engine.GetParam(ParamId::Feedback);  // the smoother's target
   int64_t       reach       = slack >= ring ? 0 : frames;
   auto          reachBy     = [&reach](int64_t f) { reach = f < reach ? f : reach; };
+  int64_t       base        = 0;  // the render frame of the engine timeline's frame 0
+  size_t        nextRestart = 0;
 
-  int32_t qL[512], qR[512];
-  float   inL[512], inR[512], outL[512], outR[512];
   size_t  patternIdx = 0;
   int64_t gridEnd    = cfg_.blockPattern[0];
   for (int64_t pos = 0; pos < frames;) {
-    const Event* evs   = nullptr;
-    const uint32_t nev = cursor.Apply(*engine, pos, &evs);
-    for (uint32_t i = 0; i < nev; ++i) {
-      const Event& ev = evs[i];
-      ++At(out, Counter::Events);
-      if (ev.frame % kPedalBlock != 0) ++At(out, Counter::OffGridEvents);
-      if (ev.type == EventType::Trigger) ++At(out, Counter::Triggers);
-      if (ev.type == EventType::Freeze) {
-        const bool on = ev.value != 0.f;
-        if (on && !frozen) {
-          ++At(out, Counter::FreezeEngages);
-          pinAbs = pos;
-        }
-        frozen = on;
+    // A restart before the events stamped at its frame. It begins a new engine timeline, so
+    // the queue is cleared with it and later stamps count from here.
+    for (; nextRestart < restarts.size() && restarts[nextRestart].frame == pos; ++nextRestart) {
+      const RestartPoint& r = restarts[nextRestart];
+      if (r.load) {
+        if (!engine.LoadPreset(*staged[r.staged], LoadMode::Exact)) return false;
+        feedback = stagedFeedback(r.staged);
+      } else {
+        engine.Restart();
       }
+      queue_->Clear();
+      base        = pos;
+      frozen      = false;
+      freezeLevel = false;
+      ++At(out, Counter::Restarts);
+      out->restartFrame = pos;
+      hasher.Restart();
     }
-    const float feedback = engine->GetParam(ParamId::Feedback);  // the target from here on
-
     int64_t end = gridEnd < frames ? gridEnd : frames;  // clamp to what remains
-    end         = cursor.BlockEnd(pos, end);
+    if (nextRestart < restarts.size() && restarts[nextRestart].frame < end) {
+      end = restarts[nextRestart].frame;
+    }
+    // Onsets are reported at hop boundaries (engine frames 256k - 1) and counted per block,
+    // so a block whose hop boundaries straddle a freeze toggle could not say which were
+    // frozen: it ends at the toggle. Output is block-split invariant, so only counting
+    // sees this cut. Split delivery cuts at every event anyway.
+    const int64_t enginePos = pos - base;
+    const int64_t firstHop  = base + enginePos + 255 - (enginePos & 255);
+    const int64_t lastHop   = base + ((end - base) & ~int64_t{255}) - 1;
+    if (cfg_.delivery == Delivery::Split) {
+      const int64_t next = cursor.NextAfter(pos);
+      if (next < end) end = next;
+    } else if (firstHop < lastHop) {
+      const int64_t toggle = cursor.NextFreeze(firstHop, lastHop);
+      if (toggle < end) end = toggle;
+    }
     const auto n = static_cast<uint32_t>(end - pos);
 
-    gen->RenderQ23(qL, qR, n);
+    // The block's events: their counters, and the frozen and feedback state of each
+    // stretch between them. Freeze is a level settled after each frame's events, as the
+    // engine settles it; a Spillover load's freeze-off is immediate.
+    const Event*   evs = nullptr;
+    const uint32_t nev = cursor.Take(end, &evs);
+    int64_t segStart        = pos;
+    bool    frozenAtHop     = false;
+    bool    frozenAtHopSeen = false;
+    auto    settleFreeze    = [&] {
+      if (freezeLevel && !frozen) {
+        ++At(out, Counter::FreezeEngages);
+        pinAbs = segStart;
+      }
+      frozen = freezeLevel;
+    };
+    auto closeSegment = [&](int64_t segEnd) {
+      settleFreeze();
+      if (frozen) {
+        At(out, Counter::FrozenFrames) += segEnd - segStart;
+        if (pinAbs + pinReach < segEnd) reachBy(pinAbs + pinReach);
+      }
+      if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += segEnd - segStart;
+      segStart = segEnd;
+    };
+    for (uint32_t i = 0; i < nev; ++i) {
+      const Event& ev = evs[i];
+      if (ev.frame > segStart) closeSegment(ev.frame);
+      if (ev.frame > firstHop && !frozenAtHopSeen) {
+        frozenAtHop     = frozen;
+        frozenAtHopSeen = true;
+      }
+      if (cfg_.delivery == Delivery::Split) {
+        ApplyUnstamped(engine, ev, staged);
+      } else if (!queue_->Push(ToEngineEvent(ev, base, staged))) {
+        return false;  // refused: outside the contract (profile §5.11)
+      }
+      ++At(out, Counter::Events);
+      if (ev.frame % kPedalBlock != 0) ++At(out, Counter::OffGridEvents);
+      switch (ev.type) {
+        case EventType::SetParam:
+          if (ev.id == static_cast<uint32_t>(ParamId::Feedback)) {
+            feedback = Canonicalize(ParamId::Feedback, ev.value);
+          }
+          break;
+        case EventType::Freeze: freezeLevel = ev.value != 0.f; break;
+        case EventType::Trigger: ++At(out, Counter::Triggers); break;
+        case EventType::SpilloverLoad:
+          ++At(out, Counter::Loads);
+          freezeLevel = false;
+          frozen      = false;
+          feedback    = stagedFeedback(ev.id);
+          break;
+      }
+    }
+    closeSegment(end);
+    if (!frozenAtHopSeen) frozenAtHop = frozen;
+
+    RenderInput(v, *gen, inputStart + pos, n, qL, qR, inL, inR);
     for (uint32_t i = 0; i < n; ++i) {
-      inL[i] = testsignal::Q23ToFloat(qL[i]);
-      inR[i] = testsignal::Q23ToFloat(qR[i]);
       if (qL[i] == testsignal::kQ23Max || qL[i] == testsignal::kQ23Min ||
           qR[i] == testsignal::kQ23Max || qR[i] == testsignal::kQ23Min) {
         ++At(out, Counter::InClipFrames);
@@ -195,37 +364,38 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     ctx.in        = ins;
     ctx.out       = outs;
     ctx.numFrames = n;
-    engine->Process(ctx);
+    if (cfg_.delivery == Delivery::Engine) {
+      // The transport hands the block every event it holds: the ones pushed above.
+      ctx.events    = blockEvents_.data();
+      ctx.numEvents = queue_->PopBlock(pos - base, n, blockEvents_.data(),
+                                       static_cast<uint32_t>(blockEvents_.size()));
+      if (ctx.numEvents != nev) return false;
+    }
+    engine.Process(ctx);
 
-    const uint32_t onsets = engine->ConsumeOnsetCount();
+    const uint32_t onsets = engine.ConsumeOnsetCount();
     if (onsets > 0) {
       At(out, Counter::Onsets) += onsets;
-      if (frozen) At(out, Counter::FrozenOnsets) += onsets;
+      if (frozenAtHop) At(out, Counter::FrozenOnsets) += onsets;
       if (out->firstOnsetBlock < 0) {
         out->firstOnsetBlock = pos;
         reachBy(pos + ring - slack);  // no mark is older than the first onset
       }
     }
-    if (frozen) {
-      At(out, Counter::FrozenFrames) += n;
-      // The first re-anchor, or the far guard measured from the pin if that is sooner.
-      const int64_t f = pinAbs + (reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack);
-      if (f < end) reachBy(f);
-    }
-    if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += n;
 
     for (uint32_t i = 0; i < n; ++i) {
       const float l = outL[i], r = outR[i];
       const bool  active =
           l > kActiveLevel || l < -kActiveLevel || r > kActiveLevel || r < -kActiveLevel;
-      const bool silent = qL[i] == 0 && qR[i] == 0;
+      const bool silent = !Nonzero(inL[i]) && !Nonzero(inR[i]);
       if (silent) ++At(out, Counter::SilentInFrames);
       if (active) {
         ++At(out, Counter::OutActiveFrames);
         if (silent) ++At(out, Counter::TailActiveFrames);
         At(out, Counter::LastActiveFrame) = pos + i;
       }
-      if (l != 0.f || r != 0.f) At(out, Counter::LastNonzeroFrame) = pos + i;
+      if (Nonzero(l) || Nonzero(r)) At(out, Counter::LastNonzeroFrame) = pos + i;
+      if (Subnormal(l) || Subnormal(r)) ++At(out, Counter::SubnormalOutFrames);
     }
     hasher.Add(outL, outR, n);
     if (capture != nullptr) {
@@ -236,6 +406,7 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     pos = end;
     if (pos == gridEnd) gridEnd += cfg_.blockPattern[++patternIdx % cfg_.blockPattern.size()];
   }
+  if (queue_->ConsumeRefused() != 0) return false;
 
   At(out, Counter::Frames) = frames;
   out->ringReachFrame      = reach;

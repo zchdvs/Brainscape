@@ -1,20 +1,35 @@
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "Corpus.h"
+#include "brainscape/Engine.h"
+#include "brainscape/EventQueue.h"
 #include "brainscape/Memory.h"
 
-// Renders one (vector, preset) pair through the current public Engine API from the
-// exact-restart state, hashing the output as it goes (docs/design/determinism-
-// profile.md §6.1: SHA-256 of the interleaved little-endian float32 output, plus one
-// per second) and counting coverage.
+// Renders one (vector, preset) pair through the public Engine API from the exact-restart
+// state, hashing the output as it goes (docs/design/determinism-profile.md §6.1: SHA-256
+// of the interleaved little-endian float32 output, plus one per second) and counting
+// coverage.
 namespace brainscape::golden {
+
+// The calling thread's floating-point control word during a render (profile §6.4). Clean
+// leaves the thread's default; Hostile installs FTZ|DAZ (Arm FZ|DN) with round toward zero
+// for the whole render, so every engine entry point, Init included, is entered from it, as
+// from a host thread that set it. The engine's guard must make that change nothing.
+enum class FpEnv : uint8_t { Clean, Hostile };
 
 struct RenderConfig {
   std::vector<uint32_t> blockPattern{48};  // grid from frame 0, repeated; each <= 512
   uint32_t              historyLog2 = 22;  // 2^22 is the canonical ring (profile §2.3)
+  Delivery              delivery    = Delivery::Engine;
+  // Init a new engine for every render instead of restarting one engine (Restart, by
+  // way of LoadPreset(..., Exact)). Both are the exact-restart state, so both must
+  // render the same bits.
+  bool                  freshEngine = false;
+  FpEnv                 fpEnv       = FpEnv::Clean;
 };
 
 struct RenderOutput {
@@ -25,6 +40,9 @@ struct RenderOutput {
   // The earliest frame at which the ring length can reach the output (profile §6.4:
   // the re-anchor, mark staleness, the far guard), or the render length if never.
   int64_t                  ringReachFrame = 0;
+  // The last restart mid-render and the hash of the output from it on, or -1.
+  int64_t                  restartFrame = -1;
+  std::string              restartHash;
 };
 
 // The output samples, kept only to write a WAV for a preset that misses its golden.
@@ -43,14 +61,23 @@ class Renderer {
   const RenderConfig& Config() const { return cfg_; }
   uint32_t HistoryFrames() const { return 1u << cfg_.historyLog2; }
 
+  // Renders the vector's input from frame `inputStart` on; the script's frames count from
+  // there.
   bool Render(const VectorCase& v, const std::vector<testsignal::Note>& notes,
-              const PresetCase& p, RenderOutput* out, Capture* capture = nullptr);
+              const PresetCase& p, RenderOutput* out, Capture* capture = nullptr,
+              int64_t inputStart = 0);
 
  private:
-  RenderConfig cfg_;
-  Arenas       arenas_{};
-  void*        raw_[kNumTiers] = {};
-  bool         ok_ = false;
+  bool RenderIn(const VectorCase& v, const std::vector<testsignal::Note>& notes,
+                const PresetCase& p, RenderOutput* out, Capture* capture, int64_t inputStart);
+
+  RenderConfig                     cfg_;
+  Arenas                           arenas_{};
+  void*                            raw_[kNumTiers] = {};
+  bool                             ok_ = false;
+  std::unique_ptr<Engine>          engine_;  // Init'd once unless freshEngine
+  std::unique_ptr<EventQueue>      queue_;   // the engine's event transport
+  std::vector<Engine::BlockEvent>  blockEvents_;
 };
 
 // SHA-256 of the vector's input, interleaved little-endian float32.

@@ -95,18 +95,19 @@ bool GrainFitsRing(const Grain& g, uint32_t bufLen) noexcept {
 void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                                  uint32_t anchorFrame, uint32_t liveFrame) noexcept {
   uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
+  const int64_t drawKey = birthAbs - drawEpoch_;
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment.
   float st = p.ratioBase;
   if (p.spreadCents > 0.f) {
-    st += (RandUnit(birthAbs, Draw::Detune) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
+    st += (RandUnit(drawKey, Draw::Detune) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
   }
   // Enforce the design's r_max = 4 ratio ceiling on the COMPOSED value — detune
   // on top of a maxed pitch otherwise exceeds what the guards/budgets assume.
   if (st > 24.f) st = 24.f;
   if (st < -24.f) st = -24.f;
   const float ratio   = grainmath::SemitonesToRatio(st);
-  const bool  reverse = p.reverseProb > 0.f && RandUnit(birthAbs, Draw::Reverse) < p.reverseProb;
+  const bool  reverse = p.reverseProb > 0.f && RandUnit(drawKey, Draw::Reverse) < p.reverseProb;
 
   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
   // recent eligible onset mark — the Strum family's mechanism, design §4).
@@ -168,7 +169,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     if (bounds.hi < bounds.lo) bounds.lo = bounds.hi;
   }
   if (p.sprayFrames > 0.f) {
-    d += static_cast<double>((RandUnit(birthAbs, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
+    d += static_cast<double>((RandUnit(drawKey, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
     d = grainmath::ReflectIntoBounds(d, bounds);
   } else {
     d = d < bounds.lo ? bounds.lo : (d > bounds.hi ? bounds.hi : d);
@@ -198,7 +199,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.tier       = slot < kHiFiGrains ? 0 : 1;
 
   // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
-  const float pan = 0.5f + p.panSpread * (RandUnit(birthAbs, Draw::Pan) - 0.5f);
+  const float pan = 0.5f + p.panSpread * (RandUnit(drawKey, Draw::Pan) - 0.5f);
   double panSin, panCos;
   detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &panSin, &panCos);
   g.gainL = static_cast<float>(panCos);
@@ -309,9 +310,11 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
 }
 
 void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
-                           uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
-                           uint32_t numFrames, float* wetL, float* wetR) noexcept {
+                           int64_t drawEpoch, uint32_t ringFrameAtBlockStart, bool frozen,
+                           uint32_t* frozenAnchor, uint32_t numFrames, float* wetL,
+                           float* wetR) noexcept {
   blockRingStart_ = ringFrameAtBlockStart;
+  drawEpoch_      = drawEpoch;
   for (uint32_t n = 0; n < numFrames; ++n) {
     wetL[n] = 0.f;
     wetR[n] = 0.f;
@@ -355,7 +358,8 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     // sample — a pre-loop fired them out of birth order relative to same-block
     // scheduler/onset births, breaking order_'s ascending-birth invariant that
     // both the canonical summation order and oldest-steal rely on (review
-    // finding). Sample-offset delivery lands with the SPSC event queue.
+    // finding). The Engine splits its block at every trigger event, so the block
+    // starts at the trigger's frame.
     if (n < ev.manualCount) {
       FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
     }
@@ -394,7 +398,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     // tremolo on coherent presets (review finding). Counter-keyed draw, so
     // split-invariant.
     uint32_t allowed = targetFloor;
-    if (targetFrac > 0.f && RandUnit(abs, Draw::Ceiling) < targetFrac) ++allowed;
+    if (targetFrac > 0.f && RandUnit(abs - drawEpoch, Draw::Ceiling) < targetFrac) ++allowed;
     if (allowed < 1u) allowed = 1u;
 
     if (sounding < allowed && slot != kGranularMaxGrains) {
@@ -409,7 +413,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
       // (Poisson) draw — Roads' synchronous<->asynchronous axis (design §4).
       float interval = spacing;
       if (p.jitter > 0.f) {
-        const float u   = RandUnit(abs, Draw::Interval);
+        const float u   = RandUnit(abs - drawEpoch, Draw::Interval);
         const float exp = -detmath::LogF(1.0f - u * 0.999f) * spacing;
         interval        = spacing + p.jitter * (exp - spacing);
       }
