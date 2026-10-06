@@ -28,12 +28,13 @@ uint32_t Bits(float v) {
   return u;
 }
 
-// The interleaved little-endian float32 bytes of a stereo signal, streamed into the hash
-// without a second copy of the signal.
+// The interleaved little-endian float32 bytes of frames [from, to) of a stereo signal,
+// streamed into the hash without a second copy of the signal.
 class InterleavedStream final : public juce::InputStream {
  public:
-  InterleavedStream(const std::vector<float>& l, const std::vector<float>& r) : l_(l), r_(r) {}
-  juce::int64 getTotalLength() override { return static_cast<juce::int64>(l_.size()) * 8; }
+  InterleavedStream(const std::vector<float>& l, const std::vector<float>& r, size_t from, size_t to)
+      : l_(l), r_(r), from_(from), frames_(to - from) {}
+  juce::int64 getTotalLength() override { return static_cast<juce::int64>(frames_) * 8; }
   bool        isExhausted() override { return pos_ >= getTotalLength(); }
   juce::int64 getPosition() override { return pos_; }
   bool        setPosition(juce::int64 p) override {
@@ -44,7 +45,7 @@ class InterleavedStream final : public juce::InputStream {
     auto* out = static_cast<uint8_t*>(dest);
     int   n   = 0;
     for (; n < maxBytes && pos_ < getTotalLength(); ++n, ++pos_) {
-      const auto     frame = static_cast<size_t>(pos_ / 8);
+      const auto     frame = from_ + static_cast<size_t>(pos_ / 8);
       const auto     byte  = static_cast<int>(pos_ % 8);
       const uint32_t u     = Bits(byte < 4 ? l_[frame] : r_[frame]);
       out[n]               = static_cast<uint8_t>(u >> (8 * (byte % 4)));
@@ -55,6 +56,7 @@ class InterleavedStream final : public juce::InputStream {
  private:
   const std::vector<float>& l_;
   const std::vector<float>& r_;
+  const size_t              from_, frames_;
   juce::int64               pos_ = 0;
 };
 
@@ -168,8 +170,17 @@ bool RenderAudition(const float* preset, InputMode mode, AuditionInput& input,
 }
 
 juce::String InterleavedSha256(const std::vector<float>& l, const std::vector<float>& r) {
-  InterleavedStream stream(l, r);
+  InterleavedStream stream(l, r, 0, l.size());
   return juce::SHA256(stream).toHexString();
+}
+
+juce::StringArray SegmentSha256(const std::vector<float>& l, const std::vector<float>& r) {
+  juce::StringArray hashes;
+  for (size_t from = 0; from < l.size(); from += Frames(1.0)) {
+    InterleavedStream stream(l, r, from, std::min(l.size(), from + Frames(1.0)));
+    hashes.add(juce::SHA256(stream).toHexString());
+  }
+  return hashes;
 }
 
 // ── AuditionJob ───────────────────────────────────────────────────────────────────────
@@ -261,6 +272,9 @@ void AuditionJob::Run(juce::File wav, std::vector<float> preset, InputMode mode,
   recipe->setProperty("input", juce::var(in.get()));
   recipe->setProperty("preset", PresetJson(preset));
   recipe->setProperty("outputSha256", r.outputSha256);
+  juce::Array<juce::var> segments;
+  for (const juce::String& h : SegmentSha256(out.l, out.r)) segments.add(h);
+  recipe->setProperty("outputSegmentSha256", segments);
   recipe->setProperty("identical", input.converted
                                        ? "on this machine only: the input was converted by platform code"
                                        : "on every conforming build of this sound revision");

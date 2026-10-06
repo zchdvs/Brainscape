@@ -135,7 +135,11 @@ void BrainscapeProcessor::prepareToPlay(double sampleRate, int maximumExpectedSa
 
 void BrainscapeProcessor::setNonRealtime(bool isNonRealtime) noexcept {
   AudioProcessor::setNonRealtime(isNonRealtime);
-  if (isNonRealtime) armRequest_.store(true, std::memory_order_relaxed);
+  // The VST3, VST2 and LV2 wrappers call this before every block: only the switch to
+  // offline arms a transport start.
+  if (!offline_.exchange(isNonRealtime, std::memory_order_relaxed) && isNonRealtime) {
+    armRequest_.store(true, std::memory_order_relaxed);
+  }
 }
 
 void BrainscapeProcessor::InitEngine(double sampleRate) {
@@ -321,7 +325,8 @@ void BrainscapeProcessor::PostStateUnit(const float* plain) noexcept {
 // A restore applies as one unit (§4.7): the decoded preset becomes a Spillover load at the
 // block's first frame, before the block's other events (profile §5.10, §5.11), so a preset
 // recalled while playing keeps its trails. Before anything has played since the last Init
-// or restart there are no trails, and the restore is the start state: an Exact load.
+// or restart there are no trails, and the restore is the start state: an Exact load, which
+// on an engine that has rendered nothing clears nothing (Engine::Restart), so it runs here.
 void BrainscapeProcessor::ApplyStateUnit() noexcept {
   const uint32_t seq = stateSeq_.load(std::memory_order_acquire);
   // Odd: a newer restore is being written, and every event drained this block is older
@@ -363,19 +368,40 @@ void BrainscapeProcessor::CheckTransportStart() noexcept {
 }
 
 void BrainscapeProcessor::RestartAtTransportStart() noexcept {
-  // The preset the engine plays (a restore this block included), loaded Exact.
+  // The values in effect at the block's first frame, loaded Exact: those sent (a restore
+  // this block included), then the block's live parameter events in their same-frame order
+  // (§4.7). Sent after the load instead, they would glide the smoothers from whatever the
+  // last playback left, and two bounces of one automated passage would differ. A stamp
+  // made before the restart is void, so scripted events stay out.
+  Values start = sent_;
+  for (const auto& live : {std::make_pair(hostEvents_.data(), hostCount_),
+                           std::make_pair(uiEvents_.data(), uiCount_)}) {
+    for (size_t k = 0; k < live.second; ++k) {
+      const WrapperEvent& e = live.first[k];
+      if (e.type != WrapperEvent::Type::Param || e.scripted || !Applies(e) || e.id < 1u ||
+          e.id > kNumParams) {
+        continue;
+      }
+      start[e.id - 1u] = e.value;
+    }
+  }
+  if (resync_) {  // the queue overflowed: the mirrors are the latest word
+    for (size_t i = 0; i < kNumParams; ++i) start[i] = params_[i]->Plain();
+  }
   bool restarted = false;
-  if (isNonRealtime()) {
-    // Offline: restart in place, about a millisecond (§4.9 a).
-    ToPreset(sent_.data(), *restore_);
+  // Offline, or with nothing played since the last Init or restart, restart in place (§4.9
+  // a): about a millisecond offline, and on an engine that has rendered nothing the load
+  // clears nothing (Engine::Restart), so real time can take it too.
+  if (isNonRealtime() || framePos_ == 0) {
+    ToPreset(start.data(), *restore_);
     live_->engine.LoadPreset(*restore_, LoadMode::Exact);
-    live_->preset = sent_;
+    live_->preset = start;
     restarted     = true;
   } else {
     // Real time never blocks (§4.9 b): swap in the spare if it holds this preset.
     int ready = kSpareReady;
     if (spareState_.compare_exchange_strong(ready, kSpareSwapping, std::memory_order_acq_rel)) {
-      if (SameBits(spare_->preset, sent_)) {
+      if (SameBits(spare_->preset, start)) {
         std::swap(live_, spare_);
         restarted = true;
       }
@@ -385,6 +411,8 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
   lastStart_.store(restarted ? TransportStart::Restarted : TransportStart::SpareNotReady,
                    std::memory_order_relaxed);
   if (!restarted) return;
+  // The block's live events still go out at its first frame: the parameter ones repeat
+  // what the load holds, and freeze is a level, so it lands as it would have.
   loadPending_ = false;  // the restore, if any, is part of the Exact load
   LoadAfterRestart();
 }
@@ -530,15 +558,18 @@ void BrainscapeProcessor::EmitPending(size_t from, size_t to, WrapperEvent::Sour
   }
 }
 
+// A parameter or freeze event posted before the last applied restore or Init lost to it
+// (§4.7: the restore arrived later), and a stamp made before a restart is void, late or
+// not. Events stamped for a later frame wait in pending_ and keep their frame order instead.
+bool BrainscapeProcessor::Applies(const WrapperEvent& e) const noexcept {
+  if (e.scripted && e.timeline != timeline_.load(std::memory_order_relaxed)) return false;
+  return e.type == WrapperEvent::Type::Trigger ||
+         static_cast<int32_t>(e.generation - generationFloor_) >= 0;
+}
+
 void BrainscapeProcessor::EmitLive(const WrapperEvent* events, size_t count, uint32_t offset) noexcept {
   for (size_t k = 0; k < count; ++k) {
-    // A parameter or freeze event posted before the last applied restore or Init lost to
-    // it (§4.7: the restore arrived later). Events stamped for a later frame wait in
-    // pending_ and keep their frame order instead.
-    const WrapperEvent& e = events[k];
-    const bool stale = e.type != WrapperEvent::Type::Trigger &&
-                       static_cast<int32_t>(e.generation - generationFloor_) < 0;
-    if (!stale) Emit(e, offset);
+    if (Applies(events[k])) Emit(events[k], offset);
   }
 }
 
@@ -577,7 +608,8 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
   EmitPending(*pending, runEnd, WrapperEvent::Source::Ui, offset);
   if (first) {
     EmitLive(uiEvents_.data(), uiCount_, offset);
-    if (sink_.TakeResync()) {  // the queue overflowed: re-send every mirror
+    if (resync_) {  // the queue overflowed: re-send every mirror
+      resync_ = false;
       for (size_t i = 0; i < kNumParams; ++i) {
         Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui,
               static_cast<uint32_t>(kParamTable[i].id), params_[i]->Plain()},
@@ -622,6 +654,7 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     buffer.clear();
     return;
   }
+  resync_ = sink_.TakeResync();
   ApplyStateUnit();
   CheckTransportStart();
 

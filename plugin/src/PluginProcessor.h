@@ -90,7 +90,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     bool     lastLoadInexact = false;
     bool           restartOnStart = false;
     // A spare engine restarted with the preset the live engine plays: a transport start
-    // now restarts.
+    // whose first block moves no parameter now restarts.
     bool           spareReady     = false;
     TransportStart lastStart      = TransportStart::None;
     uint64_t       engineCalls    = 0;  // Process calls since prepareToPlay: one per <= 512 frames
@@ -133,6 +133,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void     EmitDue(uint64_t frame, uint64_t blockStart, uint64_t chunkStart, size_t* pending,
                    const juce::MidiBuffer& midi, juce::MidiBufferIterator* midiIt, bool* frameZero) noexcept;
   void     EmitPending(size_t from, size_t to, WrapperEvent::Source rank, uint32_t offset) noexcept;
+  bool     Applies(const WrapperEvent& e) const noexcept;
   void     EmitLive(const WrapperEvent* events, size_t count, uint32_t offset) noexcept;
   void     Emit(const WrapperEvent& e, uint32_t offset) noexcept;
   void     Emit(const Engine::BlockEvent& e) noexcept;
@@ -194,11 +195,13 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   uint32_t                                           seq_            = 0;
   Values                                             sent_{};
   uint32_t                                           touched_ = 0;  // bit per ParamId - 1
+  bool                                               resync_  = false;  // re-send the mirrors
 
-  // Transport starts (§4.9 c): armed by a non-playing block, prepareToPlay or
-  // setNonRealtime(true).
+  // Transport starts (§4.9 c): armed by a non-playing block, prepareToPlay or a switch
+  // to offline.
   std::atomic<bool>           restartOnStart_{false};
   std::atomic<bool>           armRequest_{true};
+  std::atomic<bool>           offline_{false};  // what setNonRealtime last said
   bool                        startArmed_ = true;  // audio thread
   std::atomic<TransportStart> lastStart_{TransportStart::None};
 

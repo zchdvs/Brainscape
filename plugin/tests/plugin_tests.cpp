@@ -688,26 +688,51 @@ TEST_CASE("a restore before anything has played is an Exact load") {
   REQUIRE_FALSE(SameBits(got.l, RenderReference({}, in, kRate, {RefLoad(0, restored.get())}).l));
 }
 
-TEST_CASE("MIDI note-on fires a grain at its sample offset") {
+TEST_CASE("MIDI note-on fires a grain at its sample offset, at every host block pattern") {
   Preset preset = Busy();
   preset.push_back({ParamId::OnsetTrigger, 0.0f});
-  const Stereo in    = MakeInput(72000);
-  const int    notes[] = {30037, 30038, 40192, 51200, 51201};  // odd offsets, a block start, pairs
-  auto         trig  = [](std::vector<int> frames) {
+  const Stereo in = MakeInput(72000);
+  // Chunk and block edges, odd offsets and same-frame pairs.
+  const std::vector<int> notes = {0, 1, 511, 512, 513, 4095, 4096, 30037, 30038, 40192, 51200, 51200, 51201};
+  auto trig = [](const std::vector<int>& frames) {
     std::vector<RefEvent> ev;
     for (int f : frames) ev.push_back(RefTrigger(f, Engine::TriggerSource::MidiNote, 100.0f / 127.0f));
     return ev;
   };
-  auto       proc = MakeProcessor(preset, {});
-  HostRender r;
-  r.pattern        = {256};
-  r.noteOns        = std::vector<int>(std::begin(notes), std::end(notes));
-  const Stereo got = RenderProcessor(*proc, in, {}, r);
-  RequireSame(got, RenderReference(preset, in, kRate, trig(r.noteOns)), "note-ons at their frames");
-  const Stereo early = RenderReference(preset, in, kRate, trig({30036, 30038, 40192, 51200, 51201}));
-  const Stereo none  = RenderReference(preset, in, kRate);
-  REQUIRE_FALSE(SameBits(got.l, early.l));
-  REQUIRE_FALSE(SameBits(got.l, none.l));
+  const Stereo want = RenderReference(preset, in, kRate, trig(notes));
+  for (const auto& pattern : std::vector<std::vector<int>>{
+           {1}, {7}, {256}, {512}, {513}, {4096}, {0, 480}, {0, 0, 1, 0, 7, 512, 513, 0, 4096, 37, 0, 441}}) {
+    auto       proc = MakeProcessor(preset, {});
+    HostRender r;
+    r.pattern = pattern;
+    r.noteOns = notes;
+    RequireSame(RenderProcessor(*proc, in, {}, r), want, PatternName(pattern).c_str());
+  }
+  std::vector<int> early = notes;
+  early[7]               = 30036;
+  REQUIRE_FALSE(SameBits(want.l, RenderReference(preset, in, kRate, trig(early)).l));
+  REQUIRE_FALSE(SameBits(want.l, RenderReference(preset, in, kRate).l));
+}
+
+TEST_CASE("host automation applies at the first frame of its block, at every host block pattern") {
+  const Stereo in = MakeInput(48000);
+  for (const auto& pattern : std::vector<std::vector<int>>{
+           {1}, {7}, {256}, {512}, {513}, {4096}, {0, 480}, {0, 0, 1, 0, 7, 512, 513, 0, 4096, 37, 0, 441}}) {
+    auto       proc      = MakeProcessor(Busy(), {});
+    int        appliedAt = -1;
+    HostRender r;
+    r.pattern     = pattern;
+    r.beforeBlock = [&](int pos) {  // a VST3 parameter change, as the wrapper delivers it
+      if (appliedAt >= 0 || pos < 20011) return;
+      proc->Param(ParamId::PitchSt).setValue(0.73f);
+      appliedAt = pos;
+    };
+    const Stereo got  = RenderProcessor(*proc, in, {}, r);
+    const float  sent = PlainFromNormalized(ParamId::PitchSt, 0.73f);
+    REQUIRE(Bits(proc->Param(ParamId::PitchSt).Plain()) == Bits(sent));
+    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::PitchSt, sent)}),
+                PatternName(pattern).c_str());
+  }
 }
 
 TEST_CASE("a zero-frame call applies parameter changes without processing") {
@@ -1114,6 +1139,168 @@ TEST_CASE("restart on transport start: bounces start from the exact-restart stat
     REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::None);
     proc->setPlayHead(nullptr);
   }
+  SECTION("offline, the mode passed before every block: only the switch to offline arms") {
+    // The VST3, VST2 and LV2 wrappers call setNonRealtime before every block. The export
+    // starts while the transport already plays in real time; re-arming at every block
+    // restarted the engine every 10.7 ms.
+    auto       proc = withOption(true);
+    HostRender offline;
+    offline.pattern     = {512};
+    offline.beforeBlock = [&](int) { proc->setNonRealtime(true); };
+    head.playing        = true;
+    RenderProcessor(*proc, preroll, {}, {{441}});
+    // Nothing had played since prepareToPlay, so real time restarted in place, no spare.
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+    const Stereo first = RenderProcessor(*proc, take, {}, offline);
+    head.playing       = false;
+    RenderProcessor(*proc, gap, {}, offline);
+    head.playing        = true;
+    const Stereo second = RenderProcessor(*proc, take, {}, offline);
+    head.playing        = false;
+    RequireSame(first, ref, "an export starting mid-play");
+    RequireSame(second, ref, "a second export");
+    proc->setPlayHead(nullptr);
+  }
+}
+
+// A host automation lane on Mix, 0.2 -> 0.9 over the take, sent per block (as VST3 hands
+// over a block's parameter changes). Each bounce must start from the values in effect at its
+// first frame, whatever the last playback left: the restart folds the first block's
+// automation into its Exact load.
+TEST_CASE("restart on transport start: an automated passage bounces the same every time") {
+  const Stereo source = MakeInput(4 * 48000);
+  const Stereo take   = Slice(source, 48000, 120000);
+  const Stereo gap    = Slice(source, 130000, 140000);
+  const auto   value  = [&](int pos) {
+    return NormalizedFromPlain(ParamId::Mix, 0.2f + 0.7f * static_cast<float>(pos) / static_cast<float>(take.l.size()));
+  };
+  // The reference: the Exact load with the lane's first value, then each block's change.
+  Preset                start = Busy();
+  std::vector<RefEvent> changes;
+  {
+    BrainscapeProcessor lane;
+    lane.Param(ParamId::Mix).setValue(value(0));
+    start.push_back({ParamId::Mix, lane.Param(ParamId::Mix).Plain()});
+    for (int pos = 480; pos < static_cast<int>(take.l.size()); pos += 480) {
+      const float before = lane.Param(ParamId::Mix).Plain();
+      lane.Param(ParamId::Mix).setValue(value(pos));
+      if (Bits(lane.Param(ParamId::Mix).Plain()) != Bits(before)) {
+        changes.push_back(RefParam(pos, ParamId::Mix, lane.Param(ParamId::Mix).Plain()));
+      }
+    }
+  }
+  REQUIRE(changes.size() > 100u);
+  const Stereo ref = RenderReference(start, take, kRate, changes);
+  TestPlayHead head;
+  auto         proc = MakeProcessor(Busy(), {});
+  WrapperSettings s = proc->GetSettings();
+  s.restartOnStart  = true;
+  proc->SetSettings(s);
+  proc->setPlayHead(&head);
+  HostRender automated;
+  automated.pattern     = {480};
+  automated.beforeBlock = [&](int pos) { proc->Param(ParamId::Mix).setValue(value(pos)); };
+  const auto bounce = [&]() {
+    head.playing     = true;
+    const Stereo out = RenderProcessor(*proc, take, {}, automated);
+    head.playing     = false;
+    return out;
+  };
+  HostRender locate;  // stopped at the passage's start: the host sends the lane's value there
+  locate.pattern     = {480};
+  locate.beforeBlock = [&](int) { proc->Param(ParamId::Mix).setValue(value(0)); };
+
+  SECTION("offline") {
+    proc->setNonRealtime(true);
+    RenderProcessor(*proc, gap, {}, {{441}});  // stopped on another Mix
+    RequireSame(bounce(), ref, "first offline bounce");
+    RenderProcessor(*proc, gap, {}, {{441}});  // stopped on the lane's last value
+    RequireSame(bounce(), ref, "second offline bounce");
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+  }
+  SECTION("real time: the spare must hold the first block's values") {
+    RenderProcessor(*proc, gap, {}, locate);
+    REQUIRE(WaitForSpare(*proc));
+    RequireSame(bounce(), ref, "first real-time bounce");
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+    // Stopped on the lane's last value, the spare restarts with it: the next start moves
+    // Mix, so the engine runs on and says so.
+    RenderProcessor(*proc, gap, {}, {{441}});
+    REQUIRE(WaitForSpare(*proc));
+    REQUIRE_FALSE(SameBits(bounce().l, ref.l));
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::SpareNotReady);
+    RenderProcessor(*proc, gap, {}, locate);
+    REQUIRE(WaitForSpare(*proc));
+    RequireSame(bounce(), ref, "after a locate");
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+  }
+  proc->setPlayHead(nullptr);
+}
+
+TEST_CASE("restart on transport start: bounces with MIDI match the reference") {
+  Preset preset = Busy();
+  preset.push_back({ParamId::OnsetTrigger, 0.0f});
+  const Stereo           source = MakeInput(4 * 48000);
+  const Stereo           pre    = Slice(source, 0, 24000);
+  const Stereo           take   = Slice(source, 48000, 120000);
+  const std::vector<int> notes  = {0, 333, 24001};
+  std::vector<RefEvent>  ev;
+  for (int f : notes) ev.push_back(RefTrigger(f, Engine::TriggerSource::MidiNote, 100.0f / 127.0f));
+  const Stereo want = RenderReference(preset, take, kRate, ev);
+  for (const bool offline : {true, false}) {
+    for (const auto& pattern : std::vector<std::vector<int>>{{441}, {4096}, {0, 37, 1}}) {
+      INFO((offline ? "offline " : "real time ") << PatternName(pattern));
+      TestPlayHead    head;
+      auto            proc = MakeProcessor(preset, {});
+      WrapperSettings s    = proc->GetSettings();
+      s.restartOnStart     = true;
+      proc->SetSettings(s);
+      proc->setNonRealtime(offline);
+      proc->setPlayHead(&head);
+      RenderProcessor(*proc, pre, {}, {{441}});
+      if (!offline) REQUIRE(WaitForSpare(*proc));
+      HostRender r;
+      r.pattern        = pattern;
+      r.noteOns        = notes;
+      head.playing     = true;
+      const Stereo got = RenderProcessor(*proc, take, {}, r);
+      head.playing     = false;
+      proc->setPlayHead(nullptr);
+      RequireSame(got, want, "bounce with note-ons");
+    }
+  }
+}
+
+// PostAt's contract: a stamp counts on the timeline it was made on, so one made before a
+// restart is void, even when its frame has already passed (it would apply at once).
+TEST_CASE("a scripted stamp made before a transport-start restart is void, late or not") {
+  using E             = WrapperEvent;
+  const Stereo source = MakeInput(3 * 48000);
+  const Stereo pre    = Slice(source, 0, 4800);
+  const Stereo take   = Slice(source, 48000, 96000);
+  const Stereo clean  = RenderReference(Busy(), take);
+  REQUIRE_FALSE(SameBits(clean.l, RenderReference(Busy(), take, kRate, {RefParam(0, ParamId::Mix, 0.25f)}).l));
+  for (const uint64_t stamp : {uint64_t{100}, uint64_t{4800}, uint64_t{4801}}) {
+    for (const bool offline : {true, false}) {
+      INFO("stamp " << stamp << (offline ? " offline" : " real time"));
+      TestPlayHead    head;
+      auto            proc = MakeProcessor(Busy(), {});
+      WrapperSettings s    = proc->GetSettings();
+      s.restartOnStart     = true;
+      proc->SetSettings(s);
+      proc->setNonRealtime(offline);
+      proc->setPlayHead(&head);
+      RenderProcessor(*proc, pre, {}, {{480}});  // stopped: the timeline is at frame 4800
+      if (!offline) REQUIRE(WaitForSpare(*proc));
+      proc->PostAt(stamp, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(ParamId::Mix), 0.25f});
+      head.playing     = true;
+      const Stereo got = RenderProcessor(*proc, take, {}, {{480}});
+      head.playing     = false;
+      proc->setPlayHead(nullptr);
+      REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+      RequireSame(got, clean, "a void stamp");
+    }
+  }
 }
 
 TEST_CASE("reset() is Engine::Reset: the ring and the counter run on") {
@@ -1200,7 +1387,10 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
                  std::vector<float>(read.getReadPointer(1), read.getReadPointer(1) + frames)},
                 {want.l, want.r}, "the WAV's samples");
 
-    golden::Sha256 sha;  // an independent SHA-256 of the interleaved little-endian float32
+    // Independent SHA-256s of the interleaved little-endian float32: the whole render and
+    // each 1 s segment, as the golden harness hashes them.
+    golden::Sha256           sha, segment;  // Hex() finishes a digest and starts the next
+    std::vector<std::string> segments;
     for (size_t i = 0; i < want.l.size(); ++i) {
       uint8_t bytes[8];
       for (int c = 0; c < 2; ++c) {
@@ -1208,10 +1398,18 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
         for (int b = 0; b < 4; ++b) bytes[4 * c + b] = static_cast<uint8_t>(u >> (8 * b));
       }
       sha.Update(bytes, 8);
+      segment.Update(bytes, 8);
+      if ((i + 1) % 48000 == 0 || i + 1 == want.l.size()) segments.push_back(segment.Hex());
     }
+    REQUIRE(segments.size() == 14u);  // 10 s of signal, a 4 s tail
     REQUIRE(result.outputSha256.toStdString() == sha.Hex());
     const juce::var recipe = juce::JSON::parse(dir.getChildFile("take.recipe.json"));
     REQUIRE(recipe["outputSha256"].toString() == result.outputSha256);
+    REQUIRE(recipe["outputSegmentSha256"].size() == static_cast<int>(segments.size()));
+    for (size_t k = 0; k < segments.size(); ++k) {
+      INFO("segment " << k);
+      REQUIRE(recipe["outputSegmentSha256"][static_cast<int>(k)].toString().toStdString() == segments[k]);
+    }
     REQUIRE(recipe["preset"].size() == static_cast<int>(kNumParams));
     REQUIRE(recipe["preset"][1]["bits"].toString() == juce::String::toHexString(static_cast<juce::int64>(Bits(values[1]))).paddedLeft('0', 8));
     REQUIRE(static_cast<int>(recipe["soundRevision"]) == static_cast<int>(kSoundRevision));

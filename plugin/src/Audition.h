@@ -47,6 +47,9 @@ bool RenderAudition(const float* preset, InputMode mode, AuditionInput& input,
 
 // SHA-256 of the interleaved little-endian float32 frames, the golden harness's byte stream.
 juce::String InterleavedSha256(const std::vector<float>& l, const std::vector<float>& r);
+// The same per 1 s segment, the last one short (PARITY's segmented hash, companion §7.4; the
+// golden harness's per-second hashes): the first differing second of two renders.
+juce::StringArray SegmentSha256(const std::vector<float>& l, const std::vector<float>& r);
 
 // Runs one render at a time on a worker thread: renders, writes the 32-bit float WAV and
 // `<name>.recipe.json` beside it.
