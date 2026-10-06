@@ -14,10 +14,12 @@ The project has completed its **research**, the **core DSP engine** (v1 scope), 
 determinism profile**: one `dsp/` build profile, in-tree math, a full floating-point
 control-word guard, a deterministic denormal flush, a NaN-free boundary, the block-split
 fix, and the engine state API (an exact `Restart`, a random-number epoch, one `LoadPreset`
-entry point and frame-stamped events). A golden-hash harness renders a 23-preset corpus
+entry point and frame-stamped events). A golden-hash harness renders a 26-preset corpus
 bit-identically with MSVC, GCC, Clang and the Cortex-M7 code run under emulation, at any
-block size; it reports and does not yet gate. A JUCE plugin and standalone skeleton hosts the engine. Nothing has touched real
-hardware, and the parity and plugin CI workflows have not yet run on GitHub.
+block size and from a hostile caller floating-point environment; it reports and does not yet
+gate. A JUCE plugin and standalone skeleton hosts the engine through its stamped events and
+`LoadPreset`, with reproducible bounces and an offline audition render. Nothing has touched
+real hardware, and the parity and plugin CI workflows have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -28,7 +30,7 @@ hardware, and the parity and plugin CI workflows have not yet run on GitHub.
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Engine side landed, `Restart`, epoch, `LoadPreset` and stamped events included; golden harness report-only ([determinism-profile.md](design/determinism-profile.md)). Minting sound revision 1 is **next** |
-| Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper, plain-value parameters, test-bench editor; no presets, library or device link yet |
+| Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | ⬜ Not started — needs its own design doc |
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
@@ -58,12 +60,12 @@ The parity investigation showed requirement 3 is achievable. A prototype that re
 standard-library transcendental with in-tree math and disabled compiler multiply-add fusion
 produced **one identical SHA-256 across 32 builds** — MSVC, GCC 11, 12 and 14 and Clang on
 x86, and the real firmware code generation for the Cortex-M7 run under emulation — over 10
-presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (11
-vectors, 23 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
+presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (12
+vectors, 26 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
 (SSE2 and AVX2), GCC 11 and 14 (also at `-march=x86-64-v3`, and in Debug), Clang 14 and the
 Cortex-M7 build from the pinned arm-none-eabi 10.3 run under `qemu-arm -cpu cortex-m7`, and
 the prototype's 10-preset battery agrees across the same builds. A build with contraction
-turned back on (the negative control) differs on 21 of the 23 presets.
+turned back on (the negative control) differs on 24 of the 26 presets.
 
 What the guarantee covers is precise. Two conforming builds of the same sound revision,
 restarted into the exact-restart state, loading the same compiled preset with an Exact load,
@@ -74,9 +76,10 @@ DAW sessions at other sample rates, and DAW automation. The full contract is in
 [determinism-profile.md](design/determinism-profile.md). The engine now has every piece of
 that recipe except the compiled preset package: the golden harness Inits one engine, and
 for every render restarts it with `LoadPreset(…, Exact)` from a decoded preset state and
-hands its scripted events to `Process` at their frames. Rendering with a fresh `Init` per
-preset, or with the events applied between blocks split at their frames, gives the same
-bits.
+hands its scripted events to `Process` through the engine's `EventQueue`; three presets also
+load Spillover, restart, or load Exact mid-render. Rendering with a fresh `Init` per preset,
+with the events applied between blocks split at their frames, or from a caller whose control
+word is FTZ|DAZ (on the M7, FZ|DN) with round toward zero, gives the same bits.
 
 ## What the engine does today
 
@@ -162,11 +165,20 @@ implementing:
   blocks there renders, at block sizes 1 to 512, a freeze released and re-engaged at one
   frame and Spillover loads while frozen included. A Spillover load never reconverges with the
   Exact render (4 s measured, as the profile states); followed by `Reset` it reconverges after
-  0.250–0.264 s, the record's figures.
+  0.250–0.264 s, the record's figures. The golden corpus checks the same on every leg: after a
+  `Restart` or an Exact load mid-render, the rest of the output equals a render of the rest
+  from the exact-restart state.
 - **Bit-identical across conforming builds** on the golden corpus (above), whatever the
   host's floating-point environment: renders under FTZ|DAZ with round-toward-zero, or with
   every exception unmasked, match the clean render, and flushing forced on inside the guard
-  reproduces the IEEE result.
+  reproduces the IEEE result. The corpus renders six presets again on a fresh engine from a
+  hostile caller (Init included) on every leg, the M7 too, and a whole-corpus hostile run
+  matches the clean one.
+- **The plugin reproduces the engine bit for bit**: host blocks of any size against the
+  engine driven by stamped events from `LoadPreset(…, Exact)`, one `Process` call per chunk of
+  at most 512 frames; restores, MIDI and scripted events at their frames; offline and real-time
+  bounces with Restart on transport start equal a fresh render; the audition render equals
+  the engine's from the exact-restart state, and its WAV and hash match it.
 - **NaN-free boundary**: a fuzz test feeds NaN, ±inf, subnormal and ±`FLT_MAX` input and
   parameters under a hostile environment; the output stays finite and equals the run fed
   sanitized input and canonical values.
@@ -176,15 +188,15 @@ implementing:
 
 **Suite** (`ctest`): `dsp_unit` (97 test cases / ~2.61M assertions in Release, 96 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
-configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
-editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with
-MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC (Linux and macOS plugin
-builds are left to CI).
+configure-check self-test and `golden_report`; a plugin build adds the wrapper tests (25 test
+cases), the editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and
+Debug with MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC (Linux and macOS
+plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
 compile-only Cortex-M7 build), `parity.yml` (golden reports from six host legs and the
-emulated M7, block-size perturbations and a contraction-on negative control; the static
-audits gate, the hashes only report) and `plugin.yml` (every format on three OSes, Release
-and Debug). `parity.yml` and `plugin.yml` have not yet run on GitHub.
+emulated M7, block-size and hostile-FP-environment perturbations and a contraction-on negative
+control; the static audits gate, the hashes only report) and `plugin.yml` (every format on
+three OSes, Release and Debug). `parity.yml` and `plugin.yml` have not yet run on GitHub.
 
 ## How it was built (methodology)
 
@@ -215,13 +227,12 @@ records live in [docs/design/reviews/](design/reviews/).
   smoothing decision (automating delay times clicks: no smoothing on the post-delay tap),
   input above 0 dBFS hard-clips in the int16 ring, and a trigger's source and velocity are
   carried but unread.
-- **Plugin skeleton gaps:** the wrapper still applies events and state restores between
-  blocks it splits itself (the same bits) instead of through `ProcessContext` events and
-  `LoadPreset`; the resampled 48 kHz mode (other host rates run the engine natively),
-  Restart on transport start and the spare engine, the wrapper bypass with
-  crossfade, the pedal-faithful input option (`ConditionInput24`), MIDI CC mapping, pluginval
-  in CI, CLAP and LV2, `.bsp` session state, and the freeze of parameter IDs and tapers. The
-  In/Out level controls are wrapper code outside the guard and never part of a preset.
+- **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
+  natively), the wrapper bypass with crossfade, the pedal-faithful live input option
+  (`ConditionInput24`; the audition render applies it), event scripts in the audition, MIDI CC
+  mapping, pluginval in CI, CLAP and LV2, `.bsp` session state, and the freeze of parameter
+  IDs and tapers. The In/Out level controls are wrapper code outside the guard and never part
+  of a preset.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs

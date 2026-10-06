@@ -49,10 +49,8 @@ The build never copies plugins into system folders.
 
 1. Start `Brainscape`. It asks the audio device for 48 kHz, the pedal's only rate; the status
    line at the bottom says **48 kHz pedal rate · host blocks**, or **Not pedal rate: host at
-   44.1 kHz** if the device refused. The pedal's rate is not yet "pedal-exact": the engine is
-   bit-identical across builds and host block sizes, but the parity contract also needs the
-   exact-restart state, exact preset loads and frame-stamped events, which the engine has and
-   the wrapper does not use yet (see [Current limitations](#current-limitations)).
+   44.1 kHz** if the device refused. Live playing is outside the parity contract; the audition
+   render (step 6) is what reproduces the pedal.
 2. Input is muted until you open **Options → Audio/MIDI Settings…** and untick **Mute audio
    input** (JUCE's guard against feedback through speakers). Pick the input channels there; on
    Windows, ASIO devices are listed too.
@@ -72,14 +70,35 @@ The build never copies plugins into system folders.
    onsets fire grains. An orange **control events lost** in the status line counts triggers and
    frame-stamped events that a full event queue dropped; ordinary knob edits are never lost,
    because the wrapper re-sends every parameter after an overflow.
+6. **Render audition…** (the Test input panel's last row) renders the test input through the
+   current preset into a WAV file (companion §4.9): the loaded file when **File loop** is
+   selected, otherwise 10 s of `dsp/`'s plucks test signal, then 4 s of silence for the trails.
+   The input goes through `ConditionInput24` (the codec's 24-bit grid) and the input mode, and
+   a separate engine renders it from the exact-restart state (`Init`, then
+   `LoadPreset(…, Exact)`) at 48 kHz in the pedal's 48-frame blocks; the In and Out levels are
+   not applied. Beside the 32-bit float WAV it writes `<name>.recipe.json`: the preset's exact
+   bits, the SHA-256 of the input and of the output (interleaved little-endian float32, as the
+   golden harness hashes), the sound revision and the toolchain. A render of the test signal or
+   of a 48 kHz file is identical on every conforming build; a file at another rate is converted
+   by linear interpolation, and the recipe says the render is reproducible on this machine only.
 
 ## Load the VST3
 
 Copy the `Brainscape.vst3` folder to your VST3 folder (`C:\Program Files\Common Files\VST3`,
 `~/Library/Audio/Plug-Ins/VST3`, or `~/.vst3`), or add the build's `VST3` folder to your DAW's
 plugin search path, then rescan. Use it as an insert effect on a mono or stereo track; it
-accepts MIDI notes as triggers. Run the project at 48 kHz, the pedal's rate; output on the host's
-buffers is not yet promised identical to the pedal (see [Current limitations](#current-limitations)).
+accepts MIDI notes as triggers. Run the project at 48 kHz, the pedal's rate.
+
+**Restart on play** (the Test input panel's last row, saved with the session, off by default)
+restarts the engine at every transport start: the first playing block after a stopped block,
+`prepareToPlay` or the host switching to offline rendering. The engine then starts from the
+exact-restart state with an Exact load of the current preset, so two bounces of one passage are
+identical, and at 48 kHz without automation identical to the pedal (companion §4.9). Offline
+bounces restart the engine in place. In real time the plugin never blocks: while the option is
+on, a worker thread keeps a spare engine (another 17 MiB) restarted with the current preset, and
+a transport start swaps it in; if the spare is not ready (the preset changed a moment ago), the
+engine runs on and the status line says **Last start not restarted**. With the option off, trails
+continue across stops. The host's `reset()` is `Engine::Reset`: it keeps the ring.
 
 ## Windows notes
 
@@ -104,47 +123,52 @@ buffers is not yet promised identical to the pedal (see [Current limitations](#c
 its control, `dsp_fp_profile_check` and the golden harness's `golden_report`):
 
 - `plugin_wrapper` (`tests/plugin_tests.cpp`): the processor driven as hosts drive it, compared
-  bit for bit with the engine driven directly in 48-frame blocks: host blocks of 0, 1, 7, 512,
-  513 and 4096 frames, in-place mono and stereo layouts, a disabled input, non-finite input,
-  44.1/48/96 kHz, exact plain values through the parameter class, the slider attachment and
-  session state, state restores while running and their order against earlier and later edits
-  (running, suspended and before `prepareToPlay`), MIDI triggers at their sample offsets,
-  events stamped at absolute frames, freeze, lost-event accounting, the test input's file loop
-  (exact playback, wrap, mono and 44.1 kHz files, bad files, loads during playback), the default
-  input mode per format, and zero heap allocations inside `processBlock`.
+  bit for bit with the engine driven directly from `LoadPreset(…, Exact)` in 48-frame blocks,
+  its events stamped at their frames: host blocks of 0, 1, 7, 512, 513 and 4096 frames with one
+  `Process` call per chunk of at most 512 frames, in-place mono and stereo layouts, a disabled
+  input, non-finite input, 44.1/48/96 kHz, exact plain values through the parameter class, the
+  slider attachment and session state, state restores (a Spillover load while running, an Exact
+  load before anything has played) and their order against earlier and later edits (running,
+  suspended and before `prepareToPlay`), MIDI triggers at their sample offsets, events stamped
+  at absolute frames, freeze, lost-event accounting, Restart on play (offline, in real time with
+  the spare engine, with a spare that holds another preset, and off), `reset()`, the audition
+  render (the exact-restart state, both input modes, a file off the 24-bit grid, and the job's
+  WAV bits, hash and recipe), the test input's file loop (exact playback, wrap, mono and
+  44.1 kHz files, bad files, loads during playback), the default input mode per format, and zero
+  heap allocations inside `processBlock`.
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
-  `build/plugin/plugin/screenshots/` (default, minimum, large and 2× sizes, and a 44.1 kHz
-  frozen frame).
+  `build/plugin/plugin/screenshots/` (default, minimum, large and 2× sizes, a 44.1 kHz frozen
+  frame with Restart on play on, and the Standalone's editor after an audition render, which it
+  also writes there).
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
   in-place audio in odd host blocks equals the engine reference.
 
 ## Current limitations
 
-- **Not pedal-exact yet.** The engine side of the determinism profile has landed: the FP build
-  profile, in-tree math, the full control-word guard, the denormal flush, the NaN-free boundary
-  and the block-split fix, so Release and Debug, MSVC, GCC, Clang and the emulated Cortex-M7
-  render the golden corpus bit-identically on any block size. The engine now offers the
-  exact-restart state (`Restart`), exact preset loads (`LoadPreset`) and frame-stamped events
-  (`ProcessContext::events`); the wrapper does not use them yet, and events from the host and
-  the editor apply at the start of the next host block.
-  Live playing is outside the parity contract.
+- **Pedal-exact only for renders.** The engine is bit-identical across builds and block sizes
+  (Release and Debug, MSVC, GCC, Clang and the emulated Cortex-M7 render the golden corpus
+  alike), and the wrapper hands it frame-stamped events and loads presets through `LoadPreset`.
+  A render matches the pedal when it starts from the exact-restart state at 48 kHz: the
+  audition render, or a bounce with Restart on play and no automation. Live playing is outside
+  the parity contract, and so is a preset recalled while playing, which loads Spillover so the
+  trails go on.
 - **Other host rates run the engine natively,** so delay periods and pitch differ slightly; the
   resampled 48 kHz mode (companion §4.2) is still to come.
 - **Nothing here is a release.** Parameter IDs, names and tapers are provisional until the
   companion §5.7 gate; do not rely on them in DAW projects. The tapers are power curves
   (`dsp/src/ParamDisplay.cpp`) pending that decision.
-- **Session state is a provisional binary v1** (exact plain values plus the input mode and
-  levels); `.bsp` packages, the preset library, offline audition and the device link are not
-  built.
-- **Not yet built from §4:** the "Restart on transport start" and pedal-grid options, the
-  spare engine, the wrapper-owned bypass with crossfade (JUCE's default bypass stops the engine,
-  so trails do not continue), MIDI CC mapping, LV2 and CLAP.
+- **Session state is a provisional binary v1** (exact plain values plus the input mode, levels
+  and the restart option); `.bsp` packages, the preset library and the device link are not
+  built, and the audition renders no event script yet.
+- **Not yet built from §4:** the wrapper-owned bypass with crossfade (JUCE's default bypass
+  stops the engine, so trails do not continue), the resampled 48 kHz mode, MIDI CC mapping, LV2
+  and CLAP.
 - **Event timing:** host automation, editor edits, freeze and triggers apply at the start of the
-  next host block, MIDI at its sample offset. `BrainscapeProcessor::PostAt` applies an event at
-  an absolute frame (frames since the engine's last Init) and splits the block there (companion
-  §4.10), but nothing in the app posts stamped events yet; they wait for scripted renders and
-  Restart, which will reset the frame count.
+  next host block (VST3 hands automation over per block), MIDI at its sample offset.
+  `BrainscapeProcessor::PostAt` applies an event at an absolute frame of the engine's timeline,
+  which starts at 0 at every Init or restart; a stamp made before a restart is dropped. Every
+  event reaches the engine through `ProcessContext::events`, which splits the block at it.
 - **Host automation is lossy** by nature (companion §5.6): hosts store the normalised value.
   The editor and typed values write exact plain bits.
 - **The taper and display functions own the floating-point environment.** `PlainFromNormalized`,
