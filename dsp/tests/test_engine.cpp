@@ -1221,6 +1221,63 @@ TEST_CASE("Process on an un-Init'd engine outputs silence, not stale memory") {
   for (float v : outR) REQUIRE(v == 0.0f);
 }
 
+// Hosts may process in place (VST3 allows in[0] == out[0]; JUCE always does). With
+// mono input the right channel reads the left input, and the mix wrote outL[n]
+// before reading it — every right sample of a 1 s render was wrong (measured
+// 48000/48000, max |dR| ~0.2; review finding).
+TEST_CASE("in-place mono input is bit-identical to separate buffers") {
+  Rng rng;
+  std::vector<float> input(48000);  // not a multiple of the block size
+  for (auto& x : input) x = 0.6f * rng.Next();
+
+  const std::vector<std::pair<ParamId, float>> params = {
+      {ParamId::DelayMs, 80.0f},      {ParamId::Mix, 0.5f},
+      {ParamId::Feedback, 0.4f},      {ParamId::GrainSizeMs, 40.0f},
+      {ParamId::Overlap, 0.6f},       {ParamId::SprayMs, 20.0f},
+      {ParamId::PitchSt, 7.0f},       {ParamId::PanSpread, 0.8f},
+      {ParamId::ReverbMix, 0.3f},     {ParamId::ReverbTime, 0.5f}};
+  const uint32_t block = 441;
+
+  // out[0] IS the input buffer. in[1] is the same buffer when a wrapper duplicates
+  // a mono bus, or absent on a true mono bus (unused when !stereoInput).
+  auto renderInPlace = [&](const EngineConfig& cfg, bool duplicateMono) {
+    LiveEngine   live(cfg, params);
+    RenderResult out;
+    out.l = input;
+    out.r.assign(input.size(), 0.f);
+    size_t pos = 0;
+    while (pos < input.size()) {
+      const auto n = static_cast<uint32_t>(std::min<size_t>(block, input.size() - pos));
+      float*       x       = out.l.data() + pos;
+      const float* ins[2]  = {x, duplicateMono ? x : nullptr};
+      float*       outs[2] = {x, out.r.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = n;
+      live.engine.Process(ctx);
+      pos += n;
+    }
+    return out;
+  };
+
+  SECTION("mono bus: stereoInput false, in[0] == out[0]") {
+    EngineConfig cfg = SmallConfig();
+    cfg.stereoInput  = false;
+    const auto ref   = Render(cfg, input, params, true, {block});
+    const auto got   = renderInPlace(cfg, false);
+    REQUIRE(std::memcmp(ref.l.data(), got.l.data(), ref.l.size() * sizeof(float)) == 0);
+    REQUIRE(std::memcmp(ref.r.data(), got.r.data(), ref.r.size() * sizeof(float)) == 0);
+  }
+  SECTION("duplicated mono bus: in = {x, x}, x == out[0]") {
+    const EngineConfig cfg = SmallConfig();  // stereoInput true
+    const auto ref         = Render(cfg, input, params, true, {block});
+    const auto got         = renderInPlace(cfg, true);
+    REQUIRE(std::memcmp(ref.l.data(), got.l.data(), ref.l.size() * sizeof(float)) == 0);
+    REQUIRE(std::memcmp(ref.r.data(), got.r.data(), ref.r.size() * sizeof(float)) == 0);
+  }
+}
+
 #if defined(BRAINSCAPE_DENORMAL_SSE)
 TEST_CASE("denormal guard sets and restores FTZ/DAZ (SSE)") {
   const unsigned before = _mm_getcsr();

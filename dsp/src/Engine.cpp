@@ -526,8 +526,12 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
     // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
     // Two-multiply form, not dry + mix*(wet-dry): the lerp form is not bit-exact at
     // the endpoints, which would break the Tu null contract (design §10 #2).
-    outL[n] = (inL[n] * (1.0f - mix) + wetL_[n] * mix) * g;
-    outR[n] = (inR[n] * (1.0f - mix) + wetR_[n] * mix) * g;
+    // Both dry reads precede either write: hosts process in place (in[0] == out[0])
+    // and mono input aliases inR to inL, so writing outL first corrupted every outR.
+    const float dryL = inL[n];
+    const float dryR = inR[n];
+    outL[n] = (dryL * (1.0f - mix) + wetL_[n] * mix) * g;
+    outR[n] = (dryR * (1.0f - mix) + wetR_[n] * mix) * g;
   }
 
   sampleCounter_ += ctx.numFrames;
