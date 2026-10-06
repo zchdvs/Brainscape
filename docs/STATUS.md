@@ -31,7 +31,7 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (block-split defect found and fixed 2026-10-05) |
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
-| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–10). Next: the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
+| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | ⬜ Not started — needs its own design doc |
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
@@ -98,31 +98,42 @@ one per second, and 18 coverage counters, rendered from one restarted engine wit
 preset loaded Exact and its scripted events stamped through the engine's `EventQueue`. It
 covers the post-delay glide (two presets glide from second 0, one through a Spillover load),
 Spillover and Exact loads and a `Restart` mid-render, freeze, onset marks, feedback above 1,
-every post stage, subnormal input, and silent tails of up to 123 s.
+every post stage, subnormal input, and a 120 s silent tail (in a 123 s vector).
 
 **Which builds agree.** Every one tried, in `--mode check` against the file: MSVC 19.40
 (Release SSE2, Debug, Release AVX2), GCC 11.4 (Release, Debug, x86-64-v3), GCC 14.2 (Release,
 Debug), Clang 14 (Release, Debug) and the Cortex-M7 archive from arm-none-eabi 10.3 under
-`qemu-arm -cpu cortex-m7`. Every Release build and the M7 ran blocks of 1, 48 and 512 frames
-and the patterns {48, 1, 127, 32} and {300, 512, 5, 64}; the x86 Release builds also 7, and
-MSVC also 32, 37, 64 and 127. Events went through the engine or through a wrapper that splits
-its blocks at them; renders came from a restarted engine or one `Init`'d per render, and from
-a caller whose control word is FTZ|DAZ (FZ|DN on the M7) with round toward zero. The
-forced-flush control reproduces it too. The M7 archive is the same bytes across two builds and
-across the bump (`4f4ddaa3583e46f2`).
+`qemu-arm -cpu cortex-m7`. Every Release build and the M7 ran blocks of 1, 48 and 512 frames,
+the patterns {48, 1, 127, 32} and {300, 512, 5, 64} and the random pattern of seed 1 (257
+sizes of 1–512 frames, `--random-blocks`); the x86 Release builds also 7 and seed 2, and
+MSVC SSE2 also 32, 37, 64 and 127. Every Debug build ran 48-frame blocks,
+{300, 512, 5, 64}, 1-frame blocks from a hostile caller and seed 2. Events went through the
+engine or through a wrapper that splits its blocks at them (seed 3 included); renders came
+from a restarted engine or one `Init`'d per render, and from a caller whose control word is
+FTZ|DAZ (FZ|DN on the M7) with round toward zero. The forced-flush control reproduces it
+too, on every host build and with FZ on the M7. The M7 archive is the same bytes across two
+builds, across the bump and across the review fixes (`4f4ddaa3583e46f2`).
 
-**What gates.** `parity.yml` with `PARITY_HASHES_GATING` on: six host legs and the emulated
-M7 render in check mode at 48-frame blocks, 512-frame blocks and from a hostile caller (the M7
-also at {48, 1, 127, 32}; the Linux GCC leg at every block size above, with wrapper-side
-splitting and fresh engines); the contraction-on negative control must miss the file; the
-static audits (no libm import, no fused instruction, no forbidden flag); and parity-summary
-fails on any canonical leg that differs from another. ctest's `golden_check` and
-`golden_forced_flush` check the file in every build, so `host.yml` and `plugin.yml` gate on it
-as well. `sound-rev.yml` (companion-app.md §3.4's `sound-rev-gate`) fails a pull request that
-changes a golden hash without bumping `kSoundRevision`, whatever its labels, and one that
-touches `dsp/src`, `dsp/include`, the profile CMake file, the forbidden-flag list or the arm
-toolchain file without a bump or the "sound-neutral" label; a bump is exactly one and must
-regenerate the golden file (`brainscape_golden --mode mint`).
+**What gates.** Check mode fails on any difference from the file: a hash, a per-second hash or
+a counter of any preset, a vector's input hash or ring sizes, or the header's revision,
+versions and engine configuration. `parity.yml` with `PARITY_HASHES_GATING` on: six host legs
+and the emulated M7 render in check mode at 48-frame blocks, 512-frame blocks and from a
+hostile caller (the M7 also at {48, 1, 127, 32}, at a random pattern and with flushing forced
+on inside the guard, FZ; the Linux GCC leg at every block size above, two random patterns, with
+wrapper-side splitting, a random pattern included, and with fresh engines); each leg uploads
+a WAV file of every preset that misses the file on the 48-frame grid, for triage; the
+contraction-on negative control must miss the file; the static audits (no libm import, no
+fused instruction, no forbidden flag, no JUCE include outside `plugin/`); and parity-summary
+fails on any canonical leg that differs from another. ctest's `golden_check`,
+`golden_check_edits` (edited copies of the file must fail check) and `golden_forced_flush`
+run in every build, so `host.yml` and `plugin.yml` gate on the file as well. `sound-rev.yml`
+(companion-app.md §3.4's `sound-rev-gate`) fails a pull request that changes a golden hash
+without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp/src`,
+`dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
+forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
+bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
+None of this binds until branch protection requires the checks and code owners review the
+files that define them (Known gaps).
 
 **The gates were shown to fail.** A one-ULP change to a binary32 filter constant fails check
 on MSVC and on the emulated M7 (the feedback tamer's diffuser gain: 16 of 28 presets; a reverb
@@ -135,10 +146,14 @@ only when the result lies that close to a binary32 rounding boundary, roughly on
 in 2²⁹. Only the path trigger catches such a change, which is why §5.12's rule is "any change
 that can change output", not golden coverage. A contracting build is refused by the configure
 check (`-ffp-contract=fast`, `/fp:contract`); through the test-only escape it misses 25 of 28
-presets and the harness refuses check and mint. The gate's self-test runs 22 synthetic pull
-requests on every run.
+presets and the harness refuses check and mint. Check mode fails on each edit
+`golden_check_edits` makes to a copy of the file (one per-second hash, the per-second list cut
+short, the ring sizes, the generator version, a counter, a counter the harness does not count);
+the harness of the mint (`06557f3`) passed all of them but the changed counter. The gate's
+self-test runs 26 synthetic pull requests on every run.
 
-**What remains.** The nightly legs (profile step 11). On hardware, the DWT measurements and
+**What remains.** The rest of profile step 10 ([Known gaps](#known-gaps-and-deferred-work)) and
+the nightly legs (profile step 11). On hardware, the DWT measurements and
 the decisions they gate (subnormal cost and the flush, explicit FMA, polynomial kernels or
 tables, `Restart` time and the pedal's default load mode), each adopted one bumping the
 revision. The resampled 48 kHz plugin mode, the mode compiler, the `.bsp` preset package and
@@ -212,7 +227,8 @@ implementing:
   suite exercises — dither, jitter, spray, reverse, pitch, onset-mark positioning with onsets
   that actually fire, freeze engaged mid-render and held past the re-anchor point, grain
   positions on the ring's far rail, and queued manual triggers; the golden corpus agrees at
-  1-, 37-, 48- and 512-frame blocks and a mixed pattern on every build. A Debug assertion
+  1-, 48- and 512-frame blocks, mixed patterns and random sizes of 1–512 frames on every
+  toolchain. A Debug assertion
   checks that no grain reads a ring frame the current block has already written ahead of the
   live write head (for every grain the ring can hold: a ring shorter than one block plus a
   grain's span cannot be invariant, determinism-profile.md §5.7). The freeze/onset-mark/
@@ -237,7 +253,8 @@ implementing:
 - **Bit-identical across conforming builds** on the golden corpus (above), whatever the
   host's floating-point environment: renders under FTZ|DAZ with round-toward-zero, or with
   every exception unmasked, match the clean render, and flushing forced on inside the guard
-  reproduces every golden vector on the 24-bit grid (`golden_forced_flush`). One vector feeds
+  reproduces every golden vector on the 24-bit grid (`golden_forced_flush` on the host, FZ on
+  the emulated M7). One vector feeds
   subnormal input where the plucks are silent and must output subnormals, which no flushing
   mode can produce: forced flushing must change it, so a guard that lets a caller's flush bit
   through fails the corpus. The corpus renders eight presets again on a fresh engine from a
@@ -260,15 +277,17 @@ implementing:
 
 **Suite** (`ctest`): `dsp_unit` (106 test cases / ~2.61M assertions in Release, 105 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
-configure-check self-test, `golden_check` (every golden hash of sound revision 1) and the
-corpus's forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (29
+configure-check self-test, `golden_check` (every golden hash of sound revision 1),
+`golden_check_edits` (check mode fails on edited copies of the golden file) and the corpus's
+forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (29
 test cases), the editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in
 Release and Debug with MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC
 (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
 compile-only Cortex-M7 build), `parity.yml` (six host legs and the emulated M7 checking the
-golden file, block-size and hostile-FP-environment perturbations, a contraction-on negative
-control and the static audits, all gating), `sound-rev.yml` (the sound-revision gate) and
+golden file, block-size, random-block, hostile-FP-environment and, on the M7, forced-flush
+perturbations, a contraction-on negative control and the static audits, all gating),
+`sound-rev.yml` (the sound-revision gate) and
 `plugin.yml` (every format on three OSes, Release and Debug). `parity.yml`, `sound-rev.yml`
 and `plugin.yml` have not yet run on GitHub.
 
@@ -295,10 +314,33 @@ records live in [docs/design/reviews/](design/reviews/).
   and the Ubuntu-QEMU M7 leg gate on a golden file no AArch64 build or CI runner has ever
   rendered; a first failure there is a parity finding to root-cause, not a golden to
   regenerate. The QEMU and toolchain pins still need their first CI run to record checksums.
-  No CODEOWNERS file names the reviewers that profile §5.12 and §6.1 require for
-  `golden.json`, `SoundRevision.h` and the "sound-neutral" label; repository settings must
-  also limit who may apply that label. The nightly legs (full-system QEMU with the interrupt
-  `FPDSCR`, exhaustive DetMath accuracy, toolchain drift) are not built.
+  The nightly legs (full-system QEMU with the interrupt `FPDSCR`, exhaustive DetMath
+  accuracy, toolchain drift) are not built.
+- **The gates do not bind yet.** Every gate runs the pull request's own code: the harness and
+  its exit codes, `parity.yml` and its `PARITY_HASHES_GATING` switch, `sound-rev.yml` and
+  `tools/ci/sound_rev_gate.py`. A pull request that edits them passes them whatever it does to
+  the sound, and the "sound-neutral" label waives the path trigger. They bind only when
+  branch protection on `main` requires `parity-summary`, every `parity-host` and `parity-m7`
+  leg, `parity-audits`, `parity-negative-control` and `sound-rev-gate`, and a CODEOWNERS
+  file, which does not exist yet (no reviewer handle is known), makes code owners review
+  `dsp/`, `cmake/`, the root `CMakeLists.txt`, `dsp/tests/golden/` (`golden.json` included),
+  `.github/workflows/` and `tools/ci/`, as profile §5.12 and §6.1 require; repository
+  settings must also limit who may apply the label. Running `sound-rev-gate` from the base
+  branch (`pull_request_target`) would not close this alone, since a pull request can add a
+  workflow whose job has the same name.
+- **Profile step 10 is not finished** (determinism-profile.md §8.4 lists it). Not yet built:
+  the engine-side coverage counters (births, steals, reverse and mark-positioned births,
+  re-anchors, far-rail clamps, blocks with an underflow flag, the write-ahead counter) and the
+  gcov thresholds of §6.1 (revision 1 substitutes the harness's 18 counters with per-preset
+  minimums, ablations, and the Debug write-ahead assertion over the whole corpus); host blocks
+  up to 8,192 frames through the wrapper's chunker against the corpus (§6.4; the wrapper tests
+  reach 4,096 against the engine); the ODR controls, renders and the audit with `dsp/` and
+  plugin objects in swapped link order (§6.3, §6.4); the literal-bit audit (§6.3); the plugin
+  format targets' flags compared with the engine's through `compile_commands.json` (§6.3);
+  the negative control with one DetMath function swapped back to libm, as a hash control
+  (§6.4); the Rosetta 2 and Prism host legs (§6.2); and a mint job: revision 1 was minted
+  locally, and its pull request must pass every x86 leg and the emulated M7 against the
+  committed file in one CI run, the deviation §6.1 records.
 - **Engine API still to come:** `PresetState` holds the STAT leaves only (the mode blob,
   macros and the stored performance state arrive with the mode system, and the `.bsp`
   decoder with the package format); tap/tempo, mode-switch, macro and expression events;
@@ -346,9 +388,10 @@ Steps 1–4 need no hardware.
    NaN-free boundary, the block-split fix, mono aliasing and the dither key, the post-delay
    time glide, the parity harness and its M7 leg, the JUCE skeleton, and `Restart`, the
    random-number epoch, `LoadPreset` and frame-stamped events (profile steps 1–9).
-2. **Mint internal sound revision 1.** *Done* (profile step 10): golden hashes, the
-   sound-revision gate and the emulated Cortex-M7 parity job gate every pull request.
-   Remaining: the nightly legs (profile step 11) and their first CI runs.
+2. **Mint internal sound revision 1.** *Minted* (profile step 10): golden hashes, the
+   sound-revision gate and the emulated Cortex-M7 parity job check every pull request.
+   Remaining: CODEOWNERS and branch protection, the rest of step 10 (Known gaps), the nightly
+   legs (profile step 11) and their first CI runs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and
    the `.bsp` preset package with its desktop compiler.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.

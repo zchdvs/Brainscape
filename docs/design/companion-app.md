@@ -270,7 +270,7 @@ The existing jobs in `.github/workflows/host.yml` stay. The profile owns the par
 | `boundary-grep` | No `#include <juce` outside `plugin/`, so none under `dsp/`, `protocol/`, `link/`, `firmware/` or `tools/` (§3.5). | seconds |
 | `bspc-roundtrip` | Every factory JSON compiles to identical bytes on all three OSes, equal to the committed `firmware/factory/*.bsp` (§6.6). | small |
 | `firmware-elf-audit` | From the **first** firmware image, test images included: no ST USB or SD-glue symbol (`USBD_*`, `USBH_*`, `SD_Driver`) or object from libDaisy's `src/usbd/`, `src/usbh/`, `src/util/*diskio*` or ST's USB middleware (§7.2); no GOT relocation in the `dsp/` archive (§3.2). | seconds |
-| `sound-rev-gate` | Profile §5.12's triggers: a diff under `dsp/src`, `dsp/include`, the profile CMake file or the arm toolchain file needs a `kSoundRevision` bump or a CODEOWNERS-approved "sound-neutral" label; a golden-hash change always needs the bump. | seconds |
+| `sound-rev-gate` | Profile §5.12's triggers: a diff under `dsp/src` or `dsp/include`, or to `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the forbidden-flag list or the arm toolchain file, needs a `kSoundRevision` bump or a CODEOWNERS-approved "sound-neutral" label; a golden-hash change always needs the bump. | seconds |
 
 **Implementation constraints.** `plugin/parity-host` is built on JUCE's own plugin hosting
 (`juce::AudioPluginFormatManager`, which loads VST3, AU and LV2) and adds a minimal CLAP host

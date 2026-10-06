@@ -130,7 +130,7 @@ ring.
 
 `ctest` runs, besides the `dsp/` tests (`dsp_unit`, `dsp_fpenv_forced_flush`, `dsp_symbol_audit` and
 its control, `dsp_fp_profile_check` and the golden harness's `golden_check`, which requires every
-golden hash of sound revision 1, and `golden_forced_flush`):
+golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`):
 
 - `plugin_wrapper` (`tests/plugin_tests.cpp`): the processor driven as hosts drive it, compared
   bit for bit with the engine driven directly from `LoadPreset(…, Exact)` in 48-frame blocks,

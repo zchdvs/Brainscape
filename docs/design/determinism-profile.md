@@ -841,8 +841,10 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
   definition (§5.6's dither fold changes output only after 3.1 h). A **hard trigger** fails a
   pull request that changes a golden hash without a bump (§6.1); a **path trigger**
   (companion §3.4's `sound-rev-gate`) requires a pull request touching `dsp/src/`,
-  `dsp/include/`, `cmake/BrainscapeFpProfile.cmake` or the arm toolchain file to bump or to
-  carry a CODEOWNERS-approved, justified "sound-neutral" label (refactors, comments, tests).
+  `dsp/include/`, the CMake files that build the engine (`dsp/CMakeLists.txt`, the root
+  `CMakeLists.txt`, `cmake/BrainscapeFpProfile.cmake`), `cmake/fp-forbidden-flags.txt` or the
+  arm toolchain file to bump or to carry a CODEOWNERS-approved, justified "sound-neutral"
+  label (refactors, comments, tests).
   Firmware-only and app-only changes never touch it.
 - **Uses:** it keys the golden file, is recorded in every package and the pedal's handshake,
   and gates "Same engine (rN)" (§2.5). Bumps are cheap before publication (regenerate goldens,
@@ -881,7 +883,14 @@ mark-positioned births, re-anchors, far-rail clamps, frames with feedback above 
 an underflow flag, events applied, and the write-ahead counter (which must be 0). Lost coverage
 fails CI even when hashes match (today's 10 s vector fires 2 onsets, **measured** [oracle]).
 The Linux Debug leg also enforces gcov coverage of `Granular.cpp`, `OnsetDetector.cpp` and
-`PostChain.cpp`.
+`PostChain.cpp`. *Revision 1 (§8.4) has neither the engine-side counters nor the gcov
+thresholds.* Its harness counts what it sees from outside the engine (18 counters: events,
+onsets, frozen onsets and frames, frames with feedback above 1, triggers, loads, restarts,
+active and subnormal output, among others), requires per-preset minimums of them, and proves
+each preset's features with ablations, which must change its output and not before the
+feature acts. The write-ahead invariant is a Debug assertion instead of a counter, run over
+the whole corpus by every Debug `golden_check`. Births, steals, reverse and mark-positioned
+births, re-anchors, far-rail clamps and blocks with an underflow flag are not counted.
 
 **Hash:** SHA-256 of the interleaved little-endian float32 output plus one per second, computed
 in process; WAV files are written only on mismatch.
@@ -893,7 +902,10 @@ ring sizes (§6.4); per preset, the hash, per-second hashes and counters.
 **Rules:** one golden for all targets; a hash change bumps `kSoundRevision` and regenerates
 through the script; a golden is minted only when the x86 and emulated-M7 legs agree in one CI
 run; the file has CODEOWNERS review; goldens minted before revision 1 is published are
-internal.
+internal. *Revision 1 deviates:* there is no mint job, so it was minted locally on MSVC (GCC 11
+and 14, Clang 14 and the emulated M7 minted byte-identical files), and the pull request that
+carries it must pass every x86 leg and the emulated M7 in check mode against the committed
+file in one CI run: the same agreement, checked after minting instead of before.
 
 ### 6.2 CI legs
 
@@ -1168,13 +1180,26 @@ Each risk is stated with its mitigation.
 The merged milestone sequence is companion §8.1; the profile's steps fall into it as below.
 Every sound-changing change lands before revision 1 is **published** (§1.5).
 
-**Status, 2026-10-06: steps 1–10 are done**, in `a30aa9d` through `26917d3`
-(`git log ce005eb..26917d3`): merged step 1 up to `b114b07`, which merged the state API
-(step 9) and the post-delay glide (step 8's smoothing decision); internal revision 1 minted in
-`06557f3` and its gates turned on in `26917d3` (STATUS.md, "Internal sound revision 1"). One
-finding for §5.12: a one-ULP binary64 change to a DetMath coefficient changed no corpus output
-bit, because every DetMath result is rounded to binary32 first, so only the path trigger sees
-it. Step 11 and the hardware-gated work of step 13 remain.
+**Status, 2026-10-06: steps 1–9 are done, and step 10 but for the pieces listed below**, in
+`a30aa9d` through `d10c499` (`git log ce005eb..d10c499`): merged step 1 up to
+`b114b07`, which merged the state API (step 9) and the post-delay glide (step 8's smoothing
+decision); internal revision 1 minted in `06557f3`, its gates turned on in `26917d3`, and in
+`d10c499` check mode made to compare every field of the golden file, and random block
+sizes, the M7's forced-flush control (FZ) and the JUCE-include audit added to the gating legs
+(STATUS.md, "Internal sound revision 1"). Step 10 still lacks: (a) the engine-side coverage counters and the gcov
+thresholds of §6.1 (revision 1's substitutes are in §6.1); (b) host blocks up to 8,192 frames
+through the wrapper's chunker (§6.4): the plugin's wrapper tests reach 4,096-frame host blocks
+against the engine, not against the golden corpus; (c) the ODR controls, renders and the audit
+with `dsp/` and plugin objects linked in swapped order (§6.3, §6.4); (d) the literal-bit audit
+(§6.3); (e) the plugin format targets' flags compared with the engine's through
+`compile_commands.json` (§6.3; the configure check already rejects forbidden flags on them);
+(f) the second negative control, a DetMath function swapped back to libm, as a hash control
+(§6.4; its symbol-audit form runs); (g) the Rosetta 2 and Prism host legs (§6.2); (h) a mint
+job (§6.1 records the deviation); (i) CODEOWNERS and the branch protection that makes the
+gates binding (§5.12, §6.1). One finding for §5.12: a one-ULP binary64 change to a DetMath
+coefficient changed no corpus output bit, because every DetMath result is rounded to binary32
+first, so only the path trigger sees it. The rest of step 10, step 11 and the hardware-gated
+work of step 13 remain.
 
 - **Merged step 1, no hardware (profile steps 1–9; the JUCE skeleton runs in parallel):**
   (1) build profile (§5.2); (2) header hygiene (§3.5); (3) parity harness — generator,
