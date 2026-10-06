@@ -58,10 +58,42 @@ inline float EnvMorphed(const grainmath::EnvSpec& e, float i, float smoothness,
   return env * e.gain;
 }
 
+#ifndef NDEBUG
+// Contract #1's ring invariant (determinism-profile.md §5.7): Pass 1 writes the
+// whole block before grains render, so at output sample n the frames just past
+// the live head W(n) hold new input in a large block but one-ring-old audio in a
+// small one. No interpolation tap (numTaps frames from firstTap) may land within
+// [1, kBlockWriteAheadFrames] ahead of W(n); W(n) itself was written by sample n
+// under any split, so it is legal.
+bool TapsClearOfWriteAhead(uint32_t firstTap, uint32_t numTaps, uint32_t liveFrame,
+                           uint32_t mask) noexcept {
+  for (uint32_t t = 0; t < numTaps; ++t) {
+    const uint32_t ahead = (firstTap + t - liveFrame) & mask;
+    if (ahead >= 1u && ahead <= kBlockWriteAheadFrames) return false;
+  }
+  return true;
+}
+
+// The invariant needs a ring that holds the grain: the write-ahead window, the grain's
+// span and both margins. On a smaller ring ComputeDelayBounds lets the near guard win
+// and the grain reads inside the window: a legal configuration (Init accepts 8 frames)
+// that no rail can make block-split invariant (determinism-profile.md §5.7, "Not
+// covered"), so the assertion skips those grains. g.inc is the float ratio times 2^32,
+// exact, so these are the rails ScheduleGrain computed.
+bool GrainFitsRing(const Grain& g, uint32_t bufLen) noexcept {
+  const int64_t mag  = g.inc < 0 ? -g.inc : g.inc;
+  const auto    rail = grainmath::ComputeDelayRails(
+      static_cast<double>(g.total), static_cast<double>(mag) * 0x1p-32, g.inc < 0,
+      bufLen > kBlockWriteAheadFrames ? bufLen - kBlockWriteAheadFrames : 0u,
+      kGuardMarginFrames);
+  return !(rail.hi < rail.lo);
+}
+#endif
+
 }  // namespace
 
 void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
-                                 uint32_t anchorFrame) noexcept {
+                                 uint32_t anchorFrame, uint32_t liveFrame) noexcept {
   uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment.
@@ -77,39 +109,64 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   const bool  reverse = p.reverseProb > 0.f && RandUnit(birthAbs, Draw::Reverse) < p.reverseProb;
 
   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
-  // recent onset mark — the Strum family's mechanism, design §4).
+  // recent eligible onset mark — the Strum family's mechanism, design §4).
   double d          = p.baseDelayFrames;
   bool   markActive = false;
-  if (p.posFromMark && markCount_ > 0) {
-    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
+  for (uint32_t k = 0; p.posFromMark && k < markCount_; ++k) {
+    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u - k) % kMaxMarks];
     // Staleness guard: once the write head has lapped the ring, the modular
     // distance aliases to a small value and the "mark" is live audio (review
-    // finding) — fall back to the base position instead.
-    if (birthAbs - m.abs < static_cast<int64_t>(mask_)) {
-      d          = static_cast<double>((anchorFrame - m.frame) & mask_);
-      markActive = true;
-      // Read attack-length earlier so the marked transient lands at the
-      // envelope's flat top, not 15-31 dB down the fade-in (review finding).
-      d += static_cast<double>(grainmath::MakeEnv(static_cast<float>(total), p.sustain,
-                                                  p.skew)
-                                   .attackEnd);
-      // Upward pitch inflates the near guard past the mark distance and would
-      // silently clamp the grain onto pre-onset material (review finding): cap
-      // the grain length so the guard fits, instead of losing the transient.
-      if (ratio > 1.0f) {
-        const double maxOut = (d - kGuardMarginFrames) / (static_cast<double>(ratio) - 1.0);
-        if (maxOut < static_cast<double>(total)) {  // converted only in [16, total)
-          total = maxOut >= 16.0 ? static_cast<uint32_t>(maxOut) : 16u;
-        }
+    // finding) — fall back to the base position instead. Older marks are staler.
+    if (birthAbs - m.abs >= static_cast<int64_t>(mask_)) break;
+    // Pin-eligible marks (design §2.4): while frozen, a mark recorded after the
+    // pin is skipped, so freeze holds the Strum position too. Measured from the
+    // pin, such a mark wrapped to ~one ring and clamped onto the far rail.
+    // Unfrozen, the two distances are equal and the newest mark wins.
+    const uint32_t dPin = (anchorFrame - m.frame) & mask_;
+    if (dPin > ((liveFrame - m.frame) & mask_)) continue;
+    d          = static_cast<double>(dPin);
+    markActive = true;
+    break;
+  }
+  if (markActive) {
+    // Read attack-length earlier so the marked transient lands at the
+    // envelope's flat top, not 15-31 dB down the fade-in (review finding).
+    d += static_cast<double>(grainmath::MakeEnv(static_cast<float>(total), p.sustain,
+                                                p.skew)
+                                 .attackEnd);
+    // Upward pitch inflates the near guard past the mark distance and would
+    // silently clamp the grain onto pre-onset material (review finding): cap
+    // the grain length so the guard fits, instead of losing the transient.
+    if (ratio > 1.0f) {
+      const double maxOut = (d - kGuardMarginFrames) / (static_cast<double>(ratio) - 1.0);
+      if (maxOut < static_cast<double>(total)) {  // converted only in [16, total)
+        total = maxOut >= 16.0 ? static_cast<uint32_t>(maxOut) : 16u;
       }
     }
   }
   // Spray is reflected (not clamped) into the per-direction guard bounds so it
   // keeps a distribution instead of piling onto the margin rail (review finding).
-  const auto bounds = grainmath::ComputeDelayBounds(
-      static_cast<double>(total), static_cast<double>(ratio), reverse, mask_ + 1u,
+  // The far rail also excludes the frames Pass 1 has already written past the
+  // live head this block (up to kBlockWriteAheadFrames - 1): the 64-frame margin
+  // alone left far-rail reads block-size dependent. A shared build constant,
+  // never cfg.maxBlockSize, so pedal and plugin clamp identically.
+  const uint32_t bufLen = mask_ + 1u;
+  auto bounds = grainmath::ComputeDelayBounds(
+      static_cast<double>(total), static_cast<double>(ratio), reverse,
+      bufLen > kBlockWriteAheadFrames ? bufLen - kBlockWriteAheadFrames : 0u,
       kGuardMarginFrames);
-  (void)markActive;
+  // The guards protect against the LIVE write head, but d is measured from the
+  // anchor. While frozen the live head keeps recording `age` frames past the pin,
+  // so the far rail moves age frames closer; guards measured from the pin let
+  // grains overtake, or start ahead of, the live head. The near rail stays
+  // pin-relative (the grain stays inside the pinned window); if the two cross,
+  // the live-head rail wins — a clamp changes the sound, a write-ahead read
+  // breaks block-split invariance.
+  const uint32_t age = (liveFrame - anchorFrame) & mask_;
+  if (age != 0) {
+    bounds.hi -= static_cast<double>(age);
+    if (bounds.hi < bounds.lo) bounds.lo = bounds.hi;
+  }
   if (p.sprayFrames > 0.f) {
     d += static_cast<double>((RandUnit(birthAbs, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
     d = grainmath::ReflectIntoBounds(d, bounds);
@@ -118,9 +175,13 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   }
 
   Grain& g = grains_[slot];
-  // d is at least the margin and at most the larger of the ring and the near guard,
-  // L * (r - 1) + margin with r <= 4.
-  assert(d >= kGuardMarginFrames && d <= 0x1p27);
+  // d is at most the larger of the ring and the near guard, L * (r - 1) + margin
+  // with r <= 4. It is at least the margin minus the pin's age (< ring <= 2^26):
+  // while frozen the live-head rail can pull the far rail below the near one, and
+  // on a small ring with long grains below zero (the grain then starts ahead of the
+  // pin, still behind the live head). RoundHalfAwayI32 needs only |d| < 2^31; the
+  // negative result wraps modulo 2^32 under the mask as intended.
+  assert(d > kGuardMarginFrames - static_cast<double>(bufLen) && d <= 0x1p27);
   const auto startFrame =
       (anchorFrame - static_cast<uint32_t>(detmath::RoundHalfAwayI32(d))) & mask_;
   g.pos    = static_cast<uint64_t>(startFrame) << 32;
@@ -173,12 +234,16 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
       uint64_t pos   = g.pos;
       float    env_i = static_cast<float>(g.rendered);
       const float gl = g.gainL, gr = g.gainR, sm = g.smoothness;
+#ifndef NDEBUG
+      const bool fits = GrainFitsRing(g, mask_ + 1u);
+#endif
 
       // Tier / unity / envelope morph resolved per grain, hoisted out of the
       // per-sample loop as three inner-loop variants (design §3).
       if (g.unity) {
         for (uint32_t n = s; n < endN; ++n) {
           const auto  f   = static_cast<uint32_t>(pos >> 32) & mask_;
+          assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n, mask_));
           const float env = EnvMorphed(g.env, env_i, sm, lut_);
           wetL[n] += static_cast<float>(ring_[2u * f]) * kInvScale * env * gl;
           wetR[n] += static_cast<float>(ring_[2u * f + 1u]) * kInvScale * env * gr;
@@ -187,6 +252,8 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
         }
       } else if (g.tier == 0) {
         for (uint32_t n = s; n < endN; ++n) {
+          assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32) - 1u, 4u,
+                                                blockRingStart_ + n, mask_));
           const float env = EnvMorphed(g.env, env_i, sm, lut_);
           wetL[n] += ReadHermite(ring_, mask_, pos, 0) * env * gl;
           wetR[n] += ReadHermite(ring_, mask_, pos, 1) * env * gr;
@@ -195,6 +262,8 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
         }
       } else {
         for (uint32_t n = s; n < endN; ++n) {
+          assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32), 2u,
+                                                blockRingStart_ + n, mask_));
           const float env = EnvMorphed(g.env, env_i, sm, lut_);
           wetL[n] += ReadLinear(ring_, mask_, pos, 0) * env * gl;
           wetR[n] += ReadLinear(ring_, mask_, pos, 1) * env * gr;
@@ -213,8 +282,9 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
 }
 
 void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
-                                uint32_t anchorFrame, uint32_t* renderedTo, uint32_t n,
-                                int64_t absSample, float* wetL, float* wetR) noexcept {
+                                uint32_t anchorFrame, uint32_t liveFrame,
+                                uint32_t* renderedTo, uint32_t n, int64_t absSample,
+                                float* wetL, float* wetR) noexcept {
   // Flush up to the trigger sample so a reused/stolen slot's tail is emitted.
   RenderSpan(*renderedTo, n, absSample, wetL, wetR);
   *renderedTo = n;
@@ -234,13 +304,14 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
     for (uint32_t i = 1; i < orderCount_; ++i) order_[i - 1] = order_[i];
     --orderCount_;
   }
-  ScheduleGrain(slot, p, birthAbs, anchorFrame);
+  ScheduleGrain(slot, p, birthAbs, anchorFrame, liveFrame);
   order_[orderCount_++] = static_cast<uint8_t>(slot);
 }
 
 void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
-                           uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
+                           uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
                            uint32_t numFrames, float* wetL, float* wetR) noexcept {
+  blockRingStart_ = ringFrameAtBlockStart;
   for (uint32_t n = 0; n < numFrames; ++n) {
     wetL[n] = 0.f;
     wetR[n] = 0.f;
@@ -264,8 +335,21 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
   uint32_t renderedTo = 0;
   uint32_t evIdx      = 0;
 
+  // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
+  // has consumed 3/4 of the ring behind the pin, re-pin to the present. The
+  // splice is audible and documented; the alternative was the frozen window
+  // silently degrading into delayed live signal as it is overwritten. Decided
+  // per sample, so the splice lands on the same absolute sample for every block
+  // size (deciding it at block start moved it by up to one block).
+  uint32_t       pin         = *frozenAnchor;
+  const uint32_t bufLen      = mask_ + 1u;
+  const uint32_t reanchorAge = bufLen - (bufLen >> 2);
+
   for (uint32_t n = 0; n < numFrames; ++n) {
-    const int64_t abs = absSample + n;
+    const int64_t  abs  = absSample + n;
+    const uint32_t live = (ringFrameAtBlockStart + n) & mask_;  // written by Pass 1 at abs
+    if (frozen && ((live - pin) & mask_) > reanchorAge) pin = live;
+    const uint32_t anchor = frozen ? pin : live;
 
     // Manual/MIDI triggers fire INSIDE the per-sample loop, one per consecutive
     // sample — a pre-loop fired them out of birth order relative to same-block
@@ -273,8 +357,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     // both the canonical summation order and oldest-steal rely on (review
     // finding). Sample-offset delivery lands with the SPSC event queue.
     if (n < ev.manualCount) {
-      const uint32_t anchor = frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
-      FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
+      FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
     }
 
     // Onset events: record the mark always (POS_MARK feeds on it); fire a grain
@@ -285,9 +368,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
       markHead_         = (markHead_ + 1u) % kMaxMarks;
       if (markCount_ < kMaxMarks) ++markCount_;
       if (p.onsetTrigger) {
-        const uint32_t anchor =
-            frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
-        FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
+        FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
       }
       ++evIdx;
     }
@@ -321,8 +402,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
       RenderSpan(renderedTo, n, absSample, wetL, wetR);
       renderedTo = n;
 
-      const uint32_t anchor = frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
-      ScheduleGrain(slot, p, abs, anchor);
+      ScheduleGrain(slot, p, abs, anchor, live);
       order_[orderCount_++] = static_cast<uint8_t>(slot);
 
       // Next inter-arrival: deterministic spacing morphing to an exponential
@@ -343,6 +423,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
   }
 
   RenderSpan(renderedTo, numFrames, absSample, wetL, wetR);
+  *frozenAnchor = pin;
 }
 
 }  // namespace brainscape::detail

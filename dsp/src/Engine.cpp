@@ -42,6 +42,11 @@ static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
 
+// Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
+// live head within one block; that window must cover the largest legal block.
+static_assert(kFeedbackDelayFrames <= detail::kBlockWriteAheadFrames,
+              "the far-rail write-ahead window must cover maxBlockSize");
+
 constexpr float kInvScale = 1.0f / 32767.0f;
 
 constexpr float kMaxFinite = 0x1.fffffep127f;  // FLT_MAX
@@ -569,16 +574,8 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
     granularDirty_ = true;
   }
-  if (frozen_) {
-    // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
-    // has consumed 3/4 of the ring behind the pin, re-pin to the present. The
-    // splice is audible and documented; the alternative was the frozen window
-    // silently degrading into delayed live signal as it is overwritten.
-    const uint32_t age = (writeFrame_ - frozenAnchor_) & mask_;
-    if (age > cfg_.historyFrames - (cfg_.historyFrames >> 2)) {
-      frozenAnchor_ = writeFrame_;
-    }
-  }
+  // Re-anchor-on-wrap (design §2.4) runs per sample inside granular_.Process:
+  // decided here at block start, the splice moved with the block grid.
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
@@ -664,7 +661,7 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   }
 
   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
-  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, frozenAnchor_,
+  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, &frozenAnchor_,
                     ctx.numFrames, wetL_, wetR_);
 
   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into

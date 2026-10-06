@@ -64,6 +64,7 @@ int16_t Quantize(float x) {
 
 struct RenderResult {
   std::vector<float> l, r;
+  uint32_t onsets = 0;  // ConsumeOnsetCount() after the render
 };
 
 struct MidRenderChange {
@@ -110,6 +111,7 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
     pos += n;
     ++blockIdx;
   }
+  out.onsets = engine.ConsumeOnsetCount();
   return out;
 }
 
@@ -389,9 +391,16 @@ TEST_CASE("coherent overlap is level-exact: 8 stacked unity grains null") {
 TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
   EngineConfig cfg = SmallConfig();  // dither ON — its split-invariance is under test
 
+  // Full-scale noise bursts over a quiet floor, the first after the onset
+  // detector's warm-up, so onsets fire and POS_MARK and the onset trigger run.
+  // Noise from frame 0 recorded none (its only attack fell inside the warm-up),
+  // and every grain silently fell back to the base position.
   Rng rng;
   std::vector<float> input(4096);
-  for (auto& x : input) x = 0.8f * rng.Next();
+  for (size_t n = 0; n < input.size(); ++n) {
+    const bool burst = n >= 1280 && (n - 1280) % 1024 < 640;
+    input[n]         = (burst ? 0.8f : 0.002f) * rng.Next();
+  }
 
   const std::vector<std::pair<ParamId, float>> params = {
       {ParamId::DelayMs, 100.0f},      {ParamId::Mix, 0.7f},
@@ -408,6 +417,7 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
       {ParamId::OnsetTrigger, 1.0f},      {ParamId::PositionSource, 1.0f}};
 
   const auto ref = Render(cfg, input, params, false, {512});
+  REQUIRE(ref.onsets > 0);  // POS_MARK coverage must not silently vanish
   for (uint32_t split : {1u, 7u, 32u, 48u, 64u, 127u}) {
     const auto other = Render(cfg, input, params, false, {split});
     REQUIRE(std::memcmp(ref.l.data(), other.l.data(), ref.l.size() * sizeof(float)) == 0);
@@ -1088,6 +1098,91 @@ TEST_CASE("manual trigger surplus carries across blocks, split-invariant") {
   const auto big   = render(512);
   const auto small = render(4);
   REQUIRE(std::memcmp(big.data(), small.data(), big.size() * sizeof(float)) == 0);
+}
+
+// Contract #1 with FREEZE engaged mid-render. Freeze is an event, so the harness
+// splits the block at its frame (what the SPSC event queue will do); after that,
+// every block size must agree bit-for-bit with block 1. Pass 1 writes the whole
+// block into the ring before Pass 2 renders it, so any grain read past the live
+// write head sees new audio in big blocks and one-ring-old audio in small ones —
+// these sections each force one way a read used to get there.
+TEST_CASE("block-splitting bit-exactness with freeze and far-rail positions") {
+  struct Setup {
+    EngineConfig cfg;
+    std::vector<std::pair<ParamId, float>> params;
+    size_t total;
+    size_t freezeAt;  // SIZE_MAX = never
+  };
+  auto run = [](const Setup& s, const std::vector<float>& input,
+                const std::vector<uint32_t>& pattern) {
+    LiveEngine live(s.cfg, s.params);
+    std::vector<float> l(s.total), r(s.total);
+    size_t pos = 0, bi = 0;
+    while (pos < s.total) {
+      if (pos == s.freezeAt) live.engine.SetFreeze(true);
+      size_t n = std::min<size_t>(pattern[bi++ % pattern.size()], s.total - pos);
+      if (pos < s.freezeAt && pos + n > s.freezeAt) n = s.freezeAt - pos;  // split at event
+      const float* ins[2]  = {input.data() + pos, input.data() + pos};
+      float*       outs[2] = {l.data() + pos, r.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = static_cast<uint32_t>(n);
+      live.engine.Process(ctx);
+      pos += n;
+    }
+    l.insert(l.end(), r.begin(), r.end());
+    return l;
+  };
+  auto check = [&](const Setup& s, const std::vector<float>& input) {
+    const auto ref = run(s, input, {1});
+    for (const auto& pattern : std::vector<std::vector<uint32_t>>{
+             {7}, {32}, {48}, {64}, {127}, {512}, {48, 1, 127, 32}}) {
+      INFO("block pattern starting " << pattern[0]);
+      const auto other = run(s, input, pattern);
+      REQUIRE(std::memcmp(ref.data(), other.data(), ref.size() * sizeof(float)) == 0);
+    }
+  };
+
+  // Plucks keep arriving after the freeze, so POS_MARK sees marks NEWER than the pin.
+  auto plucked = [](size_t total) {
+    std::vector<float> input(total, 0.0f);
+    Rng rng;
+    for (auto& x : input) x = 0.001f * rng.Next();
+    for (size_t at = 3000; at + 2400 < total; at += 4800) {
+      AddPluck(&input, at, 0.6f, static_cast<uint32_t>(700u + at));
+    }
+    return input;
+  };
+
+  SECTION("POS_MARK + reverse/pitch/spray with marks recorded after the pin") {
+    // The contract-#1 parameter set (pitch 7 st, reverse 0.3, spray 50 ms, POS_MARK,
+    // onset trigger) plus a freeze. Guarded against the pin, post-freeze marks wrapped
+    // to ~one ring length and their grains overtook or started ahead of the live head.
+    Setup s{SmallConfig(),
+            {{ParamId::DelayMs, 100.0f},    {ParamId::Mix, 1.0f},
+             {ParamId::GrainSizeMs, 60.f},  {ParamId::Overlap, 0.55f},
+             {ParamId::SprayMs, 50.0f},     {ParamId::PitchSt, 7.0f},
+             {ParamId::SpreadCents, 20.f},  {ParamId::ReverseProb, 0.3f},
+             {ParamId::Jitter, 1.0f},       {ParamId::TriggerSens, 0.8f},
+             {ParamId::OnsetTrigger, 1.0f}, {ParamId::PositionSource, 1.0f}},
+            24000, 6001};
+    check(s, plucked(s.total));
+  }
+  SECTION("freeze held past the re-anchor point") {
+    // Re-anchor-on-wrap fires after 3/4 of the ring; deciding it at block start
+    // moved the splice with the block grid.
+    Setup s{SmallConfig(), DegenerateDelay(20.0f), 0, 1001};
+    s.cfg.historyFrames = 1u << 13;
+    s.total             = 24000;
+    check(s, plucked(s.total));
+  }
+  SECTION("far rail, no freeze: the margin must cover Pass 1's block write-ahead") {
+    // base delay = ring length - ~200 frames: inside the 64-frame margin's legal
+    // range, but within one 512-frame block of the write head's leading edge.
+    Setup s{SmallConfig(), DegenerateDelay(678.0f), 48000, SIZE_MAX};
+    check(s, plucked(s.total));
+  }
 }
 
 // POS_MARK normalization: mark-anchored grains are time-shifted copies (like

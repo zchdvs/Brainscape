@@ -18,7 +18,7 @@ library with a full contract-test suite; it has not yet touched real hardware or
 | Research corpus | ✅ Complete — 11 sourced documents + synthesis ([docs/research/](research/)) |
 | Engine design | ✅ Complete — reviewed v2 ([grain-engine.md](design/grain-engine.md)) |
 | `dsp/` core: contracts + skeleton | ✅ Shipped & hardened |
-| `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (one block-split defect found since — see "Verified behavioral contracts") |
+| `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (block-split defect found and fixed 2026-10-05) |
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 📐 Designed and prototyped ([determinism-profile.md](design/determinism-profile.md)) — **next** |
@@ -58,7 +58,7 @@ decorrelates within seconds on any preset with timing jitter.
 What the guarantee covers is precise. Two conforming builds of the same sound revision,
 restarted into the exact-restart state, loading the same compiled preset with an Exact load,
 and fed the same 48 kHz float32 input and the same frame-stamped events, write identical
-float32 output (on the pedal's 48-frame block grid until the block-split fix lands). Not
+float32 output, whatever block sizes each side uses. Not
 covered: the pedal's analog path, live playing, preset loads that keep trails (Spillover),
 DAW sessions at other sample rates, and DAW automation. The full contract is in
 [determinism-profile.md](design/determinism-profile.md).
@@ -75,7 +75,8 @@ determinism profile replaces with in-tree math) implementing:
   dithered fractional ceiling, spray (guard-reflected), ±24 st pitch with cents spread,
   per-grain reverse, equal-power pan, tiered interpolation (8× cubic Hermite / linear)
   with a bit-exact integer path at unity rate, coherence-aware `N^−p` normalization,
-  and freeze as a pinned anchor with re-anchor-on-wrap.
+  and freeze as a pinned anchor (holding onset-mark positions too) with per-sample
+  re-anchor-on-wrap.
 - **Feedback path** — a fixed taming chain (DC → HP 100 Hz → feedback-dependent LP →
   soft saturator → allpass diffusion) that makes **feedback up to 1.1 a bounded
   self-oscillation feature**, with counter-keyed TPDF dither so the loop decays to
@@ -98,13 +99,12 @@ determinism profile replaces with in-tree math) implementing:
 
 - **Bit-exact block-split invariance within one build**: identical output whether the host
   chops the stream into 1-, 7-, 48-, 127- or 512-frame blocks, for the configurations the
-  suite exercises — dither, jitter, spray, reverse, pitch, and queued manual triggers.
-  **Known exception (found 2026-10-05, not yet fixed):** three mechanisms break it — freeze
-  combined with onset-mark positioning and reverse or upward pitch; reverse grains at mark
-  positions nearly one ring (≈87 s) old; and freeze held longer than ≈65 s. The suite missed them because its
-  block-split test never engages freeze and records no onsets. A three-part fix with a
-  regression test is verified in a scratch copy (all block sizes bit-identical, full suite
-  green on MSVC and GCC); see determinism-profile.md, "The block-split bug".
+  suite exercises — dither, jitter, spray, reverse, pitch, onset-mark positioning with onsets
+  that actually fire, freeze engaged mid-render and held past the re-anchor point, grain
+  positions on the ring's far rail, and queued manual triggers. A Debug assertion checks
+  that no grain reads a ring frame the current block has already written ahead of the live
+  write head. The freeze/onset-mark/far-rail defect found on 2026-10-05 is fixed (see
+  determinism-profile.md, "The block-split bug").
 - **Bit-exact degenerate-delay null** through the int16 ring (the one-engine proof).
 - **Level consistency** within ±1 dB across the whole overlap sweep, including
   coherent, decorrelated, frozen, and mark-anchored populations.
@@ -117,7 +117,7 @@ determinism profile replaces with in-tree math) implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite: 40 test cases / ~633k assertions**, green in Release and Debug.
+**Suite: 41 test cases / ~633k assertions**, green in Release and Debug.
 **CI**: Linux/macOS/Windows host matrix with `-Werror`, a Debug+ASan/UBSan leg, a
 Release+ASan leg (for NDEBUG-gated contract tests), and a compile-only
 **Cortex-M7 cross build** of `dsp/`.
@@ -133,7 +133,8 @@ disassembly rather than inspection. Highlights of what that caught before it cou
 voice population that varied −3.5 dB with the DAW buffer size, a reverb that was silent for
 its first 107 ms, an unbounded filter at its own knob stop (+76 dB), a detector that free-ran
 on rig hiss, a normalization law wrong by +18 dB on the flagship delay modes, and — in the
-parity work — the block-split defect above and a licensing conflict in libDaisy. Review
+parity work — a block-split defect under freeze and onset marks (since fixed) and a
+licensing conflict in libDaisy. Review
 records live in [docs/design/reviews/](design/reviews/).
 
 ## Known gaps and deferred work
@@ -143,13 +144,12 @@ records live in [docs/design/reviews/](design/reviews/).
   toolchains. The determinism profile fixes both (contraction off everywhere, in-tree math)
   and adds a full floating-point control-word guard, a deterministic denormal policy,
   golden-hash CI and an emulated Cortex-M7 parity job.
-- **Engine defects to fix before the first sound revision:** the block-split defect above;
-  a mono in-place aliasing bug (`dsp/src/Engine.cpp:529-530`: with mono input and a host
-  that shares input and output buffers, every right-channel sample is wrong); the dither key
-  truncating the sample counter (the pattern repeats every 2²⁹ samples); and non-finite
-  input passing through, plus a NaN path in the grain envelope setup once denormals are no
-  longer flushed. The determinism profile lists them ("A NaN-free boundary", "Output-changing
-  fixes", "The block-split bug").
+- **Engine defects to fix before the first sound revision:** a mono in-place aliasing bug
+  (`dsp/src/Engine.cpp:526-527`: with mono input and a host that shares input and output
+  buffers, every right-channel sample is wrong); the dither key truncating the sample counter
+  (the pattern repeats every 2²⁹ samples); and non-finite input passing through, plus a NaN
+  path in the grain envelope setup once denormals are no longer flushed. The determinism
+  profile lists them ("A NaN-free boundary", "Output-changing fixes").
 - **Engine API the companion needs:** an exact `Restart`, a random-number epoch for
   preset loads that keep trails, one `LoadPreset` entry point with a fixed order, and
   frame-stamped events. Smaller items: automating delay times clicks (no smoothing on the
@@ -186,8 +186,8 @@ Steps 1–4 need no hardware.
 
 1. **Determinism profile and the `dsp/` API.** Contraction off on every toolchain, in-tree
    math replacing libm, the full control-word guard and denormal flush, a NaN-free input
-   boundary, the output-changing fixes (the block-split fix in all three parts, mono
-   aliasing, the dither key), then `Restart`, the random-number epoch, `LoadPreset` and
+   boundary, the remaining output-changing fixes (mono aliasing, the dither key; the
+   block-split fix has landed), then `Restart`, the random-number epoch, `LoadPreset` and
    frame-stamped events. The JUCE skeleton (build, plain-value parameter layer, forced-48 kHz
    standalone shell) runs in parallel.
 2. **Mint internal sound revision 1.** Golden hashes and CI gates turn on, including the

@@ -68,8 +68,9 @@ struct DelayBounds {
   double lo, hi;
 };
 
-inline DelayBounds ComputeDelayBounds(double outFrames, double ratio, bool reverse,
-                                      uint32_t bufFrames, double marginFrames) noexcept {
+// The two rails as the table states them; hi < lo means the ring cannot hold the grain.
+inline DelayBounds ComputeDelayRails(double outFrames, double ratio, bool reverse,
+                                     uint32_t bufFrames, double marginFrames) noexcept {
   DelayBounds b;
   if (reverse) {
     b.lo = marginFrames;
@@ -79,6 +80,12 @@ inline DelayBounds ComputeDelayBounds(double outFrames, double ratio, bool rever
     b.hi = static_cast<double>(bufFrames) - outFrames * (ratio < 1.0 ? 1.0 - ratio : 0.0) -
            marginFrames;
   }
+  return b;
+}
+
+inline DelayBounds ComputeDelayBounds(double outFrames, double ratio, bool reverse,
+                                      uint32_t bufFrames, double marginFrames) noexcept {
+  DelayBounds b = ComputeDelayRails(outFrames, ratio, reverse, bufFrames, marginFrames);
   if (b.hi < b.lo) b.hi = b.lo;  // degenerate config: near guard wins
   return b;
 }
