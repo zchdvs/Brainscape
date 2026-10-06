@@ -528,8 +528,10 @@ host-visible. Macro `targets[].param` addresses stable leaf names only.
   the Microcosm's undefinable-range defect (microcosm.md §12.1) fixed as data. The jack
   handling lives in `firmware/`; the assignment model and its persistence live here.
 - **Automation semantics, documented loudly:** post-chain parameters smooth continuously
-  (per-sample one-poles, fixed time constants); grain parameters are sampled at grain
-  birth — effective automation resolution equals the grain rate. Feature, not bug.
+  (per-sample one-poles, fixed time constants; the post-delay time glides its tap, bending
+  pitch like tape at up to 0.5–1.5× playback, determinism-profile.md §5.6); grain parameters
+  are sampled at grain birth — effective automation resolution equals the grain rate.
+  Feature, not bug.
 - **Soft takeover (Pickup)** — Surge XT's lock/proximity-unlock machine — applies to
   physical pots after preset recall and to absolute MIDI CC; never to host automation. MIDI
   map avoids CC 0/1/6/7/10/11/32/38/64/65/98/99/100/101/121/123; relative encoding pinned to

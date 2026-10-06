@@ -95,7 +95,8 @@ implementing:
   self-oscillation feature**, with counter-keyed TPDF dither so the loop decays to
   *exact* silence.
 - **Post chain** — ordered, bypassable stages: stereo chorus-class mod, the Space-knob
-  stereo delay (damped, DC-blocked regeneration), a Clouds-style Dattorro/Griesinger
+  stereo delay (damped, DC-blocked regeneration; a time change glides the tap and bends
+  pitch like tape instead of clicking), a Clouds-style Dattorro/Griesinger
   reverb with multi-tap early output, and a double-sampled SVF with continuous
   LP→BP→HP→Notch morph (equal-power laws throughout).
 - **Trigger layer** — spectral-flux onset detection (512/256, in-tree FFT) with
@@ -156,7 +157,7 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (78 test cases / ~2.54M assertions in Release, 77 in Debug),
+**Suite** (`ctest`): `dsp_unit` (84 test cases / ~2.54M assertions in Release, 83 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
 editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with
@@ -193,9 +194,9 @@ records live in [docs/design/reviews/](design/reviews/).
 - **Engine API the companion needs:** an exact `Restart`, a random-number epoch for
   preset loads that keep trails, one `LoadPreset` entry point with a fixed order, and
   frame-stamped events with an overflow counter; each must follow the guard pattern. Smaller
-  items: the time-parameter smoothing decision (automating delay times clicks: no smoothing on
-  the post-delay tap), input above 0 dBFS hard-clips in the int16 ring, and `Trigger()`'s
-  source/velocity/offset are accepted but unread.
+  items: automating `DelayMs` still splices clean delays (the grain engine's glide, below),
+  input above 0 dBFS hard-clips in the int16 ring, and `Trigger()`'s source/velocity/offset
+  are accepted but unread.
 - **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
   natively), Restart on transport start and the spare engine, the wrapper bypass with
   crossfade, the pedal-faithful input option (`ConditionInput24`), MIDI CC mapping, pluginval
@@ -220,7 +221,7 @@ records live in [docs/design/reviews/](design/reviews/).
   modifiers, dual layers, step tables, `POS_GRID`, CLOCK-quantized triggering, scale
   quantization of the pitch set, intermittency.
 - **Post chain**: reverb damping/bandwidth as parameters, tempo-synced delay time,
-  runtime stage reordering, delay-time change crossfade.
+  runtime stage reordering.
 - **The central product risk is unchanged**: mode *feel*. No amount of architecture
   replaces the curation effort on the 44 factory modes — and no mode exists yet.
 
@@ -233,11 +234,10 @@ Steps 1–4 need no hardware.
 
 1. **Determinism profile and the `dsp/` API.** Landed: the build profile, header hygiene,
    in-tree math with the symbol audit, the full control-word guard and denormal flush, the
-   NaN-free boundary, the block-split fix, mono aliasing and the dither key, the parity
-   harness and its M7 leg (report-only), and the JUCE skeleton. Remaining: `Restart`, the
-   random-number epoch, `LoadPreset` and frame-stamped events (profile steps 8–9, before
-   minting because golden scripts place events at odd frames), and the time-parameter
-   smoothing decision.
+   NaN-free boundary, the block-split fix, mono aliasing and the dither key, the post-delay
+   time glide, the parity harness and its M7 leg (report-only), and the JUCE skeleton.
+   Remaining: `Restart`, the random-number epoch, `LoadPreset` and frame-stamped events
+   (profile steps 8–9, before minting because golden scripts place events at odd frames).
 2. **Mint internal sound revision 1.** Golden hashes and CI gates turn on, including the
    emulated Cortex-M7 parity job on every pull request; then the nightly legs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and

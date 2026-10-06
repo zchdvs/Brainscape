@@ -530,11 +530,11 @@ changes sound and lands in merged step 1 (§8.1). For the app:
 leg (`GrainMath.h:114-126`), fixed by the profile (§3.7 there; §5.5 here); the dither-key
 truncation (`Engine.cpp:56-59`), which repeats the dither every 2²⁹ samples (3.1 h) invisibly to
 golden vectors, fixed before internal revision 1 (profile §5.6) and the motivating case for
-§6.5's rule; and **time-parameter clicks**: the post-delay tap moves by whole frames
-(`PostChain.cpp:280`) and `DelayMs` splices clean delays, identically on both sides. A smoothed
-fractional or crossfaded tap, with pot conditioning in `dsp/`, is recommended and decided in
-merged step 1 (profile §8.4 step 8); if adopted it bumps the revision before revision 1 is
-published.
+§6.5's rule; and **time-parameter clicks**, identical on both sides. Decided in merged step 1
+(profile §8.4 step 8) and landed before revision 1: the post-delay tap glides to a new time
+inside `dsp/`, so pot moves and automation bend pitch like tape instead of splicing, on every
+block grid (profile §5.6). `DelayMs` still splices clean delays until the
+grain engine's glide lands.
 
 ### 4.12 Checklist for `BrainscapeProcessor`
 

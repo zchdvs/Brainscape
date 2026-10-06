@@ -575,6 +575,29 @@ now follows the profile's rule.
 - **Time-parameter clicks:** `post.delay.time_ms` moves the post-delay tap by whole frames, and
   `DelayMs` makes hard splices on clean-delay presets; maximum second difference 0.115 and
   0.68 respectively, against 0.0018 static (**measured** [challenge]).
+- **The post-delay glide** (2026-10-06, branch `claude/time-smoothing`; **measured**, MSVC
+  19.40): a clean 10 ms grain path, the post delay alone at mix 1,
+  dither off, 48-frame blocks, the change at an odd frame. Each figure is the largest second
+  difference after the change over the larger of the two static renders, for three steady
+  tones (233, 587 and 1,319 Hz; the unit test's input) / the generator's SoftNotes vector:
+
+  | Change | Integer tap | Glide |
+  |---|---|---|
+  | step 300 → 400 ms | 190× / 202× | 1.00× / 1.00× |
+  | step 400 → 300 ms | 189× / 203× | 2.24× / 1.81× |
+  | 100 ms/s ramp, 48-frame steps, up / down | 52×, 46× / 82×, 83× | 1.00×, 1.26× / 1.00×, 1.00× |
+  | 100 ms/s ramp, 512-frame steps | 279× / 610× | 1.00× / 1.00× |
+  | 300 → 1,300 ms in 0.25 s, up / down | 158×, 156× / 442×, 439× | 1.00×, 2.36× / 1.00×, 2.11× |
+  | 10 ms ↔ 2 s steps | 137× / 227× | ≤ 2.32× |
+
+  Above 1× is pitch, not a click: a shrinking delay plays at up to 1.5× speed, and linear
+  interpolation at speed s raises a second difference by at most max(s, 3s − 2). With feedback
+  0.5 the global figures reach 6.5× (the loop beats against its own repitched copy), yet no
+  32-frame block exceeds 1.36× the largest block 2–16 blocks away (static renders 1.05–1.40×,
+  the integer tap up to 290×). A 100 ms step lands bit-identical to a static render after
+  54,743 frames (1.14 s), 10 ms → 2 s after 232,285 (4.8 s). `DelayMs`, unchanged: 86× / 71× for
+  a 100 ms step and 281× / 617× for the 48-frame ramp. Golden corpus: `post_sweep` and
+  `automation_offgrid` change from second 0, the other 20 presets keep their hashes.
 
 ### 5.7 The block-split bug: the verification in full
 
