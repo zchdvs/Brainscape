@@ -157,7 +157,7 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (84 test cases / ~2.54M assertions in Release, 83 in Debug),
+**Suite** (`ctest`): `dsp_unit` (86 test cases / ~2.54M assertions in Release, 85 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test and `golden_report`; a plugin build adds the wrapper tests, the
 editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and Debug with

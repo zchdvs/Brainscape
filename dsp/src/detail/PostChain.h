@@ -125,8 +125,8 @@ struct TapGlide {
   static constexpr float kMaxSpeed = 0.5f;      // frames of head movement per frame
   static constexpr float kSnap     = 0x1p-16f;  // frames from the target that count as on it
 
-  uint32_t target = 1;    // frames behind the write head, in [1, len - 1]
-  uint32_t base   = 1;    // the head: base + frac frames behind the write head
+  uint32_t target = 2;    // frames behind the write head, in [2, len - 1]
+  uint32_t base   = 2;    // the head: base + frac frames behind the write head
   float    frac   = 0.f;
   float    lead   = 0.f;  // the first pole's position minus target
   bool     moving = false;
@@ -164,14 +164,30 @@ struct TapGlide {
       Prime(target);
     }
   }
-  // Linear interpolation toward the neighbour on frac's side; exactly the integer tap
-  // at frac 0.
+  // Catmull-Rom (Granular's ReadHermite) toward the neighbour on frac's side; exactly the
+  // integer tap at frac 0. A linear read low-passed the moving head by up to cos(pi f/fs),
+  // -2 dB at 10 kHz, as a tremolo while frac cycles (review finding); this is -0.54 dB.
   float Read(const DelaySlice& d) const noexcept {
-    assert(base >= 1u && base <= d.len - 1u);  // targets are, and the head stays between them
-    const float a = d.ReadBack(base);
-    if (frac == 0.0f) return a;
-    const float b = d.ReadBack(frac > 0.0f ? base + 1u : base - 1u);
-    return a + (b - a) * detmath::Abs(frac);
+    // Targets are in [2, len - 1] and the head stays between them, so every tap is a frame
+    // of the line.
+    assert(base >= 2u && base <= d.len - 1u);
+    const float x0 = d.ReadBack(base);
+    if (frac == 0.0f) return x0;
+    const bool     up  = frac > 0.0f;
+    const uint32_t i1  = up ? base + 1u : base - 1u;
+    const uint32_t im1 = up ? base - 1u : base + 1u;
+    const uint32_t i2  = up ? base + 2u : base - 2u;
+    assert(i2 >= 1u && i2 <= d.len);
+    const float xm1  = d.ReadBack(im1);
+    const float x1   = d.ReadBack(i1);
+    const float x2   = d.ReadBack(i2);
+    const float t    = detmath::Abs(frac);
+    const float c    = (x1 - xm1) * 0.5f;
+    const float v    = x0 - x1;
+    const float w    = c + v;
+    const float a    = w + v + (x2 - x0) * 0.5f;
+    const float bNeg = w + a;
+    return (((a * t) - bNeg) * t + c) * t + x0;
   }
 };
 

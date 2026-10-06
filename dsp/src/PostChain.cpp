@@ -235,10 +235,11 @@ void PostChain::Reset(const PostParams& p) noexcept {
 
 uint32_t PostChain::DelayTarget(float delayFrames) const noexcept {
   // Profile §3.10: a conversion in range. Init primes from PostParams{}, whose 48 kHz
-  // default overruns the line below 8.4 kHz, so the clamp holds it.
+  // default overruns the line below 8.4 kHz, so the clamp holds it. The floor keeps
+  // TapGlide's cubic read inside the line (10 ms is 80 frames even at 8 kHz).
   assert(delayFrames >= 0.f && delayFrames < 0x1p32f);
   auto back = static_cast<uint32_t>(delayFrames);
-  if (back < 1u) back = 1u;
+  if (back < 2u) back = 2u;
   if (back > pdL_.len - 1u) back = pdL_.len - 1u;
   return back;
 }
@@ -316,22 +317,23 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
         break;
       }
       case Stage::Delay: {
-        // A silent stage has nothing to glide: its head jumps to the target, here and
-        // at the per-sample gate below, so it re-engages on the new time.
-        if (delayMixSm_.target == 0.f && delayMixSm_.value == 0.f) {
-          pdTap_.Prime(DelayTarget(p.delayFrames));
-          break;
+        // A silent stage has nothing to glide, so its head jumps to the target, including
+        // when it re-engages and the time changes on the same frame. The mix reaches 0
+        // only at the per-sample gate and leaves it only at an event, so every split sees
+        // the same silent block starts (contract #1).
+        const uint32_t tap = DelayTarget(p.delayFrames);
+        if (delayMixSm_.value == 0.f) {
+          pdTap_.Prime(tap);
+          if (delayMixSm_.target == 0.f) break;
+        } else {
+          pdTap_.Retarget(tap);
         }
         // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
         assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pdL_.len));
-        pdTap_.Retarget(DelayTarget(p.delayFrames));
         const float dfb = p.delayFb;
         for (uint32_t n = 0; n < numFrames; ++n) {
           const float mix = delayMixSm_.Next();
-          if (mix == 0.0f && delayMixSm_.target == 0.0f) {  // per-sample gate
-            if (pdTap_.moving) pdTap_.Prime(pdTap_.target);
-            continue;
-          }
+          if (mix == 0.0f && delayMixSm_.target == 0.0f) continue;  // per-sample gate
           // Equal-power crossfade: delay wet is decorrelated from dry, and the
           // linear law scooped the Space macro 5 dB mid-knob (review finding).
           // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.

@@ -1049,13 +1049,18 @@ TEST_CASE("post-delay tap glide: continuous capped speed, exact landing") {
 // line. On this input the old tap gave 190x the static second difference for a 100 ms
 // step, 52x for a 100 ms/s ramp in 48-frame steps and 279x in 512-frame (DAW) steps.
 //
-// Now the only excess is the glide's own pitch bend. Linear interpolation at read speed
-// s spreads each sample's slope change over a triangle of width 2s, so a second
-// difference grows by at most max(s, 3s - 2) for s <= 1.5, the cap: 2.5 while the head
-// runs at 1.5x, 1.3 for a 100 ms/s ramp at 1.1x, and nothing when the head slows. The
-// 5% covers the speed changes. With feedback the loop beats against its own repitched
-// copy, which raises the global maximum without a click, so those renders are held to
-// a local measure instead: no 32-frame block may stand out from its neighbourhood.
+// Now the only excess is the glide's own pitch bend. The cubic read follows these tones
+// closely, so reading at speed s scales their second difference by s^2: 2.25 while the
+// head runs at the 1.5x cap, 1.21 for a 100 ms/s ramp at 1.1x, and nothing when the
+// head slows. The 5% covers the speed changes and the interpolation error. With
+// feedback the loop beats against its own repitched copy, which raises the global
+// maximum without a click, so those renders are held to a local measure instead: no
+// 32-frame block may stand out from its neighbourhood. At the 0.9 maximum every pass
+// repitches the repeats again, and their beating stands out by up to 1.53x here (1.57x
+// over 72 wider probe cases, static renders up to 1.43x) where a lone splice in a loop
+// this long measured 118-564x. The cubic's gain is at most 1 at any fraction, so the
+// moving loop stays passive: on noise its peak stays within the spread of a static
+// render's (measured 0.89-1.10x).
 TEST_CASE("post-delay time automation is click-free") {
   EngineConfig cfg    = SmallConfig();
   cfg.ditherRingWrite = false;
@@ -1073,19 +1078,29 @@ TEST_CASE("post-delay time automation is click-free") {
     float                   fromMs, toMs;
     std::vector<ParamEvent> events;
     double                  speed;  // the head's largest read speed
+    size_t                  lands;  // frames from the first event until the head is on target
   };
   const double cap = 1.0 + double(detail::TapGlide::kMaxSpeed);
   const std::vector<Move> moves = {
-      {"step 300 -> 400 ms", 300.f, 400.f, {{at, ParamId::DelayTimeMs, 400.f}}, 1.0},
-      {"step 400 -> 300 ms", 400.f, 300.f, {{at, ParamId::DelayTimeMs, 300.f}}, cap},
+      {"step 300 -> 400 ms", 300.f, 400.f, {{at, ParamId::DelayTimeMs, 400.f}}, 1.0, 54743},
+      {"step 400 -> 300 ms", 400.f, 300.f, {{at, ParamId::DelayTimeMs, 300.f}}, cap, 54743},
       {"ramp 300 -> 400 ms, 1 s, 48-frame steps", 300.f, 400.f,
-       TimeRamp(300.f, 400.f, at, 48000, 48), 1.0},
+       TimeRamp(300.f, 400.f, at, 48000, 48), 1.0, 95177},
       {"ramp 400 -> 300 ms, 1 s, 48-frame steps", 400.f, 300.f,
-       TimeRamp(400.f, 300.f, at, 48000, 48), 1.1},
+       TimeRamp(400.f, 300.f, at, 48000, 48), 1.1, 95169},
       {"ramp 300 -> 400 ms, 1 s, 512-frame steps", 300.f, 400.f,
-       TimeRamp(300.f, 400.f, at, 48000, 512), 1.0},
+       TimeRamp(300.f, 400.f, at, 48000, 512), 1.0, 95396},
       {"twist 1300 -> 300 ms, 0.25 s, 48-frame steps", 1300.f, 300.f,
-       TimeRamp(1300.f, 300.f, at, 12000, 48), cap},
+       TimeRamp(1300.f, 300.f, at, 12000, 48), cap, 138180},
+  };
+
+  std::vector<float> noise(total);
+  Rng rng;
+  for (auto& x : noise) x = 0.5f * rng.Next();
+  auto peak = [&](const std::vector<float>& y) {
+    float m = 0.f;
+    for (size_t n = at; n < total; ++n) m = std::max(m, std::fabs(y[n]));
+    return m;
   };
 
   // The largest ratio of a 32-frame block's max |second difference| to the largest of
@@ -1111,30 +1126,42 @@ TEST_CASE("post-delay time automation is click-free") {
     REQUIRE(still > 1e-4);
     const double excess = MaxSecondDiff(moved, at, total) / still;
     INFO("max second difference " << excess << "x static");
-    REQUIRE(excess <= std::max(mv.speed, 3.0 * mv.speed - 2.0) * 1.05);
+    REQUIRE(excess <= mv.speed * mv.speed * 1.05);
     // Fed back nothing, the head on its target reads what a static render reads, bit
-    // for bit: every glide here has landed exactly by the last second.
-    const size_t settled = total - 48000;
-    REQUIRE(std::memcmp(moved.data() + settled, to.data() + settled,
-                        (total - settled) * sizeof(float)) == 0);
+    // for bit, from the frame the glide lands on, which pins the glide's time constant.
+    size_t lands = 0;
+    for (size_t n = at; n < total; ++n) {
+      if (std::memcmp(&moved[n], &to[n], sizeof(float)) != 0) lands = n + 1 - at;
+    }
+    REQUIRE(lands == mv.lands);
 
     const auto fed = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.5f), mv.events, {48});
     const double spike = localSpike(fed);
     INFO("feedback 0.5: largest local outlier " << spike << "x its neighbourhood");
     REQUIRE(spike <= 1.5);
+
+    const auto fed9 = RenderScripted(cfg, input, PostDelayOnly(mv.fromMs, 0.9f), mv.events, {48});
+    const double spike9 = localSpike(fed9);
+    const auto   loud   = RenderScripted(cfg, noise, PostDelayOnly(mv.fromMs, 0.9f), mv.events, {48});
+    const auto   loudA  = RenderScripted(cfg, noise, PostDelayOnly(mv.fromMs, 0.9f), {}, {48});
+    const auto   loudB  = RenderScripted(cfg, noise, PostDelayOnly(mv.toMs, 0.9f), {}, {48});
+    const double louder = double(peak(loud)) / double(std::max(peak(loudA), peak(loudB)));
+    INFO("feedback 0.9: largest local outlier " << spike9 << "x, peak " << louder << "x static");
+    REQUIRE(spike9 <= 2.0);
+    REQUIRE(louder <= 1.25);
   }
 }
 
 // Static settings read the same integer tap as before the glide existed: the stage at
 // mix 1 is an exact delay of the grain path's output, through truncation of a
-// fractional time.
+// fractional time (333.35 ms is 16,000.8 frames, which rounding would make 16,001).
 TEST_CASE("a static post-delay time is an exact integer delay") {
   EngineConfig cfg    = SmallConfig();
   cfg.ditherRingWrite = false;
   Rng rng;
   std::vector<float> input(120000);
   for (auto& x : input) x = 0.5f * rng.Next();
-  for (const float ms : {100.0f, 333.3f, 2000.0f}) {
+  for (const float ms : {100.0f, 333.3f, 333.35f, 2000.0f}) {
     INFO("time " << ms << " ms");
     const auto out = RenderScripted(cfg, input, PostDelayOnly(ms, 0.f), {}, {256});
     // 10 ms of grain delay, then the post delay's frames as the engine derives them,
@@ -1154,9 +1181,10 @@ TEST_CASE("a static post-delay time is an exact integer delay") {
 }
 
 // A bypassed stage is silent, so a time change made there takes effect at once: the
-// stage comes back on the new tap, not gliding from the old one. Fed back nothing, its
-// line holds the same audio either way, so the output matches a render that had the
-// new time all along from the moment the stage re-engages.
+// stage comes back on the new tap, not gliding from the old one, also when the change
+// arrives on the fade-in's own frame, as a preset load or the Space macro sends it. Fed
+// back nothing, its line holds the same audio either way, so the output matches a
+// render that had the new time all along from the moment the stage re-engages.
 TEST_CASE("a bypassed post delay takes a new time without gliding") {
   EngineConfig cfg    = SmallConfig();
   cfg.ditherRingWrite = false;
@@ -1179,9 +1207,83 @@ TEST_CASE("a bypassed post delay takes a new time without gliding") {
   const auto fixed = RenderScripted(cfg, input, params(120.f),
                                     {{off, ParamId::DelayMix, 0.0f}, {on, ParamId::DelayMix, 0.5f}},
                                     {48});
+  const auto together = RenderScripted(cfg, input, params(300.f),
+                                       {{off, ParamId::DelayMix, 0.0f},
+                                        {on, ParamId::DelayTimeMs, 120.f},
+                                        {on, ParamId::DelayMix, 0.5f}},
+                                       {48});
   REQUIRE(std::memcmp(moved.data(), fixed.data(), off * sizeof(float)) != 0);
   REQUIRE(std::memcmp(moved.data() + on, fixed.data() + on,
                       (input.size() - on) * sizeof(float)) == 0);
+  REQUIRE(std::memcmp(together.data() + on, fixed.data() + on,
+                      (input.size() - on) * sizeof(float)) == 0);
+}
+
+// Contract #1 when the gate shuts a glide: the mix reaches an exact 0 on a frame no
+// block grid marks, and a fade-in before the next block start of a coarse split must
+// find the head where a fine split leaves it, on its target, as a render that had the
+// new time all along.
+TEST_CASE("a post-delay glide shut by the gate re-engages on its target") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  Rng rng;
+  std::vector<float> input(32000);
+  for (auto& x : input) x = 0.5f * rng.Next();
+  const size_t step = 1001, off = 3001;  // 300 -> 400 ms glides for 54,743 frames
+  // Replays the delay mix's smoother: the frame whose value first reaches an exact 0.
+  detail::Smoother mix;
+  mix.SetTau(10.0f, 48000.0);
+  mix.Prime(1.0f);
+  mix.target  = 0.0f;
+  size_t gate = off;
+  while (mix.Next() != 0.0f) ++gate;
+  const size_t grid = off + 512 * ((gate - off) / 512 + 1);  // a 512-frame split's next start
+  REQUIRE(grid - gate >= 5);
+  REQUIRE(grid + 1000 < input.size());
+  for (size_t k = 0; k < 4; ++k) {
+    const size_t on = gate + 1 + k * (grid - gate - 2) / 3;
+    INFO("fade-in " << on - gate << " frames after the gate");
+    const std::vector<ParamEvent> events = {{step, ParamId::DelayTimeMs, 400.f},
+                                            {off, ParamId::DelayMix, 0.0f},
+                                            {on, ParamId::DelayMix, 1.0f}};
+    const auto fine   = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f), events, {1});
+    const auto coarse = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f), events, {512});
+    const auto fixed  = RenderScripted(cfg, input, PostDelayOnly(400.f, 0.f),
+                                       {{off, ParamId::DelayMix, 0.0f}, {on, ParamId::DelayMix, 1.0f}},
+                                       {512});
+    REQUIRE(std::memcmp(fine.data(), coarse.data(), fine.size() * sizeof(float)) == 0);
+    REQUIRE(std::memcmp(fine.data() + on, fixed.data() + on,
+                        (input.size() - on) * sizeof(float)) == 0);
+  }
+}
+
+// The moving head reads through a cubic: a linear read low-passed a 10 kHz tone by up
+// to 2 dB whenever the head sat between frames, and as a tremolo while it crossed them
+// (review finding). Catmull-Rom's worst is 0.54 dB.
+TEST_CASE("a gliding post-delay head keeps the top octave") {
+  EngineConfig cfg    = SmallConfig();
+  cfg.ditherRingWrite = false;
+  const size_t total = 3 * 48000, at = 48000 + 1, lands = at + 54743;
+  std::vector<float> input(total);
+  for (size_t i = 0; i < total; ++i) {
+    const double t = double(i) / 48000.0;
+    input[i] = static_cast<float>(std::min(1.0, t / 0.05) * 0.25 *
+                                  std::sin(2.0 * 3.14159265358979 * 10000.0 * t));
+  }
+  const auto moved = RenderScripted(cfg, input, PostDelayOnly(300.f, 0.f),
+                                    {{at, ParamId::DelayTimeMs, 400.f}}, {48});
+  const auto still = RenderScripted(cfg, input, PostDelayOnly(400.f, 0.f), {}, {48});
+  auto rms = [](const std::vector<float>& y, size_t from, size_t n) {
+    double s = 0;
+    for (size_t i = from; i < from + n; ++i) s += double(y[i]) * double(y[i]);
+    return std::sqrt(s / double(n));
+  };
+  const double ref = rms(still, total - 48000, 48000);
+  double worst = 1.0;
+  // From half a second on the head runs near 1x, so 96 frames hold 20 cycles.
+  for (size_t w = at + 24000; w + 96 <= lands; w += 96) worst = std::min(worst, rms(moved, w, 96) / ref);
+  INFO("quietest 96-frame window while gliding " << 20.0 * std::log10(worst) << " dB");
+  REQUIRE(worst >= 0.92);  // -0.72 dB; the linear read measured -2.0 dB here
 }
 
 // Init primes the post chain from PostParams{}, whose delay time is a 48 kHz frame count

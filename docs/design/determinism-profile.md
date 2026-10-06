@@ -627,13 +627,18 @@ test (§3.7).
 - **Time-parameter clicks** (the post-delay tap and `DelayMs` splices) are identical on both
   sides, so not a parity defect. *Decided in §8.4 step 8 and landed before revision 1:* the
   post-delay tap glides (`TapGlide`, `detail/PostChain.h`). Two cascaded 50 ms one-poles, a
-  critically damped pair, carry a linearly interpolated head to the new integer target, its
-  speed continuous and capped at 0.5 frames per frame (0.5–1.5× playback), so a change bends
-  pitch like tape instead of splicing; a settled head reads the integer tap exactly, and a
-  bypassed stage jumps. A 100 ms step that spliced at 190× the static second difference now
-  stays within the glide's own interpolation bound, and static settings keep their golden
-  hashes (**measured**, record §5.6). `DelayMs` still splices (86× for a 100 ms step,
-  **measured**): that is the grain engine's glide feature, not built yet.
+  critically damped pair, carry a cubic-interpolated (Catmull-Rom) head to the new integer
+  target, its speed continuous and capped at 0.5 frames per frame (0.5–1.5× playback), so a
+  change bends pitch like tape instead of splicing; a settled head reads the integer tap
+  exactly, and a silent stage jumps, also when it re-engages on the frame the time changes. A
+  100 ms step that spliced at 190× the static second difference now measures at most the
+  glide's own pitch, s² at read speed s (2.25× at the cap), and static settings keep their
+  golden hashes (**measured**, record §5.6). Two colourings remain for the owner to judge by
+  ear: a moving head loses up to 0.54 dB at 10 kHz (2.5 dB at 15 kHz) between frames, and at
+  high feedback every pass repitches the repeats again, so a 2 s → 10 ms throw at 0.9 swoops
+  the repeats up nearly three octaves over 4 s before it lands (**measured**, record §5.6).
+  `DelayMs` still splices (86× for a 100 ms step, **measured**): that is the grain engine's
+  glide feature, not built yet.
 
 ### 5.7 The block-split bug: three verified mechanisms — sound-changing
 
