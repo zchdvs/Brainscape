@@ -9,6 +9,13 @@
 #include "PluginEditor.h"
 #include "brainscape/InputCondition.h"
 
+// The parity negative control builds the engine with floating-point contraction on
+// (cmake/BrainscapeFpProfile.cmake). Configure refuses it in plugin builds; this also
+// stops a hand-defined macro, which would switch off the /fp:contract tripwire.
+#if defined(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+#error "BRAINSCAPE_FP_NEGATIVE_CONTROL is test-only: the plugin and app cannot be built with it"
+#endif
+
 namespace brainscape::plugin {
 
 namespace {
@@ -131,6 +138,12 @@ void BrainscapeProcessor::TriggerFromUi() noexcept {
 }
 
 void BrainscapeProcessor::PostAt(uint64_t frame, WrapperEvent e) noexcept {
+  // Events hold canonical values (profile §3.7), as every other producer's do: the value
+  // ApplyEvent stores becomes the parameter's mirror and the session state, so it must be
+  // the bits the engine keeps, not the caller's -0, NaN or out-of-range value.
+  if (e.type == WrapperEvent::Type::Param && e.id >= 1u && e.id <= kNumParams) {
+    e.value = Canonicalize(static_cast<ParamId>(e.id), e.value);
+  }
   e.frame = frame;
   sink_.PostScripted(e);
 }

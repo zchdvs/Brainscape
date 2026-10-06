@@ -61,8 +61,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void TriggerFromUi() noexcept;
 
   // Scripted producers: applies `e` at absolute engine frame `frame` (frames since the
-  // last Init), splitting the host block there (companion §4.10). A parameter's mirror
-  // follows when the event applies. Any thread.
+  // last Init), splitting the host block there (companion §4.10). A parameter value is
+  // canonicalized here, as every producer's is, and the mirror follows when the event
+  // applies. Any thread.
   void PostAt(uint64_t frame, WrapperEvent e) noexcept;
 
   void            SetSettings(const WrapperSettings& s) noexcept;
@@ -72,9 +73,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     double   hostRate      = 0.0;  // 0 until prepareToPlay
     double   engineRate    = 0.0;
     bool     engineReady   = false;
-    // Engine at the pedal's 48 kHz. Not "pedal-exact": until the block-split fix lands,
-    // identity is promised only on the 48-frame pedal grid (companion §2.3), which this
-    // wrapper does not offer yet.
+    // Engine at the pedal's 48 kHz. Not "pedal-exact" yet: the parity contract also needs
+    // Restart, exact preset loads and frame-stamped host and editor events (plugin/README.md,
+    // "Current limitations").
     bool     pedalRate     = false;
     int      lastHostBlock = 0;
     int      maxHostBlock  = 0;

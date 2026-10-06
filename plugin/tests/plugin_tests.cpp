@@ -848,6 +848,29 @@ TEST_CASE("scripted events apply at their stamped frames, splitting host blocks"
   }
 }
 
+TEST_CASE("scripted parameter values are canonicalized like every other producer's") {
+  // The mirror and the session state hold what the engine keeps, never the caller's bits.
+  using E           = WrapperEvent;
+  const Stereo   in = MakeInput(480);
+  const uint32_t mix = static_cast<uint32_t>(ParamId::Mix);
+  for (const float v : {2.0f, -0.0f, std::numeric_limits<float>::quiet_NaN(), -1.0f,
+                        std::numeric_limits<float>::infinity(), 1e-40f, 0.25f}) {
+    INFO("value bits " << Bits(v));
+    auto proc = MakeProcessor({}, {});
+    proc->PostAt(0, {E::Type::Param, E::Source::Ui, mix, v});
+    proc->PostAt(240, {E::Type::Param, E::Source::Ui, mix, v});  // applied inside the block
+    RenderProcessor(*proc, in, {});
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(Canonicalize(ParamId::Mix, v)));
+    // The saved session is byte for byte the one an editor edit to the canonical value saves.
+    auto ref = MakeProcessor({}, {});
+    ref->Param(ParamId::Mix).SetPlainNotifyingHost(Canonicalize(ParamId::Mix, v));
+    juce::MemoryBlock got, want;
+    proc->getStateInformation(got);
+    ref->getStateInformation(want);
+    REQUIRE(got == want);
+  }
+}
+
 namespace {
 
 juce::File WriteWav(const juce::File& file, double rate, const std::vector<std::vector<float>>& channels) {
