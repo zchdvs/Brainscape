@@ -103,9 +103,9 @@ Structural commitments, each corpus-grounded:
    48 kHz) minus one grain length has its window overwritten by wraparound; behavior at the
    boundary is re-anchor-on-wrap (audible splice), documented, with "stop writing while
    frozen" as an open alternative (§12). The code re-anchors once the live write head is
-   three quarters of the ring past the pin (`dsp/src/Engine.cpp:405-414`; 65.5 s at 2²²
-   frames, calculated), and that decision must be made per sample, not per block
-   (contract #1, §11).
+   three quarters of the ring past the pin (65.5 s at 2²² frames, calculated), and decides
+   it per sample, not per block, in `GranularCore::Process` (`dsp/src/Granular.cpp:338-352`),
+   so the splice lands on the same sample for every block size (contract #1, §11).
 5. **The dry path never enters the block-delayed wet path** (grain-delay-theory.md §3.11), so
    blend cannot comb and the plugin reports 0 latency.
 6. **The post chain includes a tempo-syncable stereo delay** — the Microcosm's Space knob
@@ -195,9 +195,9 @@ birth decides: polynomial kernels are the provisional choice, to be confirmed or
 a DWT measurement of `ScheduleGrain` at the maximum birth rate, and DetMath-built tables for
 `SemitonesToRatio` and the pan law are the fallback
 ([determinism-profile.md](determinism-profile.md), "DetMath replaces every libm
-transcendental"). Today's code still calls `std::exp2`
-(`dsp/include/brainscape/GrainMath.h:52`), and the TODO above that call (`:48-51`), which
-asks for a lookup table, predates this decision. Composable layers: per-mode weighted
+transcendental"). Today's code calls DetMath's `Exp2F` (`SemitonesToRatio`,
+`dsp/src/detail/GrainMath.h:55-60`), whose comment leaves the kernel-or-table choice to
+that DWT measurement. Composable layers: per-mode weighted
 interval set (≤ 8 entries, `cycle | random` selection) → optional scale/chord
 quantization → per-grain `spread_cents` detune. Output duration is fixed; pitch changes how
 much source is consumed (§3.7 mapping (a)). **Glide** is specified as endpoints —
@@ -224,15 +224,18 @@ from the live write head even while freeze is engaged. A position measured from 
 pin is clamped against the far rail moved `age` frames closer, where `age` is how far the
 live head has advanced past the pin; if that rail falls below the near rail, the far rail
 wins. `W_a` exists because `Process` writes the whole input block into the ring before it
-renders any grain (`dsp/src/Engine.cpp:457-498`). When output sample *n* renders, up to 511
+renders any grain (`dsp/src/Engine.cpp:591-649`). When output sample *n* renders, up to 511
 ring frames ahead of the live head already hold new input in a 512-frame block but
 one-ring-old audio in a 1-frame block, so no interpolation tap may read inside that window.
 `W_a` is a shared build constant equal to the largest legal block, never derived from
 `maxBlockSize`, because the pedal (48-frame blocks) and the plugin (up to 512) must clamp
 identically; it costs 10.7 ms of ring depth at the far end (calculated). The code
-implements both rules (`dsp/src/Granular.cpp:134-154`; `kBlockWriteAheadFrames` at
+implements both rules (`dsp/src/Granular.cpp:147-169`; `kBlockWriteAheadFrames` at
 `dsp/src/detail/Granular.h:21`), and a Debug assertion in `RenderSpan`
-(`dsp/src/Granular.cpp:61-76`) checks that no tap reads inside the window. See contract #1.
+(`dsp/src/Granular.cpp:237-266`, helpers at `:61-91`) checks that no tap reads inside the
+window. It skips a grain the ring is too small to hold with the window and both margins,
+which no rail can make block-split invariant (determinism-profile.md §5.7, "Not
+covered"). See contract #1.
 
 Plus a third guard from grain-delay-theory.md §2.1's hazard 3 (feedback re-injection): when
 `feedback.amount > 0`, enforce `d ≥ d_min_fb ≈ 5 ms` — without it, a zero-delay mode with
@@ -581,7 +584,7 @@ the fallback, and not free; amended 2026-10-05 from "mitigated by LUTs", see §3
 | Stage | Nominal | Pessimistic | Basis |
 |---|---|---|---|
 | Grain render, 64 voices, tiered (misses included) | ~1,600 (r ≈ 1) | ~4,000 (r = 4, conflict ×2) | grain-delay-theory.md §5.4, rate-scaled |
-| ScheduleGrain (cycles/sample, as in every row; birth rate = voices/size, at most one scheduler birth per sample, i.e. 48,000/s, plus onset and manual births — `dsp/src/Engine.cpp:309-314`, `dsp/src/Granular.cpp:236`, `:321`; in-tree kernels, amended 2026-10-05 from "LUT-based"; their extra cost, about +20 nominal and +300 pessimistic (estimated), is in the amended totals below) | ~30 (20 ms grains) | ~530 (1 ms grains, bursts) | derived (review finding) |
+| ScheduleGrain (cycles/sample, as in every row; birth rate = voices/size, at most one scheduler birth per sample, i.e. 48,000/s, plus onset and manual births — `dsp/src/Engine.cpp:473-478`, `dsp/src/Granular.cpp:321`, `:416`; in-tree kernels, amended 2026-10-05 from "LUT-based"; their extra cost, about +20 nominal and +300 pessimistic (estimated), is in the amended totals below) | ~30 (20 ms grains) | ~530 (1 ms grains, bursts) | derived (review finding) |
 | Per-voice modifiers (32 SVFs + crush + glide) | ~450 | ~700 | derived from post-fx §3.1 |
 | Feedback taming (DC+HP+LP+sat+4-AP, stereo) | ~150 | ~200 | derived |
 | Reverb (Dattorro, tank in SRAM) | 400–800 | 800 | post-fx §1.2–1.3, §6.2 |
@@ -768,7 +771,7 @@ boundaries.
    re-anchor of a held freeze was decided once per block. The block-split test never engaged
    freeze and recorded 0 onsets (measured), so it could not see any of them. The three-part
    fix has landed (A: guards measured from the live head; B: a far rail that excludes the
-   512-frame write-ahead; C: re-anchor decided per sample, `dsp/src/Granular.cpp:320-334`),
+   512-frame write-ahead; C: re-anchor decided per sample, `dsp/src/Granular.cpp:338-352`),
    with pin-eligible marks: while frozen, only marks at or before the pin position a grain
    (§12 item 13). The regression test "block-splitting bit-exactness with freeze and far-rail
    positions" (`dsp/tests/test_engine.cpp:1109`) covers all three mechanisms and fails without

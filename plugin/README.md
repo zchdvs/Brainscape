@@ -85,9 +85,12 @@ buffers is not yet promised identical to the pedal (see [Current limitations](#c
 
 - Install Visual Studio 2022 with the **Desktop development with C++** workload, and run the
   build commands from the repository root.
-- Keep the build directory's path short. On paths longer than about 150 characters JUCE's
-  nested `juceaide` configure fails with `C1083: Cannot open compiler generated file` (MSBuild
-  `FTK1011`), an error that does not mention the path.
+- Keep the build directory's path short: builds fail once its real path is longer than
+  about 150 characters, usually in JUCE's nested `juceaide` configure. The symptoms vary and
+  rarely blame the path: `C1083: Cannot open compiler generated file`, `C1041: cannot open
+  program database`, or MSBuild `FTK1011`. An 8.3 short alias does not help, because CMake
+  and `cl` expand it back to the long path; use a short real directory such as
+  `C:\src\brainscape`.
 - No input in the Standalone? With **Windows Audio** (WASAPI), turn on Settings → Privacy &
   security → Microphone → **Let desktop apps access your microphone**; ASIO is not affected. The
   Standalone does not yet detect a silent open input and say so (companion §3.2).
