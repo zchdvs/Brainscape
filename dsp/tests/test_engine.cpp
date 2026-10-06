@@ -68,7 +68,7 @@ struct RenderResult {
 };
 
 struct MidRenderChange {
-  size_t  atFrame = SIZE_MAX;  // absolute frame; applied before the block containing it
+  size_t  atFrame = SIZE_MAX;  // absolute frame; a stamped event in the block containing it
   ParamId id      = ParamId::Mix;
   float   value   = 0.f;
 };
@@ -89,24 +89,25 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
   out.r.assign(input.size(), 0.f);
 
   size_t pos = 0, blockIdx = 0;
-  bool changed = false;
   while (pos < input.size()) {
     const uint32_t want = blockSizes[blockIdx % blockSizes.size()];
     const auto     n    = static_cast<uint32_t>(std::min<size_t>(want, input.size() - pos));
-    // Fire the change before the block CONTAINING atFrame, with the in-block
-    // offset (the old >=-then-subtract form underflowed the offset and fired one
-    // block late; review finding).
-    if (!changed && change.atFrame >= pos && change.atFrame < pos + n) {
-      engine.SetParam(change.id, change.value,
-                      static_cast<uint32_t>(change.atFrame - pos));
-      changed = true;
-    }
     const float* ins[2]  = {input.data() + pos, input.data() + pos};
     float*       outs[2] = {out.l.data() + pos, out.r.data() + pos};
     Engine::ProcessContext ctx;
     ctx.in        = ins;
     ctx.out       = outs;
     ctx.numFrames = n;
+    // The change goes to the block CONTAINING atFrame, at its in-block offset.
+    Engine::BlockEvent ev;
+    if (change.atFrame >= pos && change.atFrame < pos + n) {
+      ev.offset     = static_cast<uint32_t>(change.atFrame - pos);
+      ev.type       = Engine::EventType::SetParam;
+      ev.id         = static_cast<uint32_t>(change.id);
+      ev.value      = change.value;
+      ctx.events    = &ev;
+      ctx.numEvents = 1;
+    }
     engine.Process(ctx);
     pos += n;
     ++blockIdx;
@@ -590,18 +591,17 @@ TEST_CASE("stochastic renders are reproducible run to run") {
   REQUIRE(std::memcmp(a.l.data(), b.l.data(), a.l.size() * sizeof(float)) == 0);
 }
 
-// Hidden until the SPSC event queue lands (design §9): a parameter change delivered
-// mid-render at a sampleOffset must be split-invariant. Run explicitly with
-// `brainscape_tests "[pending-spsc]"`.
-TEST_CASE("mid-render automation is split-invariant", "[.][pending-spsc]") {
+// A parameter change delivered mid-render as a stamped event is split-invariant
+// (determinism profile §5.11).
+TEST_CASE("mid-render automation is split-invariant") {
   EngineConfig cfg = SmallConfig();
   Rng rng;
   std::vector<float> input(4096);
   for (auto& x : input) x = 0.8f * rng.Next();
   const std::vector<std::pair<ParamId, float>> params = {
       {ParamId::DelayMs, 10.0f}, {ParamId::Mix, 0.3f}};
-  // 700 is not a multiple of either block size, so without sample-offset support
-  // the change lands at boundary 1024 (512-split) vs 704 (64-split) — divergence.
+  // 700 is not a multiple of either block size: applied at a block start, the change
+  // landed at 1024 (512-split) vs 704 (64-split).
   MidRenderChange change;
   change.atFrame = 700;
   change.id      = ParamId::Mix;

@@ -138,6 +138,49 @@ BRAINSCAPE_FP_BODY float CanonicalizeBody(ParamId id, float plainValue) noexcept
   return d != nullptr ? CanonicalValue(*d, plainValue) : 0.0f;
 }
 
+// Determinism profile §5.10 steps 1 and 2: every descriptor default, then every stored
+// leaf, canonicalized, by ascending id (values[] is indexed by id - 1, and is applied in
+// that order). The report counts what makes the load inexact.
+void ResolvePreset(const PresetState& preset, float* values, LoadReport* report) noexcept {
+  *report = LoadReport{};
+  bool seen[kNumParams] = {};
+  for (size_t i = 0; i < kNumParams; ++i) values[i] = kParamTable[i].def;
+  const uint32_t count =
+      preset.leafCount < PresetState::kMaxLeaves ? preset.leafCount : PresetState::kMaxLeaves;
+  report->unknownIds = preset.leafCount - count;
+  for (uint32_t k = 0; k < count; ++k) {
+    const PresetLeaf&      leaf = preset.leaves[k];
+    const ParamDescriptor* d    = FindParam(static_cast<ParamId>(leaf.id));
+    if (d == nullptr) {
+      ++report->unknownIds;
+      continue;
+    }
+    const size_t i = leaf.id - 1u;
+    if (seen[i]) {
+      ++report->duplicateIds;
+      continue;
+    }
+    seen[i]       = true;
+    const float v = CanonicalValue(*d, leaf.value);
+    uint32_t    stored, canonical;
+    std::memcpy(&stored, &leaf.value, sizeof stored);
+    std::memcpy(&canonical, &v, sizeof canonical);
+    if (canonical != stored) ++report->changedValues;
+    values[i] = v;
+  }
+  for (const bool s : seen) {
+    if (!s) ++report->missingIds;
+  }
+  report->exact = report->unknownIds == 0 && report->missingIds == 0 &&
+                  report->duplicateIds == 0 && report->changedValues == 0;
+}
+
+BRAINSCAPE_FP_BODY bool CheckPresetBody(const PresetState& preset, LoadReport* report) noexcept {
+  float values[kNumParams];
+  ResolvePreset(preset, values, report);
+  return report->exact;
+}
+
 }  // namespace
 
 // The engine state behind Engine's opaque storage. Its methods are the bodies of the
@@ -145,9 +188,11 @@ BRAINSCAPE_FP_BODY float CanonicalizeBody(ParamId id, float plainValue) noexcept
 struct Engine::Impl {
   BRAINSCAPE_FP_BODY bool Init(const EngineConfig&, const Arenas&) noexcept;
   BRAINSCAPE_FP_BODY void Reset() noexcept;
+  BRAINSCAPE_FP_BODY void Restart() noexcept;
   BRAINSCAPE_FP_BODY void ClearHistory() noexcept;
   BRAINSCAPE_FP_BODY void Process(const ProcessContext&) noexcept;
   BRAINSCAPE_FP_BODY void SetParam(ParamId id, float plainValue) noexcept;
+  BRAINSCAPE_FP_BODY bool LoadPreset(const PresetState&, LoadMode, LoadReport*) noexcept;
   float GetParam(ParamId id) const noexcept;  // a load, no FP arithmetic
 
   using Smoother = detail::Smoother;
@@ -157,6 +202,20 @@ struct Engine::Impl {
                                           // param actually changed (keeps exp2/pow
                                           // off the steady-state audio path)
   void RebuildPostParams() noexcept;      // same discipline for the post chain
+  void RebuildDirty() noexcept;
+
+  // The pieces of Process: what SetParam, SetFreeze and Trigger queued, applied at the
+  // block's first frame; one event; and the render of frames [start, start + count) of
+  // the block, which advances the sample counter.
+  void DrainPending() noexcept;
+  void ApplyEvent(const BlockEvent&) noexcept;
+  void RenderFrames(const ProcessContext&, uint32_t start, uint32_t count) noexcept;
+
+  // A canonical value from now on: the pending value too, so the next block start does
+  // not re-apply an older SetParam.
+  void SetValue(size_t index, float value) noexcept;
+  void SetFrozen(bool on) noexcept;
+  void ApplySpillover(const float* values) noexcept;
 
   EngineConfig cfg_{};
   int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
@@ -170,6 +229,8 @@ struct Engine::Impl {
   uint32_t     writeFrame_ = 0;
   Smoother     mix_, outGain_, feedback_, norm_;
   int64_t      sampleCounter_ = 0;
+  int64_t      epochStart_    = 0;  // random draws are keyed on sampleCounter_ - epochStart_
+  uint32_t     pendingTriggers_ = 0;  // due triggers, fired one per frame (audio thread)
   bool         ready_         = false;
   bool         granularDirty_ = true;
   bool         postDirty_     = true;
@@ -214,6 +275,10 @@ void Engine::Reset() noexcept {
   const detail::FpEnvGuard guard;
   impl().Reset();
 }
+void Engine::Restart() noexcept {
+  const detail::FpEnvGuard guard;
+  impl().Restart();
+}
 void Engine::ClearHistory() noexcept {
   const detail::FpEnvGuard guard;
   impl().ClearHistory();
@@ -225,6 +290,10 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
 void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
   const detail::FpEnvGuard guard;
   impl().SetParam(id, value);
+}
+bool Engine::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report) noexcept {
+  const detail::FpEnvGuard guard;
+  return impl().LoadPreset(preset, mode, report);
 }
 float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
 
@@ -245,6 +314,7 @@ uint32_t Engine::ConsumeOnsetCount() noexcept {
 }
 
 int64_t Engine::SampleCounter() const noexcept { return impl().sampleCounter_; }
+int64_t Engine::EpochStart() const noexcept { return impl().epochStart_; }
 
 const ParamDescriptor* Descriptors(size_t* count) noexcept {
   if (count != nullptr) *count = kNumParams;
@@ -269,6 +339,12 @@ float Canonicalize(ParamId id, float plainValue) noexcept {
 MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   const detail::FpEnvGuard guard;
   return PlanMemoryBody(cfg);
+}
+
+bool CheckPreset(const PresetState& preset, LoadReport* report) noexcept {
+  const detail::FpEnvGuard guard;
+  LoadReport               local;
+  return CheckPresetBody(preset, report != nullptr ? report : &local);
 }
 
 bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
@@ -316,6 +392,8 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
   sampleCounter_ = 0;
+  epochStart_    = 0;
+  pendingTriggers_ = 0;
   frozen_        = false;
   frozenAnchor_  = 0;
   freezePending_.store(false, std::memory_order_relaxed);
@@ -369,6 +447,7 @@ void Engine::Impl::Reset() noexcept {
   detector_.Reset();
   onsetCount_.store(0u, std::memory_order_relaxed);
   manualTriggers_.store(0u, std::memory_order_relaxed);
+  pendingTriggers_ = 0;
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
@@ -389,10 +468,74 @@ void Engine::Impl::Reset() noexcept {
   norm_.Prime(norm_.target);
 }
 
+void Engine::Impl::Restart() noexcept {
+  if (!ready_) return;
+  // What Init clears and Reset keeps; Reset below does the rest. Freeze goes off first,
+  // because the normalization rebuilt in Reset depends on it.
+  ClearHistory();
+  tamer_.ClearDiffusers();  // stale diffusers alone nulled feedback presets at -51 dB
+  sampleCounter_ = 0;
+  epochStart_    = 0;
+  writeFrame_    = 0;
+  frozen_        = false;
+  frozenAnchor_  = 0;
+  freezePending_.store(false, std::memory_order_relaxed);
+  Reset();
+}
+
 void Engine::Impl::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
   post_.ClearBuffers();  // the post delay/reverb tails are history too
+}
+
+bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
+                              LoadReport* report) noexcept {
+  LoadReport r;
+  float      values[kNumParams];
+  ResolvePreset(preset, values, &r);
+  if (ready_) {
+    r.applied = true;
+    if (mode == LoadMode::Exact) {
+      // The values become pending; Restart turns freeze off and drains them, snapping
+      // every smoother.
+      for (size_t i = 0; i < kNumParams; ++i) {
+        pending_[i].store(values[i], std::memory_order_relaxed);
+      }
+      Restart();
+    } else {
+      ApplySpillover(values);
+    }
+  }
+  if (report != nullptr) *report = r;
+  return r.applied && r.exact;
+}
+
+// A Spillover load at the current frame (determinism profile §5.10): the complete preset
+// as one change, freeze off, and the random-number epoch restarted here. Grains, marks,
+// the scheduler phase, smoothers and every buffer carry over, so the output never
+// reconverges with an Exact load's (§2.4), but it stays a deterministic function of the
+// event stream.
+void Engine::Impl::ApplySpillover(const float* values) noexcept {
+  for (size_t i = 0; i < kNumParams; ++i) SetValue(i, values[i]);
+  freezePending_.store(false, std::memory_order_relaxed);
+  SetFrozen(false);
+  epochStart_ = sampleCounter_;
+}
+
+void Engine::Impl::SetValue(size_t index, float value) noexcept {
+  pending_[index].store(value, std::memory_order_relaxed);
+  if (value != active_[index]) {
+    active_[index] = value;
+    ApplyParam(index, value);
+  }
+}
+
+void Engine::Impl::SetFrozen(bool on) noexcept {
+  if (on == frozen_) return;
+  frozen_ = on;
+  if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
+  granularDirty_ = true;  // the normalization exponent depends on it
 }
 
 void Engine::ClearLooper() noexcept {
@@ -553,17 +696,41 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     return;
   }
 
-  // Drain pending parameter changes at block start (sample-accurate queue lands
-  // with the scheduler's event queue). Freeze drains FIRST because the
-  // normalization exponent depends on it (frozen grains are decorrelated).
-  const bool freezeReq = freezePending_.load(std::memory_order_relaxed);
-  if (freezeReq != frozen_) {
-    frozen_ = freezeReq;
-    if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
-    granularDirty_ = true;
+  const BlockEvent* events    = ctx.numEvents > 0 ? ctx.events : nullptr;
+  const uint32_t    numEvents = events != nullptr ? ctx.numEvents : 0u;
+  assert(ctx.numEvents == 0 || ctx.events != nullptr);
+#if !defined(NDEBUG)
+  for (uint32_t i = 0; i < numEvents; ++i) {
+    assert(events[i].offset < ctx.numFrames);
+    assert(i == 0 || events[i].offset >= events[i - 1].offset);
   }
-  // Re-anchor-on-wrap (design §2.4) runs per sample inside granular_.Process:
-  // decided here at block start, the splice moved with the block grid.
+#endif
+
+  // The block is rendered in parts split at its events' offsets (determinism profile
+  // §5.11): each part is exactly a Process call of a wrapper that splits there, so
+  // block-split invariance (contract #1) carries over to event timing. Frames before an
+  // event see the old state.
+  DrainPending();
+  uint32_t pos  = 0;
+  uint32_t next = 0;
+  for (;;) {
+    while (next < numEvents && events[next].offset <= pos) ApplyEvent(events[next++]);
+    RebuildDirty();
+    uint32_t end = ctx.numFrames;
+    if (next < numEvents && events[next].offset < end) end = events[next].offset;
+    RenderFrames(ctx, pos, end - pos);
+    pos = end;
+    if (pos == ctx.numFrames) break;
+  }
+  // Offsets past the block apply after its last frame; the next block rebuilds.
+  while (next < numEvents) ApplyEvent(events[next++]);
+}
+
+void Engine::Impl::DrainPending() noexcept {
+  // Freeze drains FIRST because the normalization exponent depends on it (frozen
+  // grains are decorrelated). Re-anchor-on-wrap (design §2.4) runs per sample inside
+  // granular_.Process: decided here at block start, the splice moved with the block grid.
+  SetFrozen(freezePending_.load(std::memory_order_relaxed));
   for (size_t i = 0; i < kNumParams; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
@@ -571,6 +738,39 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
       ApplyParam(i, p);
     }
   }
+  pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
+}
+
+void Engine::Impl::ApplyEvent(const BlockEvent& e) noexcept {
+  switch (e.type) {
+    case EventType::SetParam: {
+      const ParamDescriptor* d = FindParam(static_cast<ParamId>(e.id));
+      if (d != nullptr) SetValue(e.id - 1u, CanonicalValue(*d, e.value));
+      break;
+    }
+    case EventType::Freeze: {
+      const bool on = e.value != 0.0f;
+      freezePending_.store(on, std::memory_order_relaxed);
+      SetFrozen(on);
+      break;
+    }
+    case EventType::Trigger:
+      ++pendingTriggers_;
+      break;
+    case EventType::SpilloverLoad:
+      // The producer learns whether the preset is exact from CheckPreset, when it stages
+      // the preset; here only the values count.
+      if (e.preset != nullptr) {
+        float      values[kNumParams];
+        LoadReport report;
+        ResolvePreset(*e.preset, values, &report);
+        ApplySpillover(values);
+      }
+      break;
+  }
+}
+
+void Engine::Impl::RebuildDirty() noexcept {
   if (granularDirty_) {
     RebuildGranularParams();
     granularDirty_ = false;
@@ -579,11 +779,14 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     RebuildPostParams();
     postDirty_ = false;
   }
+}
 
-  const float* inL  = ctx.in[0];
-  const float* inR  = cfg_.stereoInput ? ctx.in[1] : ctx.in[0];
-  float*       outL = ctx.out[0];
-  float*       outR = ctx.out[1];
+void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
+                                uint32_t count) noexcept {
+  const float* inL  = ctx.in[0] + start;
+  const float* inR  = (cfg_.stereoInput ? ctx.in[1] : ctx.in[0]) + start;
+  float*       outL = ctx.out[0] + start;
+  float*       outR = ctx.out[1] + start;
 
   const uint32_t ringStart = writeFrame_;
   const bool     dither    = cfg_.ditherRingWrite;
@@ -595,18 +798,13 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   // so the loop period is identical on firmware and plugin (contracts #1/#6).
   // Slot index is a mask of the absolute sample (power-of-two length) — a 64-bit
   // modulo compiled to two __aeabi_uldivmod calls per sample on Cortex-M7.
-  // Deliver at most numFrames manual triggers this block and CARRY the surplus —
-  // draining the counter dropped every trigger past numFrames, silently breaking
-  // the "explicit triggers never drop" contract on small blocks (review finding).
+  // Deliver at most `count` due triggers and CARRY the surplus — draining the
+  // counter dropped every trigger past numFrames, silently breaking the "explicit
+  // triggers never drop" contract on small blocks (review finding).
   detail::TriggerEvents ev;
-  {
-    const uint32_t queued = manualTriggers_.load(std::memory_order_relaxed);
-    ev.manualCount        = queued < ctx.numFrames ? queued : ctx.numFrames;
-    if (ev.manualCount > 0) {
-      manualTriggers_.fetch_sub(ev.manualCount, std::memory_order_relaxed);
-    }
-  }
-  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+  ev.manualCount = pendingTriggers_ < count ? pendingTriggers_ : count;
+  pendingTriggers_ -= ev.manualCount;
+  for (uint32_t n = 0; n < count; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   fb   = feedback_.Next();
@@ -640,8 +838,9 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
       // write value performs a downward random walk absorbed at 0 instead of
       // latching on a quantization fixed point.
       constexpr float kDitherGate = 0.25f / 32767.0f;
-      if (wrL > kDitherGate || wrL < -kDitherGate) wrL += Tpdf(abs, grainmath::Draw::DitherL);
-      if (wrR > kDitherGate || wrR < -kDitherGate) wrR += Tpdf(abs, grainmath::Draw::DitherR);
+      const int64_t key = abs - epochStart_;
+      if (wrL > kDitherGate || wrL < -kDitherGate) wrL += Tpdf(key, grainmath::Draw::DitherL);
+      if (wrR > kDitherGate || wrR < -kDitherGate) wrR += Tpdf(key, grainmath::Draw::DitherR);
     }
     ring_[2u * writeFrame_]      = QuantizeS16(wrL);
     ring_[2u * writeFrame_ + 1u] = QuantizeS16(wrR);
@@ -649,14 +848,14 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   }
 
   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
-  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, &frozenAnchor_,
-                    ctx.numFrames, wetL_, wetR_);
+  granular_.Process(gp_, ev, sampleCounter_, epochStart_, ringStart, frozen_, &frozenAnchor_,
+                    count, wetL_, wetR_);
 
   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
   // the FIFO (design §2.3: DC/HP/LP/saturator/diffuser sit inside the loop; the
   // tap is pre-post-chain per the §2 diagram). The tamer always runs so its
   // filter state stays split-invariant regardless of the feedback amount.
-  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+  for (uint32_t n = 0; n < count; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
     const float   nrm  = norm_.Next();
@@ -672,10 +871,10 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
 
   // ── Pass 3b: the post chain, in place on the wet buffers (design §2.6:
   // mod -> delay -> reverb -> filter, ordered and bypassable).
-  post_.Process(pp_, ctx.numFrames, wetL_, wetR_);
+  post_.Process(pp_, count, wetL_, wetR_);
 
   // ── Pass 3c: wet/dry mix and output trim.
-  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+  for (uint32_t n = 0; n < count; ++n) {
     const float mix = mix_.Next();
     const float g   = outGain_.Next();
     // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
@@ -702,14 +901,14 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   // The engine never makes NaN or infinity (determinism profile §3.7), and finite
   // input saturates at the output; a non-finite output here means non-finite input
   // that the wrapper failed to sanitize.
-  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+  for (uint32_t n = 0; n < count; ++n) {
     assert(detmath::IsFinite(outL[n]) && detmath::IsFinite(outR[n]));
   }
   assert(detmath::IsFinite(mix_.value) && detmath::IsFinite(outGain_.value) &&
          detmath::IsFinite(feedback_.value) && detmath::IsFinite(norm_.value));
 #endif
 
-  sampleCounter_ += ctx.numFrames;
+  sampleCounter_ += count;
 }
 
 }  // namespace brainscape

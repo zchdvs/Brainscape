@@ -4,6 +4,7 @@
 add_executable(brainscape_tests
   test_main.cpp
   test_engine.cpp
+  test_state.cpp
   test_boundary.cpp
   test_detmath.cpp
   test_param_display.cpp
@@ -31,6 +32,8 @@ target_compile_features(brainscape_dsp_fpenv_hooks PUBLIC cxx_std_17)
 target_link_libraries(brainscape_dsp_fpenv_hooks PUBLIC brainscape::fp_profile)
 target_compile_options(brainscape_dsp_fpenv_hooks
   PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_OPTIONS>)
+target_compile_definitions(brainscape_dsp_fpenv_hooks
+  PRIVATE $<TARGET_PROPERTY:brainscape_dsp,COMPILE_DEFINITIONS>)
 target_compile_definitions(brainscape_dsp_fpenv_hooks PUBLIC BRAINSCAPE_FPENV_TEST_HOOKS=1)
 
 add_executable(brainscape_fpenv_tests test_main.cpp test_flush.cpp)

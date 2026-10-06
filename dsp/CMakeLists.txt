@@ -11,11 +11,13 @@ endif()
 add_library(brainscape_dsp STATIC
   src/DetMath.cpp
   src/Engine.cpp
+  src/EventQueue.cpp
   src/Granular.cpp
   src/InputCondition.cpp
   src/OnsetDetector.cpp
   src/ParamDisplay.cpp
   src/PostChain.cpp
+  src/SoundRevision.cpp
   src/TestSignal.cpp
 )
 target_include_directories(brainscape_dsp
@@ -24,6 +26,33 @@ target_include_directories(brainscape_dsp
 target_compile_features(brainscape_dsp PUBLIC cxx_std_17)
 # PUBLIC: every translation unit that includes engine headers compiles under the profile.
 target_link_libraries(brainscape_dsp PUBLIC brainscape::fp_profile)
+
+# The toolchain ID's floating-point flags (docs/design/determinism-profile.md §5.12), for
+# brainscape::BuildToolchain(): the profile's flags, then the floating-point and target
+# flags of CMAKE_CXX_FLAGS and the configuration's flags, and the SHA-256 of that text.
+function(_brainscape_fp_flags_define config condition)
+  get_target_property(words brainscape_fp_profile INTERFACE_COMPILE_OPTIONS)
+  string(TOUPPER "${config}" cfg)
+  separate_arguments(flags NATIVE_COMMAND "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${cfg}}")
+  foreach(w IN LISTS flags)
+    if(w MATCHES "^([-/](fp|arch):|/clang:|-f(no-)?(fast-math|fp-|math-errno|unsafe-math|associative-math|reciprocal-math|finite-math|signed-zeros|trapping-math|rounding-math|honor-|approx-func|denormal-fp-math|single-precision-constant|excess-precision)|-m(arch|cpu|tune|fpu|float-abi|fpmath|thumb|avx|fma|sse|daz-ftz|32|64))")
+      list(APPEND words "${w}")
+    endif()
+  endforeach()
+  list(JOIN words " " text)
+  string(SHA256 hash "${text}")
+  string(SUBSTRING "${hash}" 0 16 hash)
+  target_compile_definitions(brainscape_dsp PRIVATE
+    "$<${condition}:BRAINSCAPE_FP_FLAGS=\"${text}\">"
+    "$<${condition}:BRAINSCAPE_FP_FLAGS_HASH=\"${hash}\">")
+endfunction()
+if(CMAKE_CONFIGURATION_TYPES)
+  foreach(c IN LISTS CMAKE_CONFIGURATION_TYPES)
+    _brainscape_fp_flags_define("${c}" "$<CONFIG:${c}>")
+  endforeach()
+else()
+  _brainscape_fp_flags_define("${CMAKE_BUILD_TYPE}" 1)
+endif()
 
 # Mirror libDaisy's constraints on the host build so violations surface immediately
 # (docs/research/vst-and-shared-dsp.md rec #3): no exceptions, no RTTI in dsp/.
