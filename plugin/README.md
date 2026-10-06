@@ -78,9 +78,11 @@ The build never copies plugins into system folders.
    `LoadPreset(…, Exact)`) at 48 kHz in the pedal's 48-frame blocks; the In and Out levels are
    not applied. Beside the 32-bit float WAV it writes `<name>.recipe.json`: the preset's exact
    bits, the SHA-256 of the input and of the output (interleaved little-endian float32, as the
-   golden harness hashes), the sound revision and the toolchain. A render of the test signal or
-   of a 48 kHz file is identical on every conforming build; a file at another rate is converted
-   by linear interpolation, and the recipe says the render is reproducible on this machine only.
+   golden harness hashes) with one more per 1 s segment of the output (PARITY's segmented hash,
+   so a comparison finds the first differing second), the sound revision and the toolchain. A
+   render of the test signal or of a 48 kHz file is identical on every conforming build; a file
+   at another rate is converted by linear interpolation, and the recipe says the render is
+   reproducible on this machine only.
 
 ## Load the VST3
 
@@ -91,14 +93,19 @@ accepts MIDI notes as triggers. Run the project at 48 kHz, the pedal's rate.
 
 **Restart on play** (the Test input panel's last row, saved with the session, off by default)
 restarts the engine at every transport start: the first playing block after a stopped block,
-`prepareToPlay` or the host switching to offline rendering. The engine then starts from the
-exact-restart state with an Exact load of the current preset, so two bounces of one passage are
-identical, and at 48 kHz without automation identical to the pedal (companion §4.9). Offline
-bounces restart the engine in place. In real time the plugin never blocks: while the option is
-on, a worker thread keeps a spare engine (another 17 MiB) restarted with the current preset, and
-a transport start swaps it in; if the spare is not ready (the preset changed a moment ago), the
-engine runs on and the status line says **Last start not restarted**. With the option off, trails
-continue across stops. The host's `reset()` is `Engine::Reset`: it keeps the ring.
+`prepareToPlay` or the host switching to offline rendering (only the switch counts: VST3, VST2
+and LV2 pass the mode again with every block). The engine then starts from the exact-restart
+state with an Exact load of the values in effect at the start's first frame: the current preset
+with that block's automation and edits, so an automated parameter starts on its lane's value.
+Two bounces of one passage are identical, and at 48 kHz without automation identical to the
+pedal (companion §4.9). Offline bounces, and a start before anything has played, restart the
+engine in place. In real time the plugin never blocks: while the option is on, a worker thread
+keeps a spare engine (another 17 MiB) restarted with the current preset, and a transport start
+swaps it in when it holds exactly those values; if it does not (the preset changed a moment
+ago, or automation moves a parameter at the start without the host having sent that value while
+stopped), the engine runs on and the status line says **Last start not restarted**. With the
+option off, trails continue across stops. The host's `reset()` is `Engine::Reset`: it keeps the
+ring.
 
 ## Windows notes
 
@@ -120,7 +127,8 @@ continue across stops. The host's `reset()` is `Engine::Reset`: it keeps the rin
 ## Tests
 
 `ctest` runs, besides the `dsp/` tests (`dsp_unit`, `dsp_fpenv_forced_flush`, `dsp_symbol_audit` and
-its control, `dsp_fp_profile_check` and the golden harness's `golden_report`):
+its control, `dsp_fp_profile_check` and the golden harness's `golden_report` and
+`golden_forced_flush`):
 
 - `plugin_wrapper` (`tests/plugin_tests.cpp`): the processor driven as hosts drive it, compared
   bit for bit with the engine driven directly from `LoadPreset(…, Exact)` in 48-frame blocks,
@@ -129,20 +137,23 @@ its control, `dsp_fp_profile_check` and the golden harness's `golden_report`):
   input, non-finite input, 44.1/48/96 kHz, exact plain values through the parameter class, the
   slider attachment and session state, state restores (a Spillover load while running, an Exact
   load before anything has played) and their order against earlier and later edits (running,
-  suspended and before `prepareToPlay`), MIDI triggers at their sample offsets, events stamped
-  at absolute frames, freeze, lost-event accounting, Restart on play (offline, in real time with
-  the spare engine, with a spare that holds another preset, and off), `reset()`, the audition
-  render (the exact-restart state, both input modes, a file off the 24-bit grid, and the job's
-  WAV bits, hash and recipe), the test input's file loop (exact playback, wrap, mono and
-  44.1 kHz files, bad files, loads during playback), the default input mode per format, and zero
-  heap allocations inside `processBlock`.
+  suspended and before `prepareToPlay`), MIDI triggers and host automation at every host block
+  pattern, events stamped at absolute frames, freeze, lost-event accounting, Restart on play
+  (offline, in real time with the spare engine, with a spare that holds another preset, off,
+  with the mode passed before every block, with an automation lane, with MIDI, and stamps made
+  before the restart), `reset()`, the audition render (the exact-restart state, both input
+  modes, a file off the 24-bit grid, and the job's WAV bits, hashes per render and per second,
+  and recipe), the test input's file loop (exact playback, wrap, mono and 44.1 kHz files, bad
+  files, loads during playback), the default input mode per format, and zero heap allocations
+  inside `processBlock`.
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
   `build/plugin/plugin/screenshots/` (default, minimum, large and 2× sizes, a 44.1 kHz frozen
   frame with Restart on play on, and the Standalone's editor after an audition render, which it
   also writes there).
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
-  in-place audio in odd host blocks equals the engine reference.
+  in-place audio in odd host blocks equals the engine reference, and that an offline export
+  with Restart on play, started while the transport plays, restarts once and equals it too.
 
 ## Current limitations
 
@@ -167,8 +178,9 @@ its control, `dsp_fp_profile_check` and the golden harness's `golden_report`):
 - **Event timing:** host automation, editor edits, freeze and triggers apply at the start of the
   next host block (VST3 hands automation over per block), MIDI at its sample offset.
   `BrainscapeProcessor::PostAt` applies an event at an absolute frame of the engine's timeline,
-  which starts at 0 at every Init or restart; a stamp made before a restart is dropped. Every
-  event reaches the engine through `ProcessContext::events`, which splits the block at it.
+  which starts at 0 at every Init or restart; a stamp made before a restart is dropped, even
+  one whose frame has passed. Every event reaches the engine through `ProcessContext::events`,
+  which splits the block at it.
 - **Host automation is lossy** by nature (companion §5.6): hosts store the normalised value.
   The editor and typed values write exact plain bits.
 - **The taper and display functions own the floating-point environment.** `PlainFromNormalized`,

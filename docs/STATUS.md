@@ -14,7 +14,7 @@ The project has completed its **research**, the **core DSP engine** (v1 scope), 
 determinism profile**: one `dsp/` build profile, in-tree math, a full floating-point
 control-word guard, a deterministic denormal flush, a NaN-free boundary, the block-split
 fix, and the engine state API (an exact `Restart`, a random-number epoch, one `LoadPreset`
-entry point and frame-stamped events). A golden-hash harness renders a 26-preset corpus
+entry point and frame-stamped events). A golden-hash harness renders a 28-preset corpus
 bit-identically with MSVC, GCC, Clang and the Cortex-M7 code run under emulation, at any
 block size and from a hostile caller floating-point environment; it reports and does not yet
 gate. A JUCE plugin and standalone skeleton hosts the engine through its stamped events and
@@ -60,12 +60,12 @@ The parity investigation showed requirement 3 is achievable. A prototype that re
 standard-library transcendental with in-tree math and disabled compiler multiply-add fusion
 produced **one identical SHA-256 across 32 builds** — MSVC, GCC 11, 12 and 14 and Clang on
 x86, and the real firmware code generation for the Cortex-M7 run under emulation — over 10
-presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (12
-vectors, 26 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
+presets × 30 s. `dsp/` now has this property (measured 2026-10-06): the golden corpus (13
+vectors, 28 presets, up to 120 s each) gives the same SHA-256 per preset with MSVC 19.40
 (SSE2 and AVX2), GCC 11 and 14 (also at `-march=x86-64-v3`, and in Debug), Clang 14 and the
 Cortex-M7 build from the pinned arm-none-eabi 10.3 run under `qemu-arm -cpu cortex-m7`, and
 the prototype's 10-preset battery agrees across the same builds. A build with contraction
-turned back on (the negative control) differs on 24 of the 26 presets.
+turned back on (the negative control) differs on 25 of the 28 presets.
 
 What the guarantee covers is precise. Two conforming builds of the same sound revision,
 restarted into the exact-restart state, loading the same compiled preset with an Exact load,
@@ -130,7 +130,9 @@ implementing:
   - the engine defects the profile listed, fixed: mono in-place aliasing, the dither key
     (it now folds the whole 64-bit sample counter), and the three block-split mechanisms,
     with pin-eligible marks (a frozen grain positions only at marks recorded before the pin);
-  - the state API: `Engine::Restart` (the exact post-`Init` state, parameters kept), a
+  - the state API: `Engine::Restart` (the exact post-`Init` state, parameters kept; on an
+    engine that has rendered nothing since its buffers were cleared it skips the clears, so
+    a load before the first block is real-time safe), a
     random-number epoch that Spillover loads restart, `LoadPreset(PresetState, Exact or
     Spillover)` in the profile's fixed order with a report of inexact loads, frame-stamped
     events in `ProcessContext` (parameter, freeze, trigger and Spillover load) applied at
@@ -171,14 +173,20 @@ implementing:
 - **Bit-identical across conforming builds** on the golden corpus (above), whatever the
   host's floating-point environment: renders under FTZ|DAZ with round-toward-zero, or with
   every exception unmasked, match the clean render, and flushing forced on inside the guard
-  reproduces the IEEE result. The corpus renders six presets again on a fresh engine from a
+  reproduces every golden vector on the 24-bit grid (`golden_forced_flush`). One vector feeds
+  subnormal input where the plucks are silent and must output subnormals, which no flushing
+  mode can produce: forced flushing must change it, so a guard that lets a caller's flush bit
+  through fails the corpus. The corpus renders eight presets again on a fresh engine from a
   hostile caller (Init included) on every leg, the M7 too, and a whole-corpus hostile run
   matches the clean one.
 - **The plugin reproduces the engine bit for bit**: host blocks of any size against the
   engine driven by stamped events from `LoadPreset(…, Exact)`, one `Process` call per chunk of
-  at most 512 frames; restores, MIDI and scripted events at their frames; offline and real-time
-  bounces with Restart on transport start equal a fresh render; the audition render equals
-  the engine's from the exact-restart state, and its WAV and hash match it.
+  at most 512 frames; restores, MIDI, host automation and scripted events at their frames, at
+  every host block pattern; offline and real-time bounces with Restart on transport start equal
+  a fresh render, with MIDI, with an automation lane (the start folds the first block's values
+  into the load) and with the wrapper passing the offline mode before every block; a stamp made
+  before the restart is void; the audition render equals the engine's from the exact-restart
+  state, and its WAV and hashes (whole and per second) match it.
 - **NaN-free boundary**: a fuzz test feeds NaN, ±inf, subnormal and ±`FLT_MAX` input and
   parameters under a hostile environment; the output stays finite and equals the run fed
   sanitized input and canonical values.
@@ -186,10 +194,11 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (97 test cases / ~2.61M assertions in Release, 96 in Debug),
+**Suite** (`ctest`): `dsp_unit` (98 test cases / ~2.61M assertions in Release, 97 in Debug),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
-configure-check self-test and `golden_report`; a plugin build adds the wrapper tests (25 test
-cases), the editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and
+configure-check self-test, `golden_report` and the corpus's forced-flush control
+`golden_forced_flush`; a plugin build adds the wrapper tests (29 test cases), the editor
+snapshot and a hosted-VST3 check. The `dsp/` tests are green in Release and
 Debug with MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC (Linux and macOS
 plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
