@@ -1,0 +1,79 @@
+   [probe] birth 98769 live 98769 anchor 97000 age 1769 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 1705 | first ahead-of-head read at grain sample 1704
+   [probe] birth 99162 live 99162 anchor 97000 age 2162 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 2098 | first ahead-of-head read at grain sample 2097
+   [probe] birth 99570 live 99570 anchor 97000 age 2570 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 2506 | first ahead-of-head read at grain sample 2505
+   [probe] birth 100054 live 100054 anchor 97000 age 3054 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 2990 | first ahead-of-head read at grain sample 2989
+   [probe] birth 100471 live 100471 anchor 97000 age 3471 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 3407 | first ahead-of-head read at grain sample 3406
+   [probe] birth 100857 live 100857 anchor 97000 age 3857 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 3793 | first ahead-of-head read at grain sample 3792
+   [probe] birth 101259 live 101259 anchor 97000 age 4259 | mark ON frame 98304 (mark-anchor 1304) | fwd r=2.000 L=4320 | d_raw 4194512.0 bounds [4384.0, 4194240.0] d 4194240.0 | start behind live head 4195 | first ahead-of-head read at grain sample 4194
+   [probe] birth 113352 live 113352 anchor 97000 age 16352 | mark ON frame 112640 (mark-anchor 15640) | fwd r=2.000 L=4320 | d_raw 4180176.0 bounds [4384.0, 4194240.0] d 4180176.0 | start behind live head 2224 | first ahead-of-head read at grain sample 2223
+== mark-pitch: POS_MARK + freeze + pitch +12 (no spray, no reverse)
+   ring 2^22, 384000 frames
+   block 1            hash 2d90334725543db9  IDENTICAL to block 1  [ahead reads 39868 in 39868 spans]
+   block 7            hash 9345f847ed81d990  DIFFERS  [ahead reads 39868 in 5848 spans] first frame 100475 (2.0932 s), 495 samples differ, max |d| 0.00376
+   block 48           hash ee71e7577b48a878  DIFFERS  [ahead reads 39868 in 1010 spans] first frame 100475 (2.0932 s), 3798 samples differ, max |d| 0.00381
+   block 64           hash de62d5e873f815d7  DIFFERS  [ahead reads 39868 in 798 spans] first frame 100475 (2.0932 s), 5094 samples differ, max |d| 0.00381
+   block 127          hash 6ce8463753b1b60f  DIFFERS  [ahead reads 39868 in 490 spans] first frame 100475 (2.0932 s), 10320 samples differ, max |d| 0.00381
+   block 512          hash daf6238023ec25f9  DIFFERS  [ahead reads 39868 in 253 spans] first frame 100475 (2.0932 s), 40271 samples differ, max |d| 0.00381
+   block 48,1,127,32  hash efacaf07578bfe59  DIFFERS  [ahead reads 39868 in 950 spans] first frame 100475 (2.0932 s), 7384 samples differ, max |d| 0.00381
+   => BROKEN
+broken cases: 1
+   [probe] birth 98933 live 98933 anchor 97000 age 1933 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -6771 | first ahead-of-head read at grain sample 3129
+   [probe] birth 99319 live 99319 anchor 97000 age 2319 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -6385 | first ahead-of-head read at grain sample 2936
+   [probe] birth 99718 live 99718 anchor 97000 age 2718 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -5986 | first ahead-of-head read at grain sample 2737
+   [probe] birth 100486 live 100486 anchor 97000 age 3486 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -5218 | first ahead-of-head read at grain sample 2353
+   [probe] birth 100839 live 100839 anchor 97000 age 3839 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -4865 | first ahead-of-head read at grain sample 2176
+   [probe] birth 101225 live 101225 anchor 97000 age 4225 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -4479 | first ahead-of-head read at grain sample 1983
+   [probe] birth 101603 live 101603 anchor 97000 age 4603 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -4101 | first ahead-of-head read at grain sample 1794
+   [probe] birth 103302 live 103302 anchor 97000 age 6302 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -2402 | first ahead-of-head read at grain sample 945
+== mark-reverse: POS_MARK + freeze + reverse 0.5 (no spray, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash bac03bb4e2987345  IDENTICAL to block 1  [ahead reads 3187 in 3187 spans]
+   block 7            hash 39b398028a77a3c7  DIFFERS  [ahead reads 3187 in 473 spans] first frame 102318 (2.1316 s), 29 samples differ, max |d| 0.000322
+   block 48           hash 61a8b99986f9f337  DIFFERS  [ahead reads 3187 in 84 spans] first frame 102310 (2.1315 s), 297 samples differ, max |d| 0.000367
+   block 64           hash bd0cb53b48da8217  DIFFERS  [ahead reads 3187 in 70 spans] first frame 102312 (2.1315 s), 295 samples differ, max |d| 0.000392
+   block 127          hash a3fe4f17df3d0c75  DIFFERS  [ahead reads 3187 in 43 spans] first frame 102304 (2.1313 s), 769 samples differ, max |d| 0.000367
+   block 512          hash 03e05397b448cb13  DIFFERS  [ahead reads 3187 in 24 spans] first frame 102120 (2.1275 s), 3070 samples differ, max |d| 0.000405
+   block 48,1,127,32  hash 66a04ff1d42db931  DIFFERS  [ahead reads 3187 in 88 spans] first frame 102281 (2.1309 s), 402 samples differ, max |d| 0.000392
+   => BROKEN
+broken cases: 1
+   [probe] birth 105124 live 105124 anchor 97000 age 8124 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177289.2 | start behind live head -8891 | first ahead-of-head read at grain sample 4189
+   [probe] birth 105511 live 105511 anchor 97000 age 8511 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177533.8 | start behind live head -8259 | first ahead-of-head read at grain sample 3873
+   [probe] birth 106540 live 106540 anchor 97000 age 9540 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177012.5 | start behind live head -7752 | first ahead-of-head read at grain sample 3620
+   [probe] birth 107622 live 107622 anchor 97000 age 10622 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177458.1 | start behind live head -6224 | first ahead-of-head read at grain sample 2856
+   [probe] birth 108232 live 108232 anchor 97000 age 11232 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177080.4 | start behind live head -5992 | first ahead-of-head read at grain sample 2740
+   [probe] birth 108762 live 108762 anchor 97000 age 11762 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177431.4 | start behind live head -5111 | first ahead-of-head read at grain sample 2299
+   [probe] birth 109103 live 109103 anchor 97000 age 12103 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4175776.9 | start behind live head -6424 | first ahead-of-head read at grain sample 2956
+   [probe] birth 109566 live 109566 anchor 97000 age 12566 | mark ON frame 98304 (mark-anchor 1304) | REV r=1.000 L=4320 | d_raw 4194512.0 bounds [64.0, 4185600.0] d 4177185.6 | start behind live head -4552 | first ahead-of-head read at grain sample 2020
+== lens-minimal: spray 20 + reverse 0.5 + POS_MARK + freeze (2^22 ring)
+   ring 2^22, 384000 frames
+   block 1            hash af83957bde379839  IDENTICAL to block 1  [ahead reads 2961 in 2961 spans]
+   block 7            hash 40e6458ec526f57f  DIFFERS  [ahead reads 2961 in 439 spans] first frame 109640 (2.2842 s), 23 samples differ, max |d| 0.000336
+   block 48           hash fb6fb2a257f4f9bc  DIFFERS  [ahead reads 2961 in 83 spans] first frame 109624 (2.2838 s), 253 samples differ, max |d| 0.0321
+   block 64           hash c8dd711f36e4cc60  DIFFERS  [ahead reads 2961 in 67 spans] first frame 109610 (2.2835 s), 377 samples differ, max |d| 0.0321
+   block 127          hash 291cf8a426f2bf4f  DIFFERS  [ahead reads 2961 in 44 spans] first frame 109582 (2.2830 s), 868 samples differ, max |d| 0.0345
+   block 512          hash e0d71c2b15f4fc16  DIFFERS  [ahead reads 2961 in 24 spans] first frame 109340 (2.2779 s), 2437 samples differ, max |d| 0.0345
+   block 48,1,127,32  hash 692b00c97daa041c  DIFFERS  [ahead reads 2961 in 77 spans] first frame 109594 (2.2832 s), 505 samples differ, max |d| 0.0345
+   => BROKEN
+broken cases: 1
+== mark-spray: POS_MARK + freeze + spray 20 (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 7            hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 48           hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 64           hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 127          hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 512          hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 48,1,127,32  hash fa01b3f6cb2b2b09  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   => INVARIANT
+broken cases: 0
+== mark-plain: POS_MARK + freeze only (unity forward, no spray)
+   ring 2^22, 384000 frames
+   block 1            hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 7            hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 48           hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 64           hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 127          hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 512          hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 48,1,127,32  hash d1737ed3080b5882  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   => INVARIANT
+broken cases: 0

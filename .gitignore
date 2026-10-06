@@ -33,6 +33,12 @@ _autosave-*
 fp-info-cache
 *.lck
 
+# Parity probes: engine copies recreated from patches, and battery inputs
+tools/parity/**/dsp_*/
+tools/parity/**/bin/
+tools/parity/**/obj/
+*.f32
+
 # Python
 __pycache__/
 *.py[cod]

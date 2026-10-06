@@ -9,6 +9,20 @@
 > corpus document; figures marked *derived* are cycle-count estimates, not measurements.
 > Status: **reviewed draft, v2** — pending prototype validation on hardware.
 
+> **Update (2026-10-05).** Two later design documents extend this one and supersede parts of
+> it. [determinism-profile.md](determinism-profile.md) specifies how engine output becomes
+> bit-identical on the pedal and every desktop build (proposed, not yet implemented; today's
+> builds diverge): it replaces contracts #6 and #7 and adds test requirements to contract #1
+> (§10), adds `Restart`, `LoadPreset` and frame-stamped event delivery to the API (§9),
+> replaces the lookup tables specified for pitch ratios and pan with in-tree math kernels
+> (§3, §8) and the public denormal guard with a private floating-point-environment guard
+> (§9), and raises the §8 CPU estimates. [companion-app.md](companion-app.md) moves mode and
+> preset compilation to the desktop only (§1, §5), makes a mode switch a frame-stamped event
+> (§5), has the plugin pass a fixed `maxBlockSize` of 512 (§9), and specifies the USB and
+> firmware-update flow that §1 leaves to another document. Both documents run the engine at
+> 48 kHz everywhere (§11). The passages changed here point at the governing text, and §13
+> lists them.
+
 ---
 
 ## 1. The design bet
@@ -23,7 +37,9 @@ experience — and everything the Microcosm structurally cannot do — as JSON m
 Consequences that drive everything below:
 
 - **Modes are files, not firmware builds.** User-loadable, git-diffable, shared between pedal
-  and plugin. The mode schema is the project's real ABI (microcosm.md §13.2).
+  and plugin. They are authored as JSON and compiled on the desktop into binary packages that
+  the pedal loads; the pedal never parses JSON (§5). The mode schema is the project's real ABI
+  (microcosm.md §13.2).
 - **The macro layer is the product.** Activity/Repeats/Shape as per-mode multi-parameter
   macros are why the Microcosm feels good (microcosm.md §13.1, rec #2). We keep that layer
   exactly, as data, and put the depth in the editor/plugin.
@@ -86,7 +102,10 @@ Structural commitments, each corpus-grounded:
    keeps recording during freeze, so a freeze held longer than the ring length (~87 s at
    48 kHz) minus one grain length has its window overwritten by wraparound; behavior at the
    boundary is re-anchor-on-wrap (audible splice), documented, with "stop writing while
-   frozen" as an open alternative (§12).
+   frozen" as an open alternative (§12). The code re-anchors once the live write head is
+   three quarters of the ring past the pin (`dsp/src/Engine.cpp:405-414`; 65.5 s at 2²²
+   frames, calculated), and that decision must be made per sample, not per block
+   (contract #1, §11).
 5. **The dry path never enters the block-delayed wet path** (grain-delay-theory.md §3.11), so
    blend cannot comb and the plugin reports 0 latency.
 6. **The post chain includes a tempo-syncable stereo delay** — the Microcosm's Space knob
@@ -167,9 +186,19 @@ plus a LUT-mean term baked at LUT build time). This replaces Clouds' `1 + 2·sha
 which compensates Clouds' smoothness axis and would be sign-inverted against a flat-top
 parameter (review finding).
 
-**Pitch.** `ratio = SemitonesToRatio(st + cents/100)` resolved at birth **via LUT + lerp,
-not `powf`** (schedule-time transcendentals are charged in §8). Composable layers: per-mode
-weighted interval set (≤ 8 entries, `cycle | random` selection) → optional scale/chord
+**Pitch.** `ratio = SemitonesToRatio(st + cents/100)` resolved at birth **by an in-tree
+DetMath kernel, never libm's `powf` or `exp2f`** (schedule-time transcendentals are charged
+in §8). DetMath is the determinism profile's private library of math kernels, written so
+that every target computes the same bits. This was amended on 2026-10-05; the earlier text
+specified a lookup table with linear interpolation. Both are deterministic, so the cost per
+birth decides: polynomial kernels are the provisional choice, to be confirmed or reversed by
+a DWT measurement of `ScheduleGrain` at the maximum birth rate, and DetMath-built tables for
+`SemitonesToRatio` and the pan law are the fallback
+([determinism-profile.md](determinism-profile.md), "DetMath replaces every libm
+transcendental"). Today's code still calls `std::exp2`
+(`dsp/include/brainscape/GrainMath.h:52`), and the TODO above that call (`:48-51`), which
+asks for a lookup table, predates this decision. Composable layers: per-mode weighted
+interval set (≤ 8 entries, `cycle | random` selection) → optional scale/chord
 quantization → per-grain `spread_cents` detune. Output duration is fixed; pitch changes how
 much source is consumed (§3.7 mapping (a)). **Glide** is specified as endpoints —
 `glide: {st_start, st_end, curve}` — so the interval is stable when `size_ms` changes, and
@@ -178,15 +207,32 @@ per-effect Shape meaning). **Reverse** is a per-grain coin flip on `reverse_prob
 FWD/REV flag covers the Microcosm's Reverse button.
 
 **Write-head guards** — derived per direction, clamped once at schedule time. `d` = scheduled
-delay behind the write head, `L` = grain length in output samples, `r` = |rate|, `margin` a
-few ms. **Reverse convention: a reverse grain starts at its scheduled position `W₀ − d` and
-reads backward** (receding from the write head — this is what makes the near guard trivially
-safe for reverse; the "start at region end" convention would instead demand `d ≥ L·r`):
+delay behind the **live** write head (the ring frame written at the grain's birth sample),
+`L` = grain length in output samples, `r` = |rate|, `margin` a few ms, `W_a` =
+`kBlockWriteAheadFrames` = 512. **Reverse convention: a reverse grain starts at its scheduled
+position `W₀ − d` and reads backward** (receding from the write head — this is what makes the
+near guard trivially safe for reverse; the "start at region end" convention would instead
+demand `d ≥ L·r`):
 
 | Direction | Near guard (read must not overtake write) | Far guard (write must not lap the grain) |
 |---|---|---|
-| Forward | `d ≥ L·max(0, r−1) + margin` | `d ≤ bufLen − L·max(0, 1−r) − margin` |
-| Reverse | `d ≥ margin` | `d ≤ bufLen − L·(1+r) − margin` |
+| Forward | `d ≥ L·max(0, r−1) + margin` | `d ≤ bufLen − W_a − L·max(0, 1−r) − margin` |
+| Reverse | `d ≥ margin` | `d ≤ bufLen − W_a − L·(1+r) − margin` |
+
+**Live-head reference and write-ahead term** (amended 2026-10-05). The guards are measured
+from the live write head even while freeze is engaged. A position measured from the freeze
+pin is clamped against the far rail moved `age` frames closer, where `age` is how far the
+live head has advanced past the pin; if that rail falls below the near rail, the far rail
+wins. `W_a` exists because `Process` writes the whole input block into the ring before it
+renders any grain (`dsp/src/Engine.cpp:457-498`). When output sample *n* renders, up to 511
+ring frames ahead of the live head already hold new input in a 512-frame block but
+one-ring-old audio in a 1-frame block, so no interpolation tap may read inside that window.
+`W_a` is a shared build constant equal to the largest legal block, never derived from
+`maxBlockSize`, because the pedal (48-frame blocks) and the plugin (up to 512) must clamp
+identically; it costs 10.7 ms of ring depth at the far end (calculated). **The code
+implements neither rule yet**: `dsp/src/Granular.cpp:102-104` computes the bounds over the
+full ring length, and while frozen the start frame is measured from the pin (`:114`). See
+contract #1.
 
 Plus a third guard from grain-delay-theory.md §2.1's hazard 3 (feedback re-injection): when
 `feedback.amount > 0`, enforce `d ≥ d_min_fb ≈ 5 ms` — without it, a zero-delay mode with
@@ -281,7 +327,7 @@ emission rate is the grid; `overlap` then acts as a don't-fire ceiling, document
 | Source | Meaning | Notes |
 |---|---|---|
 | `POS_LIVE(d, spray)` | `d` ms behind the write head, ± spray (exp law) | plus optional per-step ms offsets (taps) |
-| `POS_MARK(k, walk, jit)` | k-th most recent onset mark, optionally walking a cascade | mark ring holds 64 marks |
+| `POS_MARK(k, walk, jit)` | k-th most recent onset mark, optionally walking a cascade | mark ring holds 16 marks, enough for a 16-entry step table to address one mark per step (`kMaxMarks`, `dsp/include/brainscape/detail/Granular.h:99`; amended 2026-10-05 from 64 to match the code) |
 | `POS_PIN{anchor, rearm_ms \| rearm_src}` | pinned reference; re-armed periodically, on onset, or manually | rearm is a schema field (v1 said "per Repeats" with no field) |
 | `POS_GRID(slice)` | quantized slice of the last bar | may reduce to quantized `POS_LIVE` — prototype decides |
 
@@ -323,8 +369,14 @@ slow-pad onsets — we market the fallbacks and the visibility, not a solved pro
 
 A mode is a JSON document outside `dsp/` and a compiled POD **`ModeBlob`** inside it (one
 name throughout; sizeof computed from the vocabulary, reconciled against the §7 slot budget).
-`dsp/` never parses text; `modes::Compile()` — built into `dsp/`, host-callable, non-realtime
-— is the single shared compiler for firmware and plugin. Schema rules
+The engine never parses text; `modes::Compile()` — source in `dsp/`, host-callable,
+non-realtime — is the single shared compiler. **It runs on the desktop only** (amended
+2026-10-05; [companion-app.md](companion-app.md), "Compilation happens on the desktop
+only"): the companion app and its command-line preset compiler build JSON into binary preset
+packages, and the firmware links only the binary decoder and a structural validator, never a
+JSON parser. One compiler then yields one blob everywhere, which a pedal-side parse could
+not guarantee: newlib's `strtof` rounds decimal input twice (measured by disassembly,
+companion-app.md). Schema rules
 (preset-parameter-and-patch-format.md recs #1–#3): top-level `schema_version`; values in
 plain units keyed by **stable string names, never reused once released**; per-key tolerant
 defaulting for additive changes; name-keyed migration table only for genuine breaks; **every
@@ -414,17 +466,24 @@ LIVE 5, STOCHASTIC 3; single-user elements are `POS_GRID` (Seq — may be elimin
 `FOOTSWITCH`/`SIDECHAIN`/`intermittency` are used by **zero** parity rows — they are
 beyond-parity capabilities and earn their place on the community wishlist, not on coverage.
 
-**Hot-loading and mode switching.** JSON parses off the audio thread into a slot of a
-**4-slot ModeBlob ring**; publish is a release-store pointer swap, the audio thread
-acquire-loads once per block before scheduling. **Reclamation is explicit** (review finding —
-two slots race under repeated switching): each grain carries its blob's epoch; a slot is
-reusable only when it is not the published blob *and* its live-grain count is zero.
-`PublishMode` returns `false` when no slot is retirable (caller retries off-thread) rather
-than clobbering a blob mid-render. Mode switch crossfades *populations* — in-flight grains
-finish under the old blob, new grains are born under the new one; `ModeSwitch::Trails`
-(default) vs. `ModeSwitch::FastCut`. Presets store the mode by content hash **plus an inline
-copy**. Loop playback is a separate subsystem and survives mode changes; preset preview/queue
-is an open item (§12).
+**Hot-loading and mode switching.** A compiled blob is decoded off the audio thread (on the
+pedal, from a compiled package) into a slot of a **4-slot ModeBlob ring**; publish is a
+release-store pointer swap that the audio thread acquire-loads. **Reclamation is explicit**
+(review finding — two slots race under repeated switching): each grain carries its blob's
+epoch; a slot is reusable only when it is not the published blob *and* its live-grain count
+is zero. `PublishMode` returns `false` when no slot is retirable rather than clobbering a
+blob mid-render. **The switch is a frame-stamped event** (amended 2026-10-05;
+[companion-app.md](companion-app.md), "Complete-state presets, applied by one `dsp/`
+function"): it takes effect exactly at its stamped frame inside `Process`, not at the next
+block. The producer (the firmware control loop or the desktop wrapper) stages the blob into
+a retirable slot *before* stamping the event; if no slot is free it delays the stamp, never
+the application, so the applied frame is part of the logged event stream and identical on
+both sides. A per-block publish with a retry would land on different frames on the pedal's
+48-frame grid and the app's 512-frame chunks. Mode switch crossfades *populations* —
+in-flight grains finish under the old blob, new grains are born under the new one;
+`ModeSwitch::Trails` (default) vs. `ModeSwitch::FastCut`. Presets store the mode by content
+hash **plus an inline copy**. Loop playback is a separate subsystem and survives mode changes;
+preset preview/queue is an open item (§12).
 
 **Validation** (`modes::Validate`, which takes the target sample rate): non-empty Shape
 macro map (the "Shape does nothing" complaint is a mapping defect); guard-limit warnings per
@@ -516,12 +575,13 @@ DWT counters gate every stage (§10). The v1 table's two systematic errors are f
 cache-miss model is **rate-dependent** (misses/grain/sample = r/8 for interleaved stereo
 int16; the corpus's 8 misses/sample total is the r = 1 case), and **schedule-time work is
 charged** (SemitonesToRatio, pan, window mean, SVF coefficients — resolved per birth inside
-`Process()`; mitigated by LUTs but not free).
+`Process()`, every transcendental by an in-tree DetMath kernel with DetMath-built tables as
+the fallback, and not free; amended 2026-10-05 from "mitigated by LUTs", see §3 "Pitch").
 
 | Stage | Nominal | Pessimistic | Basis |
 |---|---|---|---|
 | Grain render, 64 voices, tiered (misses included) | ~1,600 (r ≈ 1) | ~4,000 (r = 4, conflict ×2) | grain-delay-theory.md §5.4, rate-scaled |
-| ScheduleGrain (births/s = voices/size; LUT-based) | ~30 (20 ms grains) | ~530 (1 ms grains, bursts) | derived (review finding) |
+| ScheduleGrain (cycles/sample, as in every row; birth rate = voices/size, at most one scheduler birth per sample, i.e. 48,000/s, plus onset and manual births — `dsp/src/Engine.cpp:309-314`, `dsp/src/Granular.cpp:236`, `:321`; in-tree kernels, amended 2026-10-05 from "LUT-based"; their extra cost, about +20 nominal and +300 pessimistic (estimated), is in the amended totals below) | ~30 (20 ms grains) | ~530 (1 ms grains, bursts) | derived (review finding) |
 | Per-voice modifiers (32 SVFs + crush + glide) | ~450 | ~700 | derived from post-fx §3.1 |
 | Feedback taming (DC+HP+LP+sat+4-AP, stereo) | ~150 | ~200 | derived |
 | Reverb (Dattorro, tank in SRAM) | 400–800 | 800 | post-fx §1.2–1.3, §6.2 |
@@ -536,7 +596,11 @@ charged** (SemitonesToRatio, pan, window mean, SVF coefficients — resolved per
 UI/MIDI/LED and *mode-level* coefficient recalc run at control rate and are not charged; the
 per-birth transcendentals above are the exception the v1 footnote wrongly excluded. Even the
 pessimistic case stays inside budget; the optional CloudSeed-class "big ambient" reverb mode
-is gated against it.
+is gated against it. The determinism profile (contraction off, a per-sample flush of
+recursive state, in-tree transcendentals at grain birth) raises the totals to about
+3,200–4,050 cycles/sample (32–41 %) nominal and 7,700–7,800 (77–78 %) pessimistic, all
+estimated ([determinism-profile.md](determinism-profile.md), "Effect on the grain-engine CPU
+budget").
 
 ## 9. `dsp/` core API
 
@@ -550,7 +614,8 @@ struct Arenas     { void*  base [3]; size_t bytes[3]; };
 struct EngineConfig {
   double   sampleRate    = 48000.0;   // fixed for the Engine's lifetime — rate changes
                                       // re-run PlanMemory + Init with fresh arenas
-  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, plugin the host max.
+  uint32_t maxBlockSize  = 512;       // worst case; firmware passes 48, the plugin passes 512
+                                      // and chunks larger host blocks (Init rejects > 512).
                                       // Process with numFrames > maxBlockSize is a debug assert.
   uint32_t historyFrames = 1u << 22;  // power of two; must match across builds for contract #6
   uint32_t looperFrames  = 0;         // 0 disables the looper subsystem
@@ -568,7 +633,10 @@ class Engine {
   void Reset() noexcept;                                  // RT-safe: kills grains, zeroes post/
                                                           // feedback state, drains pending params
                                                           // and snaps smoothers; ring + params kept
-  void ClearHistory() noexcept;                           // non-RT (~40-80 ms memset)
+  void ClearHistory() noexcept;                           // non-RT memset of ring + post delay
+                                                          // (~17.5 MB): M7 est. ~45-160 ms,
+                                                          // floor ~44 ms at the SDRAM peak;
+                                                          // desktop 0.92 ms measured (note below)
   void ClearLooper()  noexcept;                           // non-RT, explicit — a plugin prepare
                                                           // path must NOT call this
 
@@ -600,7 +668,7 @@ class Engine {
                                              // Counted, not boolean — bursts stay visible (LED
                                              // driver stretches each to a visible minimum).
 
-  // State — versioned; includes the RNG sample counter (contract #7)
+  // State — versioned; includes the RNG sample counter (contract #8)
   size_t SaveState(void* dst, size_t cap) const noexcept;
   bool   LoadState(const void* src, size_t bytes) noexcept;  // absent key = version default
   static constexpr uint32_t kStateSchemaVersion = 1;
@@ -620,7 +688,8 @@ namespace modes {  // non-realtime, host-callable, never from Process
   bool   Validate(const ModeBlob&, double sampleRate, ModeError* out) noexcept;
 }
 
-struct ScopedDenormalGuard { ScopedDenormalGuard() noexcept; ~ScopedDenormalGuard() noexcept; };
+// No public floating-point guard: the engine's entry points set and restore the whole
+// control word themselves, through a guard private to dsp/ (note below).
 } // namespace brainscape
 ```
 
@@ -629,10 +698,36 @@ struct ScopedDenormalGuard { ScopedDenormalGuard() noexcept; ~ScopedDenormalGuar
 | Methods | Context | Mechanism |
 |---|---|---|
 | `Process` | audio thread only | direct |
-| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | any thread | lock-free SPSC event queue, 256 entries, coalesce-on-overflow (newest wins per ParamId); drained at the top of `Process` |
+| `SetParam`, `Trigger`, `Tap`, `SetTempo`, `SetSubdiv`, `SetFreeze`, `SetGlobalReverse`, `SetExternalClock` | one producer per engine: the firmware control loop, or the desktop wrapper's audio-thread side; other threads post to that producer | lock-free SPSC event queue, 256 entries, carrying frame-stamped events that take effect at their exact frame inside `Process`; an overflow is counted, never coalesced, and a render with a nonzero count is outside the parity contract |
 | `ConsumeOnsetCount`, `GetParam`, `ActiveModeInfo` | any thread | atomics / value copies |
-| `PublishMode` | non-RT thread | release-store publish; acquire-load in `Process` |
+| `PublishMode` | non-RT thread | release-store publish; acquire-load in `Process`; the switch takes effect at its stamped frame (§5) |
 | `Init`, `Reset`*, `ClearHistory`, `ClearLooper`, `SaveState`, `LoadState`, `modes::*` | non-RT (`Reset` is RT-safe) | — |
+
+The event row was amended on 2026-10-05. The earlier wording, "any thread" through a
+single-producer queue with "coalesce-on-overflow (newest wins per ParamId)", contradicted
+itself and silently rewrote the event stream
+([determinism-profile.md](determinism-profile.md), "Frame-stamped event delivery"). The
+`ClearHistory` figures come from the same document ("Exact restart API"): libDaisy clocks the
+SDRAM for a 400 MB/s peak, which puts the floor for ~17.5 MB at 44 ms (calculated); the
+earlier "~40–80 ms" started below that floor, and the 45–160 ms range is an estimate pending
+a DWT measurement.
+
+Two lines of the listing were amended on the same date. **`maxBlockSize`:** the earlier
+comment had the plugin pass the host's maximum. The plugin passes 512 whatever the host's
+maximum and splits larger host buffers into calls of at most 512 frames, because `Init`
+rejects a larger value (`dsp/src/Engine.cpp:118`) and the engine is initialized once per
+instance ([companion-app.md](companion-app.md), "Canonical configuration and lifecycle" and
+"Host blocks"); the same stale comment remains in `dsp/include/brainscape/Engine.h:29`.
+**The denormal guard:** the listing used to export a `ScopedDenormalGuard` for callers.
+Today's `dsp/include/brainscape/DenormalGuard.h` ORs flush-to-zero bits into the caller's
+control word and guards only `Process` (`dsp/src/Engine.cpp:394`). The determinism profile
+replaces it with a private guard, `dsp/src/detail/FpEnvGuard.h`, that writes the complete
+control word (round-to-nearest, gradual underflow, which keeps subnormals rather than
+flushing them to zero) on `Init`, `Reset`, `Restart`, `ClearHistory`, `Process`,
+`LoadPreset`, `SetParam` and the exported helpers whose results reach the engine, and
+restores the caller's word on exit ([determinism-profile.md](determinism-profile.md), "A
+full control-word guard on every engine entry point", "The denormal decision: gradual
+underflow everywhere" and "Guard rewrite").
 
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
 ambiguous and collides): a Philox/Squares-class counter PRNG keyed on the tuple
@@ -654,7 +749,28 @@ boundaries.
 1. **Block-splitting bit-exactness (within one build).** Rendering 4096 frames as
    `{1, 7, 32, 48, 64, 127, 512}`-frame blocks (all ≤ maxBlockSize) produces identical
    samples. The 7- and 127-frame cases exist to catch `kChunk` alignment leaks; a dedicated
-   check diffs the normalization-gain trace across two block sizes.
+   check diffs the normalization-gain trace across two block sizes. **The test must also
+   reach the features that can break it** (amended 2026-10-05): freeze engaged mid-render,
+   with every render split at the freeze event's frame; onsets that actually fire, asserted
+   with `ConsumeOnsetCount() > 0`, so that `POS_MARK` and the onset trigger are exercised; a
+   grain position on the far rail of the ring; and a freeze held past the re-anchor point.
+   Mid-render events in general are covered once frame-stamped event delivery lands.
+   **Status: violated by today's code.** Measured in the parity investigation on `main` at
+   `e86e971`, three independent mechanisms make output depend on the block grid, because a
+   grain can read ring frames that `Process` has already written ahead of the live write head
+   in the current block (§3): (D1) while frozen, the write-head guards are measured from the
+   pin instead of the live head, so a grain positioned at an onset recorded after the pin
+   starts near or ahead of the live head; (D2) the far guard's 64-frame margin (`kGuardMarginFrames`,
+   `dsp/include/brainscape/detail/Granular.h:14`) is smaller than the write-ahead of up to
+   511 frames; (D3) the re-anchor of a held freeze is decided once per block
+   (`dsp/src/Engine.cpp:405-414`). The existing test (`dsp/tests/test_engine.cpp:376-378`)
+   never engages freeze and records 0 onsets (measured), so it could not see any of them. A
+   three-part fix (A: guards measured from the live head; B: a far rail that excludes the
+   512-frame write-ahead; C: re-anchor decided per sample) and a regression test were verified
+   on a scratch copy and have not landed. Until they do, renders that must match the pedal
+   run in 48-frame blocks aligned to frame 0, with every event on a multiple of 48. Mechanisms,
+   fix and tests: [determinism-profile.md](determinism-profile.md), "The block-split bug: three
+   verified mechanisms".
 2. **Unity-rate null test.** Preconditions stated in full: rectangular window
    (`sustain = 1, smoothness = 0`), grains abutting and phase-locked to the delay time,
    overlap → N = 1, feedback = 0, `pan_spread = 0`, dither off, reference = the same int16
@@ -667,16 +783,43 @@ boundaries.
    `base_ms` swept to 0** (the `d_min_fb` guard's regression test): bounded limit cycle,
    never a rail.
 5. **Mono compatibility** across the full `pan_spread` range.
-6. **Mode round-trip.** `Compile → Serialize → Compile` idempotent; the same mode file
-   drives firmware and plugin to identical output **given identical `EngineConfig`
-   (historyFrames, sampleRate) and starting RNG counter** — within one build, bit-exact.
-7. **Cross-build equivalence.** Firmware (Cortex-M7, FMA-contracted) vs. plugin (x86) output
-   nulls below **−120 dBFS RMS over a 10 s render** — *not* bit-exact: `-ffp-contract`,
-   libm differences, and rsqrt paths make true cross-ISA bit-exactness cost the FMA
-   throughput the §8 budget assumes (review finding). If bit-exactness is ever wanted, the
-   price is listed there.
+6. **Preset round-trip and cross-target identity.** `Compile → Serialize → Compile` is
+   idempotent. The compiled preset package is the unit of identity. It is produced only on the
+   desktop, by `dsp/`'s compiler running under the determinism profile, and compiling the same
+   JSON on every desktop CI leg yields byte-identical packages. Loaded with
+   `LoadPreset(P, Exact)` from the exact-restart state, one package drives the firmware and
+   every desktop build to bit-identical output under the parity contract
+   (`docs/design/determinism-profile.md` §2). This holds across builds, not merely within one.
+
+   *Replaced 2026-10-05 with the text of determinism-profile.md §2.6, verbatim.* **Status: not
+   met by today's code; builds diverge** ([determinism-profile.md](determinism-profile.md),
+   "Why a tolerance is not enough"). The package compiler, `LoadPreset` and the exact-restart
+   state (`Restart`) do not exist yet. The contract's preconditions (same sound revision,
+   canonical `EngineConfig`, identical input bits and frame-stamped events, exact plain
+   parameter values, execution inside the floating-point-environment guard) are listed in
+   determinism-profile.md, "The parity contract"; independence from block size additionally
+   needs contract #1's fix.
+7. **Cross-build equivalence (bit-exact).** Every conforming build (determinism profile §3)
+   reproduces the golden SHA-256 of every golden vector for the current `kSoundRevision`.
+   Verified per pull request on the host matrix and on the emulated Cortex-M7, nightly under
+   full-system emulation, and on hardware before every release. The earlier −120 dBFS
+   tolerance is withdrawn.
+
+   *Replaced 2026-10-05 with the text of determinism-profile.md §2.6, verbatim.* **Status: not
+   met by today's code; builds diverge** ([determinism-profile.md](determinism-profile.md),
+   "Why a tolerance is not enough"). A conforming build is one compiled under the profile's
+   build and numerics rules that passes its audits; `kSoundRevision` is a constant in `dsp/`
+   bumped by any change that can alter output. Neither the constant, the golden vectors nor
+   the verification legs exist yet: today's CI runs the host test matrix and only compiles
+   `dsp/` for the Cortex-M7 ([STATUS.md](../STATUS.md)). The tolerance was withdrawn because
+   a difference as small as multiply-add fusion moves one grain birth by one sample, after
+   which a jittered preset decorrelates: the default preset nulled at only −4.8 dB between a
+   fused and an unfused build (measured in the parity investigation, determinism-profile.md
+   §1.2). The price the earlier text declined (contraction off, in-tree transcendentals, no
+   fast-math) is costed in determinism-profile.md, "Costs and the explicit-FMA option".
 8. **State round-trip.** `SaveState → LoadState` (including the RNG counter) restores
-   byte-identical behavior within a build.
+   byte-identical behavior within a build. The determinism profile adds the RNG epoch used by
+   Spillover preset loads to the saved state.
 9. **SD loop save integrity.** Save and reload a loop with a known pattern across a power
    cycle; byte-identical (exercises the cache-coherency rule).
 10. **Hardware measurement gates.** DWT counters around every stage; the grain-count stress
@@ -691,10 +834,10 @@ boundaries.
 | Engine structure | One engine, modes as data | microcosm.md §4.5; the design bet |
 | Phase format | Split 32.32, masked absolute + fraction | 16.16 overflows at 500 ms × r 4; float ULP ≥ 0.5 samples at ring top |
 | Ratio ceiling | `r_max = 4.0` (+24 st), validator-enforced | bounds guards, staging, and the cache model |
-| Reverse convention | Start at scheduled position, read backward | near guard trivially safe; far guard `bufLen − L·(1+r)` |
+| Reverse convention | Start at scheduled position, read backward | near guard trivially safe; far guard `bufLen − W_a − L·(1+r) − margin`, per §3 (amended 2026-10-05 to add the write-ahead term and margin) |
 | History ring | 16 MiB, 2²² frames, int16 interleaved | undo-capable 2-min looper must coexist (post-fx rec #10) |
 | Looper undo | Two buffers + O(1) watermark undo | Microcosm parity without 23 MiB memsets in the control path |
-| Freeze | Pinned reference; ring keeps recording; ~87 s ceiling documented | zero cost; coexists with looper |
+| Freeze | Pinned reference; ring keeps recording; the pin re-anchors to the live head once it is three quarters of a ring old (65.5 s at 2²², calculated), decided per sample; write-head guards always measured from the live head (amended 2026-10-05) | zero cost; coexists with looper; a per-block decision made output depend on the block grid (contract #1) |
 | Feedback | Topology A + fixed taming chain + `d_min_fb` guard | grain-delay-theory.md §3.10 + review |
 | Normalization | `N^(−p)`, coherence-resolved exponent, per-sample τ smoothing | √N is wrong for coherent (delay) modes |
 | Window | {sustain, skew, smoothness}, unit-peak legs, mean-divide compensation | v1's `1+2·shape` was sign-inverted |
@@ -702,10 +845,12 @@ boundaries.
 | Reverb | Dattorro w/ input diffusion, 16-bit tank in AXI (72 KiB budgeted worst-case) | post-fx §1; ReverbSc is LGPL + 4× oversized |
 | Block size | Runtime at the API (default max 512); fixed internal `kChunk` | post-fx §7; hosts hand out 1024+ |
 | Sample rate | Fixed per Engine lifetime; changes re-run PlanMemory+Init | `SetSampleRate` invalidated already-sized arenas |
-| Firmware rate | Pinned 48 kHz v1; `dsp/` rate-agnostic | budget and ring time halve at 96 k |
+| Engine rate (amended 2026-10-05) | 48 kHz everywhere: the firmware runs at 48 kHz, and the plugin and app run the engine at 48 kHz and resample other host rates. `dsp/` accepts other rates, but its constants are counted in frames (the 512-frame feedback FIFO, the 512/256 onset window and hop, the guard margin), so any other rate is a different sound | budget and ring time halve at 96 k; a 100 ms preset repeats every 110.667 ms at 48 kHz and 105.333 ms at 96 kHz (measured; [determinism-profile.md](determinism-profile.md), "Boundary"; [companion-app.md](companion-app.md), "Sample rate: the 48 kHz path and the resampled path") |
 | Trigger v1 | Spectral flux + whitening + calibration + counted LED + fallbacks | onset doc recs #1–#8 |
 | Settings storage | microSD (not QSPI) | XIP stall during QSPI write is guaranteed, not a risk |
 | Mode format | JSON, plain units, stable names, tolerant defaults; `ModeBlob` 4-slot ring | preset doc recs #1–#3 + reclamation |
+| Mode and preset compilation (added 2026-10-05) | Desktop only: the app and its command-line compiler build JSON into binary preset packages; the firmware decodes and validates packages and never parses JSON; a mode switch is a frame-stamped event | one compiler gives one blob on every target; newlib's `strtof` rounds twice (measured); [companion-app.md](companion-app.md) |
+| Cross-target output (added 2026-10-05) | Bit-identical float32 on the pedal and every desktop build under the determinism profile: contraction off, no fast-math, in-tree transcendentals, a full floating-point-environment guard, golden hashes per sound revision | the owner's "same sound" requirement; a tolerance fails for stochastic presets (measured); [determinism-profile.md](determinism-profile.md) |
 | Dry latency | 0, dry never block-delayed | grain-delay-theory.md §3.11 |
 | Layers / modifiers | 2 layers, 2 modifier slots at v1 | all 44 variations fit; raising later is a schema break |
 | Voices / tiers | 64; 8/24/32 + Tu read-path specialization | Clouds precedent + budget |
@@ -746,6 +891,16 @@ do not vendor.
     #10) gates the arena plan; the window LUT moves to AXI if DTCM is tight.
 12. **Looper subsystem design** (transport API, slot count, quantize, Burst, Looper-Only,
     varispeed) is deferred to its own document; its memory/CPU envelope is fixed here.
+13. **Cross-target sample identity** (added 2026-10-05). The risks and open questions of the
+    bit-exact contracts (#6, #7) and of the contract-#1 fix are tracked in
+    [determinism-profile.md](determinism-profile.md), "Risks" and "Open questions". Among
+    them: the unmeasured M7 cost of the profile (pessimistic total estimated at 77–78 % of
+    the budget), subnormal timing on the M7, emulation versus silicon, and the fix's effect
+    on Strum-family modes under freeze. There the choice between *pin-eligible marks* (only
+    marks at or before the pin may position a frozen grain, so freeze holds the Strum
+    position; recommended) and *live-head marks* (the newest mark, measured from the live
+    head, so freeze has no effect on `POS_MARK` grains, measured) waits on a listening test.
+    The app-side risks are in [companion-app.md](companion-app.md).
 
 ## 13. Provenance
 
@@ -761,7 +916,16 @@ macro `in_range`; expression as a control source; Time dual mode; ModeBlob 4-slo
 reclamation; fully-specified counter RNG; per-sample smoothers; rate-dependent cache model +
 ScheduleGrain CPU row; Init/Clear split and O(1) looper undo; SD cache-coherency rule;
 settings moved off QSPI; contracts #2/#6/#7 restated with preconditions and a cross-build
-tolerance. Corpus references: [grain-delay-theory.md](../research/grain-delay-theory.md),
+tolerance. Amended 2026-10-05 to align with [determinism-profile.md](determinism-profile.md)
+and [companion-app.md](companion-app.md): the header note, §1, §2 commitment 4, the §3
+guards and pitch-ratio method (in-tree kernels, tables as the fallback), the §4 mark-ring
+size (16, as in the code), §5 compilation and mode switching, the §8 per-birth cost note,
+ScheduleGrain row and totals, §9 `ClearHistory`, threading, the `maxBlockSize` comment
+(the plugin passes 512 and chunks) and the removal of the public denormal guard (now
+private to `dsp/`), §10 #1/#6/#7/#8 (#6 and #7 in the profile's replacement text, with
+status lines), §11 (reverse far guard, engine rate, freeze, compilation, cross-target
+output) and §12 #13; the evidence is recorded in those documents. Corpus references:
+[grain-delay-theory.md](../research/grain-delay-theory.md),
 [microcosm.md](../research/microcosm.md),
 [post-fx-chain-looper-and-system-budget.md](../research/post-fx-chain-looper-and-system-budget.md),
 [preset-parameter-and-patch-format.md](../research/preset-parameter-and-patch-format.md),

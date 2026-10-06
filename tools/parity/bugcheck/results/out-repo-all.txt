@@ -1,0 +1,81 @@
+== lens-minimal: spray 20 + reverse 0.5 + POS_MARK + freeze (2^22 ring)
+   ring 2^22, 384000 frames
+   block 1            hash af83957bde379839  IDENTICAL to block 1
+   block 7            hash 40e6458ec526f57f  DIFFERS first frame 109640 (2.2842 s), 23 samples differ, max |d| 0.000336
+   block 48           hash fb6fb2a257f4f9bc  DIFFERS first frame 109624 (2.2838 s), 253 samples differ, max |d| 0.0321
+   block 64           hash c8dd711f36e4cc60  DIFFERS first frame 109610 (2.2835 s), 377 samples differ, max |d| 0.0321
+   block 127          hash 291cf8a426f2bf4f  DIFFERS first frame 109582 (2.2830 s), 868 samples differ, max |d| 0.0345
+   block 512          hash e0d71c2b15f4fc16  DIFFERS first frame 109340 (2.2779 s), 2437 samples differ, max |d| 0.0345
+   block 48,1,127,32  hash 692b00c97daa041c  DIFFERS first frame 109594 (2.2832 s), 505 samples differ, max |d| 0.0345
+   => BROKEN
+== mark-spray: POS_MARK + freeze + spray 20 (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 7            hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 48           hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 64           hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 127          hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 512          hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   block 48,1,127,32  hash fa01b3f6cb2b2b09  IDENTICAL to block 1
+   => INVARIANT
+== mark-reverse: POS_MARK + freeze + reverse 0.5 (no spray, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash bac03bb4e2987345  IDENTICAL to block 1
+   block 7            hash 39b398028a77a3c7  DIFFERS first frame 102318 (2.1316 s), 29 samples differ, max |d| 0.000322
+   block 48           hash 61a8b99986f9f337  DIFFERS first frame 102310 (2.1315 s), 297 samples differ, max |d| 0.000367
+   block 64           hash bd0cb53b48da8217  DIFFERS first frame 102312 (2.1315 s), 295 samples differ, max |d| 0.000392
+   block 127          hash a3fe4f17df3d0c75  DIFFERS first frame 102304 (2.1313 s), 769 samples differ, max |d| 0.000367
+   block 512          hash 03e05397b448cb13  DIFFERS first frame 102120 (2.1275 s), 3070 samples differ, max |d| 0.000405
+   block 48,1,127,32  hash 66a04ff1d42db931  DIFFERS first frame 102281 (2.1309 s), 402 samples differ, max |d| 0.000392
+   => BROKEN
+== mark-pitch: POS_MARK + freeze + pitch +12 (no spray, no reverse)
+   ring 2^22, 384000 frames
+   block 1            hash 2d90334725543db9  IDENTICAL to block 1
+   block 7            hash 9345f847ed81d990  DIFFERS first frame 100475 (2.0932 s), 495 samples differ, max |d| 0.00376
+   block 48           hash ee71e7577b48a878  DIFFERS first frame 100475 (2.0932 s), 3798 samples differ, max |d| 0.00381
+   block 64           hash de62d5e873f815d7  DIFFERS first frame 100475 (2.0932 s), 5094 samples differ, max |d| 0.00381
+   block 127          hash 6ce8463753b1b60f  DIFFERS first frame 100475 (2.0932 s), 10320 samples differ, max |d| 0.00381
+   block 512          hash daf6238023ec25f9  DIFFERS first frame 100475 (2.0932 s), 40271 samples differ, max |d| 0.00381
+   block 48,1,127,32  hash efacaf07578bfe59  DIFFERS first frame 100475 (2.0932 s), 7384 samples differ, max |d| 0.00381
+   => BROKEN
+== mark-plain: POS_MARK + freeze only (unity forward, no spray)
+   ring 2^22, 384000 frames
+   block 1            hash d1737ed3080b5882  IDENTICAL to block 1
+   block 7            hash d1737ed3080b5882  IDENTICAL to block 1
+   block 48           hash d1737ed3080b5882  IDENTICAL to block 1
+   block 64           hash d1737ed3080b5882  IDENTICAL to block 1
+   block 127          hash d1737ed3080b5882  IDENTICAL to block 1
+   block 512          hash d1737ed3080b5882  IDENTICAL to block 1
+   block 48,1,127,32  hash d1737ed3080b5882  IDENTICAL to block 1
+   => INVARIANT
+== suite-params+freeze: test_engine.cpp:386-398 parameters, 2^15 ring, freeze at 0.02 s
+   ring 2^15, 24576 frames
+   block 1            hash e15eeff8140f1a21  IDENTICAL to block 1
+   block 7            hash e15eeff8140f1a21  IDENTICAL to block 1
+   block 48           hash e15eeff8140f1a21  IDENTICAL to block 1
+   block 64           hash 3c666dc3599d3807  DIFFERS first frame 12776 (0.2662 s), 21804 samples differ, max |d| 2.04e-05
+   block 127          hash 85fbd053cdfa8bb8  DIFFERS first frame 12811 (0.2669 s), 22489 samples differ, max |d| 0.000184
+   block 512          hash 0d080a5f45151e7d  DIFFERS first frame 12776 (0.2662 s), 23445 samples differ, max |d| 0.00138
+   block 48,1,127,32  hash 66a437f9d958e8ff  DIFFERS first frame 12761 (0.2659 s), 22490 samples differ, max |d| 7.53e-05
+   => BROKEN
+== live-farguard: POS_LIVE + freeze, 2^15 ring, base 400 ms, reverse 0.5 (no mark)
+   ring 2^15, 144000 frames
+   block 1            hash 76a9585dd3a9d286  IDENTICAL to block 1
+   block 7            hash 544324a71375bfb1  DIFFERS first frame 29261 (0.6096 s), 187 samples differ, max |d| 0.12
+   block 48           hash 5769cc7c6f294a1d  DIFFERS first frame 29600 (0.6167 s), 198681 samples differ, max |d| 0.446
+   block 64           hash 5c487abe04fe9f0f  DIFFERS first frame 29247 (0.6093 s), 198781 samples differ, max |d| 0.45
+   block 127          hash 4f9ed2cfe1cf022d  DIFFERS first frame 29256 (0.6095 s), 199210 samples differ, max |d| 0.439
+   block 512          hash 7bfdec32c066042c  DIFFERS first frame 29216 (0.6087 s), 205844 samples differ, max |d| 0.416
+   block 48,1,127,32  hash 1aa61305e7d5c7ff  DIFFERS first frame 29247 (0.6093 s), 198861 samples differ, max |d| 0.45
+   => BROKEN
+== reanchor: POS_LIVE + freeze held past 3/4 ring, 2^13 ring, no spray/reverse
+   ring 2^13, 48000 frames
+   block 1            hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 7            hash 567ba890b7745225  DIFFERS first frame 16165 (0.3368 s), 63666 samples differ, max |d| 0.0671
+   block 48           hash 6be438ba2c4b9620  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.126
+   block 64           hash e177acdef911ca45  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.244
+   block 127          hash 12565196bcf8e09f  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.338
+   block 512          hash 8faaf9f651553bde  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.0401
+   block 48,1,127,32  hash 5d8a3db3c547409b  DIFFERS first frame 16165 (0.3368 s), 63668 samples differ, max |d| 0.342
+   => BROKEN
+broken cases: 6

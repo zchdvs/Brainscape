@@ -1,0 +1,354 @@
+diff -ru a/dsp/include/brainscape/detail/Granular.h b/dsp/include/brainscape/detail/Granular.h
+--- a/dsp/include/brainscape/detail/Granular.h	2026-09-01 18:45:56.565377100 -0700
++++ b/dsp/include/brainscape/detail/Granular.h	2026-10-05 18:01:53.675856800 -0700
+@@ -12,6 +12,11 @@
+ inline constexpr uint32_t kHiFiGrains        = 8;    // T0: cubic Hermite
+ inline constexpr uint32_t kWindowLutSize     = 4096;
+ inline constexpr double   kGuardMarginFrames = 64.0;
++// Most frames Pass 1 can have written past the live write head when a grain
++// reads (the largest legal block; Engine.cpp static_asserts it covers
++// kFeedbackDelayFrames, which bounds maxBlockSize). The far rail keeps every read
++// out of that window — the condition for block-split invariance (contract #1).
++inline constexpr uint32_t kBlockWriteAheadFrames = 512;
+ 
+ // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
+ // schedule-time; grains never re-read a global parameter).
+@@ -85,10 +90,12 @@
+ 
+   // Schedules and renders one block. wetL/wetR are overwritten (not accumulated).
+   // ringFrameAtBlockStart: the ring frame where absSample's input is written.
+-  // frozen/frozenAnchor: design §2.4 — positions resolve against the pinned
+-  // anchor instead of the advancing write position; the ring keeps recording.
++  // frozen/frozenAnchor: design §2.4 — POS_LIVE positions resolve against the
++  // pinned anchor instead of the advancing write position; the ring keeps
++  // recording, so the write-head guards stay relative to the live head.
++  // *frozenAnchor is in/out: re-anchor-on-wrap updates it per sample.
+   void Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
+-               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
++               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
+                uint32_t numFrames, float* wetL, float* wetR) noexcept;
+ 
+  private:
+@@ -98,13 +105,15 @@
+   };
+   static constexpr uint32_t kMaxMarks = 16;
+ 
++  // anchorFrame: POS_LIVE position reference (the pin while frozen).
++  // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
+   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
+-                     uint32_t anchorFrame) noexcept;
++                     uint32_t anchorFrame, uint32_t liveFrame) noexcept;
+   // Fire an explicit trigger: free slot if available, else steal the OLDEST voice
+   // (design §4 allocation policy — explicit triggers never drop a hit).
+   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
+-                    uint32_t* renderedTo, uint32_t n, int64_t absSample, float* wetL,
+-                    float* wetR) noexcept;
++                    uint32_t liveFrame, uint32_t* renderedTo, uint32_t n, int64_t absSample,
++                    float* wetL, float* wetR) noexcept;
+   // Renders every live voice over [from, to) in BIRTH order (the canonical
+   // per-sample summation order — see Process), retiring finished grains.
+   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
+diff -ru a/dsp/src/Engine.cpp b/dsp/src/Engine.cpp
+--- a/dsp/src/Engine.cpp	2026-09-01 19:23:05.911774600 -0700
++++ b/dsp/src/Engine.cpp	2026-10-05 18:01:53.643822400 -0700
+@@ -31,6 +31,11 @@
+                   detail::TriggerEvents::kMaxOnsets,
+               "TriggerEvents::kMaxOnsets must cover the largest legal block");
+ 
++// Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
++// live head within one block; that window must cover the largest legal block.
++static_assert(kFeedbackDelayFrames <= detail::kBlockWriteAheadFrames,
++              "the far-rail write-ahead window must cover maxBlockSize");
++
+ constexpr float kInvScale = 1.0f / 32767.0f;
+ 
+ // Rounding-mode-independent, NaN-safe int16 quantizer. Not lrintf: lrintf follows
+@@ -402,16 +407,8 @@
+     if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
+     granularDirty_ = true;
+   }
+-  if (frozen_) {
+-    // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
+-    // has consumed 3/4 of the ring behind the pin, re-pin to the present. The
+-    // splice is audible and documented; the alternative was the frozen window
+-    // silently degrading into delayed live signal as it is overwritten.
+-    const uint32_t age = (writeFrame_ - frozenAnchor_) & mask_;
+-    if (age > cfg_.historyFrames - (cfg_.historyFrames >> 2)) {
+-      frozenAnchor_ = writeFrame_;
+-    }
+-  }
++  // Re-anchor-on-wrap (design §2.4) runs per sample inside granular_.Process:
++  // decided here at block start, the splice moved with the block grid.
+   for (size_t i = 0; i < kNumParams; ++i) {
+     const float p = pending_[i].load(std::memory_order_relaxed);
+     if (p != active_[i]) {
+@@ -494,7 +491,7 @@
+   }
+ 
+   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
+-  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, frozenAnchor_,
++  granular_.Process(gp_, ev, sampleCounter_, ringStart, frozen_, &frozenAnchor_,
+                     ctx.numFrames, wetL_, wetR_);
+ 
+   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
+diff -ru a/dsp/src/Granular.cpp b/dsp/src/Granular.cpp
+--- a/dsp/src/Granular.cpp	2026-09-01 19:22:43.858732900 -0700
++++ b/dsp/src/Granular.cpp	2026-10-05 18:01:53.608267700 -0700
+@@ -54,7 +54,7 @@
+ }  // namespace
+ 
+ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
+-                                 uint32_t anchorFrame) noexcept {
++                                 uint32_t anchorFrame, uint32_t liveFrame) noexcept {
+   uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
+ 
+   // Resolve everything once (design §3): pitch -> ratio -> signed increment.
+@@ -69,17 +69,28 @@
+   const float ratio   = grainmath::SemitonesToRatio(st);
+   const bool  reverse = p.reverseProb > 0.f && RandUnit(birthAbs, Draw::Reverse) < p.reverseProb;
+ 
++  // The write-head guards (design §3 table) protect against the LIVE write head.
++  // The anchor IS the live head unless frozen; while frozen the live head keeps
++  // recording and is `age` frames past the pin. Guards measured from the pin let
++  // post-freeze POS_MARK grains overtake, or start ahead of, the live head, so
++  // what they read depended on how much of the block Pass 1 had already written.
++  const uint32_t age = (liveFrame - anchorFrame) & mask_;
++
+   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
+   // recent onset mark — the Strum family's mechanism, design §4).
+-  double d          = p.baseDelayFrames;
+-  bool   markActive = false;
++  double   d          = p.baseDelayFrames;
++  uint32_t refFrame   = anchorFrame;  // the frame d is measured back from
++  bool     markActive = false;
+   if (p.posFromMark && markCount_ > 0) {
+     const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
+     // Staleness guard: once the write head has lapped the ring, the modular
+     // distance aliases to a small value and the "mark" is live audio (review
+     // finding) — fall back to the base position instead.
+     if (birthAbs - m.abs < static_cast<int64_t>(mask_)) {
+-      d          = static_cast<double>((anchorFrame - m.frame) & mask_);
++      // A mark is an absolute ring frame: measure it from the live head. From a
++      // frozen anchor, a mark recorded after the freeze wrapped to ~bufLen.
++      d          = static_cast<double>((liveFrame - m.frame) & mask_);
++      refFrame   = liveFrame;
+       markActive = true;
+       // Read attack-length earlier so the marked transient lands at the
+       // envelope's flat top, not 15-31 dB down the fade-in (review finding).
+@@ -99,9 +110,23 @@
+   }
+   // Spray is reflected (not clamped) into the per-direction guard bounds so it
+   // keeps a distribution instead of piling onto the margin rail (review finding).
+-  const auto bounds = grainmath::ComputeDelayBounds(
+-      static_cast<double>(total), static_cast<double>(ratio), reverse, mask_ + 1u,
++  // Far rail: also stay out of the frames Pass 1 has already written past the live
++  // head in this block (up to kBlockWriteAheadFrames - 1). The 64-frame margin
++  // alone is less than one 512-frame block, so far-rail reads were block-size
++  // dependent. A shared build constant, never cfg.maxBlockSize, so pedal and
++  // plugin clamp identically.
++  const uint32_t bufLen = mask_ + 1u;
++  auto bounds = grainmath::ComputeDelayBounds(
++      static_cast<double>(total), static_cast<double>(ratio), reverse,
++      bufLen > kBlockWriteAheadFrames ? bufLen - kBlockWriteAheadFrames : 0u,
+       kGuardMarginFrames);
++  // Express the live-head far rail in d's frame of reference. A frozen POS_LIVE
++  // grain keeps its anchor-relative near rail (it stays inside the pinned window);
++  // if the two cross, the live-head rail wins.
++  if (refFrame != liveFrame) {
++    bounds.hi -= static_cast<double>(age);
++    if (bounds.hi < bounds.lo) bounds.lo = bounds.hi;
++  }
+   (void)markActive;
+   if (p.sprayFrames > 0.f) {
+     d += static_cast<double>((RandUnit(birthAbs, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
+@@ -111,7 +136,7 @@
+   }
+ 
+   Grain& g = grains_[slot];
+-  const auto startFrame = (anchorFrame - static_cast<uint32_t>(std::lround(d))) & mask_;
++  const auto startFrame = (refFrame - static_cast<uint32_t>(std::lround(d))) & mask_;
+   g.pos    = static_cast<uint64_t>(startFrame) << 32;
+   auto inc = static_cast<int64_t>(std::llround(static_cast<double>(ratio) * kFix));
+   if (reverse) inc = -inc;
+@@ -199,8 +224,9 @@
+ }
+ 
+ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
+-                                uint32_t anchorFrame, uint32_t* renderedTo, uint32_t n,
+-                                int64_t absSample, float* wetL, float* wetR) noexcept {
++                                uint32_t anchorFrame, uint32_t liveFrame, uint32_t* renderedTo,
++                                uint32_t n, int64_t absSample, float* wetL,
++                                float* wetR) noexcept {
+   // Flush up to the trigger sample so a reused/stolen slot's tail is emitted.
+   RenderSpan(*renderedTo, n, absSample, wetL, wetR);
+   *renderedTo = n;
+@@ -220,12 +246,12 @@
+     for (uint32_t i = 1; i < orderCount_; ++i) order_[i - 1] = order_[i];
+     --orderCount_;
+   }
+-  ScheduleGrain(slot, p, birthAbs, anchorFrame);
++  ScheduleGrain(slot, p, birthAbs, anchorFrame, liveFrame);
+   order_[orderCount_++] = static_cast<uint8_t>(slot);
+ }
+ 
+ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
+-                           uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
++                           uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
+                            uint32_t numFrames, float* wetL, float* wetR) noexcept {
+   for (uint32_t n = 0; n < numFrames; ++n) {
+     wetL[n] = 0.f;
+@@ -249,8 +275,19 @@
+   uint32_t renderedTo = 0;
+   uint32_t evIdx      = 0;
+ 
++  // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
++  // has consumed 3/4 of the ring behind the pin, re-pin to the present. Decided
++  // per sample, so the splice lands on the same absolute sample for every block
++  // size (deciding it at block start moved it by up to one block).
++  uint32_t       pin         = *frozenAnchor;
++  const uint32_t bufLen      = mask_ + 1u;
++  const uint32_t reanchorAge = bufLen - (bufLen >> 2);
++
+   for (uint32_t n = 0; n < numFrames; ++n) {
+-    const int64_t abs = absSample + n;
++    const int64_t  abs  = absSample + n;
++    const uint32_t live = (ringFrameAtBlockStart + n) & mask_;  // written by Pass 1 at abs
++    if (frozen && ((live - pin) & mask_) > reanchorAge) pin = live;
++    const uint32_t anchor = frozen ? pin : live;
+ 
+     // Manual/MIDI triggers fire INSIDE the per-sample loop, one per consecutive
+     // sample — a pre-loop fired them out of birth order relative to same-block
+@@ -258,8 +295,7 @@
+     // both the canonical summation order and oldest-steal rely on (review
+     // finding). Sample-offset delivery lands with the SPSC event queue.
+     if (n < ev.manualCount) {
+-      const uint32_t anchor = frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
+-      FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
++      FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
+     }
+ 
+     // Onset events: record the mark always (POS_MARK feeds on it); fire a grain
+@@ -270,9 +306,7 @@
+       markHead_         = (markHead_ + 1u) % kMaxMarks;
+       if (markCount_ < kMaxMarks) ++markCount_;
+       if (p.onsetTrigger) {
+-        const uint32_t anchor =
+-            frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
+-        FireExternal(p, abs, anchor, &renderedTo, n, absSample, wetL, wetR);
++        FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
+       }
+       ++evIdx;
+     }
+@@ -306,8 +340,7 @@
+       RenderSpan(renderedTo, n, absSample, wetL, wetR);
+       renderedTo = n;
+ 
+-      const uint32_t anchor = frozen ? frozenAnchor : ((ringFrameAtBlockStart + n) & mask_);
+-      ScheduleGrain(slot, p, abs, anchor);
++      ScheduleGrain(slot, p, abs, anchor, live);
+       order_[orderCount_++] = static_cast<uint8_t>(slot);
+ 
+       // Next inter-arrival: deterministic spacing morphing to an exponential
+@@ -328,6 +361,7 @@
+   }
+ 
+   RenderSpan(renderedTo, numFrames, absSample, wetL, wetR);
++  *frozenAnchor = pin;
+ }
+ 
+ }  // namespace brainscape::detail
+diff -ru a/dsp/tests/test_engine.cpp b/dsp/tests/test_engine.cpp
+--- a/dsp/tests/test_engine.cpp	2026-09-01 19:28:04.047183400 -0700
++++ b/dsp/tests/test_engine.cpp	2026-10-05 18:07:48.616250300 -0700
+@@ -1080,6 +1080,91 @@
+   REQUIRE(std::memcmp(big.data(), small.data(), big.size() * sizeof(float)) == 0);
+ }
+ 
++// Contract #1 with FREEZE engaged mid-render. Freeze is an event, so the harness
++// splits the block at its frame (what the SPSC event queue will do); after that,
++// every block size must agree bit-for-bit with block 1. Pass 1 writes the whole
++// block into the ring before Pass 2 renders it, so any grain read at or past the
++// live write head sees new audio in big blocks and one-ring-old audio in small
++// ones — these sections each force one way a read used to get there.
++TEST_CASE("block-splitting bit-exactness with freeze and far-rail positions") {
++  struct Setup {
++    EngineConfig cfg;
++    std::vector<std::pair<ParamId, float>> params;
++    size_t total;
++    size_t freezeAt;  // SIZE_MAX = never
++  };
++  auto run = [](const Setup& s, const std::vector<float>& input,
++                const std::vector<uint32_t>& pattern) {
++    LiveEngine live(s.cfg, s.params);
++    std::vector<float> l(s.total), r(s.total);
++    size_t pos = 0, bi = 0;
++    while (pos < s.total) {
++      if (pos == s.freezeAt) live.engine.SetFreeze(true);
++      size_t n = std::min<size_t>(pattern[bi++ % pattern.size()], s.total - pos);
++      if (pos < s.freezeAt && pos + n > s.freezeAt) n = s.freezeAt - pos;  // split at event
++      const float* ins[2]  = {input.data() + pos, input.data() + pos};
++      float*       outs[2] = {l.data() + pos, r.data() + pos};
++      Engine::ProcessContext ctx;
++      ctx.in        = ins;
++      ctx.out       = outs;
++      ctx.numFrames = static_cast<uint32_t>(n);
++      live.engine.Process(ctx);
++      pos += n;
++    }
++    l.insert(l.end(), r.begin(), r.end());
++    return l;
++  };
++  auto check = [&](const Setup& s, const std::vector<float>& input) {
++    const auto ref = run(s, input, {1});
++    for (const auto& pattern : std::vector<std::vector<uint32_t>>{
++             {7}, {32}, {48}, {64}, {127}, {512}, {48, 1, 127, 32}}) {
++      INFO("block pattern starting " << pattern[0]);
++      const auto other = run(s, input, pattern);
++      REQUIRE(std::memcmp(ref.data(), other.data(), ref.size() * sizeof(float)) == 0);
++    }
++  };
++
++  // Plucks keep arriving after the freeze, so POS_MARK sees marks NEWER than the pin.
++  auto plucked = [](size_t total) {
++    std::vector<float> input(total, 0.0f);
++    Rng rng;
++    for (auto& x : input) x = 0.001f * rng.Next();
++    for (size_t at = 3000; at + 2400 < total; at += 4800) {
++      AddPluck(&input, at, 0.6f, static_cast<uint32_t>(700u + at));
++    }
++    return input;
++  };
++
++  SECTION("POS_MARK + reverse/pitch/spray with marks recorded after the pin") {
++    // The contract-#1 parameter set (pitch 7 st, reverse 0.3, spray 50 ms, POS_MARK,
++    // onset trigger) plus a freeze. Guarded against the pin, post-freeze marks wrapped
++    // to ~one ring length and their grains overtook or started ahead of the live head.
++    Setup s{SmallConfig(),
++            {{ParamId::DelayMs, 100.0f},    {ParamId::Mix, 1.0f},
++             {ParamId::GrainSizeMs, 60.f},  {ParamId::Overlap, 0.55f},
++             {ParamId::SprayMs, 50.0f},     {ParamId::PitchSt, 7.0f},
++             {ParamId::SpreadCents, 20.f},  {ParamId::ReverseProb, 0.3f},
++             {ParamId::Jitter, 1.0f},       {ParamId::TriggerSens, 0.8f},
++             {ParamId::OnsetTrigger, 1.0f}, {ParamId::PositionSource, 1.0f}},
++            24000, 6001};
++    check(s, plucked(s.total));
++  }
++  SECTION("freeze held past the re-anchor point") {
++    // Re-anchor-on-wrap fires after 3/4 of the ring; deciding it at block start
++    // moved the splice with the block grid.
++    Setup s{SmallConfig(), DegenerateDelay(20.0f), 0, 1001};
++    s.cfg.historyFrames = 1u << 13;
++    s.total             = 24000;
++    check(s, plucked(s.total));
++  }
++  SECTION("far rail, no freeze: the margin must cover Pass 1's block write-ahead") {
++    // base delay = ring length - ~200 frames: inside the 64-frame margin's legal
++    // range, but within one 512-frame block of the write head's leading edge.
++    Setup s{SmallConfig(), DegenerateDelay(678.0f), 48000, SIZE_MAX};
++    check(s, plucked(s.total));
++  }
++}
++
+ // POS_MARK normalization: mark-anchored grains are time-shifted copies (like
+ // freeze) — without the decorrelation term the Strum family read up to 18 dB
+ // quiet across the overlap knob (review finding).

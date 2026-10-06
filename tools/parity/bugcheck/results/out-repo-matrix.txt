@@ -1,0 +1,35 @@
+S=spray 20ms R=reverse 0.5 M=POS_MARK F=freeze 2.02-6.0 s P=pitch +12; 2^22 ring, 8 s; columns vs block 1:
+combo      1    7   48   64  127  512 48,1
+-        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+S        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+R        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SR       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+M        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SM       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RM       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRM      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+F        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRF      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SMF      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RMF      ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+SRMF     ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+P        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SMP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RMP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRMP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+FP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SFP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RFP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRFP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MFP      ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+SMFP     ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+RMFP     ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+SRMFP    ok  DIFF DIFF DIFF DIFF DIFF DIFF   BROKEN
+broken cases: 6

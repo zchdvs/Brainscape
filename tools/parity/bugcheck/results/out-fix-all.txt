@@ -1,0 +1,166 @@
+== lens-minimal: spray 20 + reverse 0.5 + POS_MARK + freeze (2^22 ring)
+   ring 2^22, 384000 frames
+   block 1            hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 7            hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 48           hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 64           hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 127          hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 512          hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 48,1,127,32  hash 67da24eb00fc55fa  IDENTICAL to block 1
+   => INVARIANT
+== mark-spray: POS_MARK + freeze + spray 20 (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash e354792d3d39f39c  IDENTICAL to block 1
+   block 7            hash e354792d3d39f39c  IDENTICAL to block 1
+   block 48           hash e354792d3d39f39c  IDENTICAL to block 1
+   block 64           hash e354792d3d39f39c  IDENTICAL to block 1
+   block 127          hash e354792d3d39f39c  IDENTICAL to block 1
+   block 512          hash e354792d3d39f39c  IDENTICAL to block 1
+   block 48,1,127,32  hash e354792d3d39f39c  IDENTICAL to block 1
+   => INVARIANT
+== mark-reverse: POS_MARK + freeze + reverse 0.5 (no spray, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 7            hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 48           hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 64           hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 127          hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 512          hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 48,1,127,32  hash 787117b47ff8ab76  IDENTICAL to block 1
+   => INVARIANT
+== mark-pitch: POS_MARK + freeze + pitch +12 (no spray, no reverse)
+   ring 2^22, 384000 frames
+   block 1            hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 7            hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 48           hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 64           hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 127          hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 512          hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 48,1,127,32  hash 4158aaae8ba468f3  IDENTICAL to block 1
+   => INVARIANT
+== mark-plain: POS_MARK + freeze only (unity forward, no spray)
+   ring 2^22, 384000 frames
+   block 1            hash 0d723781eadf150c  IDENTICAL to block 1
+   block 7            hash 0d723781eadf150c  IDENTICAL to block 1
+   block 48           hash 0d723781eadf150c  IDENTICAL to block 1
+   block 64           hash 0d723781eadf150c  IDENTICAL to block 1
+   block 127          hash 0d723781eadf150c  IDENTICAL to block 1
+   block 512          hash 0d723781eadf150c  IDENTICAL to block 1
+   block 48,1,127,32  hash 0d723781eadf150c  IDENTICAL to block 1
+   => INVARIANT
+== suite-params+freeze: test_engine.cpp:386-398 parameters, 2^15 ring, freeze at 0.02 s
+   ring 2^15, 24576 frames
+   block 1            hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 7            hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 48           hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 64           hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 127          hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 512          hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 48,1,127,32  hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   => INVARIANT
+== mark-spray200: POS_MARK + freeze + spray 200 ms (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 7            hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 48           hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 64           hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 127          hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 512          hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 48,1,127,32  hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   => INVARIANT
+== mark-rev-pitch-nofreeze: POS_MARK + reverse 0.5 + pitch +12 + spray 200, NO freeze (control)
+   ring 2^22, 384000 frames
+   block 1            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 7            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 64           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 127          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 512          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48,1,127,32  hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   => INVARIANT
+== farmargin: POS_LIVE, NO freeze, 2^15 ring, base 678 ms (start ~200 frames past the far rail of the write-ahead window)
+   ring 2^15, 96000 frames
+   block 1            hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 7            hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 48           hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 64           hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 127          hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 512          hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   block 48,1,127,32  hash 10ca1b4028c1c9b8  IDENTICAL to block 1
+   => INVARIANT
+== stale-mark: POS_MARK, NO freeze, default 2^22 ring, one pluck then 90 s (mark ages past one ring)
+   ring 2^22, 4320000 frames
+   block 1            hash a50291b195ada2a4  IDENTICAL to block 1
+   block 7            hash a50291b195ada2a4  IDENTICAL to block 1
+   block 48           hash a50291b195ada2a4  IDENTICAL to block 1
+   block 64           hash a50291b195ada2a4  IDENTICAL to block 1
+   block 127          hash a50291b195ada2a4  IDENTICAL to block 1
+   block 512          hash a50291b195ada2a4  IDENTICAL to block 1
+   block 48,1,127,32  hash a50291b195ada2a4  IDENTICAL to block 1
+   => INVARIANT
+== live-farguard: POS_LIVE + freeze, 2^15 ring, base 400 ms, reverse 0.5 (no mark)
+   ring 2^15, 144000 frames
+   block 1            hash f5476eea53c58544  IDENTICAL to block 1
+   block 7            hash f5476eea53c58544  IDENTICAL to block 1
+   block 48           hash f5476eea53c58544  IDENTICAL to block 1
+   block 64           hash f5476eea53c58544  IDENTICAL to block 1
+   block 127          hash f5476eea53c58544  IDENTICAL to block 1
+   block 512          hash f5476eea53c58544  IDENTICAL to block 1
+   block 48,1,127,32  hash f5476eea53c58544  IDENTICAL to block 1
+   => INVARIANT
+== reanchor-default: POS_LIVE + freeze held 67 s, default 2^22 ring, no spray/reverse/mark
+   ring 2^22, 3264000 frames
+   block 1            hash c36e1bec013dac77  IDENTICAL to block 1
+   block 7            hash c36e1bec013dac77  IDENTICAL to block 1
+   block 48           hash c36e1bec013dac77  IDENTICAL to block 1
+   block 64           hash c36e1bec013dac77  IDENTICAL to block 1
+   block 127          hash c36e1bec013dac77  IDENTICAL to block 1
+   block 512          hash c36e1bec013dac77  IDENTICAL to block 1
+   block 48,1,127,32  hash c36e1bec013dac77  IDENTICAL to block 1
+   => INVARIANT
+== reanchor: POS_LIVE + freeze held past 3/4 ring, 2^13 ring, no spray/reverse
+   ring 2^13, 48000 frames
+   block 1            hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 7            hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 48           hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 64           hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 127          hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 512          hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 48,1,127,32  hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   => INVARIANT
+broken cases: 0
+S=spray 20ms R=reverse 0.5 M=POS_MARK F=freeze 2.02-6.0 s P=pitch +12; 2^22 ring, 8 s; columns vs block 1:
+combo      1    7   48   64  127  512 48,1
+-        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+S        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+R        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SR       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+M        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SM       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RM       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRM      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+F        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRF      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MF       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SMF      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RMF      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRMF     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+P        ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SMP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RMP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRMP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+FP       ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SFP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RFP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRFP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+MFP      ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SMFP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+RMFP     ok   ok   ok   ok   ok   ok   ok    INVARIANT
+SRMFP    ok   ok   ok   ok   ok   ok   ok    INVARIANT
+broken cases: 0

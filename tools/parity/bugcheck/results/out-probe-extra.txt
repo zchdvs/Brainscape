@@ -1,0 +1,26 @@
+   [probe] birth 12760 live 12760 anchor 1000 age 11760 | mark ON frame 11776 (mark-anchor 10776) | fwd r=1.502 L=2880 | d_raw 23000.0 bounds [1510.0, 32704.0] d 20952.9 | start behind live head -55 | first ahead-of-head read at grain sample 0
+== suite-params+freeze: test_engine.cpp:386-398 parameters, 2^15 ring, freeze at 0.02 s
+   block 1            hash e15eeff8140f1a21  IDENTICAL to block 1  [ahead reads 915 in 915 spans]
+   [probe] birth 12760 live 12760 anchor 1000 age 11760 | mark ON frame 11776 (mark-anchor 10776) | fwd r=1.502 L=2880 | d_raw 23000.0 bounds [1510.0, 32704.0] d 20952.9 | start behind live head -55 | first ahead-of-head read at grain sample 0
+   [probe] birth 118912 live 118912 anchor 97000 age 21912 | mark ON frame 112640 (mark-anchor 15640) | fwd r=1.000 L=4320 | d_raw 4180176.0 bounds [64.0, 4194240.0] d 4172386.6 | start behind live head -5 | first ahead-of-head read at grain sample 0
+   [probe] birth 130353 live 130353 anchor 97000 age 33353 | mark ON frame 127232 (mark-anchor 30232) | fwd r=1.000 L=4320 | d_raw 4165584.0 bounds [64.0, 4194240.0] d 4160943.1 | start behind live head -8 | first ahead-of-head read at grain sample 0
+   [probe] birth 134574 live 134574 anchor 97000 age 37574 | mark ON frame 127232 (mark-anchor 30232) | fwd r=1.000 L=4320 | d_raw 4165584.0 bounds [64.0, 4194240.0] d 4156322.9 | start behind live head -407 | first ahead-of-head read at grain sample 0
+   [probe] birth 160608 live 160608 anchor 97000 age 63608 | mark ON frame 155904 (mark-anchor 58904) | fwd r=1.000 L=4320 | d_raw 4136912.0 bounds [64.0, 4194240.0] d 4130350.6 | start behind live head -345 | first ahead-of-head read at grain sample 0
+   [probe] birth 0 live 0 anchor 0 age 0 | mark off frame 0 (mark-anchor 0) | fwd r=1.000 L=960 | d_raw 32544.0 bounds [64.0, 32704.0] d 32544.0 | start behind live head -224 | first ahead-of-head read at grain sample 0
+   [probe] birth 82 live 82 anchor 82 age 0 | mark off frame 0 (mark-anchor -82) | fwd r=1.000 L=960 | d_raw 32544.0 bounds [64.0, 32704.0] d 32544.0 | start behind live head -224 | first ahead-of-head read at grain sample 0
+   [probe] birth 156 live 156 anchor 156 age 0 | mark off frame 0 (mark-anchor -156) | fwd r=1.000 L=960 | d_raw 32544.0 bounds [64.0, 32704.0] d 32544.0 | start behind live head -224 | first ahead-of-head read at grain sample 0
+   [probe] birth 237 live 237 anchor 237 age 0 | mark off frame 0 (mark-anchor -237) | fwd r=1.000 L=960 | d_raw 32544.0 bounds [64.0, 32704.0] d 32544.0 | start behind live head -224 | first ahead-of-head read at grain sample 0
+   [probe] birth 4195984 live 1680 anchor 1680 age 0 | mark ON frame 11776 (mark-anchor 10096) | REV r=1.000 L=4320 | d_raw 4185720.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -8704 | first ahead-of-head read at grain sample 4096
+   [probe] birth 4196739 live 2435 anchor 2435 age 0 | mark ON frame 11776 (mark-anchor 9341) | REV r=1.000 L=4320 | d_raw 4186475.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -8704 | first ahead-of-head read at grain sample 4096
+   [probe] birth 4197289 live 2985 anchor 2985 age 0 | mark ON frame 11776 (mark-anchor 8791) | REV r=1.000 L=4320 | d_raw 4187025.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -8704 | first ahead-of-head read at grain sample 4096
+   [probe] birth 4197718 live 3414 anchor 3414 age 0 | mark ON frame 11776 (mark-anchor 8362) | REV r=1.000 L=4320 | d_raw 4187454.0 bounds [64.0, 4185600.0] d 4185600.0 | start behind live head -8704 | first ahead-of-head read at grain sample 4096
+   [probe] birth 24554 live 24554 anchor 20000 age 4554 | mark off frame 11776 (mark-anchor -8224) | REV r=1.000 L=4320 | d_raw 19200.0 bounds [64.0, 24064.0] d 19200.0 | start behind live head -9014 | first ahead-of-head read at grain sample 4251
+   [probe] birth 24958 live 24958 anchor 20000 age 4958 | mark off frame 11776 (mark-anchor -8224) | REV r=1.000 L=4320 | d_raw 19200.0 bounds [64.0, 24064.0] d 19200.0 | start behind live head -8610 | first ahead-of-head read at grain sample 4049
+   [probe] birth 25674 live 25674 anchor 20000 age 5674 | mark off frame 11776 (mark-anchor -8224) | REV r=1.000 L=4320 | d_raw 19200.0 bounds [64.0, 24064.0] d 19200.0 | start behind live head -7894 | first ahead-of-head read at grain sample 3691
+   [probe] birth 26479 live 26479 anchor 20000 age 6479 | mark off frame 11776 (mark-anchor -8224) | REV r=1.000 L=4320 | d_raw 19200.0 bounds [64.0, 24064.0] d 19200.0 | start behind live head -7089 | first ahead-of-head read at grain sample 3288
+== reanchor: POS_LIVE + freeze held past 3/4 ring, 2^13 ring, no spray/reverse
+   block 1            hash e9f0bf190f7e0bed  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 512          hash 8faaf9f651553bde  DIFFERS  [ahead reads 0 in 0 spans] first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.0401
+== reanchor-default: POS_LIVE + freeze held 67 s, default 2^22 ring, no spray/reverse/mark
+   block 1            hash c36e1bec013dac77  IDENTICAL to block 1  [ahead reads 0 in 0 spans]
+   block 512          hash 366281af730e0a88  DIFFERS  [ahead reads 0 in 0 spans] first frame 3194032 (66.5423 s), 139934 samples differ, max |d| 0.00325

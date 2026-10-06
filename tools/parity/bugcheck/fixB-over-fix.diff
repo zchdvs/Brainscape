@@ -1,0 +1,40 @@
+diff -ru a/dsp/src/Granular.cpp b/dsp/src/Granular.cpp
+--- a/dsp/src/Granular.cpp	2026-10-05 18:01:53.608267700 -0700
++++ b/dsp/src/Granular.cpp	2026-10-05 18:10:39.904578000 -0700
+@@ -81,16 +81,18 @@
+   double   d          = p.baseDelayFrames;
+   uint32_t refFrame   = anchorFrame;  // the frame d is measured back from
+   bool     markActive = false;
+-  if (p.posFromMark && markCount_ > 0) {
+-    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u) % kMaxMarks];
+-    // Staleness guard: once the write head has lapped the ring, the modular
+-    // distance aliases to a small value and the "mark" is live audio (review
+-    // finding) — fall back to the base position instead.
+-    if (birthAbs - m.abs < static_cast<int64_t>(mask_)) {
+-      // A mark is an absolute ring frame: measure it from the live head. From a
+-      // frozen anchor, a mark recorded after the freeze wrapped to ~bufLen.
+-      d          = static_cast<double>((liveFrame - m.frame) & mask_);
+-      refFrame   = liveFrame;
++  for (uint32_t k = 0; p.posFromMark && k < markCount_; ++k) {
++    const Mark& m = marks_[(markHead_ + kMaxMarks - 1u - k) % kMaxMarks];
++    // Staleness guard (older marks are staler still).
++    if (birthAbs - m.abs >= static_cast<int64_t>(mask_)) break;
++    // VARIANT B: while frozen only marks at or before the pin are eligible, so
++    // freeze also holds the Strum position. Unfrozen dPin == dLive: newest mark.
++    const uint32_t dPin  = (anchorFrame - m.frame) & mask_;
++    const uint32_t dLive = (liveFrame - m.frame) & mask_;
++    if (dPin > dLive) continue;  // recorded after the pin
++    {
++      d          = static_cast<double>(dPin);
++      refFrame   = anchorFrame;
+       markActive = true;
+       // Read attack-length earlier so the marked transient lands at the
+       // envelope's flat top, not 15-31 dB down the fade-in (review finding).
+@@ -107,6 +109,7 @@
+         }
+       }
+     }
++    break;
+   }
+   // Spray is reflected (not clamped) into the per-direction guard bounds so it
+   // keeps a distribution instead of piling onto the margin rail (review finding).

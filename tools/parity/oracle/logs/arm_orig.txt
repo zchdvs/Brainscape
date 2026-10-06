@@ -1,0 +1,10 @@
+[arm_orig] input fnv=b14af4bd4a25ee76 frames=480000 hist=2^22 block=48
+[arm_orig] default   onsets=   2 fnv=aa47553115f92431
+[arm_orig] clean     onsets=   2 fnv=3d0c518d76199fd0
+[arm_orig] shimmer   onsets=   2 fnv=666466834d13f96a
+[arm_orig] syncpitch onsets=   2 fnv=36788763e6ec74b4
+[arm_orig] strum     onsets=   2 fnv=22006554717ce44f
+[arm_orig] selfosc   onsets=   2 fnv=395257e6f4990797
+[arm_orig] post      onsets=   2 fnv=d1b7fe244b277ef8
+[arm_orig] freeze    onsets=   2 fnv=68666ea8fad558d0
+arm_orig wall=94.673420155s

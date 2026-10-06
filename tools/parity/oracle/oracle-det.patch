@@ -1,0 +1,330 @@
+diff --git a/dsp/include/brainscape/BMath.h b/dsp/include/brainscape/BMath.h
+new file mode 100644
+index 0000000..945664e
+--- /dev/null
++++ b/dsp/include/brainscape/BMath.h
+@@ -0,0 +1,115 @@
++#pragma once
++#include <cstdint>
++#include <cstring>
++
++// Probe-only stand-in for design contract #7 ("in-tree math, no libm on any path
++// that reaches audio"). Every function is a fixed sequence of IEEE-754 binary64
++// +,-,*,/ plus exact bit manipulation -- no libm, no table whose contents depend
++// on a platform. Compiled with FP contraction OFF, the result is the same bit
++// pattern on any IEEE-754 machine (x86-64 SSE2, Cortex-M7 FPv5-D16 hardware DP).
++// Accuracy is ~1e-15 relative: fine for coefficients; it is NOT tuned for speed.
++namespace brainscape::bm {
++
++inline double Pow2i(int k) noexcept {  // exact 2^k for k in [-1022, 1023]
++  const uint64_t bits = static_cast<uint64_t>(k + 1023) << 52;
++  double d;
++  std::memcpy(&d, &bits, sizeof d);
++  return d;
++}
++inline int RoundToInt(double x) noexcept {  // half away from zero, exact
++  return static_cast<int>(x < 0.0 ? x - 0.5 : x + 0.5);
++}
++
++inline double exp(double x) noexcept {
++  if (x > 709.0) x = 709.0;
++  if (x < -708.0) return 0.0;
++  const int    k     = RoundToInt(x * 1.4426950408889634);
++  const double ln2hi = 6.93147180369123816490e-01;  // fdlibm split: k*ln2hi exact
++  const double ln2lo = 1.90821492927058770002e-10;
++  const double r     = (x - k * ln2hi) - k * ln2lo;  // |r| <= ~0.347
++  double term = 1.0, sum = 1.0;
++  for (int n = 1; n <= 17; ++n) {
++    term = term * r / static_cast<double>(n);
++    sum  = sum + term;
++  }
++  return sum * Pow2i(k);
++}
++
++inline double expm1(double x) noexcept {
++  if (x > 0.5 || x < -0.5) return exp(x) - 1.0;
++  double term = x, sum = x;  // direct series: no cancellation near 0
++  for (int n = 2; n <= 22; ++n) {
++    term = term * x / static_cast<double>(n);
++    sum  = sum + term;
++  }
++  return sum;
++}
++
++inline double exp2(double x) noexcept {
++  const int    k = RoundToInt(x);
++  const double f = x - static_cast<double>(k);  // exact
++  return exp(f * 0.6931471805599453) * Pow2i(k);
++}
++
++inline double log(double x) noexcept {  // x > 0, normal
++  uint64_t bits;
++  std::memcpy(&bits, &x, sizeof bits);
++  int e = static_cast<int>((bits >> 52) & 0x7FF) - 1023;
++  bits  = (bits & 0x000FFFFFFFFFFFFFull) | (static_cast<uint64_t>(1023) << 52);
++  double m;
++  std::memcpy(&m, &bits, sizeof m);  // m in [1, 2)
++  if (m > 1.4142135623730951) { m = m * 0.5; ++e; }
++  const double s = (m - 1.0) / (m + 1.0), s2 = s * s;
++  double term = s, sum = s;
++  for (int n = 3; n <= 31; n += 2) {
++    term = term * s2;
++    sum  = sum + term / static_cast<double>(n);
++  }
++  const double ln2hi = 6.93147180369123816490e-01, ln2lo = 1.90821492927058770002e-10;
++  return static_cast<double>(e) * ln2hi + (2.0 * sum + static_cast<double>(e) * ln2lo);
++}
++
++inline void SinCosReduced(double r, double* s, double* c) noexcept {  // |r| <= pi/4
++  const double r2 = r * r;
++  double ts = r, ss = r, tc = 1.0, sc = 1.0;
++  for (int n = 1; n <= 11; ++n) {
++    ts = -ts * r2 / static_cast<double>((2 * n) * (2 * n + 1));
++    ss = ss + ts;
++    tc = -tc * r2 / static_cast<double>((2 * n - 1) * (2 * n));
++    sc = sc + tc;
++  }
++  *s = ss;
++  *c = sc;
++}
++inline void SinCos(double x, double* s, double* c) noexcept {  // |x| modest (< 1e4)
++  const int    q = RoundToInt(x * 0.63661977236758134308);
++  const double pio2_1  = 1.57079632673412561417e+00;  // fdlibm 33-bit split
++  const double pio2_1t = 6.07710050650619224932e-11;
++  const double r = (x - q * pio2_1) - q * pio2_1t;
++  double sr, cr;
++  SinCosReduced(r, &sr, &cr);
++  switch (q & 3) {
++    case 0: *s = sr;  *c = cr;  break;
++    case 1: *s = cr;  *c = -sr; break;
++    case 2: *s = -sr; *c = -cr; break;
++    default: *s = -cr; *c = sr; break;
++  }
++}
++inline double sin(double x) noexcept { double s, c; SinCos(x, &s, &c); return s; }
++inline double cos(double x) noexcept { double s, c; SinCos(x, &s, &c); return c; }
++inline double pow(double x, double y) noexcept {
++  if (x <= 0.0) return x == 0.0 ? 0.0 : 0.0;  // engine never passes x<0
++  return exp(y * log(x));
++}
++
++// float overloads: evaluate in binary64, round once.
++inline float exp(float x) noexcept { return static_cast<float>(exp(static_cast<double>(x))); }
++inline float exp2(float x) noexcept { return static_cast<float>(exp2(static_cast<double>(x))); }
++inline float log(float x) noexcept { return static_cast<float>(log(static_cast<double>(x))); }
++inline float sin(float x) noexcept { return static_cast<float>(sin(static_cast<double>(x))); }
++inline float cos(float x) noexcept { return static_cast<float>(cos(static_cast<double>(x))); }
++inline float pow(float x, float y) noexcept {
++  return static_cast<float>(pow(static_cast<double>(x), static_cast<double>(y)));
++}
++
++}  // namespace brainscape::bm
+diff --git a/dsp/include/brainscape/DenormalGuard.h b/dsp/include/brainscape/DenormalGuard.h
+index f780a10..2d29f03 100644
+--- a/dsp/include/brainscape/DenormalGuard.h
++++ b/dsp/include/brainscape/DenormalGuard.h
+@@ -6,7 +6,9 @@
+ // top-level Process() call on both firmware and plugin — never assume the host's
+ // FP state, and always restore it on exit.
+ 
+-#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
++#if defined(BRAINSCAPE_PROBE_NO_FZ)
++#define BRAINSCAPE_DENORMAL_NONE_PROBE 1
++#elif defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+ #define BRAINSCAPE_DENORMAL_SSE 1
+ #include <immintrin.h>
+ #elif defined(__aarch64__)
+diff --git a/dsp/include/brainscape/GrainMath.h b/dsp/include/brainscape/GrainMath.h
+index b65fb5f..1c1f17c 100644
+--- a/dsp/include/brainscape/GrainMath.h
++++ b/dsp/include/brainscape/GrainMath.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include <cmath>
++#include "brainscape/BMath.h"
+ #include <cstdint>
+ 
+ // Pure grain arithmetic (docs/design/grain-engine.md §3-§4): counter-based RNG,
+@@ -49,7 +50,7 @@ inline float SemitonesToRatio(float st) noexcept {
+   // before any cross-build null is attempted — a 1-ULP libm difference here was
+   // measured to null at only -108.7 dBFS across builds (review finding), and the
+   // design (§3) mandates LUT+lerp on the M7 for the §8 budget anyway.
+-  return std::exp2(st * (1.0f / 12.0f));
++  return ::brainscape::bm::exp2(st * (1.0f / 12.0f));
+ }
+ 
+ // Write-head guard bounds (design §3, per-direction table). d = scheduled delay in
+diff --git a/dsp/include/brainscape/detail/Smoother.h b/dsp/include/brainscape/detail/Smoother.h
+index 30d7838..9608a39 100644
+--- a/dsp/include/brainscape/detail/Smoother.h
++++ b/dsp/include/brainscape/detail/Smoother.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include <cmath>
++#include "brainscape/BMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -12,7 +13,7 @@ struct Smoother {
+ 
+   void SetTau(float tauMs, double sr) noexcept {
+     // expm1, not 1-exp: the subtraction cancels to ~18 mantissa bits (review finding).
+-    coef = -static_cast<float>(std::expm1(-1.0 / (tauMs * 0.001 * sr)));
++    coef = -static_cast<float>(::brainscape::bm::expm1(-1.0 / (tauMs * 0.001 * sr)));
+   }
+   void  Prime(float v) noexcept { value = target = v; }
+   float Next() noexcept {
+diff --git a/dsp/src/Engine.cpp b/dsp/src/Engine.cpp
+index e6dd9ab..a231fc6 100644
+--- a/dsp/src/Engine.cpp
++++ b/dsp/src/Engine.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <cassert>
+ #include <cmath>
++#include "brainscape/BMath.h"
+ #include <cstring>
+ 
+ #include "brainscape/DenormalGuard.h"
+@@ -171,7 +172,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+   // raw leg — which is what makes the (1+sustain)/2 window mean exact (GrainMath.h).
+   for (uint32_t i = 0; i < detail::kWindowLutSize; ++i) {
+     const double x = static_cast<double>(i) / static_cast<double>(detail::kWindowLutSize - 1);
+-    windowLut_[i]  = static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * x)));
++    windowLut_[i]  = static_cast<float>(0.5 * (1.0 - ::brainscape::bm::cos(3.14159265358979323846 * x)));
+   }
+ 
+   granular_.Init(ring_, mask_, windowLut_);
+@@ -250,7 +251,7 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
+     case ParamId::OutTrimDb:
+       // exp2f, not powf (cheaper, and the pattern to copy is LUT+lerp when
+       // SemitonesToRatio lands — schedule-time transcendentals are charged in §8).
+-      outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
++      outGain_.target = ::brainscape::bm::exp2(value * 0.16609640474436813f);  // dB -> linear
+       break;
+     case ParamId::TriggerSens:
+       detector_.SetSensitivity(value);
+@@ -352,7 +353,7 @@ void Engine::RebuildGranularParams() noexcept {
+   if (frozen_ || gp_.posFromMark) decorr = 1.0f;
+   decorr        = clamp01(decorr);
+   const float p = 1.0f - 0.5f * decorr;
+-  norm_.target  = std::pow(gp_.targetVoices, -p);
++  norm_.target  = ::brainscape::bm::pow(gp_.targetVoices, -p);
+ }
+ 
+ void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+diff --git a/dsp/src/Granular.cpp b/dsp/src/Granular.cpp
+index e1f6f51..797e191 100644
+--- a/dsp/src/Granular.cpp
++++ b/dsp/src/Granular.cpp
+@@ -1,6 +1,7 @@
+ #include "brainscape/detail/Granular.h"
+ 
+ #include <cmath>
++#include "brainscape/BMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -126,8 +127,8 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
+ 
+   // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
+   const float pan = 0.5f + p.panSpread * (RandUnit(birthAbs, Draw::Pan) - 0.5f);
+-  g.gainL = std::cos(pan * 1.5707963267948966f);
+-  g.gainR = std::sin(pan * 1.5707963267948966f);
++  g.gainL = ::brainscape::bm::cos(pan * 1.5707963267948966f);
++  g.gainR = ::brainscape::bm::sin(pan * 1.5707963267948966f);
+   // Exact unity at center pan so the degenerate-delay null holds bit-exactly.
+   if (p.panSpread == 0.0f) {
+     g.gainL = 1.0f;
+@@ -315,7 +316,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
+       float interval = spacing;
+       if (p.jitter > 0.f) {
+         const float u   = RandUnit(abs, Draw::Interval);
+-        const float exp = -std::log(1.0f - u * 0.999f) * spacing;
++        const float exp = -::brainscape::bm::log(1.0f - u * 0.999f) * spacing;
+         interval        = spacing + p.jitter * (exp - spacing);
+       }
+       intervalRemaining_ += (interval >= 1.0f ? interval : 1.0f);
+diff --git a/dsp/src/OnsetDetector.cpp b/dsp/src/OnsetDetector.cpp
+index 731a601..181fe62 100644
+--- a/dsp/src/OnsetDetector.cpp
++++ b/dsp/src/OnsetDetector.cpp
+@@ -1,6 +1,7 @@
+ #include "brainscape/detail/OnsetDetector.h"
+ 
+ #include <cmath>
++#include "brainscape/BMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -35,17 +36,17 @@ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
+   minIoi_            = ioiHops * kOnsetHop;
+   // Whitening memory ~0.4 s in TIME regardless of rate (review: the fixed 0.997
+   // constant was a 1.78 s memory that suppressed quiet notes after loud ones).
+-  whitenDecay_ = static_cast<float>(std::exp(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
++  whitenDecay_ = static_cast<float>(::brainscape::bm::exp(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
+ 
+   // Tables at Init only (libm at init is fine; cross-build 1-ULP table drift is
+   // covered by the same contract-#7 TODO as SemitonesToRatio).
+   for (uint32_t i = 0; i < kOnsetFftSize; ++i) {
+     hann_[i] = static_cast<float>(
+-        0.5 * (1.0 - std::cos(2.0 * kPi * static_cast<double>(i) / kOnsetFftSize)));
++        0.5 * (1.0 - ::brainscape::bm::cos(2.0 * kPi * static_cast<double>(i) / kOnsetFftSize)));
+   }
+   for (uint32_t k = 0; k < kOnsetFftSize / 2; ++k) {
+-    twCos_[k] = static_cast<float>(std::cos(2.0 * kPi * k / kOnsetFftSize));
+-    twSin_[k] = static_cast<float>(-std::sin(2.0 * kPi * k / kOnsetFftSize));
++    twCos_[k] = static_cast<float>(::brainscape::bm::cos(2.0 * kPi * k / kOnsetFftSize));
++    twSin_[k] = static_cast<float>(-::brainscape::bm::sin(2.0 * kPi * k / kOnsetFftSize));
+   }
+   Reset();
+ }
+diff --git a/dsp/src/PostChain.cpp b/dsp/src/PostChain.cpp
+index a31c757..ee23ed4 100644
+--- a/dsp/src/PostChain.cpp
++++ b/dsp/src/PostChain.cpp
+@@ -1,6 +1,7 @@
+ #include "brainscape/detail/PostChain.h"
+ 
+ #include <cmath>
++#include "brainscape/BMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -8,7 +9,7 @@ namespace {
+ 
+ // One-pole LP coefficient at control rate only (expm1 for precision — Smoother.h).
+ inline float LpCoef(double cutoffHz, double sr) noexcept {
+-  return -static_cast<float>(std::expm1(-6.283185307179586 * cutoffHz / sr));
++  return -static_cast<float>(::brainscape::bm::expm1(-6.283185307179586 * cutoffHz / sr));
+ }
+ 
+ inline uint32_t ScaleLen(uint32_t base32k, double sr) noexcept {
+@@ -212,14 +213,14 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
+   // DaisySP-style double-sampled SVF coefficients (MIT; post-fx doc §3.1).
+   // Control rate only — sinf/cosf never run per sample.
+   const double f = static_cast<double>(cutoff) / (sr_ * 2.0);
+-  svfFreq_ = static_cast<float>(2.0 * std::sin(3.14159265358979 * (f < 0.25 ? f : 0.25)));
++  svfFreq_ = static_cast<float>(2.0 * ::brainscape::bm::sin(3.14159265358979 * (f < 0.25 ? f : 0.25)));
+   float r = res < 0.f ? 0.f : (res > 1.f ? 1.f : res);
+   // Floor the damping: at res exactly 1 damp hits 0 and (with the reference's
+   // cubic drive term not ported) nothing bounds the resonator — measured +76 dB
+   // runaway at the knob stop (review finding). 0.995 is already an extreme
+   // (+52 dB) resonance.
+   if (r > 0.995f) r = 0.995f;
+-  float damp      = 2.0f * (1.0f - std::pow(r, 0.25f));
++  float damp      = 2.0f * (1.0f - ::brainscape::bm::pow(r, 0.25f));
+   const float lim = 2.0f / svfFreq_ - svfFreq_ * 0.5f;
+   if (damp > lim) damp = lim;
+   if (damp > 2.0f) damp = 2.0f;
+@@ -230,8 +231,8 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
+   const float m   = morph < 0.f ? 0.f : (morph > 3.f ? 3.f : morph);
+   svfSeg_         = m >= 3.f ? 2u : static_cast<uint32_t>(m);
+   const float fr  = m - static_cast<float>(svfSeg_);
+-  svfWa_          = std::cos(fr * 1.5707963267948966f);
+-  svfWb_          = std::sin(fr * 1.5707963267948966f);
++  svfWa_          = ::brainscape::bm::cos(fr * 1.5707963267948966f);
++  svfWb_          = ::brainscape::bm::sin(fr * 1.5707963267948966f);
+ }
+ 
+ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept {

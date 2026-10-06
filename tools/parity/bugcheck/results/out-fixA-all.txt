@@ -1,0 +1,131 @@
+== lens-minimal: spray 20 + reverse 0.5 + POS_MARK + freeze (2^22 ring)
+   ring 2^22, 384000 frames
+   block 1            hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 7            hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 48           hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 64           hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 127          hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 512          hash 67da24eb00fc55fa  IDENTICAL to block 1
+   block 48,1,127,32  hash 67da24eb00fc55fa  IDENTICAL to block 1
+   => INVARIANT
+== mark-spray: POS_MARK + freeze + spray 20 (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash e354792d3d39f39c  IDENTICAL to block 1
+   block 7            hash e354792d3d39f39c  IDENTICAL to block 1
+   block 48           hash e354792d3d39f39c  IDENTICAL to block 1
+   block 64           hash e354792d3d39f39c  IDENTICAL to block 1
+   block 127          hash e354792d3d39f39c  IDENTICAL to block 1
+   block 512          hash e354792d3d39f39c  IDENTICAL to block 1
+   block 48,1,127,32  hash e354792d3d39f39c  IDENTICAL to block 1
+   => INVARIANT
+== mark-reverse: POS_MARK + freeze + reverse 0.5 (no spray, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 7            hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 48           hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 64           hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 127          hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 512          hash 787117b47ff8ab76  IDENTICAL to block 1
+   block 48,1,127,32  hash 787117b47ff8ab76  IDENTICAL to block 1
+   => INVARIANT
+== mark-pitch: POS_MARK + freeze + pitch +12 (no spray, no reverse)
+   ring 2^22, 384000 frames
+   block 1            hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 7            hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 48           hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 64           hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 127          hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 512          hash 4158aaae8ba468f3  IDENTICAL to block 1
+   block 48,1,127,32  hash 4158aaae8ba468f3  IDENTICAL to block 1
+   => INVARIANT
+== mark-plain: POS_MARK + freeze only (unity forward, no spray)
+   ring 2^22, 384000 frames
+   block 1            hash 0d723781eadf150c  IDENTICAL to block 1
+   block 7            hash 0d723781eadf150c  IDENTICAL to block 1
+   block 48           hash 0d723781eadf150c  IDENTICAL to block 1
+   block 64           hash 0d723781eadf150c  IDENTICAL to block 1
+   block 127          hash 0d723781eadf150c  IDENTICAL to block 1
+   block 512          hash 0d723781eadf150c  IDENTICAL to block 1
+   block 48,1,127,32  hash 0d723781eadf150c  IDENTICAL to block 1
+   => INVARIANT
+== suite-params+freeze: test_engine.cpp:386-398 parameters, 2^15 ring, freeze at 0.02 s
+   ring 2^15, 24576 frames
+   block 1            hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 7            hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 48           hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 64           hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 127          hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 512          hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   block 48,1,127,32  hash a15a9ccc8e8f80d1  IDENTICAL to block 1
+   => INVARIANT
+== mark-spray200: POS_MARK + freeze + spray 200 ms (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 7            hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 48           hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 64           hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 127          hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 512          hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   block 48,1,127,32  hash 46c1e9aa8ebd0745  IDENTICAL to block 1
+   => INVARIANT
+== mark-rev-pitch-nofreeze: POS_MARK + reverse 0.5 + pitch +12 + spray 200, NO freeze (control)
+   ring 2^22, 384000 frames
+   block 1            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 7            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 64           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 127          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 512          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48,1,127,32  hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   => INVARIANT
+== farmargin: POS_LIVE, NO freeze, 2^15 ring, base 678 ms (start ~200 frames past the far rail of the write-ahead window)
+   ring 2^15, 96000 frames
+   block 1            hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 7            hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 48           hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 64           hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 127          hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 512          hash cc465ad7ac91905f  DIFFERS first frame 1 (0.0000 s), 106454 samples differ, max |d| 0.423
+   block 48,1,127,32  hash f4ab523e59f2e317  IDENTICAL to block 1
+   => BROKEN
+== stale-mark: POS_MARK, NO freeze, default 2^22 ring, one pluck then 90 s (mark ages past one ring)
+   ring 2^22, 4320000 frames
+   block 1            hash 859420830825ba52  IDENTICAL to block 1
+   block 7            hash 859420830825ba52  IDENTICAL to block 1
+   block 48           hash 859420830825ba52  IDENTICAL to block 1
+   block 64           hash 859420830825ba52  IDENTICAL to block 1
+   block 127          hash 9a77e457cfba6b3e  DIFFERS first frame 4200275 (87.5057 s), 4422 samples differ, max |d| 0.175
+   block 512          hash 48b4953b7a124346  DIFFERS first frame 4200225 (87.5047 s), 9108 samples differ, max |d| 0.175
+   block 48,1,127,32  hash b2122f8882171b47  DIFFERS first frame 4201031 (87.5215 s), 2743 samples differ, max |d| 0.175
+   => BROKEN
+== live-farguard: POS_LIVE + freeze, 2^15 ring, base 400 ms, reverse 0.5 (no mark)
+   ring 2^15, 144000 frames
+   block 1            hash b58e189759e0e3b7  IDENTICAL to block 1
+   block 7            hash b58e189759e0e3b7  IDENTICAL to block 1
+   block 48           hash 7e8d66db2b55fbad  DIFFERS first frame 44827 (0.9339 s), 141176 samples differ, max |d| 0.422
+   block 64           hash 577aa4e7c02ac206  DIFFERS first frame 44827 (0.9339 s), 141173 samples differ, max |d| 0.368
+   block 127          hash 9e250a34ff8efc9e  DIFFERS first frame 29271 (0.6098 s), 180352 samples differ, max |d| 0.851
+   block 512          hash 7d5f15eca5f1c6f2  DIFFERS first frame 29216 (0.6087 s), 211754 samples differ, max |d| 0.795
+   block 48,1,127,32  hash 5c626856eb637fe3  DIFFERS first frame 29985 (0.6247 s), 165048 samples differ, max |d| 0.844
+   => BROKEN
+== reanchor-default: POS_LIVE + freeze held 67 s, default 2^22 ring, no spray/reverse/mark
+   ring 2^22, 3264000 frames
+   block 1            hash c36e1bec013dac77  IDENTICAL to block 1
+   block 7            hash b0160463ab8833ac  DIFFERS first frame 3194032 (66.5423 s), 139934 samples differ, max |d| 0.00312
+   block 48           hash 8a36972b10b08797  DIFFERS first frame 3194032 (66.5423 s), 139933 samples differ, max |d| 0.00309
+   block 64           hash 5ba9e39c7a55f0c7  DIFFERS first frame 3194032 (66.5423 s), 139935 samples differ, max |d| 0.00316
+   block 127          hash 44ad0b251fe00d80  DIFFERS first frame 3194032 (66.5423 s), 139932 samples differ, max |d| 0.00306
+   block 512          hash 366281af730e0a88  DIFFERS first frame 3194032 (66.5423 s), 139934 samples differ, max |d| 0.00325
+   block 48,1,127,32  hash 17d83288c2a44f5e  DIFFERS first frame 3194032 (66.5423 s), 139935 samples differ, max |d| 0.00291
+   => BROKEN
+== reanchor: POS_LIVE + freeze held past 3/4 ring, 2^13 ring, no spray/reverse
+   ring 2^13, 48000 frames
+   block 1            hash e9f0bf190f7e0bed  IDENTICAL to block 1
+   block 7            hash 567ba890b7745225  DIFFERS first frame 16165 (0.3368 s), 63666 samples differ, max |d| 0.0671
+   block 48           hash 6be438ba2c4b9620  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.126
+   block 64           hash e177acdef911ca45  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.244
+   block 127          hash 12565196bcf8e09f  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.338
+   block 512          hash 8faaf9f651553bde  DIFFERS first frame 16165 (0.3368 s), 63669 samples differ, max |d| 0.0401
+   block 48,1,127,32  hash 5d8a3db3c547409b  DIFFERS first frame 16165 (0.3368 s), 63668 samples differ, max |d| 0.342
+   => BROKEN
+broken cases: 5

@@ -1,0 +1,776 @@
+diff --git a/dsp/include/brainscape/DenormalGuard.h b/dsp/include/brainscape/DenormalGuard.h
+index f780a10..4bae059 100644
+--- a/dsp/include/brainscape/DenormalGuard.h
++++ b/dsp/include/brainscape/DenormalGuard.h
+@@ -29,14 +29,16 @@ struct ScopedDenormalGuard {
+ #if defined(BRAINSCAPE_DENORMAL_SSE)
+   // MXCSR: FTZ = bit 15 (0x8000), DAZ = bit 6 (0x0040)
+   unsigned int saved_;
+-  ScopedDenormalGuard() noexcept : saved_(_mm_getcsr()) { _mm_setcsr(saved_ | 0x8040u); }
++  // Profile: also force RC = round-to-nearest (bits 13-14) - a host that left a
++  // directed rounding mode set would otherwise change every result.
++  ScopedDenormalGuard() noexcept : saved_(_mm_getcsr()) { _mm_setcsr((saved_ & ~0x6000u) | 0x8040u); }
+   ~ScopedDenormalGuard() noexcept { _mm_setcsr(saved_); }
+ #elif defined(BRAINSCAPE_DENORMAL_AARCH64)
+   // FPCR: FZ = bit 24
+   uint64_t saved_;
+   ScopedDenormalGuard() noexcept {
+     __asm__ __volatile__("mrs %0, fpcr" : "=r"(saved_));
+-    const uint64_t v = saved_ | (1ull << 24);
++    const uint64_t v = (saved_ & ~(3ull << 22)) | (1ull << 24);  // RMode = RN, FZ = 1
+     __asm__ __volatile__("msr fpcr, %0" ::"r"(v));
+   }
+   ~ScopedDenormalGuard() noexcept { __asm__ __volatile__("msr fpcr, %0" ::"r"(saved_)); }
+@@ -45,7 +47,7 @@ struct ScopedDenormalGuard {
+   uint32_t saved_;
+   ScopedDenormalGuard() noexcept {
+     __asm__ __volatile__("vmrs %0, fpscr" : "=r"(saved_));
+-    const uint32_t v = saved_ | (1u << 24);
++    const uint32_t v = (saved_ & ~(3u << 22)) | (1u << 24);  // RMode = RN, FZ = 1
+     __asm__ __volatile__("vmsr fpscr, %0" ::"r"(v));
+   }
+   ~ScopedDenormalGuard() noexcept { __asm__ __volatile__("vmsr fpscr, %0" ::"r"(saved_)); }
+diff --git a/dsp/include/brainscape/DetMath.h b/dsp/include/brainscape/DetMath.h
+new file mode 100644
+index 0000000..1166ac3
+--- /dev/null
++++ b/dsp/include/brainscape/DetMath.h
+@@ -0,0 +1,311 @@
++#pragma once
++#include <cstdint>
++#include <cstring>
++#if !defined(__GNUC__)
++#include <cmath>  // MSVC: std::sqrt lowers to sqrtss/sqrtsd (IEEE correctly rounded)
++#endif
++
++// Deterministic in-tree math — the "determinism profile" prototype (design §10
++// contracts #6/#7). Every function below is built ONLY from IEEE-754 basic
++// operations (+ - * / and, via Sqrt, sqrt), comparisons, integer/bit operations
++// and exact conversions, with ONE floating operation per statement so that the
++// evaluation order is fixed by the source text. Under the profile's build rule
++// (FP contraction OFF, no -ffast-math / /fp:fast, round-to-nearest, SSE2/VFP
++// scalar — never x87) every IEEE-conforming compiler must produce bit-identical
++// results: MSVC x64, GCC, Clang, arm-none-eabi-gcc (Cortex-M7 FPv5-D16).
++//
++// Polynomial coefficients are hexadecimal floating literals (exact; no
++// decimal-to-binary conversion latitude between compilers). Kernels evaluate in
++// double and round once to float, so the float wrappers are within ~0.5 ulp of
++// the correctly rounded result over the engine's argument ranges (measured by
++// the accuracy probe, not assumed).
++//
++// Splitting every multiply and add into its own statement also makes these
++// kernels immune to Clang's default -ffp-contract=on (which only fuses within one
++// expression); GCC's -ffp-contract=fast still crosses statements, so the build
++// rule remains mandatory for the engine as a whole.
++
++// Optional: keep the (cold: birth/param-change/init) double kernels out of line to save
++// flash on the M7 (-DBS_DETMATH_NOINLINE). Inlining never changes results here: the
++// same IEEE operations run in the same order either way.
++#if defined(BS_DETMATH_NOINLINE) && defined(__GNUC__)
++#define BS_DETMATH_KERNEL __attribute__((noinline))
++#else
++#define BS_DETMATH_KERNEL
++#endif
++
++namespace brainscape::detmath {
++
++// ── Exact helpers ────────────────────────────────────────────────────────────────
++
++inline float Abs(float x) noexcept {  // bit-exact fabsf (clears the sign bit only)
++  uint32_t u;
++  std::memcpy(&u, &x, sizeof u);
++  u &= 0x7FFFFFFFu;
++  std::memcpy(&x, &u, sizeof u);
++  return x;
++}
++
++// lround/llround semantics (round half away from zero), exact: x - trunc(x) is
++// always exactly representable. Valid for |x| < 2^31 (I32) / 2^62 (I64).
++inline int32_t RoundHalfAwayI32(double x) noexcept {
++  const auto   t    = static_cast<int32_t>(x);
++  const double frac = x - static_cast<double>(t);
++  if (frac >= 0.5) return t + 1;
++  if (frac <= -0.5) return t - 1;
++  return t;
++}
++inline int64_t RoundHalfAwayI64(double x) noexcept {
++  const auto   t    = static_cast<int64_t>(x);
++  const double frac = x - static_cast<double>(t);
++  if (frac >= 0.5) return t + 1;
++  if (frac <= -0.5) return t - 1;
++  return t;
++}
++
++// ceil for |x| < 2^31, exact.
++inline double CeilSmall(double x) noexcept {
++  const auto t = static_cast<double>(static_cast<int32_t>(x));
++  return t < x ? t + 1.0 : t;
++}
++
++// x * 2^n for a normal result, exact (pure exponent construction).
++inline double ScaleB(double x, int32_t n) noexcept {
++  const uint64_t bits = static_cast<uint64_t>(static_cast<int64_t>(n) + 1023) << 52;
++  double s;
++  std::memcpy(&s, &bits, sizeof s);
++  return x * s;
++}
++
++// IEEE-754 requires sqrt to be correctly rounded, so it is the one non-basic
++// operation the profile allows. GCC/Clang: build with -fno-math-errno or the
++// builtin keeps an errno fallback call to sqrtf/sqrt for negative inputs.
++#if defined(__GNUC__)
++inline float  SqrtF(float x) noexcept { return __builtin_sqrtf(x); }
++inline double SqrtD(double x) noexcept { return __builtin_sqrt(x); }
++#else
++inline float  SqrtF(float x) noexcept { return std::sqrt(x); }
++inline double SqrtD(double x) noexcept { return std::sqrt(x); }
++#endif
++
++// Explicit fused multiply-add: IEEE-754 fusedMultiplyAdd (single rounding) — exactly
++// specified, so placing it explicitly is portable. GCC/Clang: inline vfma/vfmadd when
++// the ISA has it (Cortex-M7 FPv5, x86-64-v3), else a call to libm fmaf (exact).
++// MSVC: std::fma -> UCRT fmaf (FMA3 at runtime, exact software fallback otherwise).
++#if defined(__GNUC__)
++inline float FmaF(float a, float b, float c) noexcept { return __builtin_fmaf(a, b, c); }
++#else
++inline float FmaF(float a, float b, float c) noexcept { return std::fma(a, b, c); }
++#endif
++
++// ── exp family ───────────────────────────────────────────────────────────────────
++
++// e^r for |r| <= 0.35 (Taylor to r^13; truncation < 5e-18 relative).
++BS_DETMATH_KERNEL inline double ExpKernel(double r) noexcept {
++  double p = 0x1.6124613a86d09p-33;  // 1/13!
++  p = p * r;  p = p + 0x1.1eed8eff8d898p-29;  // 1/12!
++  p = p * r;  p = p + 0x1.ae64567f544e4p-26;  // 1/11!
++  p = p * r;  p = p + 0x1.27e4fb7789f5cp-22;  // 1/10!
++  p = p * r;  p = p + 0x1.71de3a556c734p-19;  // 1/9!
++  p = p * r;  p = p + 0x1.a01a01a01a01ap-16;  // 1/8!
++  p = p * r;  p = p + 0x1.a01a01a01a01ap-13;  // 1/7!
++  p = p * r;  p = p + 0x1.6c16c16c16c17p-10;  // 1/6!
++  p = p * r;  p = p + 0x1.1111111111111p-7;   // 1/5!
++  p = p * r;  p = p + 0x1.5555555555555p-5;   // 1/4!
++  p = p * r;  p = p + 0x1.5555555555555p-3;   // 1/3!
++  p = p * r;  p = p + 0x1.0000000000000p-1;   // 1/2!
++  p = p * r;  p = p + 1.0;
++  p = p * r;  p = p + 1.0;
++  return p;
++}
++
++// 2^x, |x| <= 1000. n = nearest integer; f = x - n is exact (Sterbenz).
++BS_DETMATH_KERNEL inline double Exp2D(double x) noexcept {
++  const int32_t n = RoundHalfAwayI32(x);
++  const double  f = x - static_cast<double>(n);
++  const double  r = f * 0x1.62e42fefa39efp-1;  // ln 2
++  return ScaleB(ExpKernel(r), n);
++}
++
++// e^x, |x| <= 700. Cody-Waite reduction with a 32-bit-trailing-zero ln2_hi so
++// n*ln2_hi is exact for |n| < 2^20.
++BS_DETMATH_KERNEL inline double ExpD(double x) noexcept {
++  const double  t  = x * 0x1.71547652b82fep+0;  // log2(e)
++  const int32_t n  = RoundHalfAwayI32(t);
++  const double  nd = static_cast<double>(n);
++  const double  hi = nd * 0x1.62e42fee00000p-1;  // ln2_hi (exact product)
++  const double  lo = nd * 0x1.a39ef35793c76p-33; // ln2_lo
++  double r = x - hi;
++  r = r - lo;
++  return ScaleB(ExpKernel(r), n);
++}
++
++// e^x - 1 without cancellation for small |x| (direct series below 0.25; the
++// engine's coefficient arguments are -1.44..-2e-4).
++BS_DETMATH_KERNEL inline double Expm1D(double x) noexcept {
++  const double ax = x < 0.0 ? -x : x;
++  if (ax < 0.25) {
++    // x + x^2/2! + ... + x^15/15!: truncation < 1e-19 relative at |x| = 0.25.
++    double p = 0x1.ae7f3e733b81fp-41;  // 1/15!
++    p = p * x;  p = p + 0x1.93974a8c07c9dp-37;  // 1/14!
++    p = p * x;  p = p + 0x1.6124613a86d09p-33;  // 1/13!
++    p = p * x;  p = p + 0x1.1eed8eff8d898p-29;  // 1/12!
++    p = p * x;  p = p + 0x1.ae64567f544e4p-26;  // 1/11!
++    p = p * x;  p = p + 0x1.27e4fb7789f5cp-22;  // 1/10!
++    p = p * x;  p = p + 0x1.71de3a556c734p-19;  // 1/9!
++    p = p * x;  p = p + 0x1.a01a01a01a01ap-16;  // 1/8!
++    p = p * x;  p = p + 0x1.a01a01a01a01ap-13;  // 1/7!
++    p = p * x;  p = p + 0x1.6c16c16c16c17p-10;  // 1/6!
++    p = p * x;  p = p + 0x1.1111111111111p-7;   // 1/5!
++    p = p * x;  p = p + 0x1.5555555555555p-5;   // 1/4!
++    p = p * x;  p = p + 0x1.5555555555555p-3;   // 1/3!
++    p = p * x;  p = p + 0x1.0000000000000p-1;   // 1/2!
++    p = p * x;                                  // x/2 + x^2/6 + ...
++    p = p * x;                                  // x^2/2 + ...
++    return x + p;
++  }
++  const double e = ExpD(x);
++  return e - 1.0;
++}
++
++// ── log family ───────────────────────────────────────────────────────────────────
++
++// ln(x) for finite normal x > 0. x = m * 2^e with m in [sqrt(1/2), sqrt(2));
++// ln(m) = 2 atanh(s), s = (m-1)/(m+1), |s| <= 0.1716 (series to s^25).
++BS_DETMATH_KERNEL inline double LogD(double x) noexcept {
++  uint64_t bits;
++  std::memcpy(&bits, &x, sizeof bits);
++  int32_t e = static_cast<int32_t>((bits >> 52) & 0x7FFu) - 1023;
++  bits = (bits & 0x000FFFFFFFFFFFFFull) | 0x3FF0000000000000ull;  // m in [1, 2)
++  double m;
++  std::memcpy(&m, &bits, sizeof m);
++  if (m > 0x1.6a09e667f3bcdp+0) {  // sqrt(2)
++    m = m * 0.5;                  // exact
++    e = e + 1;
++  }
++  const double num = m - 1.0;  // exact (Sterbenz)
++  const double den = m + 1.0;
++  const double s   = num / den;
++  const double z   = s * s;
++  // 2/(2k+1) for k = 12..1, Horner in z.
++  double p = 0x1.47ae147ae147bp-4;          // 2/25
++  p = p * z;  p = p + 0x1.642c8590b2164p-4;  // 2/23
++  p = p * z;  p = p + 0x1.8618618618618p-4;  // 2/21
++  p = p * z;  p = p + 0x1.af286bca1af28p-4;  // 2/19
++  p = p * z;  p = p + 0x1.e1e1e1e1e1e1ep-4;  // 2/17
++  p = p * z;  p = p + 0x1.1111111111111p-3;  // 2/15
++  p = p * z;  p = p + 0x1.3b13b13b13b14p-3;  // 2/13
++  p = p * z;  p = p + 0x1.745d1745d1746p-3;  // 2/11
++  p = p * z;  p = p + 0x1.c71c71c71c71cp-3;  // 2/9
++  p = p * z;  p = p + 0x1.2492492492492p-2;  // 2/7
++  p = p * z;  p = p + 0x1.999999999999ap-2;  // 2/5
++  p = p * z;  p = p + 0x1.5555555555555p-1;  // 2/3
++  p = p * z;                                 // (2/3)z + ...
++  p = p * s;                                 // tail of 2 atanh(s) beyond 2s
++  const double s2  = s + s;                  // exact
++  const double lnm = s2 + p;
++  const double ed  = static_cast<double>(e);
++  const double hi  = ed * 0x1.62e42fee00000p-1;   // exact
++  const double lo  = ed * 0x1.a39ef35793c76p-33;
++  double r = lo + lnm;
++  r = r + hi;
++  return r;
++}
++
++inline double Log2D(double x) noexcept {
++  const double l = LogD(x);
++  return l * 0x1.71547652b82fep+0;  // 1/ln2
++}
++
++// ── sin / cos ────────────────────────────────────────────────────────────────────
++
++// sin(r), cos(r) for |r| <= pi/4 (+tiny): Taylor to r^17 / r^18, truncation
++// < 1e-19 relative.
++inline double SinKernel(double r) noexcept {
++  const double z = r * r;
++  double p = 0x1.952c77030ad4ap-49;          // 1/17!
++  p = p * z;  p = p - 0x1.ae7f3e733b81fp-41;  // 1/15!
++  p = p * z;  p = p + 0x1.6124613a86d09p-33;  // 1/13!
++  p = p * z;  p = p - 0x1.ae64567f544e4p-26;  // 1/11!
++  p = p * z;  p = p + 0x1.71de3a556c734p-19;  // 1/9!
++  p = p * z;  p = p - 0x1.a01a01a01a01ap-13;  // 1/7!
++  p = p * z;  p = p + 0x1.1111111111111p-7;   // 1/5!
++  p = p * z;  p = p - 0x1.5555555555555p-3;   // 1/3!
++  p = p * z;
++  p = p * r;
++  return r + p;
++}
++inline double CosKernel(double r) noexcept {
++  const double z = r * r;
++  // Horner: 1/18!, -1/16!, 1/14!, -1/12!, 1/10!, -1/8!, 1/6!, -1/4!, 1/2!
++  double p = 0x1.6827863b97d97p-53;           // 1/18!
++  p = p * z;  p = p - 0x1.ae7f3e733b81fp-45;  // 1/16!
++  p = p * z;  p = p + 0x1.93974a8c07c9dp-37;  // 1/14!
++  p = p * z;  p = p - 0x1.1eed8eff8d898p-29;  // 1/12!
++  p = p * z;  p = p + 0x1.27e4fb7789f5cp-22;  // 1/10!
++  p = p * z;  p = p - 0x1.a01a01a01a01ap-16;  // 1/8!
++  p = p * z;  p = p + 0x1.6c16c16c16c17p-10;  // 1/6!
++  p = p * z;  p = p - 0x1.5555555555555p-5;   // 1/4!
++  p = p * z;  p = p + 0x1.0000000000000p-1;   // 1/2!
++  p = p * z;                                  // z/2 - z^2/24 + ...
++  return 1.0 - p;
++}
++
++// sin/cos of x radians, |x| <= 2^19 * pi/2. Cody-Waite 3-part pi/2 (fdlibm split;
++// n*P1 and n*P2 are exact products for |n| < 2^20).
++BS_DETMATH_KERNEL inline void SinCosD(double x, double* s, double* c) noexcept {
++  const double  t  = x * 0x1.45f306dc9c883p-1;  // 2/pi
++  const int32_t n  = RoundHalfAwayI32(t);
++  const double  nd = static_cast<double>(n);
++  const double  p1 = nd * 0x1.921fb54400000p+0;
++  const double  p2 = nd * 0x1.0b4611a600000p-34;
++  const double  p3 = nd * 0x1.3198a2e037073p-69;
++  double r = x - p1;
++  r = r - p2;
++  r = r - p3;
++  const double sk = SinKernel(r);
++  const double ck = CosKernel(r);
++  switch (static_cast<uint32_t>(n) & 3u) {
++    case 0: *s = sk;  *c = ck;  break;
++    case 1: *s = ck;  *c = -sk; break;
++    case 2: *s = -sk; *c = -ck; break;
++    default: *s = -ck; *c = sk; break;
++  }
++}
++inline double SinD(double x) noexcept { double s, c; SinCosD(x, &s, &c); return s; }
++inline double CosD(double x) noexcept { double s, c; SinCosD(x, &s, &c); return c; }
++
++// sin(pi*x), cos(pi*x) in half-turns: the reduction x - n/2 is EXACT, so table
++// builds (window LUT, Hann, FFT twiddles) carry no pi-rounding in the argument.
++BS_DETMATH_KERNEL inline void SinCosPi(double x, double* s, double* c) noexcept {
++  const double  t  = x + x;                  // exact
++  const int32_t n  = RoundHalfAwayI32(t);
++  const double  h  = static_cast<double>(n) * 0.5;  // exact
++  const double  f  = x - h;                  // exact, |f| <= 1/4
++  const double  r  = f * 0x1.921fb54442d18p+1;  // pi
++  const double  sk = SinKernel(r);
++  const double  ck = CosKernel(r);
++  switch (static_cast<uint32_t>(n) & 3u) {
++    case 0: *s = sk;  *c = ck;  break;
++    case 1: *s = ck;  *c = -sk; break;
++    case 2: *s = -sk; *c = -ck; break;
++    default: *s = -ck; *c = sk; break;
++  }
++}
++inline double SinPi(double x) noexcept { double s, c; SinCosPi(x, &s, &c); return s; }
++inline double CosPi(double x) noexcept { double s, c; SinCosPi(x, &s, &c); return c; }
++
++// ── float front-ends (one rounding from a double kernel) ─────────────────────────
++
++inline float Exp2F(float x) noexcept { return static_cast<float>(Exp2D(static_cast<double>(x))); }
++inline float LogF(float x) noexcept { return static_cast<float>(LogD(static_cast<double>(x))); }
++inline float SinF(float x) noexcept { return static_cast<float>(SinD(static_cast<double>(x))); }
++inline float CosF(float x) noexcept { return static_cast<float>(CosD(static_cast<double>(x))); }
++// powf for x > 0 (normal): exp2(y * log2(x)) in double, one final rounding.
++inline float PowF(float x, float y) noexcept {
++  const double l = Log2D(static_cast<double>(x));
++  const double t = static_cast<double>(y) * l;
++  return static_cast<float>(Exp2D(t));
++}
++
++}  // namespace brainscape::detmath
+diff --git a/dsp/include/brainscape/FpProfile.h b/dsp/include/brainscape/FpProfile.h
+new file mode 100644
+index 0000000..831139c
+--- /dev/null
++++ b/dsp/include/brainscape/FpProfile.h
+@@ -0,0 +1,24 @@
++#pragma once
++// Determinism profile, source-level enforcement (prototype). Included FIRST in every
++// engine translation unit so a mis-set build flag cannot silently re-enable FP
++// contraction or value-unsafe math. The build-system flags stay the primary rule;
++// this is the belt to their braces.
++#include <cfloat>
++
++#if defined(__FAST_MATH__)
++#error "brainscape determinism profile: -ffast-math / -Ofast is forbidden"
++#endif
++#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_FP_FAST)
++#error "brainscape determinism profile: /fp:fast is forbidden"
++#endif
++#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD != 0
++#error "brainscape determinism profile: requires FLT_EVAL_METHOD == 0 (SSE2/VFP scalar, no x87)"
++#endif
++
++#if defined(__clang__)
++#pragma STDC FP_CONTRACT OFF
++#elif defined(__GNUC__)
++#pragma GCC optimize("fp-contract=off")
++#elif defined(_MSC_VER)
++#pragma fp_contract(off)
++#endif
+diff --git a/dsp/include/brainscape/GrainMath.h b/dsp/include/brainscape/GrainMath.h
+index b65fb5f..c2f04dc 100644
+--- a/dsp/include/brainscape/GrainMath.h
++++ b/dsp/include/brainscape/GrainMath.h
+@@ -1,7 +1,8 @@
+ #pragma once
+-#include <cmath>
+ #include <cstdint>
+ 
++#include "brainscape/DetMath.h"
++
+ // Pure grain arithmetic (docs/design/grain-engine.md §3-§4): counter-based RNG,
+ // pitch ratios, write-head guards, and envelope geometry. Everything here is a
+ // stateless function of its arguments so it can be unit-tested directly and is
+@@ -49,7 +50,7 @@ inline float SemitonesToRatio(float st) noexcept {
+   // before any cross-build null is attempted — a 1-ULP libm difference here was
+   // measured to null at only -108.7 dBFS across builds (review finding), and the
+   // design (§3) mandates LUT+lerp on the M7 for the §8 budget anyway.
+-  return std::exp2(st * (1.0f / 12.0f));
++  return detmath::Exp2F(st * (1.0f / 12.0f));  // determinism profile: in-tree exp2
+ }
+ 
+ // Write-head guard bounds (design §3, per-direction table). d = scheduled delay in
+diff --git a/dsp/include/brainscape/detail/Smoother.h b/dsp/include/brainscape/detail/Smoother.h
+index 30d7838..517a589 100644
+--- a/dsp/include/brainscape/detail/Smoother.h
++++ b/dsp/include/brainscape/detail/Smoother.h
+@@ -1,5 +1,5 @@
+ #pragma once
+-#include <cmath>
++#include "brainscape/DetMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -12,7 +12,7 @@ struct Smoother {
+ 
+   void SetTau(float tauMs, double sr) noexcept {
+     // expm1, not 1-exp: the subtraction cancels to ~18 mantissa bits (review finding).
+-    coef = -static_cast<float>(std::expm1(-1.0 / (tauMs * 0.001 * sr)));
++    coef = -static_cast<float>(detmath::Expm1D(-1.0 / (tauMs * 0.001 * sr)));
+   }
+   void  Prime(float v) noexcept { value = target = v; }
+   float Next() noexcept {
+diff --git a/dsp/src/Engine.cpp b/dsp/src/Engine.cpp
+index e6dd9ab..11b75ff 100644
+--- a/dsp/src/Engine.cpp
++++ b/dsp/src/Engine.cpp
+@@ -1,10 +1,10 @@
+ #include "brainscape/Engine.h"
+ 
+ #include <cassert>
+-#include <cmath>
+ #include <cstring>
+ 
+ #include "brainscape/DenormalGuard.h"
++#include "brainscape/DetMath.h"
+ #include "brainscape/GrainMath.h"
+ 
+ namespace brainscape {
+@@ -109,6 +109,7 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
+ }
+ 
+ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
++  ScopedDenormalGuard guard;  // profile: tables/coefs built under the pinned FP env
+   ready_ = false;
+   // Rate bounds: below ~40 Hz the ms-sized post buffers round to zero length and
+   // a DelaySlice write walks off its arena (review finding); above 384 kHz is
+@@ -171,7 +172,9 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+   // raw leg — which is what makes the (1+sustain)/2 window mean exact (GrainMath.h).
+   for (uint32_t i = 0; i < detail::kWindowLutSize; ++i) {
+     const double x = static_cast<double>(i) / static_cast<double>(detail::kWindowLutSize - 1);
+-    windowLut_[i]  = static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * x)));
++    const double c  = detmath::CosPi(x);  // cos(pi*x), exact half-turn reduction
++    const double om = 1.0 - c;
++    windowLut_[i]   = static_cast<float>(0.5 * om);
+   }
+ 
+   granular_.Init(ring_, mask_, windowLut_);
+@@ -202,6 +205,7 @@ bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+ 
+ void Engine::Reset() noexcept {
+   if (!ready_) return;
++  ScopedDenormalGuard guard;  // profile: rebuilds run under the pinned FP env
+   granular_.Reset();
+   tamer_.Reset();
+   detector_.Reset();
+@@ -250,7 +254,7 @@ void Engine::ApplyParam(size_t index, float value) noexcept {
+     case ParamId::OutTrimDb:
+       // exp2f, not powf (cheaper, and the pattern to copy is LUT+lerp when
+       // SemitonesToRatio lands — schedule-time transcendentals are charged in §8).
+-      outGain_.target = std::exp2(value * 0.16609640474436813f);  // dB -> linear
++      outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
+       break;
+     case ParamId::TriggerSens:
+       detector_.SetSensitivity(value);
+@@ -301,7 +305,7 @@ void Engine::RebuildGranularParams() noexcept {
+   // ONE rounded integer drives grain length, spacing, and the voice budget —
+   // spacing from the unrounded float opened duty-cycle holes across 80% of the
+   // size_ms range (review finding, up to 48.8% silence).
+-  auto total = static_cast<uint32_t>(std::lround(get(ParamId::GrainSizeMs) * 0.001 * sr));
++  auto total = static_cast<uint32_t>(detmath::RoundHalfAwayI32(get(ParamId::GrainSizeMs) * 0.001 * sr));
+   if (total < 1u) total = 1u;
+   gp_.totalFrames = total;
+ 
+@@ -338,9 +342,9 @@ void Engine::RebuildGranularParams() noexcept {
+   const float kDecorrFrames = static_cast<float>(0.003 * sr);  // ~3 ms of divergence = full
+   auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
+   float decorr = 0.f;
+-  decorr += clamp01(std::fabs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
++  decorr += clamp01(detmath::Abs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
+   decorr += clamp01(get(ParamId::SprayMs) * (1.0f / 30.0f));  // ms-based: rate-independent
+-  decorr += clamp01(std::fabs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
++  decorr += clamp01(detmath::Abs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
+                     static_cast<float>(total) / kDecorrFrames);
+   decorr += gp_.reverseProb;
+   // Freeze pins the anchor, turning identical grains into time-shifted copies of
+@@ -352,7 +356,7 @@ void Engine::RebuildGranularParams() noexcept {
+   if (frozen_ || gp_.posFromMark) decorr = 1.0f;
+   decorr        = clamp01(decorr);
+   const float p = 1.0f - 0.5f * decorr;
+-  norm_.target  = std::pow(gp_.targetVoices, -p);
++  norm_.target  = detmath::PowF(gp_.targetVoices, -p);
+ }
+ 
+ void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+diff --git a/dsp/src/Granular.cpp b/dsp/src/Granular.cpp
+index e1f6f51..494ee25 100644
+--- a/dsp/src/Granular.cpp
++++ b/dsp/src/Granular.cpp
+@@ -1,6 +1,6 @@
+ #include "brainscape/detail/Granular.h"
+ 
+-#include <cmath>
++#include "brainscape/DetMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -33,7 +33,10 @@ inline float ReadHermite(const int16_t* ring, uint32_t mask, uint64_t pos, uint3
+   const float w    = c + v;
+   const float a    = w + v + (x2 - x0) * 0.5f;
+   const float bNeg = w + a;
+-  return ((((a * fr) - bNeg) * fr + c) * fr + x0) * kInvScale;
++  float h = detmath::FmaF(a, fr, -bNeg);
++  h = detmath::FmaF(h, fr, c);
++  h = detmath::FmaF(h, fr, x0);
++  return h * kInvScale;
+ }
+ 
+ // Envelope value with the always-applied LUT morph: at smoothness 0 the morph is
+@@ -111,9 +114,9 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
+   }
+ 
+   Grain& g = grains_[slot];
+-  const auto startFrame = (anchorFrame - static_cast<uint32_t>(std::lround(d))) & mask_;
++  const auto startFrame = (anchorFrame - static_cast<uint32_t>(detmath::RoundHalfAwayI32(d))) & mask_;
+   g.pos    = static_cast<uint64_t>(startFrame) << 32;
+-  auto inc = static_cast<int64_t>(std::llround(static_cast<double>(ratio) * kFix));
++  auto inc = detmath::RoundHalfAwayI64(static_cast<double>(ratio) * kFix);
+   if (reverse) inc = -inc;
+   g.inc        = inc;
+   g.unity      = (inc == static_cast<int64_t>(1) << 32);
+@@ -126,8 +129,12 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
+ 
+   // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
+   const float pan = 0.5f + p.panSpread * (RandUnit(birthAbs, Draw::Pan) - 0.5f);
+-  g.gainL = std::cos(pan * 1.5707963267948966f);
+-  g.gainR = std::sin(pan * 1.5707963267948966f);
++  {
++    double s, c;
++    detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &s, &c);
++    g.gainL = static_cast<float>(c);
++    g.gainR = static_cast<float>(s);
++  }
+   // Exact unity at center pan so the degenerate-delay null holds bit-exactly.
+   if (p.panSpread == 0.0f) {
+     g.gainL = 1.0f;
+@@ -174,8 +181,8 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
+       } else if (g.tier == 0) {
+         for (uint32_t n = s; n < endN; ++n) {
+           const float env = EnvMorphed(g.env, env_i, sm, lut_);
+-          wetL[n] += ReadHermite(ring_, mask_, pos, 0) * env * gl;
+-          wetR[n] += ReadHermite(ring_, mask_, pos, 1) * env * gr;
++          wetL[n] = detmath::FmaF(ReadHermite(ring_, mask_, pos, 0) * env, gl, wetL[n]);
++          wetR[n] = detmath::FmaF(ReadHermite(ring_, mask_, pos, 1) * env, gr, wetR[n]);
+           pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
+           env_i += 1.0f;
+         }
+@@ -315,7 +322,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
+       float interval = spacing;
+       if (p.jitter > 0.f) {
+         const float u   = RandUnit(abs, Draw::Interval);
+-        const float exp = -std::log(1.0f - u * 0.999f) * spacing;
++        const float exp = -detmath::LogF(1.0f - u * 0.999f) * spacing;
+         interval        = spacing + p.jitter * (exp - spacing);
+       }
+       intervalRemaining_ += (interval >= 1.0f ? interval : 1.0f);
+diff --git a/dsp/src/OnsetDetector.cpp b/dsp/src/OnsetDetector.cpp
+index 731a601..bf19c85 100644
+--- a/dsp/src/OnsetDetector.cpp
++++ b/dsp/src/OnsetDetector.cpp
+@@ -1,13 +1,9 @@
+ #include "brainscape/detail/OnsetDetector.h"
+ 
+-#include <cmath>
++#include "brainscape/DetMath.h"
+ 
+ namespace brainscape::detail {
+ 
+-namespace {
+-constexpr double kPi = 3.14159265358979323846;
+-}
+-
+ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
+   float* p = warm;
+   hann_    = p;
+@@ -31,21 +27,25 @@ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
+   sr_ = sampleRate;
+   // aubio's 20 ms min-IOI, rounded UP to whole hops so the constant matches the
+   // realized behavior (the gate only runs at hop boundaries).
+-  const auto ioiHops = static_cast<int64_t>(std::ceil(0.020 * sampleRate / kOnsetHop));
++  const auto ioiHops = static_cast<int64_t>(detmath::CeilSmall(0.020 * sampleRate / kOnsetHop));
+   minIoi_            = ioiHops * kOnsetHop;
+   // Whitening memory ~0.4 s in TIME regardless of rate (review: the fixed 0.997
+   // constant was a 1.78 s memory that suppressed quiet notes after loud ones).
+-  whitenDecay_ = static_cast<float>(std::exp(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
++  whitenDecay_ = static_cast<float>(detmath::ExpD(-(static_cast<double>(kOnsetHop) / sampleRate) / 0.4));
+ 
+   // Tables at Init only (libm at init is fine; cross-build 1-ULP table drift is
+   // covered by the same contract-#7 TODO as SemitonesToRatio).
+   for (uint32_t i = 0; i < kOnsetFftSize; ++i) {
+-    hann_[i] = static_cast<float>(
+-        0.5 * (1.0 - std::cos(2.0 * kPi * static_cast<double>(i) / kOnsetFftSize)));
++    // cos(2*pi*i/N) == cos(pi * (2i/N)): the half-turn argument is exact (dyadic).
++    const double c  = detmath::CosPi(static_cast<double>(2u * i) / kOnsetFftSize);
++    const double om = 1.0 - c;
++    hann_[i] = static_cast<float>(0.5 * om);
+   }
+   for (uint32_t k = 0; k < kOnsetFftSize / 2; ++k) {
+-    twCos_[k] = static_cast<float>(std::cos(2.0 * kPi * k / kOnsetFftSize));
+-    twSin_[k] = static_cast<float>(-std::sin(2.0 * kPi * k / kOnsetFftSize));
++    double s, c;
++    detmath::SinCosPi(static_cast<double>(2u * k) / kOnsetFftSize, &s, &c);
++    twCos_[k] = static_cast<float>(c);
++    twSin_[k] = static_cast<float>(-s);
+   }
+   Reset();
+ }
+@@ -133,7 +133,7 @@ void OnsetDetector::AnalyzeHop() noexcept {
+   // level independence is preserved.
+   float frameMax = 1e-6f;
+   for (uint32_t k = 1; k < kOnsetBins; ++k) {
+-    const float mag = std::sqrt(re_[k] * re_[k] + im_[k] * im_[k]);
++    const float mag = detmath::SqrtF(re_[k] * re_[k] + im_[k] * im_[k]);
+     re_[k]          = mag;  // stash magnitudes (re_ is scratch after the FFT)
+     if (mag > frameMax) frameMax = mag;
+   }
+diff --git a/dsp/src/PostChain.cpp b/dsp/src/PostChain.cpp
+index a31c757..3cadbeb 100644
+--- a/dsp/src/PostChain.cpp
++++ b/dsp/src/PostChain.cpp
+@@ -1,6 +1,6 @@
+ #include "brainscape/detail/PostChain.h"
+ 
+-#include <cmath>
++#include "brainscape/DetMath.h"
+ 
+ namespace brainscape::detail {
+ 
+@@ -8,11 +8,11 @@ namespace {
+ 
+ // One-pole LP coefficient at control rate only (expm1 for precision — Smoother.h).
+ inline float LpCoef(double cutoffHz, double sr) noexcept {
+-  return -static_cast<float>(std::expm1(-6.283185307179586 * cutoffHz / sr));
++  return -static_cast<float>(detmath::Expm1D(-6.283185307179586 * cutoffHz / sr));
+ }
+ 
+ inline uint32_t ScaleLen(uint32_t base32k, double sr) noexcept {
+-  const auto n = static_cast<uint32_t>(std::lround(static_cast<double>(base32k) * sr / 32000.0));
++  const auto n = static_cast<uint32_t>(detmath::RoundHalfAwayI32(static_cast<double>(base32k) * sr / 32000.0));
+   return n < 2u ? 2u : n;
+ }
+ 
+@@ -109,7 +109,7 @@ void FeedbackTamer::ProcessSample(float& l, float& r) noexcept {
+ 
+ uint32_t PostChain::WarmFloats(double sr) noexcept {
+   uint32_t total = 0;
+-  total += 2u * static_cast<uint32_t>(std::lround(kModLineSeconds * sr));  // mod L+R
++  total += 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));  // mod L+R
+   for (uint32_t b : kRvAp) total += ScaleLen(b, sr);
+   for (uint32_t b : kRvDap) total += ScaleLen(b, sr);
+   for (uint32_t b : kRvDel) {
+@@ -119,13 +119,13 @@ uint32_t PostChain::WarmFloats(double sr) noexcept {
+ }
+ 
+ uint32_t PostChain::BulkFloats(double sr) noexcept {
+-  return 2u * static_cast<uint32_t>(std::lround(kPostDelayMaxSeconds * sr));
++  return 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
+ }
+ 
+ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
+   sr_      = sr;
+   float* p = warm;
+-  auto modLen = static_cast<uint32_t>(std::lround(kModLineSeconds * sr));
++  auto modLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));
+   if (modLen < 2u) modLen = 2u;
+   modL_.Init(p, modLen);
+   p += modLen;
+@@ -148,7 +148,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
+     p += n;
+   }
+ 
+-  auto pdLen = static_cast<uint32_t>(std::lround(kPostDelayMaxSeconds * sr));
++  auto pdLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
+   if (pdLen < 2u) pdLen = 2u;
+   pdL_.Init(bulk, pdLen);
+   pdR_.Init(bulk + pdLen, pdLen);
+@@ -212,14 +212,16 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
+   // DaisySP-style double-sampled SVF coefficients (MIT; post-fx doc §3.1).
+   // Control rate only — sinf/cosf never run per sample.
+   const double f = static_cast<double>(cutoff) / (sr_ * 2.0);
+-  svfFreq_ = static_cast<float>(2.0 * std::sin(3.14159265358979 * (f < 0.25 ? f : 0.25)));
++  svfFreq_ = static_cast<float>(2.0 * detmath::SinD(3.14159265358979 * (f < 0.25 ? f : 0.25)));
+   float r = res < 0.f ? 0.f : (res > 1.f ? 1.f : res);
+   // Floor the damping: at res exactly 1 damp hits 0 and (with the reference's
+   // cubic drive term not ported) nothing bounds the resonator — measured +76 dB
+   // runaway at the knob stop (review finding). 0.995 is already an extreme
+   // (+52 dB) resonance.
+   if (r > 0.995f) r = 0.995f;
+-  float damp      = 2.0f * (1.0f - std::pow(r, 0.25f));
++  // r^0.25 = sqrt(sqrt(r)) in double (both correctly rounded), one final rounding.
++  const float r4  = static_cast<float>(detmath::SqrtD(detmath::SqrtD(static_cast<double>(r))));
++  float damp      = 2.0f * (1.0f - r4);
+   const float lim = 2.0f / svfFreq_ - svfFreq_ * 0.5f;
+   if (damp > lim) damp = lim;
+   if (damp > 2.0f) damp = 2.0f;
+@@ -230,8 +232,12 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
+   const float m   = morph < 0.f ? 0.f : (morph > 3.f ? 3.f : morph);
+   svfSeg_         = m >= 3.f ? 2u : static_cast<uint32_t>(m);
+   const float fr  = m - static_cast<float>(svfSeg_);
+-  svfWa_          = std::cos(fr * 1.5707963267948966f);
+-  svfWb_          = std::sin(fr * 1.5707963267948966f);
++  {
++    double s, c;
++    detmath::SinCosD(static_cast<double>(fr * 1.5707963267948966f), &s, &c);
++    svfWa_ = static_cast<float>(c);
++    svfWb_ = static_cast<float>(s);
++  }
+ }
+ 
+ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept {
+@@ -287,8 +293,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
+           // Equal-power crossfade: delay wet is decorrelated from dry, and the
+           // linear law scooped the Space macro 5 dB mid-knob (review finding).
+           // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.
+-          const float gw   = std::sqrt(mix);
+-          const float gd   = std::sqrt(1.0f - mix);
++          const float gw   = detmath::SqrtF(mix);
++          const float gd   = detmath::SqrtF(1.0f - mix);
+           const float tapL = pdL_.ReadBack(back);
+           const float tapR = pdR_.ReadBack(back);
+           // Damped, DC-blocked regeneration (bare recirculation measured x9.9 DC
+@@ -312,8 +318,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
+         for (uint32_t n = 0; n < numFrames; ++n) {
+           const float mix = reverbMixSm_.Next();
+           if (mix == 0.0f && reverbMixSm_.target == 0.0f) continue;  // per-sample gate
+-          const float gw  = std::sqrt(mix);
+-          const float gd  = std::sqrt(1.0f - mix);
++          const float gw  = detmath::SqrtF(mix);
++          const float gd  = detmath::SqrtF(1.0f - mix);
+           rvBandwidth_ += rvBw_ * (0.5f * (l[n] + r[n]) - rvBandwidth_);
+           float x = rvBandwidth_;
+           x       = rvAp_[0].Process(x, 0.75f);
+@@ -376,16 +382,16 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
+           auto tick = [&](float in, float* s) {
+             float outs[4] = {0.f, 0.f, 0.f, 0.f};
+             for (int pass = 0; pass < 2; ++pass) {
+-              const float notch = in - dp * s[1];
+-              s[0] += fq * s[1];
++              const float notch = detmath::FmaF(-dp, s[1], in);
++              s[0] = detmath::FmaF(fq, s[1], s[0]);
+               const float high = notch - s[0];
+-              s[1] += fq * high;
+-              outs[0] += 0.5f * s[0];
+-              outs[1] += 0.5f * s[1];
+-              outs[2] += 0.5f * high;
+-              outs[3] += 0.5f * notch;
++              s[1] = detmath::FmaF(fq, high, s[1]);
++              outs[0] = detmath::FmaF(0.5f, s[0], outs[0]);
++              outs[1] = detmath::FmaF(0.5f, s[1], outs[1]);
++              outs[2] = detmath::FmaF(0.5f, high, outs[2]);
++              outs[3] = detmath::FmaF(0.5f, notch, outs[3]);
+             }
+-            return outs[seg] * wa + outs[seg + 1] * wb;
++            return detmath::FmaF(outs[seg], wa, outs[seg + 1] * wb);
+           };
+           l[n] = l[n] * (1.0f - fm) + tick(l[n], svfL_) * fm;
+           r[n] = r[n] * (1.0f - fm) + tick(r[n], svfR_) * fm;

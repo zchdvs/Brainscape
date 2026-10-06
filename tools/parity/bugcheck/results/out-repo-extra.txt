@@ -1,0 +1,55 @@
+== mark-spray200: POS_MARK + freeze + spray 200 ms (no reverse, no pitch)
+   ring 2^22, 384000 frames
+   block 1            hash a0b77d9aa7eb3790  IDENTICAL to block 1
+   block 7            hash 7ae58f0280a200a6  DIFFERS first frame 118917 (2.4774 s), 2427 samples differ, max |d| 0.000356
+   block 48           hash d3dc20b9694fb3b4  DIFFERS first frame 118913 (2.4774 s), 14704 samples differ, max |d| 0.000429
+   block 64           hash ac4d655549b8821f  DIFFERS first frame 118913 (2.4774 s), 15273 samples differ, max |d| 0.000429
+   block 127          hash f3cb66a1ba36486a  DIFFERS first frame 118913 (2.4774 s), 16123 samples differ, max |d| 0.000429
+   block 512          hash b6dcd6ef59630889  DIFFERS first frame 118913 (2.4774 s), 27486 samples differ, max |d| 0.000429
+   block 48,1,127,32  hash 377e924af96cc249  DIFFERS first frame 118913 (2.4774 s), 15326 samples differ, max |d| 0.000429
+   => BROKEN
+broken cases: 1
+== mark-rev-pitch-nofreeze: POS_MARK + reverse 0.5 + pitch +12 + spray 200, NO freeze (control)
+   ring 2^22, 384000 frames
+   block 1            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 7            hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 64           hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 127          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 512          hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   block 48,1,127,32  hash 3a5ddc41bb66961f  IDENTICAL to block 1
+   => INVARIANT
+broken cases: 0
+== farmargin: POS_LIVE, NO freeze, 2^15 ring, base 678 ms (start ~200 frames past the far rail of the write-ahead window)
+   ring 2^15, 96000 frames
+   block 1            hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 7            hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 48           hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 64           hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 127          hash f4ab523e59f2e317  IDENTICAL to block 1
+   block 512          hash cc465ad7ac91905f  DIFFERS first frame 1 (0.0000 s), 106454 samples differ, max |d| 0.423
+   block 48,1,127,32  hash f4ab523e59f2e317  IDENTICAL to block 1
+   => BROKEN
+broken cases: 1
+== stale-mark: POS_MARK, NO freeze, default 2^22 ring, one pluck then 90 s (mark ages past one ring)
+   ring 2^22, 4320000 frames
+   block 1            hash 859420830825ba52  IDENTICAL to block 1
+   block 7            hash 859420830825ba52  IDENTICAL to block 1
+   block 48           hash 859420830825ba52  IDENTICAL to block 1
+   block 64           hash 859420830825ba52  IDENTICAL to block 1
+   block 127          hash 9a77e457cfba6b3e  DIFFERS first frame 4200275 (87.5057 s), 4422 samples differ, max |d| 0.175
+   block 512          hash 48b4953b7a124346  DIFFERS first frame 4200225 (87.5047 s), 9108 samples differ, max |d| 0.175
+   block 48,1,127,32  hash b2122f8882171b47  DIFFERS first frame 4201031 (87.5215 s), 2743 samples differ, max |d| 0.175
+   => BROKEN
+broken cases: 1
+== reanchor-default: POS_LIVE + freeze held 67 s, default 2^22 ring, no spray/reverse/mark
+   ring 2^22, 3264000 frames
+   block 1            hash c36e1bec013dac77  IDENTICAL to block 1
+   block 7            hash b0160463ab8833ac  DIFFERS first frame 3194032 (66.5423 s), 139934 samples differ, max |d| 0.00312
+   block 48           hash 8a36972b10b08797  DIFFERS first frame 3194032 (66.5423 s), 139933 samples differ, max |d| 0.00309
+   block 64           hash 5ba9e39c7a55f0c7  DIFFERS first frame 3194032 (66.5423 s), 139935 samples differ, max |d| 0.00316
+   block 127          hash 44ad0b251fe00d80  DIFFERS first frame 3194032 (66.5423 s), 139932 samples differ, max |d| 0.00306
+   block 512          hash 366281af730e0a88  DIFFERS first frame 3194032 (66.5423 s), 139934 samples differ, max |d| 0.00325
+   block 48,1,127,32  hash 17d83288c2a44f5e  DIFFERS first frame 3194032 (66.5423 s), 139935 samples differ, max |d| 0.00291
+   => BROKEN
+broken cases: 1

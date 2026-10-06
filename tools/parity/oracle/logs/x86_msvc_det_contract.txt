@@ -1,0 +1,10 @@
+[x86_msvc_det_contract] input fnv=b14af4bd4a25ee76 frames=480000 hist=2^22 block=48
+[x86_msvc_det_contract] default   onsets=   2 fnv=6d3193d9dc48059b
+[x86_msvc_det_contract] clean     onsets=   2 fnv=9a7256476d4a0610
+[x86_msvc_det_contract] shimmer   onsets=   2 fnv=3a8199c16a0e7fd2
+[x86_msvc_det_contract] syncpitch onsets=   2 fnv=aa08652bd8b1a442
+[x86_msvc_det_contract] strum     onsets=   2 fnv=9d997055a0c8de5f
+[x86_msvc_det_contract] selfosc   onsets=   2 fnv=946931cf9e703107
+[x86_msvc_det_contract] post      onsets=   2 fnv=f276ef7622d3111f
+[x86_msvc_det_contract] freeze    onsets=   2 fnv=d988f7133af91dc0
+x86_msvc_det_contract wall=1.54s
