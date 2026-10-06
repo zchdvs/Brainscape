@@ -320,9 +320,13 @@ such as 1e-40, which passes `SetParam`'s clamp (`:364-365`) and, under gradual u
 makes `MakeEnv`'s reciprocal infinite and `EnvValue(0)` NaN (`GrainMath.h:121,126`), reaching
 the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 
-- **`MakeEnv` guard**, mandatory under §4: `attackInv = a >= 0x1p-20f ? 1.0f / a : 0.f`,
-  likewise `decayInv`. A leg shorter than a frame covers at most index 0, which is 0 either
-  way. An unchanged golden hash must confirm that the guard does not change output.
+- **`MakeEnv` guard**, mandatory under §4: a leg shorter than 2⁻²⁰ frames is absent,
+  `if (!(a >= 0x1p-20f)) a = 0.f`, likewise `dcy`, before `attackEnd`, `decayStart` and the
+  reciprocals are derived. Guarding only the reciprocal left a subnormal `attackEnd`, which put
+  index 0 inside the attack leg (0) under gradual underflow and past it (1) with flushing
+  forced on (**measured**, engine review). The guard changes output only for grains with a leg
+  in (0, 2⁻²⁰): their index 0, and a mark-positioned start shifted by under 2⁻²⁰ frames. An
+  unchanged golden hash must confirm that the battery has none.
 - **`SetParam` canonicalization** (`Engine.cpp:358-367`, shared with `LoadPreset`), written as
   **integer tests on the bit pattern**: exponent all ones (NaN, ±inf) → the descriptor
   minimum; exponent zero (±0, subnormals) → `+0.0f`; then clamp to `[min, max]`. Under DAZ,
@@ -336,8 +340,9 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 - **Text** is parsed only on the desktop, by a correctly rounded binary32 parser (companion
   §6.4); the pedal never parses decimal text.
 - **Input functions,** exported and non-inline in `dsp/include/brainscape/InputCondition.h`
-  and referenced, not restated, by companion-app.md. They use only integer and exact
-  operations, so no flag or FP environment changes them, and they need no guard.
+  and referenced, not restated, by companion-app.md. They work in integers on the bit
+  pattern, plus exact conversions, so no flag or FP environment changes them, unmasked
+  exceptions included, and they need no guard.
   1. **`SanitizeInput`** maps an all-ones exponent (NaN, ±inf) to `+0.0f` and passes every
      finite value, subnormals included. Every desktop wrapper applies it to every live input
      sample (each plugin format, the Standalone's live monitoring, the oracle harness); the
@@ -346,15 +351,25 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
   2. **`ConditionInput24`** puts input on the codec's 24-bit grid (§2.2): NaN → 0;
      `d = (double)x * 0x1p23` (exact); clamp `d` to [−2²³, 2²³ − 1], which saturates ±inf;
      `i = (int32_t)(d >= 0 ? d + 0.5 : d - 0.5)`, ties away from zero; return *i* × 2⁻²³.
-     Every step is exact and the truncation ignores the rounding mode (never `lrintf`). It
-     serves offline DI renders, golden vectors from recordings, the preset tool's render
-     command and the app's optional pedal-faithful monitoring, never the default live path.
-     It is a no-op for §5.13's generator vectors, which are already on the grid. The firmware
-     relies instead on `postgain` staying 1 and on bring-up confirming the Seed3's 24-bit
-     codec branch. Identity needs only identical bits; the grid adds realism.
+     Every step is exact and the truncation ignores the rounding mode (never `lrintf`). The
+     code computes the same result in integers on the bit pattern: the binary64 steps trap
+     where a host has unmasked the denormal-operand or inexact exception (**measured**,
+     engine review). It serves offline DI renders, golden vectors from recordings, the
+     preset tool's render command and the app's optional pedal-faithful monitoring, never
+     the default live path. It is a no-op for §5.13's generator vectors, which are already on
+     the grid. The firmware relies instead on `postgain` staying 1 and on bring-up confirming
+     the Seed3's 24-bit codec branch. Identity needs only identical bits; the grid adds
+     realism.
+- **Finite in, finite out:** every finite input, ±`FLT_MAX` included, gives finite output
+  and finite state. The final mix saturates at ±`FLT_MAX` (one-sided compares, so NaN still
+  reaches the Debug assertion); unsaturated, a dry sample near `FLT_MAX` under a positive trim
+  overflowed to ±inf. The onset detector's input is bounded at ±2¹⁶, where its FFT and hop
+  energy cannot overflow; unbounded, one sample past about 2e19 latched +inf into the whitening
+  memory and stopped onset detection until `Reset` (both **measured**, engine review).
 - **Debug assertions:** output samples and smoother states finite once per block; macro and
   expression leaves finite before canonicalization. A CI fuzz test feeds NaN, ±inf and
-  subnormal inputs and parameters and requires finite output equal to the sanitized run.
+  subnormal inputs and parameters and requires finite output equal to the sanitized run, over
+  several seeds: with one, the overflow above went unnoticed.
 
 ### 3.8 Conforming builds and supported targets
 
@@ -504,7 +519,8 @@ still equal the golden hash (§6.4). The evidence disagreed (record §4.2). Why 
    states are exposed, and one hit would flip a per-sample bypass gate
    (`PostChain.cpp:263,286,314,364`).
 5. **The flush removes FTZ's advantage:** x86 silent tails run 6–14× slower in IEEE mode
-   without it and cost the same as FTZ with it (0.13–0.25 % of blocks still flag).
+   without it and cost the same as FTZ with it (0.13–0.25 % of blocks still flag; with
+   `SoftSat`'s square flushed too, none do, §4.3).
 
 **Gating measurement.** No source gives the M7's subnormal cycle cost. Measure with DWT on a
 Seed3: (a) a dependent `vmul.f32`/`vadd.f32` chain with subnormal operands and results at
@@ -515,9 +531,11 @@ flags are set.
 
 **Decision rule** (the single acceptance criterion; companion-app.md refers to it):
 
-- **Keep gradual underflow** if, in (b), silent-tail CPU at FZ = 0 is at most 1.2× that at
-  FZ = 1, at most 0.5 % of blocks raise a subnormal flag, and the FTZ-forced render equals the
-  golden hash. The absolute budget is a separate gate (§7.2).
+- **Keep gradual underflow** if, in (b), worst-block silent-tail CPU at FZ = 0 is at most
+  1.2× that at FZ = 1, at most 0.5 % of blocks raise a subnormal flag, and the FTZ-forced
+  render equals the golden hash. Total tail time hides the slow blocks: with flags in 0.05 %
+  of x86 blocks, the totals matched while the worst block ran 1.16–1.59× slower (**measured**,
+  engine review). The absolute budget is a separate gate (§7.2).
 - **Otherwise widen the deterministic flush** (more sites or a higher threshold) and measure
   again: a sound-revision bump that keeps identity.
 - **FZ on the M7 alone is ruled out** (point 1). FTZ/FZ everywhere would make identity depend
@@ -546,11 +564,16 @@ runs **per sample, never per block**, or state would depend on block boundaries 
 | Reverb `rvBandwidth_`, `rvLp_[0..1]` | `PostChain.cpp:317`, `:329-330` |
 | SVF integrators `s[0]`, `s[1]` | `PostChain.cpp:380,382` |
 | `Smoother::Next`: snap to target when `|next − target| < kTiny` (the stall snap stays) | `detail/Smoother.h:18-22` |
+| `SoftSat`'s square of the flushed `lpL_/lpR_`, an intermediate: below 2⁻⁶³ it squares 0, which 27 absorbs to the same bits | `detail/PostChain.h:30-43` |
 
 No flush is needed in the int16 ring, the feedback FIFO (fed by the flushed tamer), the onset
 detector (peak floored at 1 % of the frame maximum, `OnsetDetector.cpp:140-146`; the rest
 rewritten every hop) or the granular core. With the flush, IEEE-mode silent tails cost the
 same as FTZ and match it bit for bit (**measured** [fp-isa]); it changed one preset's hash.
+The flushed values themselves reach down to 1e-20, so squaring one can go subnormal:
+`SoftSat`'s square flagged every remaining x86 tail block until it was flushed too, and since
+then no battery tail block raises a subnormal flag on x86 or on the emulated M7 (**measured**,
+engine review), which the forced-flush test requires.
 About **45 sites per sample** (derived; record §4.3) cost an **estimated** 150–250
 cycles/sample (1.5–2.5 %) on the M7; a cheaper deterministic form is open (§8.3 Q5).
 
@@ -902,7 +925,14 @@ These must still reproduce the golden hashes:
 
 - a hostile host environment before every entry, `SetParam` included (x86 FTZ|DAZ, Arm FZ|DN,
   each with round-toward-zero);
-- flushing forced on inside the guard by a test-only option (FTZ|DAZ, or FZ on the M7 leg);
+- flushing forced on inside the guard by a test-only option (FTZ|DAZ, or FZ on the M7 leg).
+  This control holds for golden vectors, not for every canonical input: inputs stay on the
+  24-bit grid (DAZ zeroes a subnormal dry sample), and the golden script rejects a preset with
+  any nonzero parameter value below 2⁻²⁴ in magnitude. A tiny gain times a tail-level signal
+  is subnormal: Mix = 1e-30 flagged 21.6 % of tail blocks and changed the forced render, while
+  every gain at 2⁻²⁴ left none flagged and the renders identical (**measured**, engine
+  review). Parity itself holds for any canonical value, since every conforming build runs
+  gradual underflow;
 - block sizes {1, 7, 32, 37, 48, 64, 127, 512}, the pattern {48, 1, 127, 32}, random sizes
   1–512 and host blocks up to 8,192 through the wrapper's chunker, split at event frames —
   after §5.7's fix; until then the 48-frame grid only;
@@ -1043,9 +1073,10 @@ ARM64 in v1 (§3.8). Polynomial kernels (§3.9), Spillover as the pedal's defaul
 
 Each risk is stated with its mitigation.
 
-1. **The M7's subnormal cost is unknown.** If subnormal operations are slow on the M7, the
-   0.13–0.25 % of silent-tail blocks that still raise a flag (**measured** on x86) could
-   cause CPU spikes. Mitigation: §4.2's DWT gate, then a wider flush.
+1. **The M7's subnormal cost is unknown.** If subnormal operations are slow on the M7, any
+   silent-tail block that still raises a flag could cause a CPU spike: none in the battery
+   since §4.3's `SoftSat` flush, but presets with tiny nonzero values still raise them (§6.4).
+   Mitigation: §4.2's DWT gate, then a wider flush.
 2. **The profile's M7 cost is unmeasured**; the pessimistic total is 77–78 % of the budget
    (**estimated**, §7.2). Mitigation: explicit FMA (§7.3), Init-built tables (§3.9) and ITCM
    placement of the inner loops (§7.1), all gated by DWT.

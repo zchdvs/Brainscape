@@ -93,14 +93,13 @@ struct Stereo {
   std::vector<float> l, r;
 };
 
-// Renders `input` (stereo) in blocks of `block` frames. With a host word, that word is
-// installed around every engine call, as a careless host would leave it; the engine's
-// guard must make it irrelevant, and must hand it back unchanged after each call.
+// Renders `input` (stereo) in blocks of `block` frames. The host word is installed
+// around every engine call, as a careless host would leave it; the engine's guard must
+// make it irrelevant, and must hand it back unchanged after each call.
 Stereo RenderEvents(const Stereo& input, const std::vector<std::pair<ParamId, float>>& preset,
-                    const std::vector<Event>& events, uint32_t block, bool hostile,
+                    const std::vector<Event>& events, uint32_t block, detail::FpWord host,
                     bool canonicalizeFirst, bool sanitizeInput) {
   const EngineConfig cfg = SmallConfig();
-  const detail::FpWord host = hostile ? testing::kHostileFpWord : detail::kFpProfileWord;
   MemoryPlan plan;
   {
     const HostileFpScope scope(host);
@@ -343,21 +342,55 @@ TEST_CASE("ConditionInput24 puts input on the codec grid, exactly, in any enviro
   REQUIRE(ConditionInput24(-2.5f * 0x1p-23f) == -3.0f * 0x1p-23f);
 }
 
-// §3.7: the MakeEnv guard. A subnormal or sub-frame attack leg gets no reciprocal, so
-// EnvValue(0) is 0, never 0 * inf = NaN.
-TEST_CASE("MakeEnv gives sub-frame envelope legs no reciprocal") {
+// §3.7: the MakeEnv guard. A leg shorter than 2^-20 frames is absent, geometry and
+// reciprocal both, so EnvValue(0) is never 0 * inf = NaN, and a subnormal leg cannot
+// put index 0 on different sides of attackEnd under different flush modes. (This
+// replaces the reciprocal-only guard, under which such a leg's index 0 was 0.)
+TEST_CASE("MakeEnv treats envelope legs shorter than 2^-20 frames as absent") {
   using grainmath::EnvValue;
   using grainmath::MakeEnv;
   for (const uint32_t skewBits : {0x00000001u, 0x000116C2u, 0x007FFFFFu, Bits(1e-30f)}) {
     const auto e = MakeEnv(480.f, 0.0f, FromBits(skewBits));
+    REQUIRE(Bits(e.attackEnd) == 0u);
     REQUIRE(Bits(e.attackInv) == 0u);
-    REQUIRE(Bits(EnvValue(e, 0.f)) == 0u);
-    REQUIRE(EnvValue(e, 1.f) > 0.99f);  // the decay leg starts at once
+    REQUIRE(EnvValue(e, 0.f) == 1.0f);  // the decay leg starts at once
+    REQUIRE(EnvValue(e, 1.f) > 0.99f);
   }
+  // The decay side: a 2^-24-frame decay leg is absent too.
+  const auto shortDecay = MakeEnv(1.f, 0.0f, 0x1.fffffep-1f);
+  REQUIRE(Bits(shortDecay.decayInv) == 0u);
+  REQUIRE(shortDecay.decayStart == 1.0f);
   // A one-frame leg still gets its reciprocal.
   const auto one = MakeEnv(480.f, 0.0f, 1.0f / 480.0f);
   REQUIRE(one.attackInv > 0.99f);
+  REQUIRE(Bits(EnvValue(one, 0.f)) == 0u);
 }
+
+#if defined(BRAINSCAPE_FPENV_X64)
+// §3.7: the input functions need no guard because no FP environment changes them. That
+// includes a host that unmasked FP exceptions: the binary64 version of ConditionInput24
+// trapped on a subnormal operand and on its inexact truncation (review finding).
+TEST_CASE("the input functions never trap, even with every FP exception unmasked") {
+  std::vector<uint32_t> patterns(std::begin(kSpecialBits), std::end(kSpecialBits));
+  IntRng rng{0x7EA9u};
+  for (int i = 0; i < 65536; ++i) patterns.push_back(rng.Next());
+  for (int i = 0; i < 4096; ++i) patterns.push_back(rng.Next() & 0x807FFFFFu);  // subnormals
+  std::vector<float> in(patterns.size()), sanitized(in.size()), grid(in.size());
+  for (size_t i = 0; i < patterns.size(); ++i) in[i] = FromBits(patterns[i]);
+  {
+    const HostileFpScope scope(testing::kTrapAllFpWord);
+    SanitizeInput(in.data(), sanitized.data(), in.size());
+    ConditionInput24(in.data(), grid.data(), in.size());
+    for (size_t i = 0; i < in.size(); ++i) grid[i] = ConditionInput24(grid[i]);
+  }
+  size_t mismatches = 0;
+  for (size_t i = 0; i < patterns.size(); ++i) {
+    if (Bits(sanitized[i]) != (IsNonFinite(patterns[i]) ? 0u : patterns[i])) ++mismatches;
+    if (Bits(grid[i]) != Bits(ReferenceGrid24(patterns[i]))) ++mismatches;
+  }
+  REQUIRE(mismatches == 0);
+}
+#endif
 
 // §4.3: the flush decides |x| < 1e-20 on the bits; it must agree with the profile's
 // comparison form for every input.
@@ -392,59 +425,148 @@ TEST_CASE("a hostile host FP environment reproduces the clean render") {
   events.push_back({9600, 2, ParamId::Mix, 0u});
   events.push_back({12000, 3, ParamId::Mix, 0u});
 
-  const Stereo clean   = RenderEvents(input, kBusyPreset, events, 48, false, false, false);
-  const Stereo hostile = RenderEvents(input, kBusyPreset, events, 48, true, false, false);
+  const Stereo clean =
+      RenderEvents(input, kBusyPreset, events, 48, detail::kFpProfileWord, false, false);
+  const Stereo hostile =
+      RenderEvents(input, kBusyPreset, events, 48, testing::kHostileFpWord, false, false);
   REQUIRE(std::memcmp(clean.l.data(), hostile.l.data(), clean.l.size() * sizeof(float)) == 0);
   REQUIRE(std::memcmp(clean.r.data(), hostile.r.data(), clean.r.size() * sizeof(float)) == 0);
+#if defined(BRAINSCAPE_FPENV_X64)
+  // Every exception unmasked: an FP operation in an entry point before its guard writes
+  // the word, or after it restores the host's, traps here.
+  const Stereo trapping =
+      RenderEvents(input, kBusyPreset, events, 48, testing::kTrapAllFpWord, false, false);
+  REQUIRE(std::memcmp(clean.l.data(), trapping.l.data(), clean.l.size() * sizeof(float)) == 0);
+  REQUIRE(std::memcmp(clean.r.data(), trapping.r.data(), clean.r.size() * sizeof(float)) == 0);
+#endif
 }
 
 // §3.7's CI fuzz test: NaN, ±inf and subnormal inputs and parameters, under a hostile
 // host environment, give finite output equal to the run fed the sanitized input and the
-// canonical parameter values in a clean environment.
+// canonical parameter values in a clean environment. Several seeds: the largest finite
+// inputs overflowed the output only where they met a positive trim and enough dry
+// signal, which one seed happened to avoid (review finding).
 TEST_CASE("fuzz: non-finite and subnormal inputs and parameters stay out of the output") {
   constexpr size_t kFrames = 19200;
-  IntRng rng{0xF022u};
-  Stereo input = GridNoise(kFrames, 0xBADF00Du, 12000000);  // up to +3.1 dBFS
-  for (size_t i = 0; i < kFrames; ++i) {
-    for (float* x : {&input.l[i], &input.r[i]}) {
-      const uint32_t roll = rng.Next() % 100u;
-      if (roll < 3u) {
-        *x = FromBits(kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]);
-      } else if (roll < 5u) {
-        *x = FromBits((rng.Next() & 0x807FFFFFu) | 1u);  // a subnormal
+  const std::pair<uint32_t, uint32_t> seeds[] = {
+      {0xF022u, 0xBADF00Du}, {3u, 0x5EED3u}, {0x51EEDu, 0xA11CEu}, {0xC0DAu, 0x0B0Eu}};
+  for (const auto& seed : seeds) {
+    INFO("seeds " << seed.first << ", " << seed.second);
+    IntRng rng{seed.first};
+    Stereo input = GridNoise(kFrames, seed.second, 12000000);  // up to +3.1 dBFS
+    for (size_t i = 0; i < kFrames; ++i) {
+      for (float* x : {&input.l[i], &input.r[i]}) {
+        const uint32_t roll = rng.Next() % 100u;
+        if (roll < 3u) {
+          *x = FromBits(kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]);
+        } else if (roll < 5u) {
+          *x = FromBits((rng.Next() & 0x807FFFFFu) | 1u);  // a subnormal
+        }
       }
     }
-  }
-  size_t count = 0;
-  const ParamDescriptor* table = Descriptors(&count);
-  std::vector<Event> events;
-  for (uint32_t f = 0; f < kFrames; f += 64) {
-    const uint32_t roll = rng.Next() % 8u;
-    const ParamId  id   = table[rng.Next() % count].id;
-    if (roll < 3u) {
-      events.push_back({f, 0, id, kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]});
-    } else if (roll < 4u) {
-      events.push_back({f, 0, id, (rng.Next() & 0x807FFFFFu) | 1u});
-    } else if (roll < 6u) {
-      events.push_back({f, 0, id, rng.Next()});  // any bit pattern, mostly out of range
-    } else if (roll == 6u) {
-      events.push_back({f, 1 + static_cast<int>(rng.Next() % 3u), id, 0u});
+    size_t count = 0;
+    const ParamDescriptor* table = Descriptors(&count);
+    std::vector<Event> events;
+    for (uint32_t f = 0; f < kFrames; f += 64) {
+      const uint32_t roll = rng.Next() % 8u;
+      const ParamId  id   = table[rng.Next() % count].id;
+      if (roll < 3u) {
+        events.push_back({f, 0, id, kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]});
+      } else if (roll < 4u) {
+        events.push_back({f, 0, id, (rng.Next() & 0x807FFFFFu) | 1u});
+      } else if (roll < 6u) {
+        events.push_back({f, 0, id, rng.Next()});  // any bit pattern, mostly out of range
+      } else if (roll == 6u) {
+        events.push_back({f, 1 + static_cast<int>(rng.Next() % 3u), id, 0u});
+      }
     }
+
+    // Run A sanitizes inside the render, as a wrapper does, and hands SetParam the raw
+    // bits; run B gets pre-sanitized input and canonical values.
+    Stereo sanitized = input;
+    SanitizeInput(sanitized.l.data(), sanitized.l.data(), kFrames);
+    SanitizeInput(sanitized.r.data(), sanitized.r.data(), kFrames);
+    const Stereo a =
+        RenderEvents(input, kBusyPreset, events, 64, testing::kHostileFpWord, false, true);
+    const Stereo b =
+        RenderEvents(sanitized, kBusyPreset, events, 64, detail::kFpProfileWord, true, false);
+
+    size_t nonFinite = 0;
+    for (size_t i = 0; i < kFrames; ++i) {
+      nonFinite += IsNonFinite(Bits(a.l[i])) + IsNonFinite(Bits(a.r[i]));
+    }
+    REQUIRE(nonFinite == 0);
+    REQUIRE(std::memcmp(a.l.data(), b.l.data(), kFrames * sizeof(float)) == 0);
+    REQUIRE(std::memcmp(a.r.data(), b.r.data(), kFrames * sizeof(float)) == 0);
   }
+}
 
-  // Run A sanitizes inside the render, as a wrapper does, and hands SetParam the raw bits;
-  // run B gets pre-sanitized input and canonical values.
-  Stereo sanitized = input;
-  SanitizeInput(sanitized.l.data(), sanitized.l.data(), kFrames);
-  SanitizeInput(sanitized.r.data(), sanitized.r.data(), kFrames);
-  const Stereo a = RenderEvents(input, kBusyPreset, events, 64, true, false, true);
-  const Stereo b = RenderEvents(sanitized, kBusyPreset, events, 64, false, true, false);
-
-  size_t nonFinite = 0;
+// §3.7: finite input gives finite output. At Mix 0 under +24 dB of trim the dry path
+// carries FLT_MAX * 15.8, which overflowed to ±inf (review finding); the final mix now
+// saturates it. Equal signs in both channels also overflow the detector's mono sum.
+TEST_CASE("the largest finite input saturates at the output instead of overflowing") {
+  constexpr size_t kFrames = 4800;
+  constexpr float  kMax    = 0x1.fffffep127f;
+  Stereo input;
+  input.l.resize(kFrames);
+  input.r.resize(kFrames);
   for (size_t i = 0; i < kFrames; ++i) {
-    nonFinite += IsNonFinite(Bits(a.l[i])) + IsNonFinite(Bits(a.r[i]));
+    const float v = i % 3u == 0u ? kMax : (i % 3u == 1u ? -kMax : 0.25f);
+    input.l[i]    = v;
+    input.r[i]    = i % 4u < 2u ? v : -v;
+  }
+  const Stereo out = RenderEvents(input, {{ParamId::Mix, 0.0f}, {ParamId::OutTrimDb, 24.0f}},
+                                  {}, 48, detail::kFpProfileWord, false, false);
+  size_t nonFinite = 0, wrong = 0;
+  for (size_t i = 0; i < kFrames; ++i) {
+    nonFinite += IsNonFinite(Bits(out.l[i])) + IsNonFinite(Bits(out.r[i]));
+    if (i % 3u != 2u && (out.l[i] != input.l[i] || out.r[i] != input.r[i])) ++wrong;
   }
   REQUIRE(nonFinite == 0);
-  REQUIRE(std::memcmp(a.l.data(), b.l.data(), kFrames * sizeof(float)) == 0);
-  REQUIRE(std::memcmp(a.r.data(), b.r.data(), kFrames * sizeof(float)) == 0);
+  REQUIRE(wrong == 0);  // ±FLT_MAX in, ±FLT_MAX out
+}
+
+// §3.7: finite input never latches a non-finite value into engine state. The onset
+// detector squares its input, and one sample past about 2e19 put +inf into its
+// whitening memory: inf / inf = NaN inside, and no onset until Reset (review finding).
+TEST_CASE("one huge finite input sample does not deafen the onset detector") {
+  constexpr size_t kFrames = 384000, kSpikeAt = 48000;  // 8 s, spike at 1 s
+  // Decaying grid-noise plucks every 250 ms.
+  std::vector<float> clean(kFrames, 0.0f);
+  IntRng rng{0x9E11u};
+  for (size_t at = 6000; at < kFrames; at += 12000) {
+    for (size_t i = 0; i < 2400 && at + i < kFrames; ++i) {
+      const auto k = static_cast<int32_t>(rng.Next() % 8388607u) - 4194303;
+      clean[at + i] = static_cast<float>(k) * 0x1p-23f * static_cast<float>(2400 - i) / 2400.0f;
+    }
+  }
+  // Onsets in the last 3 s, once the whitening memory has decayed from the spike.
+  auto lateOnsets = [&](float spike) {
+    std::vector<float> in = clean;
+    in[kSpikeAt]          = spike;
+    host::HeapArenas arenas(PlanMemory(SmallConfig()));
+    Engine engine;
+    REQUIRE(engine.Init(SmallConfig(), arenas.get()));
+    std::vector<float> l(kFrames), r(kFrames);
+    uint32_t late = 0;
+    for (size_t pos = 0; pos < kFrames;) {
+      const auto   n       = static_cast<uint32_t>(std::min<size_t>(480, kFrames - pos));
+      const float* ins[2]  = {in.data() + pos, in.data() + pos};
+      float*       outs[2] = {l.data() + pos, r.data() + pos};
+      Engine::ProcessContext ctx;
+      ctx.in        = ins;
+      ctx.out       = outs;
+      ctx.numFrames = n;
+      engine.Process(ctx);
+      const uint32_t onsets = engine.ConsumeOnsetCount();
+      if (pos >= kFrames - 144000) late += onsets;
+      pos += n;
+    }
+    return late;
+  };
+  const uint32_t control = lateOnsets(0.0f);
+  INFO("control: " << control << " late onsets");
+  REQUIRE(control >= 10u);
+  REQUIRE(lateOnsets(1e20f) == control);
+  REQUIRE(lateOnsets(0x1.fffffep127f) == control);
 }

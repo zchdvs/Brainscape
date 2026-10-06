@@ -1,7 +1,7 @@
 // Built against the engine compiled with the guard's test hooks (determinism profile
 // §4.2, §6.4): flushing forced on inside the guard must reproduce the gradual-underflow
 // render bit for bit, because the in-code flush (§4.3) keeps recursive state out of the
-// subnormal range, and few silent-tail blocks may still raise a subnormal flag.
+// subnormal range, and no silent-tail block may raise a subnormal flag.
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -96,10 +96,24 @@ TEST_CASE("forced flushing reproduces the gradual-underflow render on silent tai
                  << ieee.lastFlaggedTailBlock);
     REQUIRE(std::memcmp(ieee.l.data(), forced.l.data(), ieee.l.size() * sizeof(float)) == 0);
     REQUIRE(std::memcmp(ieee.r.data(), forced.r.data(), ieee.r.size() * sizeof(float)) == 0);
-    // §4.2 allows flags in 0.5 % of the blocks of a 120 s silent tail (600 of 120,000).
-    // The flags are a transient while the flushed states decay to exact zero, so they
-    // must also have stopped a second before this shorter tail ends.
-    REQUIRE(ieee.flaggedTailBlocks <= 600u);
-    REQUIRE(ieee.lastFlaggedTailBlock + 1000u <= ieee.tailBlocks);
+    // §4.2 allows flags in 0.5 % of the blocks of a 120 s silent tail, but with every
+    // subnormal source flushed (§4.3) there are none: a flagged block ran up to 3.3x
+    // slower on x86, and a budget would hide a new source until it grew large.
+    REQUIRE(ieee.flaggedTailBlocks == 0u);
   }
+}
+
+// §3.7: an attack leg of sustain 1 - 2^-24 times skew FLT_MIN is subnormal. With only its
+// reciprocal guarded, index 0 of every grain was 0 under gradual underflow and 1 with
+// flushing forced on; MakeEnv now drops legs shorter than 2^-20 frames in every mode.
+TEST_CASE("a subnormal envelope leg renders the same with flushing forced on") {
+  const std::vector<std::pair<ParamId, float>> preset = {
+      {ParamId::WindowSustain, 0x1.fffffep-1f},
+      {ParamId::WindowSkew, 0x1p-126f},
+      {ParamId::GrainSizeMs, 1.0f}};
+  constexpr size_t kNoise = 24000, kTotal = 48000;
+  const TailRender ieee   = RenderTail(preset, false, kNoise, kTotal);
+  const TailRender forced = RenderTail(preset, true, kNoise, kTotal);
+  REQUIRE(std::memcmp(ieee.l.data(), forced.l.data(), ieee.l.size() * sizeof(float)) == 0);
+  REQUIRE(std::memcmp(ieee.r.data(), forced.r.data(), ieee.r.size() * sizeof(float)) == 0);
 }

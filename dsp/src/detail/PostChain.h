@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 
 #include "detail/FlushTiny.h"
 #include "detail/Smoother.h"
@@ -30,7 +31,16 @@ inline float CheapSine(float phase01) noexcept {
 inline float SoftSat(float x) noexcept {
   if (x > 3.0f) return 1.0f;
   if (x < -3.0f) return -1.0f;
-  const float x2 = x * x;
+  // Below 2^-63 the square is subnormal, and the flushed tamer state fed in here
+  // reaches down to 1e-20 (determinism profile §4.3). 27 absorbs such a square, so
+  // squaring 0 gives the same bits without the subnormal operation. Selecting on the
+  // bits before the multiply keeps a compiler from speculating x * x.
+  uint32_t u;
+  std::memcpy(&u, &x, sizeof u);
+  if ((u & 0x7FFFFFFFu) < 0x20000000u) u = 0u;
+  float xs;
+  std::memcpy(&xs, &u, sizeof u);
+  const float x2 = xs * xs;
   return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 

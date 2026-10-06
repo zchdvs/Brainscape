@@ -37,18 +37,27 @@ void SanitizeInput(const float* in, float* out, size_t numSamples) noexcept {
   }
 }
 
-// Neither the rounding mode nor a flush mode changes the result: scaling by 2^23 is
-// exact in binary64; d +- 0.5 is exact for 2^-7 <= |d| <= 2^23 (d has at most 24
-// significant bits), and below 2^-7 any rounding of it stays inside (-1, 1); the
-// conversion truncates (never lrint, which follows the rounding mode); and |i| <= 2^23
-// converts back exactly. A subnormal x gives 0 whether or not DAZ zeroes it first.
+// The rounding is done in integers on the bit pattern: an FP version (scale to binary64,
+// add a half, truncate) gave the same results but trapped on a subnormal operand or an
+// inexact conversion when a host had unmasked those exceptions (review finding). The
+// only FP operations left, converting |i| <= 2^23 and scaling by 2^-23, are exact.
 float ConditionInput24(float x) noexcept {
-  const uint32_t u = Bits(x);
-  if ((u & kExponentMask) == kExponentMask && (u & 0x007FFFFFu) != 0u) return 0.0f;  // NaN
-  double d = static_cast<double>(x) * 0x1p23;
-  if (d > 0x1p23 - 1.0) d = 0x1p23 - 1.0;  // also saturates +inf
-  if (d < -0x1p23) d = -0x1p23;
-  const auto i = static_cast<int32_t>(d >= 0.0 ? d + 0.5 : d - 0.5);
+  const uint32_t u        = Bits(x);
+  const uint32_t biased   = (u & kExponentMask) >> 23;
+  const uint32_t fraction = u & 0x007FFFFFu;
+  if (biased == 0xFFu && fraction != 0u) return 0.0f;  // NaN
+  // |x| * 2^23 = m * 2^(biased - 127) with the 24-bit significand m. At biased >= 127
+  // (|x| >= 1, and ±inf) it reaches the clamp; below, round half away from zero by
+  // adding half of the shifted-out weight. Past a shift of 25, m / 2^shift < 1/2, and
+  // subnormals (biased 0) land there too.
+  uint32_t q = 1u << 23;
+  if (biased < 127u) {
+    const uint32_t shift = 127u - biased;
+    q = shift > 25u ? 0u : ((fraction | 0x00800000u) + (1u << (shift - 1u))) >> shift;
+  }
+  const bool negative = (u >> 31) != 0u;
+  if (!negative && q > (1u << 23) - 1u) q = (1u << 23) - 1u;
+  const auto i = negative ? -static_cast<int32_t>(q) : static_cast<int32_t>(q);
   return static_cast<float>(i) * 0x1p-23f;
 }
 

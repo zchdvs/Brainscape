@@ -12,6 +12,9 @@ namespace brainscape::testing {
 inline constexpr detail::FpWord kHostileFpWord     = 0xFFC0u;
 inline constexpr detail::FpWord kFtzDazFpWord      = 0x9FC0u;  // JUCE's ScopedNoDenormals
 inline constexpr detail::FpWord kSubnormalFlagBits = 0x12u;    // DE | UE
+// Every exception unmasked: any FP operation outside the guard that is inexact, or
+// touches a subnormal, traps.
+inline constexpr detail::FpWord kTrapAllFpWord = 0x0000u;
 #else
 // FZ | DN | round toward zero (FPCR on AArch64, FPSCR on the M7).
 inline constexpr detail::FpWord kHostileFpWord     = 0x03C00000u;

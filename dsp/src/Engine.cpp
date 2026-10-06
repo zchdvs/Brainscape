@@ -44,6 +44,14 @@ static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice c
 
 constexpr float kInvScale = 1.0f / 32767.0f;
 
+constexpr float kMaxFinite = 0x1.fffffep127f;  // FLT_MAX
+
+// Bound on the onset detector's input. Its FFT and hop energy square the input, so a
+// finite sample past about 2e19 overflowed them and latched +inf into the whitening
+// memory, turning onset triggering off until Reset (review finding). 2^16 (+96 dBFS)
+// never touches real audio and keeps every square finite.
+constexpr float kDetectorBound = 0x1p16f;
+
 // Init and PlanMemory accept these rates. Below ~40 Hz the ms-sized post buffers round
 // to zero length and a DelaySlice write walks off its arena (review finding); above
 // 384 kHz is outside anything the design supports. The bounds also keep every length
@@ -625,7 +633,10 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     // unconditionally even when nothing consumes onsets: the trigger LED must
     // stay live for sensitivity calibration (research rec #7), and gating it on
     // parameters would make the whitening state parameter-history dependent.
-    if (detector_.ProcessSample(0.5f * (inL[n] + inR[n]), abs)) {
+    float det = 0.5f * (inL[n] + inR[n]);
+    if (det > kDetectorBound) det = kDetectorBound;
+    if (det < -kDetectorBound) det = -kDetectorBound;
+    if (detector_.ProcessSample(det, abs)) {
       onsetCount_.fetch_add(1u, std::memory_order_relaxed);  // LED even if the
                                                              // event list is full
       if (ev.onsetCount < detail::TriggerEvents::kMaxOnsets) {
@@ -689,13 +700,23 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     // and mono input aliases inR to inL, so writing outL first corrupted every outR.
     const float dryL = inL[n];
     const float dryR = inR[n];
-    outL[n] = (dryL * (1.0f - mix) + wetL_[n] * mix) * g;
-    outR[n] = (dryR * (1.0f - mix) + wetR_[n] * mix) * g;
+    float       oL   = (dryL * (1.0f - mix) + wetL_[n] * mix) * g;
+    float       oR   = (dryR * (1.0f - mix) + wetR_[n] * mix) * g;
+    // Finite input gives finite output (determinism profile §3.7): a dry sample near
+    // FLT_MAX under a positive trim saturates instead of overflowing. One-sided
+    // compares, so NaN from unsanitized input still reaches the Debug check below.
+    if (oL > kMaxFinite) oL = kMaxFinite;
+    if (oL < -kMaxFinite) oL = -kMaxFinite;
+    if (oR > kMaxFinite) oR = kMaxFinite;
+    if (oR < -kMaxFinite) oR = -kMaxFinite;
+    outL[n] = oL;
+    outR[n] = oR;
   }
 
 #if !defined(NDEBUG)
-  // The engine never makes NaN or infinity (determinism profile §3.7); a non-finite
-  // output here means non-finite input that the wrapper failed to sanitize.
+  // The engine never makes NaN or infinity (determinism profile §3.7), and finite
+  // input saturates at the output; a non-finite output here means non-finite input
+  // that the wrapper failed to sanitize.
   for (uint32_t n = 0; n < ctx.numFrames; ++n) {
     assert(detmath::IsFinite(outL[n]) && detmath::IsFinite(outR[n]));
   }

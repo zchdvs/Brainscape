@@ -6,9 +6,10 @@
 // Engine input conditioning (docs/design/determinism-profile.md §3.7; referenced by
 // docs/design/companion-app.md §4.8). Every desktop input path applies exactly one of
 // these to every input sample before Engine::Process; the firmware applies neither,
-// because libDaisy already delivers exactly i * 2^-23. Both use only integer and exact
-// operations, so no compiler flag or host floating-point environment changes their
-// results, and they run without the engine's guard. The buffer forms allow in == out.
+// because libDaisy already delivers exactly i * 2^-23. Both work on the bit pattern in
+// integers (ConditionInput24 ends in one exact conversion), so no compiler flag or host
+// floating-point environment changes their results, unmasked exceptions included, and
+// they run without the engine's guard. The buffer forms allow in == out.
 namespace brainscape {
 
 // Live input (every plugin format, the Standalone's live monitoring, the oracle
