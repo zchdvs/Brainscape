@@ -12,6 +12,13 @@ inline constexpr uint32_t kGranularMaxGrains = 64;
 inline constexpr uint32_t kHiFiGrains        = 8;    // T0: cubic Hermite
 inline constexpr uint32_t kWindowLutSize     = 4096;
 inline constexpr double   kGuardMarginFrames = 64.0;
+// The largest legal block. Pass 1 writes a whole block into the ring before grains
+// render, so up to kBlockWriteAheadFrames - 1 frames past the live write head hold
+// audio a smaller block would not have written yet. The far rail keeps every read
+// out of that window — the condition for block-split invariance (contract #1).
+// Engine.cpp static_asserts it covers kFeedbackDelayFrames, which bounds
+// maxBlockSize.
+inline constexpr uint32_t kBlockWriteAheadFrames = 512;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
 // schedule-time; grains never re-read a global parameter).
@@ -86,9 +93,12 @@ class GranularCore {
   // Schedules and renders one block. wetL/wetR are overwritten (not accumulated).
   // ringFrameAtBlockStart: the ring frame where absSample's input is written.
   // frozen/frozenAnchor: design §2.4 — positions resolve against the pinned
-  // anchor instead of the advancing write position; the ring keeps recording.
+  // anchor instead of the advancing write position, and POS_MARK uses only marks
+  // at or before the pin; the ring keeps recording, so the write-head guards stay
+  // relative to the live head. *frozenAnchor is in/out: re-anchor-on-wrap
+  // updates it per sample.
   void Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
-               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t frozenAnchor,
+               uint32_t ringFrameAtBlockStart, bool frozen, uint32_t* frozenAnchor,
                uint32_t numFrames, float* wetL, float* wetR) noexcept;
 
  private:
@@ -98,13 +108,15 @@ class GranularCore {
   };
   static constexpr uint32_t kMaxMarks = 16;
 
+  // anchorFrame: the position reference (the pin while frozen).
+  // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
-                     uint32_t anchorFrame) noexcept;
+                     uint32_t anchorFrame, uint32_t liveFrame) noexcept;
   // Fire an explicit trigger: free slot if available, else steal the OLDEST voice
   // (design §4 allocation policy — explicit triggers never drop a hit).
   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
-                    uint32_t* renderedTo, uint32_t n, int64_t absSample, float* wetL,
-                    float* wetR) noexcept;
+                    uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
+                    int64_t absSample, float* wetL, float* wetR) noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
@@ -113,6 +125,8 @@ class GranularCore {
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;
   uint32_t       mask_ = 0;
+  uint32_t       blockRingStart_ = 0;  // ring frame of the block's first sample; read
+                                       // only by the Debug write-ahead assertion
   float          intervalRemaining_ = 1.0f;  // frames until the next scheduled birth
   Grain          grains_[kGranularMaxGrains]{};
   uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order

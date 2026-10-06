@@ -229,10 +229,10 @@ ring frames ahead of the live head already hold new input in a 512-frame block b
 one-ring-old audio in a 1-frame block, so no interpolation tap may read inside that window.
 `W_a` is a shared build constant equal to the largest legal block, never derived from
 `maxBlockSize`, because the pedal (48-frame blocks) and the plugin (up to 512) must clamp
-identically; it costs 10.7 ms of ring depth at the far end (calculated). **The code
-implements neither rule yet**: `dsp/src/Granular.cpp:102-104` computes the bounds over the
-full ring length, and while frozen the start frame is measured from the pin (`:114`). See
-contract #1.
+identically; it costs 10.7 ms of ring depth at the far end (calculated). The code
+implements both rules (`dsp/src/Granular.cpp:133-148`; `kBlockWriteAheadFrames` at
+`dsp/include/brainscape/detail/Granular.h:21`), and a Debug assertion in `RenderSpan`
+(`dsp/src/Granular.cpp:55-70`) checks that no tap reads inside the window. See contract #1.
 
 Plus a third guard from grain-delay-theory.md §2.1's hazard 3 (feedback re-injection): when
 `feedback.amount > 0`, enforce `d ≥ d_min_fb ≈ 5 ms` — without it, a zero-delay mode with
@@ -755,22 +755,24 @@ boundaries.
    with `ConsumeOnsetCount() > 0`, so that `POS_MARK` and the onset trigger are exercised; a
    grain position on the far rail of the ring; and a freeze held past the re-anchor point.
    Mid-render events in general are covered once frame-stamped event delivery lands.
-   **Status: violated by today's code.** Measured in the parity investigation on `main` at
-   `e86e971`, three independent mechanisms make output depend on the block grid, because a
-   grain can read ring frames that `Process` has already written ahead of the live write head
-   in the current block (§3): (D1) while frozen, the write-head guards are measured from the
-   pin instead of the live head, so a grain positioned at an onset recorded after the pin
-   starts near or ahead of the live head; (D2) the far guard's 64-frame margin (`kGuardMarginFrames`,
-   `dsp/include/brainscape/detail/Granular.h:14`) is smaller than the write-ahead of up to
-   511 frames; (D3) the re-anchor of a held freeze is decided once per block
-   (`dsp/src/Engine.cpp:405-414`). The existing test (`dsp/tests/test_engine.cpp:376-378`)
-   never engages freeze and records 0 onsets (measured), so it could not see any of them. A
-   three-part fix (A: guards measured from the live head; B: a far rail that excludes the
-   512-frame write-ahead; C: re-anchor decided per sample) and a regression test were verified
-   on a scratch copy and have not landed. Until they do, renders that must match the pedal
-   run in 48-frame blocks aligned to frame 0, with every event on a multiple of 48. Mechanisms,
-   fix and tests: [determinism-profile.md](determinism-profile.md), "The block-split bug: three
-   verified mechanisms".
+   **Status: holds (fixed 2026-10-05).** The parity investigation found, on `main` at
+   `e86e971`, three independent mechanisms that made output depend on the block grid, because
+   a grain could read ring frames that `Process` had already written ahead of the live write
+   head in the current block (§3): (D1) while frozen, the write-head guards were measured from
+   the pin instead of the live head, so a grain positioned at an onset recorded after the pin
+   started near or ahead of the live head; (D2) the far guard's 64-frame margin
+   (`kGuardMarginFrames`) was smaller than the write-ahead of up to 511 frames; (D3) the
+   re-anchor of a held freeze was decided once per block. The block-split test never engaged
+   freeze and recorded 0 onsets (measured), so it could not see any of them. The three-part
+   fix has landed (A: guards measured from the live head; B: a far rail that excludes the
+   512-frame write-ahead; C: re-anchor decided per sample, `dsp/src/Granular.cpp:302-315`),
+   with pin-eligible marks: while frozen, only marks at or before the pin position a grain
+   (§12 item 13). The regression test "block-splitting bit-exactness with freeze and far-rail
+   positions" (`dsp/tests/test_engine.cpp:1099`) covers all three mechanisms and fails without
+   the fix; the block-split test now requires `ConsumeOnsetCount() > 0` (`:410`); and a Debug
+   assertion rejects any tap within [1, `kBlockWriteAheadFrames`] frames ahead of the live
+   head (§3). Mechanisms, fix and tests: [determinism-profile.md](determinism-profile.md),
+   "The block-split bug: three verified mechanisms".
 2. **Unity-rate null test.** Preconditions stated in full: rectangular window
    (`sustain = 1, smoothness = 0`), grains abutting and phase-locked to the delay time,
    overlap → N = 1, feedback = 0, `pan_spread = 0`, dither off, reference = the same int16
@@ -898,8 +900,9 @@ do not vendor.
     the budget), subnormal timing on the M7, emulation versus silicon, and the fix's effect
     on Strum-family modes under freeze. There the choice between *pin-eligible marks* (only
     marks at or before the pin may position a frozen grain, so freeze holds the Strum
-    position; recommended) and *live-head marks* (the newest mark, measured from the live
-    head, so freeze has no effect on `POS_MARK` grains, measured) waits on a listening test.
+    position; recommended, and what `dsp/` implements) and *live-head marks* (the newest
+    mark, measured from the live head, so freeze has no effect on `POS_MARK` grains,
+    measured) waits on a listening test.
     The app-side risks are in [companion-app.md](companion-app.md).
 
 ## 13. Provenance
