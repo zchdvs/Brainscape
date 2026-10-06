@@ -69,5 +69,5 @@ endif()
 add_test(NAME dsp_fp_profile_check
          COMMAND ${CMAKE_COMMAND} ${_bs_probe_args}
                  -DPROBE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fpcheck -DDSP_DIR=${_bs_dsp_dir}
-                 -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fpcheck
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/fpcheck
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/FpProfileCheck.cmake)

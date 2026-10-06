@@ -4,7 +4,10 @@
 # build's generator and compiler.
 cmake_minimum_required(VERSION 3.21)
 
-set(args -S "${PROBE_DIR}" -G "${GENERATOR}" "-DBRAINSCAPE_DSP_DIR=${DSP_DIR}")
+# Never built, so the compiler check is skipped: its try-compile adds nothing and, under
+# a deep build directory, overflows MSBuild's path limit.
+set(args -S "${PROBE_DIR}" -G "${GENERATOR}" "-DBRAINSCAPE_DSP_DIR=${DSP_DIR}"
+         -DCMAKE_CXX_COMPILER_WORKS=ON)
 if(PLATFORM)
   list(APPEND args -A "${PLATFORM}")
 endif()
