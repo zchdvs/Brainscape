@@ -1195,8 +1195,8 @@ with `dsp/` and plugin objects linked in swapped order (§6.3, §6.4); (d) the l
 `compile_commands.json` (§6.3; the configure check already rejects forbidden flags on them);
 (f) the second negative control, a DetMath function swapped back to libm, as a hash control
 (§6.4; its symbol-audit form runs); (g) the Rosetta 2 and Prism host legs (§6.2); (h) a mint
-job (§6.1 records the deviation); (i) CODEOWNERS and the branch protection that makes the
-gates binding (§5.12, §6.1). One finding for §5.12: a one-ULP binary64 change to a DetMath
+job (§6.1 records the deviation); (i) the branch protection that makes the gates binding
+(§5.12, §6.1; `.github/CODEOWNERS` exists). One finding for §5.12: a one-ULP binary64 change to a DetMath
 coefficient changed no corpus output bit, because every DetMath result is rounded to binary32
 first, so only the path trigger sees it. The rest of step 10, step 11 and the hardware-gated
 work of step 13 remain.

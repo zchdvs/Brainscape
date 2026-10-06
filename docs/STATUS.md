@@ -321,11 +321,12 @@ records live in [docs/design/reviews/](design/reviews/).
   `tools/ci/sound_rev_gate.py`. A pull request that edits them passes them whatever it does to
   the sound, and the "sound-neutral" label waives the path trigger. They bind only when
   branch protection on `main` requires `parity-summary`, every `parity-host` and `parity-m7`
-  leg, `parity-audits`, `parity-negative-control` and `sound-rev-gate`, and a CODEOWNERS
-  file, which does not exist yet (no reviewer handle is known), makes code owners review
-  `dsp/`, `cmake/`, the root `CMakeLists.txt`, `dsp/tests/golden/` (`golden.json` included),
-  `.github/workflows/` and `tools/ci/`, as profile §5.12 and §6.1 require; repository
-  settings must also limit who may apply the label. Running `sound-rev-gate` from the base
+  leg, `parity-audits`, `parity-negative-control` and `sound-rev-gate`, and requires review
+  from code owners. [`.github/CODEOWNERS`](../.github/CODEOWNERS) names @zchdvs for `dsp/`
+  (`dsp/tests/golden/golden.json` included), `cmake/`, the root `CMakeLists.txt`, the arm
+  toolchain file, `.github/workflows/` and `tools/ci/`, as profile §5.12 and §6.1 require; the
+  branch protection itself is still to be configured, and repository settings must also limit
+  who may apply the label. Running `sound-rev-gate` from the base
   branch (`pull_request_target`) would not close this alone, since a pull request can add a
   workflow whose job has the same name.
 - **Profile step 10 is not finished** (determinism-profile.md §8.4 lists it). Not yet built:
@@ -390,7 +391,7 @@ Steps 1–4 need no hardware.
    random-number epoch, `LoadPreset` and frame-stamped events (profile steps 1–9).
 2. **Mint internal sound revision 1.** *Minted* (profile step 10): golden hashes, the
    sound-revision gate and the emulated Cortex-M7 parity job check every pull request.
-   Remaining: CODEOWNERS and branch protection, the rest of step 10 (Known gaps), the nightly
+   Remaining: branch protection (CODEOWNERS exists), the rest of step 10 (Known gaps), the nightly
    legs (profile step 11) and their first CI runs.
 3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and
    the `.bsp` preset package with its desktop compiler.

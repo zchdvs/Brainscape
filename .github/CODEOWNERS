@@ -1,0 +1,11 @@
+# Paths whose changes can alter the engine's sound or the gates that certify it
+# (determinism-profile.md §5.12, §6.1). Owner review binds only when branch
+# protection on main requires code-owner review.
+
+/dsp/                                    @zchdvs
+/cmake/                                  @zchdvs
+/CMakeLists.txt                          @zchdvs
+/tools/cmake/arm-none-eabi-toolchain.cmake @zchdvs
+/tools/ci/                               @zchdvs
+/.github/workflows/                      @zchdvs
+/.github/CODEOWNERS                      @zchdvs
