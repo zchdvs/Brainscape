@@ -17,22 +17,48 @@ endif()
 add_library(brainscape_fp_profile INTERFACE)
 add_library(brainscape::fp_profile ALIAS brainscape_fp_profile)
 
+# TEST-ONLY escape for the negative control (§6.4): a build with contraction ON must NOT
+# reproduce the reference hashes, or the golden corpus cannot see contraction. It swaps
+# the profile's contraction flag for its opposite, lets the configure check below accept
+# contraction (and nothing else it forbids), skips the private headers' FP_CONTRACT
+# pragmas, and defines BRAINSCAPE_FP_NEGATIVE_CONTROL for every consumer: the golden
+# harness then refuses check and mint and only reports. Never for anything shipped.
+option(BRAINSCAPE_FP_NEGATIVE_CONTROL
+       "TEST ONLY: build the engine with floating-point contraction ON (parity negative control)"
+       OFF)
+if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+  set(_bs_contract_gnu -ffp-contract=fast)
+  set(_bs_contract_msvc /fp:contract)
+  target_compile_definitions(brainscape_fp_profile INTERFACE BRAINSCAPE_FP_NEGATIVE_CONTROL=1)
+  message(WARNING
+    "\n"
+    "  ********************************************************************\n"
+    "  *  BRAINSCAPE_FP_NEGATIVE_CONTROL=ON: floating-point contraction ON  *\n"
+    "  *  This build is NOT profile-conforming (determinism-profile.md     *\n"
+    "  *  §3.2). Its output must DIFFER from every conforming build. The   *\n"
+    "  *  golden harness only reports; never ship, mint or check with it.  *\n"
+    "  ********************************************************************\n")
+else()
+  set(_bs_contract_gnu -ffp-contract=off)
+  set(_bs_contract_msvc "")
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   # Before VS 2022 17.0, /fp:precise still contracted on some targets.
   if(MSVC_VERSION LESS 1930)
     message(FATAL_ERROR "brainscape determinism profile: MSVC from Visual Studio 2022 17.0 "
                         "(MSVC_VERSION 1930) is required, found ${MSVC_VERSION}")
   endif()
-  target_compile_options(brainscape_fp_profile INTERFACE /fp:precise)
+  target_compile_options(brainscape_fp_profile INTERFACE /fp:precise ${_bs_contract_msvc})
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
   # clang-cl: /fp:precise implies -ffp-contract=on, so the override must follow it.
   target_compile_options(brainscape_fp_profile INTERFACE
-    /fp:precise /clang:-ffp-contract=off /clang:-fno-math-errno)
+    /fp:precise /clang:${_bs_contract_gnu} /clang:-fno-math-errno)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
   # Order matters: -fno-fast-math turns math-errno back on (GCC) and contraction to "on"
   # (Clang), so it comes first.
   target_compile_options(brainscape_fp_profile INTERFACE
-    -fno-fast-math -ffp-contract=off -fno-math-errno)
+    -fno-fast-math ${_bs_contract_gnu} -fno-math-errno)
 else()
   message(FATAL_ERROR "brainscape determinism profile: no flag set for compiler "
                       "'${CMAKE_CXX_COMPILER_ID}' (determinism-profile.md §3.2)")
@@ -46,7 +72,7 @@ endif()
 # may sit inside a generator expression, between commas: JUCE's
 # juce_recommended_lto_flags writes $<IF:...,-GL,-flto>. A global property, because the
 # check runs deferred in the top-level directory's scope. CMake's regex engine allows
-# nine groups and the pattern below has eight, so new entries avoid parentheses.
+# nine groups and the pattern below has at most seven, so new entries avoid parentheses.
 set(_forbidden
   "-ffast-math" "-Ofast" "-funsafe-math-optimizations" "-fassociative-math"
   "-freciprocal-math" "-ffinite-math-only" "-fno-signed-zeros" "-fno-honor-nans"
@@ -55,9 +81,12 @@ set(_forbidden
   "-fdenormal-fp-math[-f32]*=[a-z,]*preserve-sign"
   "-fdenormal-fp-math[-f32]*=[a-z,]*positive-zero"
   "-fdenormal-fp-math[-f32]*=[a-z,]*dynamic" "-mdaz-ftz"
-  "-ffp-contract=(fast|on|fast-honor-pragmas)" "-ffp-model=(fast|aggressive)"
+  "-ffp-model=(fast|aggressive)"
   "-mfpmath=(387|sse\\+387|both)" "-m32" "-flto(=[^ ;>,\"']*)?" "-fwhole-program"
-  "[/-]fp:(fast|contract)" "[/-]GL" "[/-]arch:IA32")
+  "[/-]fp:fast" "[/-]GL" "[/-]arch:IA32")
+if(NOT BRAINSCAPE_FP_NEGATIVE_CONTROL)  # the escape above admits contraction only
+  list(APPEND _forbidden "-ffp-contract=(fast|on|fast-honor-pragmas)" "[/-]fp:contract")
+endif()
 list(JOIN _forbidden "|" _forbidden)
 set_property(GLOBAL PROPERTY BRAINSCAPE_FP_FORBIDDEN_RE
              "(^|[ ;:>,\"'])(${_forbidden})($|[ ;>,\"'])")

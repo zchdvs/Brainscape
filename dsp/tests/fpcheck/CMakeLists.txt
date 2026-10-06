@@ -15,6 +15,12 @@ endfunction()
 
 consumer(clean_consumer)
 
+if(BRAINSCAPE_FPCHECK_CONTRACTION)
+  # Contraction only, by both spellings: what BRAINSCAPE_FP_NEGATIVE_CONTROL admits.
+  consumer(via_contraction)
+  target_compile_options(via_contraction PRIVATE -ffp-contract=fast /fp:contract)
+endif()
+
 if(BRAINSCAPE_FPCHECK_VIOLATIONS)
   # JUCE 9.0.3's juce_recommended_lto_flags (JUCEHelperTargets.cmake): MSVC's flag sits
   # between commas.

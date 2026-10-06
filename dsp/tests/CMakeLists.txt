@@ -6,6 +6,7 @@ add_executable(brainscape_tests
   test_engine.cpp
   test_boundary.cpp
   test_detmath.cpp
+  test_testsignal.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
 # The engine's private headers: the unit tests exercise its internals directly.
@@ -95,3 +96,5 @@ add_test(NAME dsp_fp_profile_check
                  -DPROBE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fpcheck -DDSP_DIR=${_bs_dsp_dir}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/fpcheck
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/FpProfileCheck.cmake)
+
+add_subdirectory(golden)

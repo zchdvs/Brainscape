@@ -61,4 +61,53 @@ if(missed)
   list(JOIN missed "\n  " missed)
   message(FATAL_ERROR "fp profile check: the check missed\n  ${missed}\nOutput:\n${out}")
 endif()
-message(STATUS "fp profile check: every forbidden route was rejected")
+
+# The test-only negative-control escape (BRAINSCAPE_FP_NEGATIVE_CONTROL) admits
+# contraction, says so loudly, and still rejects every other route.
+execute_process(COMMAND "${CMAKE_COMMAND}" ${args} -B "${WORK_DIR}/negctl"
+                        -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON -DBRAINSCAPE_FPCHECK_CONTRACTION=ON
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "fp profile check: the negative control rejected contraction:\n${out}")
+endif()
+string(FIND "${out}" "BRAINSCAPE_FP_NEGATIVE_CONTROL=ON: floating-point contraction ON" pos)
+if(pos EQUAL -1)
+  message(FATAL_ERROR "fp profile check: the negative control configured without its warning")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" ${args} -B "${WORK_DIR}/negctl-violations"
+                        -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON -DBRAINSCAPE_FPCHECK_VIOLATIONS=ON
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+if(rc EQUAL 0)
+  message(FATAL_ERROR "fp profile check: the negative control admitted non-contraction settings")
+endif()
+set(missed "")
+foreach(route "(via via_juce_lto): '-GL'|(via via_juce_lto): '-flto'"
+              "via_ipo INTERPROCEDURAL_OPTIMIZATION"
+              "via_single_precision COMPILE_OPTIONS: '-fsingle-precision-constant'"
+              "via_denormal_math COMPILE_OPTIONS: '-fdenormal-fp-math=preserve-sign'"
+              "via_daz_ftz COMPILE_OPTIONS: '-mdaz-ftz'")
+  set(found FALSE)
+  string(REPLACE "|" ";" alternatives "${route}")
+  foreach(alt IN LISTS alternatives)
+    string(FIND "${out}" "${alt}" pos)
+    if(NOT pos EQUAL -1)
+      set(found TRUE)
+    endif()
+  endforeach()
+  if(NOT found)
+    list(APPEND missed "${route}")
+  endif()
+endforeach()
+foreach(admitted "via_source_options.cpp COMPILE_OPTIONS" "src/PostChain.cpp COMPILE_FLAGS")
+  string(FIND "${out}" "${admitted}" pos)
+  if(NOT pos EQUAL -1)
+    list(APPEND missed "(contraction should be admitted) ${admitted}")
+  endif()
+endforeach()
+if(missed)
+  list(JOIN missed "\n  " missed)
+  message(FATAL_ERROR
+          "fp profile check: under the negative control the check missed\n  ${missed}\nOutput:\n${out}")
+endif()
+message(STATUS "fp profile check: every forbidden route was rejected; the negative control "
+               "admits contraction only")

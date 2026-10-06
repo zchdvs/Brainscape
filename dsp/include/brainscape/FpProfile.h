@@ -12,8 +12,14 @@
 #if defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__  // -ffinite-math-only
 #error "brainscape determinism profile: finite-math-only is forbidden"
 #endif
-#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_FP_FAST) || defined(_M_FP_CONTRACT))
-#error "brainscape determinism profile: /fp:fast and /fp:contract are forbidden"
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_FP_FAST)
+#error "brainscape determinism profile: /fp:fast is forbidden"
+#endif
+// /fp:contract (which /fp:fast also implies) only in the test-only negative-control
+// build (BrainscapeFpProfile.cmake).
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_FP_CONTRACT) && \
+    !defined(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+#error "brainscape determinism profile: /fp:contract is forbidden"
 #endif
 #if !defined(FLT_EVAL_METHOD) || FLT_EVAL_METHOD != 0
 #error "brainscape determinism profile: FLT_EVAL_METHOD must be 0 (no x87)"
