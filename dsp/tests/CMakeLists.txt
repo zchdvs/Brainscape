@@ -4,6 +4,7 @@
 add_executable(brainscape_tests
   test_main.cpp
   test_engine.cpp
+  test_param_display.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
 target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
