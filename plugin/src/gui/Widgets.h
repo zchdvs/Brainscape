@@ -122,7 +122,8 @@ class TriggerButton final : public Scalable<juce::Button> {
   float flash_ = 0.f;
 };
 
-// The status line: engine rate (the pedal's or not), host block size, lost events.
+// The status line: engine rate (the pedal's or not), host block size, the restart option,
+// lost events.
 class StatusBar final : public Scalable<juce::Component>, public juce::SettableTooltipClient {
  public:
   void Set(const BrainscapeProcessor::Status& status, const WrapperSettings& settings);
@@ -135,6 +136,8 @@ class StatusBar final : public Scalable<juce::Component>, public juce::SettableT
 
 // Developer test input: live input, a looped file or the pluck generator, plus the
 // global input mode and levels (companion §4.8). Harmless in a DAW: Live is the default.
+// Its last row holds the reproducible renders of §4.9: in the Standalone the offline
+// audition of the test input, in a plugin the "Restart on transport start" option.
 class TestInputPanel final : public juce::Component {
  public:
   explicit TestInputPanel(BrainscapeProcessor& processor);
@@ -145,15 +148,20 @@ class TestInputPanel final : public juce::Component {
 
  private:
   void ChooseFile();
+  void ChooseAuditionFile();
   void PushSettings();
   static void StyleSegment(juce::TextButton& b, int group, juce::Colour on);
 
   BrainscapeProcessor&               processor_;
+  const bool                         standalone_;
   juce::TextButton                   live_{"Live in"}, file_{"File loop"}, pluck_{"Pluck"};
   juce::TextButton                   load_{"Load file..."};
   juce::Label                        fileName_;
   juce::TextButton                   mono_{"Mono"}, stereo_{"Stereo"};
   juce::Label                        modeCaption_;
+  juce::TextButton                   audition_{"Render audition..."};
+  juce::TextButton                   restartOnPlay_{"Restart on play"};
+  juce::Label                        renderNote_;
   juce::Slider                       inLevel_, outLevel_;
   juce::Label                        inCaption_, outCaption_, inValue_, outValue_;
   std::unique_ptr<juce::FileChooser> chooser_;

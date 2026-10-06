@@ -9,12 +9,13 @@ namespace brainscape::plugin {
 
 enum class InputMode : uint32_t { Mono = 0, Stereo = 1 };  // Mono: R := L (companion §4.8)
 
-// Global wrapper settings, saved with the session but never part of a preset (§4.8). The
-// processor starts the Standalone in Mono (BrainscapeProcessor's constructor).
+// Global wrapper settings, saved with the session but never part of a preset (§4.8, §6.9).
+// The processor starts the Standalone in Mono (BrainscapeProcessor's constructor).
 struct WrapperSettings {
-  InputMode inputMode    = InputMode::Stereo;
-  float     inputGainDb  = 0.f;
-  float     outputGainDb = 0.f;
+  InputMode inputMode      = InputMode::Stereo;
+  float     inputGainDb    = 0.f;
+  float     outputGainDb   = 0.f;
+  bool      restartOnStart = false;  // "Restart on transport start" (§4.9), off by default
 };
 inline constexpr float kWrapperGainRangeDb = 24.f;
 
@@ -22,6 +23,7 @@ inline constexpr float kWrapperGainRangeDb = 24.f;
 // binary32 bits plus the wrapper settings. Little-endian fields written one by one, never
 // a struct. Layout v1:
 //   "BSWS"  u32 version=1  u32 n  n x {u32 ParamId, u32 bits}  u32 m  m x {u32 key, u32 bits}
+// Readers skip setting keys they do not know, so a setting is added without a new version.
 // Freeze is a performance state and is never stored (companion §6.2).
 struct WrapperState {
   float           plain[kNumParams];

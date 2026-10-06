@@ -28,6 +28,8 @@ class TestInput {
   // off the audio thread and publishes it lock-free; playback never waits.
   bool         LoadFile(const juce::File& file, juce::String& error);
   juce::String LoadedName() const;  // message thread
+  // Message thread: the loaded file's decoded audio (two channels) and its rate, or null.
+  const juce::AudioBuffer<float>* LoadedAudio(double* sampleRate) const;
   // Message thread: frees loops the audio thread can no longer be reading.
   void CollectGarbage();
 

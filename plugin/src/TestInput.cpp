@@ -57,6 +57,12 @@ bool TestInput::LoadFile(const juce::File& file, juce::String& error) {
 
 juce::String TestInput::LoadedName() const { return owned_ != nullptr ? owned_->name : juce::String(); }
 
+const juce::AudioBuffer<float>* TestInput::LoadedAudio(double* sampleRate) const {
+  if (owned_ == nullptr) return nullptr;
+  *sampleRate = owned_->sampleRate;
+  return &owned_->audio;
+}
+
 void TestInput::CollectGarbage() {
   const Loop* reading = inUse_.load();
   retired_.erase(std::remove_if(retired_.begin(), retired_.end(),

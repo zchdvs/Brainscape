@@ -28,6 +28,7 @@ juce_add_plugin(Brainscape
 )
 
 set(BRAINSCAPE_PLUGIN_SOURCES
+  src/Audition.cpp
   src/BrainscapeParam.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
@@ -75,6 +76,7 @@ target_link_libraries(Brainscape
     brainscape_dsp
   PRIVATE
     juce::juce_audio_utils
+    juce::juce_cryptography  # SHA-256 of audition renders (companion §4.9)
     juce::juce_recommended_warning_flags
     brainscape_plugin_warnings
 )
@@ -90,6 +92,7 @@ if(BRAINSCAPE_BUILD_TESTS)
   target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape)
   target_include_directories(brainscape_plugin_tests PRIVATE
     src
+    ${PROJECT_SOURCE_DIR}/dsp/tests  # golden/Sha256.h: an independent check of audition hashes
     ${PROJECT_SOURCE_DIR}/dsp/tests/vendor
     $<TARGET_PROPERTY:Brainscape,INCLUDE_DIRECTORIES>)
   if(MSVC)
