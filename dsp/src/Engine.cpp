@@ -237,6 +237,9 @@ struct Engine::Impl {
   bool         postDirty_     = true;
   bool         frozen_        = false;
   uint32_t     frozenAnchor_  = 0;
+  // Nothing rendered since Init or ClearHistory cleared the ring and the post buffers, so
+  // Restart need not clear them again.
+  bool         historyClear_  = false;
 
   detail::GranularCore   granular_;
   detail::GranularParams gp_{};
@@ -437,7 +440,8 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   feedback_.Prime(feedback_.target);
   norm_.Prime(norm_.target);
 
-  ready_ = true;
+  historyClear_ = true;  // the ring above, the post buffers in post_.Init
+  ready_        = true;
   return true;
 }
 
@@ -473,7 +477,7 @@ void Engine::Impl::Restart() noexcept {
   if (!ready_) return;
   // What Init clears and Reset keeps; Reset below does the rest. Freeze goes off first,
   // because the normalization rebuilt in Reset depends on it.
-  ClearHistory();
+  if (!historyClear_) ClearHistory();
   tamer_.ClearDiffusers();  // stale diffusers alone nulled feedback presets at -51 dB
   sampleCounter_ = 0;
   epochStart_    = 0;
@@ -488,6 +492,7 @@ void Engine::Impl::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
   post_.ClearBuffers();  // the post delay/reverb tails are history too
+  historyClear_ = true;
 }
 
 bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
@@ -720,6 +725,7 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   // block-split invariance (contract #1) carries over to event timing. Frames before an
   // event see the old state. Freeze settles once per frame, after the frame's events,
   // as DrainPending settles SetFreeze.
+  historyClear_ = false;
   DrainPending();
   freeze        = frozen_;
   uint32_t pos  = 0;

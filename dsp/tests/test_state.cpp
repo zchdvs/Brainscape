@@ -572,6 +572,48 @@ TEST_CASE("Reset and ClearHistory do not reach the exact-restart state") {
   }
 }
 
+// Restart's multi-MiB clears are skipped while the buffers are still clear, so a wrapper's
+// Exact load before its first block is real-time safe. A ring planted through the arena
+// shows which Restarts cleared: it survives one on a clean engine, not one after a render.
+TEST_CASE("Restart clears the buffers only once something has rendered into them") {
+  const EngineConfig cfg    = SmallConfig();
+  const Stereo       prefix = Plucks(3001, 0x5555u);
+  const Stereo       input  = Plucks(12000, 0x6666u);
+  // Grains 100 ms behind the write head: the first 100 ms read the ring as Restart left it.
+  const PresetState  preset = Complete({{ParamId::Mix, 1.0f}, {ParamId::DelayMs, 100.0f}});
+  const auto plant = [&cfg](Rig& rig) {  // the ring opens the Bulk arena (Engine.cpp Init)
+    auto* ring = static_cast<int16_t*>(rig.arenas.get().base[static_cast<size_t>(Tier::Bulk)]);
+    std::fill(ring, ring + 2u * cfg.historyFrames, int16_t{8192});
+  };
+  Stereo ref;
+  {
+    Rig rig(cfg);
+    REQUIRE(rig.engine.LoadPreset(preset, LoadMode::Exact));
+    ref = RenderStamped(rig.engine, input, {}, {48});
+  }
+  {
+    Rig rig(cfg);  // clean since Init: kept
+    plant(rig);
+    REQUIRE(rig.engine.LoadPreset(preset, LoadMode::Exact));
+    REQUIRE_FALSE(Same(RenderStamped(rig.engine, input, {}, {48}), ref));
+  }
+  {
+    Rig rig(cfg);  // rendered into: cleared, and the engine is exact again
+    RenderStamped(rig.engine, prefix, {}, {48});
+    plant(rig);
+    REQUIRE(rig.engine.LoadPreset(preset, LoadMode::Exact));
+    REQUIRE(Same(RenderStamped(rig.engine, input, {}, {48}), ref));
+  }
+  {
+    Rig rig(cfg);  // cleared by ClearHistory since the render: kept
+    RenderStamped(rig.engine, prefix, {}, {48});
+    rig.engine.ClearHistory();
+    plant(rig);
+    REQUIRE(rig.engine.LoadPreset(preset, LoadMode::Exact));
+    REQUIRE_FALSE(Same(RenderStamped(rig.engine, input, {}, {48}), ref));
+  }
+}
+
 // ── LoadPreset (§5.10) ────────────────────────────────────────────────────────────────
 
 TEST_CASE("an Exact load reaches the exact-restart state from any engine") {

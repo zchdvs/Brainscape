@@ -97,12 +97,17 @@ class Engine {
   // smoothers to them. Reset is the real-time subset: it keeps the counter, the epoch,
   // freeze and every large buffer, so a DAW's reset() maps to it. Restart begins a new
   // timeline at frame 0: events queued against the old one are cleared with it
-  // (EventQueue::Clear), and producers stamp from the restarted counter.
+  // (EventQueue::Clear), and producers stamp from the restarted counter. On an engine that
+  // has rendered no frame since Init, Restart or ClearHistory the ring and post buffers are
+  // still clear and are not cleared again: such a Restart costs about what Reset does and
+  // may run on the audio thread between Process calls (a wrapper's restore or restart
+  // before its first block).
   void Restart() noexcept;
 
   // Applies a decoded preset in the fixed order of determinism profile §5.10: every
   // descriptor default; every stored leaf, canonicalized, in ascending id order; freeze
-  // off; then for Exact a Restart (non-RT, Process stopped, the event queue cleared), for
+  // off; then for Exact a Restart (Process stopped, the event queue cleared; non-RT unless
+  // the engine has rendered nothing since its buffers were cleared, see Restart), for
   // Spillover the random-number epoch restarted at the load frame, keeping history,
   // grains, scheduler phase and smoothers. A direct Spillover call applies at the next
   // Process call's first frame and must not race Process (audio thread between blocks, or
