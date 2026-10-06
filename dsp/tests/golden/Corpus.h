@@ -26,8 +26,6 @@ enum class Counter : uint8_t {
   FrozenOnsets,       // onsets detected in blocks rendered while frozen
   FrozenFrames,       // frames rendered while frozen
   FreezeEngages,
-  Reanchors,          // frozen holds crossing 3/4 of the ring past the pin (from the script)
-  MarksAgedPastRing,  // 1 if frames after the last onset's block exceed the ring
   FbAbove1Frames,     // frames rendered with the Feedback target above 1
   InClipFrames,       // input frames at full scale on either channel
   SilentInFrames,     // input frames exactly zero on both channels
@@ -41,9 +39,12 @@ const char* CounterName(Counter) noexcept;
 
 // A feature an ablation switches off: a parameter forced to its neutral value
 // (and its script events dropped), or the freeze / trigger events dropped.
+// RingLength keeps the preset and renders it on a ring twice as long: the ring
+// reaches the output only through the re-anchor, mark staleness and the far guard
+// (profile §6.4), so a change proves the render reached one of them.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
-  PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers,
+  PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
 };
 const char* FeatureName(Feature) noexcept;
 

@@ -120,8 +120,9 @@ TEST_CASE("Q23ToFloat is exact on the whole 24-bit grid") {
 
 TEST_CASE("standard vectors match the independent reference implementation") {
   // FNV-1a 64 of the first 10 s of each vector (activeFrames = 10 s), computed by a
-  // separate Python implementation of the generator spec. A change here means a
-  // different input signal: bump kVersion.
+  // separate Python implementation of the generator spec:
+  //   python3 tools/parity/testsignal_ref.py 480000
+  // A change here means a different input signal: bump kVersion.
   struct Kat {
     Vector   v;
     size_t   notes;

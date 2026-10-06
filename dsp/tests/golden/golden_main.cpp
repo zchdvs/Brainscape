@@ -4,18 +4,20 @@
 //
 //   brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]
 //                     [--block N | --pattern A,B,...] [--ring LOG2] [--only NAME,...]
-//                     [--ablate | --no-ablate] [--quick] [--tag TAG] [--wav-dir DIR]
-//                     [--list]
+//                     [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]
+//                     [--wav-dir DIR] [--list]
 //
 // report (default) never compares against anything it must match: it fails only when
 //        a render cannot run or a preset's coverage is missing (exit 1).
 // check  also requires every hash, per-second hash and counter to equal the golden
 //        file for this build's kSoundRevision (exit 2 on any difference).
 // mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, whole
-//        corpus). It refuses while kSoundRevision is 0: nothing is minted until the
-//        engine stops changing (profile §8.4 step 10).
+//        corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
+//        minted until the engine stops changing (profile §8.4 step 10).
 // With a golden file for this revision, report and check write a WAV of every preset
 // that misses it into --wav-dir (profile §6.1: WAV files only on mismatch).
+// --note records a fact about the build that the binary cannot see (the archive's
+// SHA-256, the emulator version) in the report's build.notes; repeatable.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -47,7 +49,8 @@ constexpr const char* kGoldenFormat = "brainscape-golden/1";
 constexpr const char* kUsage =
     "usage: brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]\n"
     "       [--block N | --pattern A,B,...] [--ring LOG2] [--only VECTOR[/PRESET],...]\n"
-    "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--wav-dir DIR] [--list]\n";
+    "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]\n"
+    "       [--wav-dir DIR] [--list]\n";
 
 struct Options {
   std::string              mode   = "report";
@@ -58,6 +61,7 @@ struct Options {
   std::vector<uint32_t>    pattern{48};
   uint32_t                 ring = 22;
   std::vector<std::string> only;
+  std::vector<std::pair<std::string, std::string>> notes;
   bool                     ablate = true;
   bool                     quick  = false;
   bool                     list   = false;
@@ -131,7 +135,10 @@ bool Parse(int argc, char** argv, Options* o) {
     else if (!std::strcmp(a, "--wav-dir") && more) o->wavDir = argv[++i];
     else if (!std::strcmp(a, "--ring") && more) o->ring = Count(argv[++i]);
     else if (!std::strcmp(a, "--only") && more) o->only = Split(argv[++i]);
-    else if ((!std::strcmp(a, "--block") || !std::strcmp(a, "--pattern")) && more) {
+    else if (!std::strcmp(a, "--note") && more && std::strchr(argv[i + 1], '=') != nullptr) {
+      const std::string kv = argv[++i];
+      o->notes.emplace_back(kv.substr(0, kv.find('=')), kv.substr(kv.find('=') + 1));
+    } else if ((!std::strcmp(a, "--block") || !std::strcmp(a, "--pattern")) && more) {
       o->pattern.clear();
       for (const std::string& b : Split(argv[++i])) {
         o->pattern.push_back(Count(b.c_str()));
@@ -194,6 +201,7 @@ int64_t NotBeforeSecond(const PresetCase& p, Feature f, const RenderOutput& r) {
     case Feature::OnsetTrigger: return r.firstOnsetBlock >= 0 ? r.firstOnsetBlock / 48000 : 0;
     case Feature::Freeze: return firstEvent(EventType::Freeze);
     case Feature::Triggers: return firstEvent(EventType::Trigger);
+    case Feature::RingLength: return r.ringReachFrame / 48000;
     default: return 0;
   }
 }
@@ -231,6 +239,9 @@ Json ReportHeader(const Options& o, uint32_t historyFrames) {
   build.Set("delivery", Json::Str("split-at-event-frames"));
   build.Set("ablations", Json::Bool(o.ablate));
   build.Set("canonical", Json::Bool(o.Canonical()));
+  Json notes = Json::Obj();
+  for (const auto& kv : o.notes) notes.Set(kv.first, Json::Str(kv.second));
+  build.Set("notes", notes);
   report.Set("build", build);
   report.Set("vectors", Json::Arr());
   return report;
@@ -268,7 +279,16 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
   for (const Feature f : o.ablate ? p.ablate : std::vector<Feature>{}) {
     const std::string name = std::string("ablation ") + FeatureName(f);
     RenderOutput      ra;
-    if (!renderer.Render(v, notes, Ablate(p, f), &ra)) {
+    bool              rendered;
+    if (f == Feature::RingLength) {
+      RenderConfig rc = renderer.Config();
+      ++rc.historyLog2;
+      Renderer doubled(rc);
+      rendered = doubled.ok() && doubled.Render(v, notes, p, &ra);
+    } else {
+      rendered = renderer.Render(v, notes, Ablate(p, f), &ra);
+    }
+    if (!rendered) {
       failures.push_back(name + " did not render");
       continue;
     }
@@ -300,11 +320,9 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
   const char* status = !failures.empty()                    ? "COVERAGE FAILED"
                        : o.ablate && !p.ablate.empty()      ? "coverage ok (ablations ok)"
                                                             : "coverage ok";
-  std::printf("  %-22s %s  onsets=%lld frozen=%lld reanchors=%lld events=%lld offgrid=%lld "
-              "tail=%lld  %s\n",
+  std::printf("  %-24s %s  onsets=%lld frozen=%lld events=%lld offgrid=%lld tail=%lld  %s\n",
               p.name, Short(r.hash).c_str(), static_cast<long long>(Get(r, Counter::Onsets)),
               static_cast<long long>(Get(r, Counter::FrozenFrames)),
-              static_cast<long long>(Get(r, Counter::Reanchors)),
               static_cast<long long>(Get(r, Counter::Events)),
               static_cast<long long>(Get(r, Counter::OffGridEvents)),
               static_cast<long long>(Get(r, Counter::TailActiveFrames)), status);
@@ -498,8 +516,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mint refused: kSoundRevision is 0, so there is no revision to mint\n");
     return 3;
   }
-  if (o.mode == "mint" && !o.Canonical()) {
-    std::fprintf(stderr, "mint refused: needs the whole corpus at --block 48 --ring 22\n");
+  if (o.mode == "mint" && (!o.Canonical() || !o.ablate)) {
+    std::fprintf(stderr,
+                 "mint refused: needs the whole corpus at --block 48 --ring 22 with ablations\n");
     return 3;
   }
 
@@ -551,7 +570,7 @@ int main(int argc, char** argv) {
       ++presets;
       RenderOutput r;
       if (!renderer.Render(v, notes, p, &r)) {
-        std::printf("  %-22s RENDER FAILED\n", p.name);
+        std::printf("  %-24s RENDER FAILED\n", p.name);
         ++renderFailures;
         continue;
       }

@@ -22,6 +22,9 @@ struct RenderOutput {
   std::vector<std::string> secondHashes;
   int64_t                  counters[static_cast<size_t>(Counter::kCount)] = {};
   int64_t                  firstOnsetBlock = -1;  // block start, so only block-accurate
+  // The earliest frame at which the ring length can reach the output (profile §6.4:
+  // the re-anchor, mark staleness, the far guard), or the render length if never.
+  int64_t                  ringReachFrame = 0;
 };
 
 // The output samples, kept only to write a WAV for a preset that misses its golden.
@@ -37,6 +40,7 @@ class Renderer {
   Renderer& operator=(const Renderer&) = delete;
 
   bool ok() const { return ok_; }
+  const RenderConfig& Config() const { return cfg_; }
   uint32_t HistoryFrames() const { return 1u << cfg_.historyLog2; }
 
   bool Render(const VectorCase& v, const std::vector<testsignal::Note>& notes,

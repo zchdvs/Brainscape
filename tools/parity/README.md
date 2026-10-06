@@ -12,7 +12,9 @@ against that tree rather than as a full copy.
 The production parity tooling grown from them lives elsewhere: the test-signal generator in
 `dsp/include/brainscape/TestSignal.h`, the golden-hash harness in `dsp/tests/golden/` (ctest
 `golden_report`; `brainscape_golden --help`), the CI legs in `.github/workflows/parity.yml` and the
-static audits and report comparison in `tools/ci/`.
+static audits and report comparison in `tools/ci/`. [`testsignal_ref.py`](testsignal_ref.py) here is
+the separate Python implementation of the generator that derives the known-answer hashes in
+`dsp/tests/test_testsignal.cpp` (`python3 tools/parity/testsignal_ref.py 480000`).
 
 | Directory | What it shows |
 | --- | --- |

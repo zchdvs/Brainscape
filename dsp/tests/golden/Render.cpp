@@ -18,6 +18,16 @@ constexpr float   kActiveLevel = 0x1p-16f;  // about -96 dBFS
 
 int64_t& At(RenderOutput* out, Counter c) { return out->counters[static_cast<size_t>(c)]; }
 
+// How far behind its position's reference a grain can read, at the parameter maxima
+// (profile §6.4): base delay, spray, an attack offset and the read span L * (1 + r)
+// at r = 4, plus the 64-frame guard margin, §5.7's 512-frame write-ahead and one
+// 256-frame onset hop (a mark can precede the block that reports its onset).
+int64_t RingSlackFrames() {
+  auto ms = [](ParamId id) { return static_cast<int64_t>(FindParam(id)->max) * 48; };
+  return ms(ParamId::DelayMs) + ms(ParamId::SprayMs) + 6 * ms(ParamId::GrainSizeMs) + 64 + 512 +
+         256;
+}
+
 // Interleaved little-endian float32, the byte stream every hash is taken over.
 void PackFrames(const float* l, const float* r, uint32_t n, uint8_t* bytes) {
   for (uint32_t i = 0; i < n; ++i) {
@@ -135,10 +145,12 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
 
   const int64_t ring        = cfg.historyFrames;
   const int64_t reanchorAge = ring - ring / 4;  // Engine.cpp's 3/4-ring rule
+  const int64_t slack       = RingSlackFrames();
   const int64_t frames      = v.frames;
   bool          frozen      = false;
   int64_t       pinAbs      = 0;
-  int64_t       lastOnset   = -1;
+  int64_t       reach       = slack >= ring ? 0 : frames;
+  auto          reachBy     = [&reach](int64_t f) { reach = f < reach ? f : reach; };
 
   int32_t qL[512], qR[512];
   float   inL[512], inR[512], outL[512], outR[512];
@@ -189,17 +201,16 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     if (onsets > 0) {
       At(out, Counter::Onsets) += onsets;
       if (frozen) At(out, Counter::FrozenOnsets) += onsets;
-      if (out->firstOnsetBlock < 0) out->firstOnsetBlock = pos;
-      lastOnset = pos;
+      if (out->firstOnsetBlock < 0) {
+        out->firstOnsetBlock = pos;
+        reachBy(pos + ring - slack);  // no mark is older than the first onset
+      }
     }
     if (frozen) {
       At(out, Counter::FrozenFrames) += n;
-      // The re-anchor as a property of the script: per sample, as profile §5.7 part
-      // C will decide it, so the count does not move with the block grid.
-      while (pinAbs + reanchorAge + 1 < end) {
-        pinAbs += reanchorAge + 1;
-        ++At(out, Counter::Reanchors);
-      }
+      // The first re-anchor, or the far guard measured from the pin if that is sooner.
+      const int64_t f = pinAbs + (reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack);
+      if (f < end) reachBy(f);
     }
     if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += n;
 
@@ -226,8 +237,8 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     if (pos == gridEnd) gridEnd += cfg_.blockPattern[++patternIdx % cfg_.blockPattern.size()];
   }
 
-  At(out, Counter::Frames)            = frames;
-  At(out, Counter::MarksAgedPastRing) = lastOnset >= 0 && frames - lastOnset > ring ? 1 : 0;
+  At(out, Counter::Frames) = frames;
+  out->ringReachFrame      = reach;
   hasher.Finish(out);
   return true;
 }

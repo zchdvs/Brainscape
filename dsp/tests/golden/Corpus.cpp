@@ -98,8 +98,6 @@ const char* CounterName(Counter c) noexcept {
     case C::FrozenOnsets: return "frozenOnsets";
     case C::FrozenFrames: return "frozenFrames";
     case C::FreezeEngages: return "freezeEngages";
-    case C::Reanchors: return "reanchors";
-    case C::MarksAgedPastRing: return "marksAgedPastRing";
     case C::FbAbove1Frames: return "fbAbove1Frames";
     case C::InClipFrames: return "inClipFrames";
     case C::SilentInFrames: return "silentInFrames";
@@ -126,6 +124,7 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::PostFilter: return "postFilter";
     case Feature::Freeze: return "freeze";
     case Feature::Triggers: return "triggers";
+    case Feature::RingLength: return "ringLength";
   }
   return "unknown";
 }
@@ -163,10 +162,13 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::Triggers:
       drop([](const Event& e) { return e.type == EventType::Trigger; });
       break;
+    case Feature::RingLength: break;  // same preset; the harness doubles the ring
   }
   return out;
 }
 
+// Not yet in the corpus: profile §6.1's committed guitar DI recordings, which enter
+// through ConditionInput24 (§3.7).
 std::vector<VectorCase> BuildCorpus() {
   std::vector<VectorCase> corpus;
 
@@ -205,6 +207,27 @@ std::vector<VectorCase> BuildCorpus() {
          {P::WindowSustain, 0.1f}, {P::WindowSkew, 0.2f}, {P::WindowSmooth, 1.0f}});
     heavy.ablate = {Feature::Pitch, Feature::Reverse, Feature::Spray};
     v.presets.push_back(heavy);
+
+    // The position limits: maximum delay, spray and grain size, then with reverse
+    // and +24 st on top.
+    const std::vector<std::pair<ParamId, float>> kFar = {
+        {P::DelayMs, 5000.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}};
+    PresetCase farPlain = Preset("max_delay_spray", kFar);
+    farPlain.ablate     = {Feature::Spray};
+    v.presets.push_back(farPlain);
+
+    PresetCase farRevUp = Preset("max_delay_spray_rev_up24", kFar);
+    farRevUp.params.emplace_back(P::ReverseProb, 0.5f);
+    farRevUp.params.emplace_back(P::PitchSt, 24.0f);
+    farRevUp.ablate = {Feature::Spray, Feature::Reverse, Feature::Pitch};
+    v.presets.push_back(farRevUp);
+
+    // Spray reflected off the near guard: a 500 ms grain at +24 st needs 1.5 s behind
+    // the write head, so from a 1 ms base about 7 in 8 draws fold back into the bounds.
+    PresetCase nearRail = Preset("near_rail_spray",
+        {{P::DelayMs, 1.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}, {P::PitchSt, 24.0f}});
+    nearRail.ablate = {Feature::Spray};
+    v.presets.push_back(nearRail);
     corpus.push_back(std::move(v));
   }
 
@@ -310,16 +333,30 @@ std::vector<VectorCase> BuildCorpus() {
     corpus.push_back(std::move(v));
   }
 
-  {  // A freeze held past 3/4 of the 2^22 ring (65.5 s): the re-anchor (mechanism D3).
+  {  // Freezes held 69 s, past 3/4 of the 2^22 ring (65.5 s), with onsets throughout.
     VectorCase v{"strums_freeze_70s", Vector::Strums, Frames(70), Frames(70), true, {}};
-    PresetCase hold = Preset("freeze_long",
+    // Mark positioning: marks newer than the pin through a long hold (mechanism D1).
+    // A grain starts at the mark whatever the anchor (Granular.cpp:82, :114), so the
+    // re-anchor cannot reach this output; freeze_live_long covers it.
+    PresetCase marks = Preset("freeze_long",
         {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
          {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
          {P::PositionSource, 1.0f}});
-    hold.script.Freeze(S(1) + 11, true);
-    hold.require = {{C::Reanchors, 1}, {C::FrozenOnsets, 20}, {C::FrozenFrames, S(68)}};
-    hold.ablate  = {Feature::Freeze};
-    v.presets.push_back(hold);
+    marks.script.Freeze(S(1) + 11, true);
+    marks.require = {{C::FrozenOnsets, 20}, {C::FrozenFrames, S(68)}};
+    marks.ablate  = {Feature::Freeze};
+    v.presets.push_back(marks);
+
+    // Live positioning: grains sit behind the anchor, so the re-anchor (mechanism D3)
+    // moves them and the ring ablation first differs at the re-anchor second, 66.
+    PresetCase live = Preset("freeze_live_long",
+        {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
+         {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
+         {P::PositionSource, 0.0f}});
+    live.script.Freeze(S(1) + 11, true);
+    live.require = {{C::FrozenOnsets, 20}, {C::FrozenFrames, S(68)}, {C::FreezeEngages, 1}};
+    live.ablate  = {Feature::Freeze, Feature::RingLength};
+    v.presets.push_back(live);
     corpus.push_back(std::move(v));
   }
 
@@ -328,8 +365,8 @@ std::vector<VectorCase> BuildCorpus() {
     PresetCase age = Preset("reverse_mark_aging",
         {{P::PositionSource, 1.0f}, {P::ReverseProb, 1.0f}, {P::SprayMs, 0.0f}, {P::Jitter, 0.0f},
          {P::GrainSizeMs, 100.0f}, {P::Overlap, 0.4f}, {P::Mix, 1.0f}});
-    age.require = {{C::Onsets, 1}, {C::MarksAgedPastRing, 1}, {C::TailActiveFrames, S(80)}};
-    age.ablate  = {Feature::MarkPosition};
+    age.require = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}};
+    age.ablate  = {Feature::MarkPosition, Feature::RingLength};
     v.presets.push_back(age);
     corpus.push_back(std::move(v));
   }
