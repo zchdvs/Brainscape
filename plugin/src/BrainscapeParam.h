@@ -61,9 +61,10 @@ class FreezeParam final : public juce::AudioParameterBool {
 };
 
 // Typed text to a canonical plain value, in the display's units ("1.2 s", "2.5k", "40%",
-// "Off", "Mark"). Decimal text is read by a correctly rounded parser, and unit scaling is
-// a shift of the decimal exponent before parsing, so "55.55%" is exactly the float
-// nearest 0.5555 (companion §5.3, §6.4).
+// "-25%" on a centred balance, "Off", "Mark"). Decimal text is read by a correctly rounded
+// parser, and unit scaling is a shift of the decimal exponent (exact decimal arithmetic for
+// a balance) before parsing, so "55.55%" is exactly the float nearest 0.5555 (companion
+// §5.3, §6.4).
 bool ParsePlainText(ParamId id, const juce::String& text, float& plainOut);
 
 juce::String FormatPlainText(ParamId id, float plain);

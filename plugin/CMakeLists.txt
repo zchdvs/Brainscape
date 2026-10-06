@@ -27,7 +27,7 @@ juce_add_plugin(Brainscape
   HARDENED_RUNTIME_OPTIONS      com.apple.security.device.audio-input
 )
 
-target_sources(Brainscape PRIVATE
+set(BRAINSCAPE_PLUGIN_SOURCES
   src/BrainscapeParam.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
@@ -38,7 +38,14 @@ target_sources(Brainscape PRIVATE
   src/gui/BrainscapeLookAndFeel.cpp
   src/gui/Widgets.cpp
 )
+target_sources(Brainscape PRIVATE ${BRAINSCAPE_PLUGIN_SOURCES})
 target_include_directories(Brainscape PRIVATE src)
+# Warnings are errors on Brainscape's own sources (on in CI); JUCE's module translation
+# units, compiled in the same target, keep their warnings as warnings.
+if(BRAINSCAPE_WERROR)
+  set_source_files_properties(${BRAINSCAPE_PLUGIN_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/WX,-Werror>")
+endif()
 
 # PUBLIC, so every format wrapper (each compiled in its own target that sees only this
 # target's interface, JUCEUtils.cmake:1480-1497) is built with the same settings; the

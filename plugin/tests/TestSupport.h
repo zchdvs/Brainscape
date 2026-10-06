@@ -13,7 +13,24 @@
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#include <stdlib.h>
+#endif
+
 namespace brainscape::testing {
+
+// MSVC's debug CRT answers a failed assert or abort() with a dialog, which hangs an
+// unattended run; report on stderr and exit instead.
+inline void ReportCrtErrorsOnStderr() {
+#if defined(_MSC_VER)
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+  for (int type : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+    _CrtSetReportMode(type, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(type, _CRTDBG_FILE_STDERR);
+  }
+#endif
+}
 
 using Preset = std::vector<std::pair<ParamId, float>>;
 

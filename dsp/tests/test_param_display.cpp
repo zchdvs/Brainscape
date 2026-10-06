@@ -118,6 +118,12 @@ TEST_CASE("display text carries units and the named endpoints") {
   CHECK(Format(ParamId::FilterMorph, 3.0f) == "Notch");
   CHECK(Format(ParamId::OnsetTrigger, 1.0f) == "On");
   CHECK(Format(ParamId::PositionSource, 0.0f) == "Live");
+  CHECK(Format(ParamId::WindowSkew, 0.5f) == "0%");  // centred: symmetric window
+  CHECK(Format(ParamId::WindowSkew, 0.25f) == "-50%");
+  CHECK(Format(ParamId::WindowSkew, 1.0f) == "+100%");
+  CHECK(Format(ParamId::WindowSkew, 0.48f) == "-4.0%");
+  CHECK(Format(ParamId::ReverbTime, 0.6f) == "60");
+  CHECK(Format(ParamId::ReverbTime, 0.05f) == "5.0");
   char small[4];
   CHECK(FormatPlain(ParamId::DelayMs, 250.0f, small, sizeof small) == 3);
   CHECK(std::string(small) == "250");

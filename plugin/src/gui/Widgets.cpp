@@ -21,8 +21,6 @@ juce::String DbText(float db) {
   return (db > 0.f ? "+" : "") + juce::String(db, 1) + " dB";
 }
 
-int Scaled(int px, float scale) { return juce::roundToInt(static_cast<float>(px) * scale); }
-
 void DrawPanel(juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title,
                juce::Colour accent, float scale, const juce::String& note = {}) {
   const auto b = area.toFloat().reduced(0.5f);
@@ -56,8 +54,10 @@ void StyleCaption(juce::Label& l, float height, juce::Colour colour, bool bold =
 // ── ParamKnob ─────────────────────────────────────────────────────────────────────────
 
 ParamKnob::ParamKnob(BrainscapeParam& param, juce::Colour accent) {
-  const ParamDisplay*    m = FindParamDisplay(param.Id());
-  const ParamDescriptor* d = FindParam(param.Id());
+  const ParamId          id = param.Id();
+  const ParamDisplay*    m  = FindParamDisplay(id);
+  const ParamDescriptor* d  = FindParam(id);
+  isSwitch_                 = m->steps == 2;
   title_.setText(m->shortTitle, juce::dontSendNotification);
   StyleCaption(title_, 13.0f, palette::kTextDim);
   addAndMakeVisible(title_);
@@ -66,17 +66,30 @@ ParamKnob::ParamKnob(BrainscapeParam& param, juce::Colour accent) {
   slider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
   slider_.setMouseDragSensitivity(240);
   slider_.setColour(juce::Slider::rotarySliderFillColourId, accent);
-  slider_.getProperties().set("bipolar", d->min < 0.f || param.Id() == ParamId::WindowSkew);
+  slider_.getProperties().set("bipolar", d->min < 0.f || m->kind == DisplayKind::Balance);
   slider_.setPopupMenuEnabled(false);
-  addAndMakeVisible(slider_);
+  slider_.setTitle(m->title);
+  addChildComponent(slider_);
 
   value_.setFont(UiFont(13.5f));
   value_.setColour(juce::Label::textColourId, palette::kText);
   value_.setJustificationType(juce::Justification::centred);
   value_.setEditable(false, true, false);
-  addAndMakeVisible(value_);
+  addChildComponent(value_);
 
   attachment_ = std::make_unique<BrainscapePlainAttachment>(param, slider_);
+  // Screen readers and the slider's own text read plain values in units, not the knob's
+  // position (the current position reads the exact mirror).
+  slider_.textFromValueFunction = [this, id](double v) {
+    return attachment_ != nullptr && v == slider_.getValue()
+               ? attachment_->DisplayText()
+               : FormatPlainText(id, PlainFromNormalized(id, static_cast<float>(v)));
+  };
+  slider_.valueFromTextFunction = [this, id](const juce::String& text) {
+    float plain = 0.f;
+    return ParsePlainText(id, text, plain) ? static_cast<double>(NormalizedFromPlain(id, plain))
+                                           : slider_.getValue();
+  };
   slider_.onDoubleClick = [this] {
     attachment_->ResetToDefault();
     Refresh();
@@ -85,19 +98,49 @@ ParamKnob::ParamKnob(BrainscapeParam& param, juce::Colour accent) {
     attachment_->CommitText(value_.getText());
     value_.setText(attachment_->DisplayText(), juce::dontSendNotification);
   };
-  const juce::String tip = juce::String(m->title) + "\nDouble-click the knob for the default (" +
-                           FormatPlainText(param.Id(), param.DefaultPlain()) +
-                           "); double-click the value to type one.";
-  setTooltip(tip);
-  slider_.setTooltip(tip);
-  value_.setTooltip(tip);
+
+  if (isSwitch_) {
+    for (int k = 0; k < 2; ++k) {
+      juce::TextButton& b     = segments_[k];
+      const float       plain = k == 0 ? d->min : d->max;
+      b.setButtonText(FormatPlainText(id, plain));
+      b.setClickingTogglesState(true);
+      b.setRadioGroupId(1);
+      b.setColour(juce::TextButton::buttonOnColourId, accent);
+      b.setColour(juce::TextButton::textColourOnId, palette::kBackground);
+      b.setTitle(juce::String(m->title) + ": " + b.getButtonText());
+      b.onClick = [this, plain] {
+        attachment_->CommitPlain(plain);
+        Refresh();
+      };
+      b.setTooltip(m->title);
+      addAndMakeVisible(b);
+    }
+    setTooltip(m->title);
+  } else {
+    slider_.setVisible(true);
+    value_.setVisible(true);
+    const juce::String tip = juce::String(m->title) + "\nDouble-click the knob for the default (" +
+                             FormatPlainText(id, param.DefaultPlain()) +
+                             "); double-click the value to type one.";
+    setTooltip(tip);
+    slider_.setTooltip(tip);
+    value_.setTooltip(tip);
+  }
   value_.setText(attachment_->DisplayText(), juce::dontSendNotification);
+  Refresh();
 }
 
 ParamKnob::~ParamKnob() { attachment_.reset(); }
 
 void ParamKnob::Refresh() {
   attachment_->Refresh();
+  if (isSwitch_) {
+    const bool on = attachment_->Param().Plain() >= 0.5f;  // the engine's threshold
+    segments_[0].setToggleState(!on, juce::dontSendNotification);
+    segments_[1].setToggleState(on, juce::dontSendNotification);
+    return;
+  }
   if (value_.isBeingEdited()) return;
   const juce::String text = attachment_->DisplayText();
   if (text != value_.getText()) value_.setText(text, juce::dontSendNotification);
@@ -115,6 +158,19 @@ void ParamKnob::resized() {
   const int titleH = Scaled(16, scale_);
   const int valueH = Scaled(20, scale_);
   auto      r      = getLocalBounds();
+  if (isSwitch_) {  // two stacked segments where the knob would be
+    const int segH  = Scaled(26, scale_);
+    const int gap   = Scaled(4, scale_);
+    const int total = titleH + gap + 2 * segH + gap;
+    r               = r.withSizeKeepingCentre(r.getWidth(), std::min(total, r.getHeight()));
+    title_.setBounds(r.removeFromTop(titleH));
+    r.removeFromTop(gap);
+    const int w = std::min(r.getWidth() - 8, Scaled(76, scale_));
+    segments_[1].setBounds(r.removeFromTop(segH).withSizeKeepingCentre(w, segH));
+    r.removeFromTop(gap);
+    segments_[0].setBounds(r.removeFromTop(segH).withSizeKeepingCentre(w, segH));
+    return;
+  }
   const int side   = std::min({r.getWidth() - 4, r.getHeight() - titleH - valueH, Scaled(104, scale_)});
   const int total  = titleH + side + valueH;
   r                = r.withSizeKeepingCentre(r.getWidth(), std::min(total, r.getHeight()));
@@ -169,16 +225,16 @@ void LevelMeter::Push(float peakLinear) {
 
 void LevelMeter::paint(juce::Graphics& g) {
   auto r = getLocalBounds();
-  g.setFont(UiFont(11.5f, true));
+  g.setFont(UiFont(11.5f * scale_, true));
   g.setColour(palette::kTextDim);
-  g.drawText(label_, r.removeFromLeft(30), juce::Justification::centredLeft, false);
+  g.drawText(label_, r.removeFromLeft(Scaled(30, scale_)), juce::Justification::centredLeft, false);
   const juce::String value = holdDb_ <= -60.f ? juce::String("-inf") : juce::String(holdDb_, 1);
-  g.setFont(UiFont(11.5f));
+  g.setFont(UiFont(11.5f * scale_));
   g.setColour(holdDb_ > -0.1f ? palette::kBad : palette::kTextDim);
-  g.drawText(value, r.removeFromRight(40), juce::Justification::centredRight, false);
-  r.removeFromRight(6);
+  g.drawText(value, r.removeFromRight(Scaled(40, scale_)), juce::Justification::centredRight, false);
+  r.removeFromRight(Scaled(6, scale_));
 
-  const auto  bar  = r.withSizeKeepingCentre(r.getWidth(), 8).toFloat();
+  const auto  bar  = r.withSizeKeepingCentre(r.getWidth(), Scaled(8, scale_)).toFloat();
   const auto  frac = [](float db) { return juce::jlimit(0.f, 1.f, (db + 60.f) / 66.f); };
   g.setColour(palette::kControl);
   g.fillRoundedRectangle(bar, 3.0f);
@@ -221,23 +277,23 @@ void OnsetLed::Push(uint32_t onsets) {
 
 void OnsetLed::paint(juce::Graphics& g) {
   auto        r      = getLocalBounds();
-  const float d      = 14.0f;
-  const auto  ledBox = r.removeFromLeft(26).toFloat();
+  const float d      = 14.0f * scale_;
+  const auto  ledBox = r.removeFromLeft(Scaled(26, scale_)).toFloat();
   const auto  led    = juce::Rectangle<float>(d, d).withCentre(ledBox.getCentre());
   if (brightness_ > 0.f) {
     g.setColour(palette::kLed.withAlpha(0.35f * brightness_));
-    g.fillEllipse(led.expanded(5.0f * brightness_));
+    g.fillEllipse(led.expanded(5.0f * scale_ * brightness_));
   }
   g.setColour(palette::kLed.withAlpha(0.18f).interpolatedWith(palette::kLed, brightness_));
   g.fillEllipse(led);
   g.setColour(palette::kLed.withAlpha(0.5f));
   g.drawEllipse(led, 1.0f);
-  r.removeFromLeft(4);
+  r.removeFromLeft(Scaled(4, scale_));
   g.setColour(palette::kTextDim);
-  g.setFont(UiFont(11.5f, true).withExtraKerningFactor(0.08f));
+  g.setFont(UiFont(11.5f * scale_, true).withExtraKerningFactor(0.08f));
   g.drawText("ONSET", r.removeFromTop(r.getHeight() / 2), juce::Justification::bottomLeft, false);
   g.setColour(palette::kTextFaint);
-  g.setFont(UiFont(11.5f));
+  g.setFont(UiFont(11.5f * scale_));
   g.drawText(juce::String(total_), r, juce::Justification::topLeft, false);
 }
 
@@ -261,15 +317,16 @@ void FreezeButton::paintButton(juce::Graphics& g, bool highlighted, bool down) {
   }
   const auto ink = on ? palette::kBackground : palette::kIce;
   // A six-armed snowflake beside the label.
-  const float s  = std::min(b.getHeight() * 0.36f, 16.0f);
-  const auto  c  = juce::Point<float>(b.getX() + 14.0f + s, b.getCentreY());
+  const float s  = std::min(b.getHeight() * 0.36f, 16.0f * scale_);
+  const auto  c  = juce::Point<float>(b.getX() + 14.0f * scale_ + s, b.getCentreY());
   g.setColour(ink);
   for (int k = 0; k < 3; ++k) {
     const float a = juce::MathConstants<float>::pi * static_cast<float>(k) / 3.0f;
-    g.drawLine({c.getPointOnCircumference(s, a), c.getPointOnCircumference(s, a + juce::MathConstants<float>::pi)}, 2.0f);
+    g.drawLine({c.getPointOnCircumference(s, a), c.getPointOnCircumference(s, a + juce::MathConstants<float>::pi)},
+               2.0f * scale_);
   }
-  g.setFont(UiFont(std::min(20.0f, b.getHeight() * 0.42f), true).withExtraKerningFactor(0.12f));
-  g.drawText(on ? "FROZEN" : "FREEZE", b.withTrimmedLeft(s * 2.0f + 18.0f),
+  g.setFont(UiFont(std::min(20.0f * scale_, b.getHeight() * 0.42f), true).withExtraKerningFactor(0.12f));
+  g.drawText(on ? "FROZEN" : "FREEZE", b.withTrimmedLeft(s * 2.0f + 18.0f * scale_),
              juce::Justification::centred, false);
 }
 
@@ -289,7 +346,7 @@ void TriggerButton::paintButton(juce::Graphics& g, bool highlighted, bool down) 
   g.setColour(palette::kWarn.withAlpha(highlighted ? 0.95f : 0.6f));
   g.drawRoundedRectangle(b.reduced(0.5f), 9.0f, 1.5f);
   g.setColour(lit > 0.5f ? palette::kBackground : palette::kWarn);
-  g.setFont(UiFont(std::min(15.0f, b.getHeight() * 0.36f), true).withExtraKerningFactor(0.1f));
+  g.setFont(UiFont(std::min(15.0f * scale_, b.getHeight() * 0.36f), true).withExtraKerningFactor(0.1f));
   g.drawText("TRIGGER", b, juce::Justification::centred, false);
 }
 
@@ -305,10 +362,11 @@ void StatusBar::Set(const BrainscapeProcessor::Status& status, const WrapperSett
   status_   = status;
   settings_ = settings;
   if (!changed) return;
-  setTooltip(status_.pedalExact
-                 ? "The engine runs at 48 kHz with the pedal's configuration. Live input and raw "
-                   "host buffers are not covered by the parity contract until the block-split "
-                   "fix lands (companion-app.md, section 2.3)."
+  setTooltip(status_.pedalRate
+                 ? "The engine runs at the pedal's 48 kHz on the host's buffers. Until the "
+                   "block-split fix lands, identity with the pedal is promised only on the 48-frame "
+                   "pedal grid, which this build does not offer yet; live input and automation are "
+                   "outside the parity contract (companion-app.md, section 2.3)."
                  : "The pedal runs only at 48 kHz. At this host rate the engine runs natively, so "
                    "delay times and pitch are close but not identical; the resampled 48 kHz mode "
                    "is still to come (companion-app.md, section 4.2).");
@@ -321,30 +379,34 @@ void StatusBar::paint(juce::Graphics& g) {
   g.fillRect(r);
   g.setColour(palette::kPanelBorder);
   g.fillRect(r.removeFromTop(1));
-  r = r.reduced(14, 0);
+  r = r.reduced(Scaled(14, scale_), 0);
 
-  juce::Colour dot;
+  // Green stays reserved for "Pedal-exact", which needs the pedal grid (companion §2.3).
+  juce::Colour dot, text;
   juce::String main;
   if (!status_.engineReady && status_.hostRate <= 0.0) {
     dot  = palette::kTextFaint;
+    text = palette::kTextDim;
     main = "Waiting for audio";
   } else if (!status_.engineReady) {
-    dot  = palette::kBad;
-    main = "Engine failed to initialise";
-  } else if (status_.pedalExact) {
-    dot  = palette::kGood;
-    main = "Pedal-exact @ 48 kHz";
+    dot = text = palette::kBad;
+    main       = "Engine failed to initialise";
+  } else if (status_.pedalRate) {
+    dot  = palette::kTextDim;
+    text = palette::kText;
+    main = "48 kHz pedal rate " + kDot + " host blocks";
   } else {
-    dot  = palette::kWarn;
-    main = "Not pedal-exact: host at " + RateText(status_.hostRate);
+    dot = text = palette::kWarn;
+    main       = "Not pedal rate: host at " + RateText(status_.hostRate);
   }
-  const auto dotBox = r.removeFromLeft(14).toFloat();
+  const auto dotBox = r.removeFromLeft(Scaled(14, scale_)).toFloat();
   g.setColour(dot);
-  g.fillEllipse(juce::Rectangle<float>(8.0f, 8.0f).withCentre(dotBox.getCentre()));
-  r.removeFromLeft(4);
-  const juce::Font mainFont = UiFont(13.5f, true);
+  const float dotD = 8.0f * scale_;
+  g.fillEllipse(juce::Rectangle<float>(dotD, dotD).withCentre(dotBox.getCentre()));
+  r.removeFromLeft(Scaled(4, scale_));
+  const juce::Font mainFont = UiFont(13.5f * scale_, true);
   g.setFont(mainFont);
-  g.setColour(dot == palette::kTextFaint ? palette::kTextDim : dot);
+  g.setColour(text);
   const int mainW = static_cast<int>(std::ceil(juce::GlyphArrangement::getStringWidth(mainFont, main)));
   g.drawText(main, r.removeFromLeft(mainW + 2), juce::Justification::centredLeft, false);
 
@@ -354,13 +416,13 @@ void StatusBar::paint(juce::Graphics& g) {
            << "   Host block " << status_.lastHostBlock << " (engine chunks " << kLeq << " 512)";
   }
   detail << "   " << kDot << "   Input " << (settings_.inputMode == InputMode::Mono ? "mono (R = L)" : "stereo");
-  g.setFont(UiFont(13.0f));
+  g.setFont(UiFont(13.0f * scale_));
   g.setColour(palette::kTextDim);
   const juce::String right =
       status_.droppedEvents > 0u
-          ? juce::String(status_.droppedEvents) + " control events dropped"
+          ? juce::String(status_.droppedEvents) + " control events lost"
           : (status_.lastLoadInexact ? juce::String("Last state load was inexact") : juce::String());
-  auto rightArea = r.removeFromRight(right.isEmpty() ? 0 : 240);
+  auto rightArea = r.removeFromRight(right.isEmpty() ? 0 : Scaled(240, scale_));
   g.drawText(detail, r, juce::Justification::centredLeft, true);
   if (right.isNotEmpty()) {
     g.setColour(palette::kWarn);
@@ -383,14 +445,25 @@ TestInputPanel::TestInputPanel(BrainscapeProcessor& processor) : processor_(proc
     StyleSegment(*b, 1, accent);
     addAndMakeVisible(*b);
   }
-  live_.onClick  = [this] { processor_.GetTestInput().SetSource(TestInput::Source::Live); };
-  pluck_.onClick = [this] { processor_.GetTestInput().SetSource(TestInput::Source::Pluck); };
-  file_.onClick  = [this] {
+  // Choosing a source acknowledges a failed load's message.
+  live_.onClick = [this] {
+    fileError_ = false;
+    processor_.GetTestInput().SetSource(TestInput::Source::Live);
+    Refresh();
+  };
+  pluck_.onClick = [this] {
+    fileError_ = false;
+    processor_.GetTestInput().SetSource(TestInput::Source::Pluck);
+    Refresh();
+  };
+  file_.onClick = [this] {
+    fileError_ = false;
     if (processor_.GetTestInput().LoadedName().isEmpty()) {
       ChooseFile();
     } else {
       processor_.GetTestInput().SetSource(TestInput::Source::FileLoop);
     }
+    Refresh();
   };
   live_.setTooltip("Process the live input (standalone: unmute it in Options > Audio/MIDI Settings).");
   file_.setTooltip("Loop an audio file through the engine instead of the live input.");
@@ -462,7 +535,10 @@ void TestInputPanel::ChooseFile() {
         TestInput&   input = safe->processor_.GetTestInput();
         safe->fileError_   = !input.LoadFile(fc.getResult(), error);
         if (safe->fileError_) {
-          safe->fileName_.setText(error, juce::dontSendNotification);
+          // A failed load keeps the previous loop, so say which one is still there.
+          const juce::String kept = input.LoadedName();
+          safe->fileName_.setText(kept.isEmpty() ? error : error + "; keeping " + kept,
+                                  juce::dontSendNotification);
         } else {
           input.SetSource(TestInput::Source::FileLoop);
         }

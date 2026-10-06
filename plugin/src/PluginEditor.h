@@ -51,6 +51,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   StatusBar      status_;
 
   juce::Rectangle<int> header_;
+  float                scale_ = 1.f;
   juce::TooltipWindow  tooltips_{this, 700};
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrainscapeEditor)

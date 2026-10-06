@@ -8,7 +8,7 @@ juce::Colour palette::GroupAccent(ParamGroup group) {
     case ParamGroup::Grains:     return juce::Colour(0xFF7F9CF5);
     case ParamGroup::Pitch:      return juce::Colour(0xFFB794F4);
     case ParamGroup::Window:     return juce::Colour(0xFF63B3ED);
-    case ParamGroup::PanMod:     return juce::Colour(0xFFF687B3);
+    case ParamGroup::Mod:        return juce::Colour(0xFFF687B3);
     case ParamGroup::PostDelay:  return juce::Colour(0xFF68D391);
     case ParamGroup::Reverb:     return juce::Colour(0xFF76E4F7);
     case ParamGroup::Filter:     return juce::Colour(0xFFF6AD55);

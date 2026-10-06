@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -52,6 +53,11 @@ BrainscapeProcessor::BrainscapeProcessor()
   freeze_ = f.get();
   addParameter(f.release());
   setLatencySamples(0);  // dry is never delayed (§4.5); the resampled mode will report its own
+  // The Standalone expects a guitar on input 1 (§2.2); a plugin on a stereo track must pass
+  // both channels, dry exact at Mix = 0 (§4.5). A saved session's mode wins over either.
+  if (wrapperType == wrapperType_Standalone) {
+    inputMode_.store(static_cast<int>(InputMode::Mono), std::memory_order_relaxed);
+  }
 }
 
 BrainscapeProcessor::~BrainscapeProcessor() = default;
@@ -82,7 +88,7 @@ void BrainscapeProcessor::prepareToPlay(double sampleRate, int maximumExpectedSa
 void BrainscapeProcessor::InitEngine(double sampleRate) {
   // TODO(companion §4.2): at other host rates the engine must stay at 48 kHz behind an
   // r8brain-free-src resampler (reported latency). Until then it runs natively at the
-  // host rate, and the status says the output is not pedal-exact.
+  // host rate, and the status says it is not at the pedal's rate.
   EngineConfig cfg;
   cfg.sampleRate      = sampleRate;
   cfg.maxBlockSize    = kMaxChunk;
@@ -95,12 +101,22 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
   engineReady_ = arenas->ok() && engine_.Init(cfg, arenas->get());
   arenas_      = std::move(arenas);
   engineRate_  = sampleRate;
+  framePos_     = 0;  // stamps count from Init; stamps for the old engine are void
+  pendingCount_ = 0;
   statusEngineRate_.store(engineReady_ ? sampleRate : 0.0, std::memory_order_relaxed);
   statusReady_.store(engineReady_, std::memory_order_relaxed);
   if (engineReady_) PushAllAfterInit();
 }
 
 void BrainscapeProcessor::PushAllAfterInit() {
+  // Every producer stores the mirror before it posts, so the mirrors read after this
+  // generation step hold every event posted before it; those events are then dropped,
+  // as is any restore posted so far, which the mirrors also hold.
+  const uint32_t gen = NextGeneration();
+  sink_.SetGeneration(gen);
+  generationFloor_ = gen;
+  initGeneration_  = gen;
+  seqApplied_      = stateSeq_.load(std::memory_order_acquire);
   // Init resets every parameter and clears freeze (Engine.cpp Init), so the wrapper's
   // values go back in, and Reset snaps the smoothers to them: the start state a preset
   // render begins from.
@@ -110,8 +126,9 @@ void BrainscapeProcessor::PushAllAfterInit() {
   }
   engine_.SetFreeze(freeze_->get());
   engine_.Reset();
-  stateApplied_ = statePosted_.load(std::memory_order_acquire);  // the mirrors hold it
 }
+
+uint32_t BrainscapeProcessor::NextGeneration() noexcept { return sink_.Generation() + 1u; }
 
 void BrainscapeProcessor::reset() {
   if (engineReady_) engine_.Reset();  // keeps the ring (§4.9)
@@ -119,6 +136,11 @@ void BrainscapeProcessor::reset() {
 
 void BrainscapeProcessor::TriggerFromUi() noexcept {
   sink_.Post({WrapperEvent::Type::Trigger, WrapperEvent::Source::Ui, 0u, 1.0f});
+}
+
+void BrainscapeProcessor::PostAt(uint64_t frame, WrapperEvent e) noexcept {
+  e.frame = frame;
+  sink_.PostScripted(e);
 }
 
 void BrainscapeProcessor::SetSettings(const WrapperSettings& s) noexcept {
@@ -140,10 +162,10 @@ BrainscapeProcessor::Status BrainscapeProcessor::GetStatus() const noexcept {
   s.hostRate        = hostRate_.load(std::memory_order_relaxed);
   s.engineRate      = statusEngineRate_.load(std::memory_order_relaxed);
   s.engineReady     = statusReady_.load(std::memory_order_relaxed);
-  s.pedalExact      = s.engineReady && s.engineRate == kPedalRate;
+  s.pedalRate       = s.engineReady && s.engineRate == kPedalRate;
   s.lastHostBlock   = lastHostBlock_.load(std::memory_order_relaxed);
   s.maxHostBlock    = maxHostBlock_.load(std::memory_order_relaxed);
-  s.droppedEvents   = sink_.Overflows();
+  s.droppedEvents   = sink_.Lost();
   s.lastLoadInexact = lastLoadInexact_.load(std::memory_order_relaxed);
   return s;
 }
@@ -179,21 +201,26 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
 }
 
 void BrainscapeProcessor::PostStateUnit(const float* plain) noexcept {
+  const uint32_t gen = NextGeneration();
   const uint32_t seq = stateSeq_.load(std::memory_order_relaxed);
   stateSeq_.store(seq + 1u, std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_release);
   for (size_t i = 0; i < kNumParams; ++i) stateSlot_[i].store(plain[i], std::memory_order_relaxed);
+  stateGen_.store(gen, std::memory_order_relaxed);
   stateSeq_.store(seq + 2u, std::memory_order_release);
-  statePosted_.fetch_add(1u, std::memory_order_release);
+  // Only once the slot is complete: whoever pops an event stamped with this generation
+  // then sees the whole unit.
+  sink_.SetGeneration(gen);
 }
 
 void BrainscapeProcessor::ApplyStateUnit() noexcept {
-  const uint32_t posted = statePosted_.load(std::memory_order_acquire);
-  if (posted == stateApplied_) return;
   const uint32_t seq = stateSeq_.load(std::memory_order_acquire);
-  if ((seq & 1u) != 0u) return;  // being written: the next block takes it
+  // Odd: a newer restore is being written, and every event drained this block is older
+  // than it; the next block takes it.
+  if (seq == seqApplied_ || (seq & 1u) != 0u) return;
   float plain[kNumParams];
   for (size_t i = 0; i < kNumParams; ++i) plain[i] = stateSlot_[i].load(std::memory_order_relaxed);
+  const uint32_t gen = stateGen_.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   if (stateSeq_.load(std::memory_order_relaxed) != seq) return;
   for (size_t i = 0; i < kNumParams; ++i) {
@@ -202,21 +229,65 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
   }
   touched_ = (1u << kNumParams) - 1u;
   engine_.SetFreeze(false);
-  stateApplied_ = posted;
+  seqApplied_      = seq;
+  generationFloor_ = gen;
 }
 
 // ── Events ─────────────────────────────────────────────────────────────────────────
 
-void BrainscapeProcessor::DrainEvents() noexcept {
+void BrainscapeProcessor::DrainEvents(uint64_t blockStart) noexcept {
   hostCount_ = uiCount_ = 0;
   WrapperEvent e;
   for (size_t k = 0; k < WrapperQueue::capacity() && sink_.Queue().Pop(e); ++k) {
-    if (e.source == WrapperEvent::Source::Host) {
+    // Stamped against an engine the last Init replaced: void.
+    if (e.frame != 0u && static_cast<int32_t>(e.generation - initGeneration_) < 0) continue;
+    if (e.frame > blockStart) {
+      InsertPending(e);
+    } else if (e.source == WrapperEvent::Source::Host) {
       hostEvents_[hostCount_++] = e;
     } else {
       uiEvents_[uiCount_++] = e;
     }
   }
+}
+
+void BrainscapeProcessor::InsertPending(const WrapperEvent& e) noexcept {
+  if (pendingCount_ == pending_.size()) {
+    sink_.CountLost();
+    return;
+  }
+  size_t at = pendingCount_;  // after every event stamped at or before e's frame
+  for (; at > 0u && pending_[at - 1u].frame > e.frame; --at) pending_[at] = pending_[at - 1u];
+  pending_[at] = e;
+  ++pendingCount_;
+}
+
+size_t BrainscapeProcessor::DuePending(uint64_t frame) const noexcept {
+  size_t due = 0;
+  while (due < pendingCount_ && pending_[due].frame <= frame) ++due;
+  return due;
+}
+
+void BrainscapeProcessor::ApplyPending(size_t due, WrapperEvent::Source rank) noexcept {
+  for (size_t k = 0; k < due; ++k) {
+    if (pending_[k].source == rank) ApplyEvent(pending_[k]);
+  }
+}
+
+void BrainscapeProcessor::ErasePending(size_t due) noexcept {
+  if (due == 0u) return;
+  std::copy(pending_.begin() + static_cast<std::ptrdiff_t>(due),
+            pending_.begin() + static_cast<std::ptrdiff_t>(pendingCount_), pending_.begin());
+  pendingCount_ -= due;
+}
+
+void BrainscapeProcessor::ApplyLive(const WrapperEvent& e) noexcept {
+  // A parameter or freeze event posted before the last applied restore or Init lost to
+  // it (§4.7: the restore arrived later). Events stamped for a later frame wait in
+  // pending_ and keep their frame order instead.
+  const bool stale = e.type != WrapperEvent::Type::Trigger &&
+                     static_cast<int32_t>(e.generation - generationFloor_) < 0;
+  if (!stale) ApplyEvent(e);
 }
 
 void BrainscapeProcessor::ApplyEvent(const WrapperEvent& e) noexcept {
@@ -261,37 +332,44 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
   // every entry point (companion §4.6, profile §4.1).
   const int numSamples = buffer.getNumSamples();
   if (numSamples > 0) lastHostBlock_.store(numSamples, std::memory_order_relaxed);
+  if (!engineReady_) {
+    buffer.clear();
+    return;
+  }
+
+  // Drained first, so the state unit read next is at least as new as every drained event.
+  const uint64_t start = framePos_;
+  DrainEvents(start);
+  ApplyStateUnit();
 
   // Frame 0 of the block, in the fixed same-frame order (§4.7): state load, host
-  // automation, MIDI, UI.
-  if (engineReady_) {
-    ApplyStateUnit();
-    DrainEvents();
-    for (size_t k = 0; k < hostCount_; ++k) ApplyEvent(hostEvents_[k]);
-  }
+  // automation, MIDI, UI. Within a rank, events stamped earlier came first.
+  const size_t due = DuePending(start);
+  ApplyPending(due, WrapperEvent::Source::Host);
+  for (size_t k = 0; k < hostCount_; ++k) ApplyLive(hostEvents_[k]);
   auto       midiIt  = midi.cbegin();
   const auto midiEnd = midi.cend();
   for (; midiIt != midiEnd && (*midiIt).samplePosition <= 0; ++midiIt) {
-    if (engineReady_) ApplyMidi((*midiIt).data, (*midiIt).numBytes);
+    ApplyMidi((*midiIt).data, (*midiIt).numBytes);
   }
-  if (engineReady_) {
-    for (size_t k = 0; k < uiCount_; ++k) ApplyEvent(uiEvents_[k]);
-    if (sink_.TakeResync()) {  // the queue overflowed: re-send every mirror
-      for (size_t i = 0; i < kNumParams; ++i) {
-        ApplyEvent({WrapperEvent::Type::Param, WrapperEvent::Source::Ui,
-                    static_cast<uint32_t>(kParamTable[i].id), params_[i]->Plain()});
-      }
-      engine_.SetFreeze(freeze_->get());
+  ApplyPending(due, WrapperEvent::Source::Ui);
+  for (size_t k = 0; k < uiCount_; ++k) ApplyLive(uiEvents_[k]);
+  ErasePending(due);
+  if (sink_.TakeResync()) {  // the queue overflowed: re-send every mirror
+    for (size_t i = 0; i < kNumParams; ++i) {
+      ApplyEvent({WrapperEvent::Type::Param, WrapperEvent::Source::Ui,
+                  static_cast<uint32_t>(kParamTable[i].id), params_[i]->Plain()});
     }
-    WriteBackMirrors();
+    engine_.SetFreeze(freeze_->get());
   }
+  WriteBackMirrors();
 
   const int numOut = std::min(getTotalNumOutputChannels(), buffer.getNumChannels());
   const int numIn  = std::min(getTotalNumInputChannels(), buffer.getNumChannels());
   // Zero-frame calls (VST3 sends them whenever buses exist): parameters are applied
   // above; Process is skipped (§4.3).
   if (numSamples <= 0) return;
-  if (!engineReady_ || numOut == 0) {
+  if (numOut == 0) {
     buffer.clear();
     return;
   }
@@ -315,18 +393,28 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     outGain_   = GainFromDb(outDb);
   }
 
-  // Sub-blocks of at most 512 frames, split at every MIDI event's frame (§4.3, §4.10).
+  // Sub-blocks of at most 512 frames, split at every MIDI event's and stamped event's
+  // frame (§4.3, §4.10), with the same-frame order at each split.
   int frame = 0;
   while (frame < numSamples) {
+    const size_t dueNow = DuePending(start + static_cast<uint64_t>(frame));
+    ApplyPending(dueNow, WrapperEvent::Source::Host);
     for (; midiIt != midiEnd && (*midiIt).samplePosition <= frame; ++midiIt) {
       ApplyMidi((*midiIt).data, (*midiIt).numBytes);
     }
+    ApplyPending(dueNow, WrapperEvent::Source::Ui);
+    ErasePending(dueNow);
     int end = std::min(numSamples, frame + static_cast<int>(kMaxChunk));
     if (midiIt != midiEnd) end = std::min(end, (*midiIt).samplePosition);
+    if (pendingCount_ > 0u && pending_[0].frame < start + static_cast<uint64_t>(end)) {
+      end = static_cast<int>(pending_[0].frame - start);
+    }
     RenderChunk(hostInL, hostInR, outL, outR, frame, end - frame);
     frame = end;
   }
   for (; midiIt != midiEnd; ++midiIt) ApplyMidi((*midiIt).data, (*midiIt).numBytes);
+  framePos_ = start + static_cast<uint64_t>(numSamples);
+  WriteBackMirrors();  // stamped events applied inside the block
 
   for (int c = 2; c < numOut; ++c) buffer.clear(c, 0, numSamples);
   onsets_.fetch_add(engine_.ConsumeOnsetCount(), std::memory_order_relaxed);

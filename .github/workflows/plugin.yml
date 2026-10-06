@@ -14,7 +14,17 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        config: [Release]
+        include:
+          # Debug legs: the zero-frame rule (companion §4.3) and the engine's block-size
+          # contract are enforced by asserts that Release compiles out, and JUCE's
+          # jasserts and leak detector run only here.
+          - os: ubuntu-latest
+            config: Debug
+          - os: windows-latest
+            config: Debug
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -37,26 +47,28 @@ jobs:
           path: build/_deps/juce-subbuild/juce-populate-prefix/src/9.0.3.tar.gz
           key: juce-9.0.3-a81e5508b8a0efa4
 
+      # BRAINSCAPE_WERROR holds dsp/ (built here with the plugin's PIC and visibility
+      # flags) and Brainscape's own plugin sources to zero warnings.
       - name: Configure
         run: >
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          -DBRAINSCAPE_BUILD_PLUGIN=ON -DBRAINSCAPE_BUILD_TESTS=ON
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          -DBRAINSCAPE_BUILD_PLUGIN=ON -DBRAINSCAPE_BUILD_TESTS=ON -DBRAINSCAPE_WERROR=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel 4
+        run: cmake --build build --config ${{ matrix.config }} --parallel 4
 
       - name: Test
         if: runner.os != 'Linux'
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 900
 
       - name: Test (virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a ctest --test-dir build -C Release --output-on-failure
+        run: xvfb-run -a ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 900
 
       - name: Upload editor screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: editor-screenshots-${{ matrix.os }}
+          name: editor-screenshots-${{ matrix.os }}-${{ matrix.config }}
           path: build/plugin/screenshots
           if-no-files-found: ignore

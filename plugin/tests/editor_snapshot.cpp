@@ -10,6 +10,7 @@
 
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "TestSupport.h"
 
 using namespace brainscape;
 using namespace brainscape::plugin;
@@ -47,6 +48,7 @@ bool Snapshot(BrainscapeEditor& editor, const juce::File& dir, const juce::Strin
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  brainscape::testing::ReportCrtErrorsOnStderr();
   juce::ScopedJuceInitialiser_GUI juce;
   const juce::File dir = argc > 1 ? juce::File::getCurrentWorkingDirectory().getChildFile(juce::String(argv[1]))
                                   : juce::File::getCurrentWorkingDirectory();

@@ -60,6 +60,11 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // A momentary footswitch-style trigger (companion §5.7), applied at the next block.
   void TriggerFromUi() noexcept;
 
+  // Scripted producers: applies `e` at absolute engine frame `frame` (frames since the
+  // last Init), splitting the host block there (companion §4.10). A parameter's mirror
+  // follows when the event applies. Any thread.
+  void PostAt(uint64_t frame, WrapperEvent e) noexcept;
+
   void            SetSettings(const WrapperSettings& s) noexcept;
   WrapperSettings GetSettings() const noexcept;
 
@@ -67,10 +72,13 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     double   hostRate      = 0.0;  // 0 until prepareToPlay
     double   engineRate    = 0.0;
     bool     engineReady   = false;
-    bool     pedalExact    = false;  // engine at 48 kHz
+    // Engine at the pedal's 48 kHz. Not "pedal-exact": until the block-split fix lands,
+    // identity is promised only on the 48-frame pedal grid (companion §2.3), which this
+    // wrapper does not offer yet.
+    bool     pedalRate     = false;
     int      lastHostBlock = 0;
     int      maxHostBlock  = 0;
-    uint32_t droppedEvents = 0;
+    uint32_t droppedEvents = 0;  // lost events only (EventSink)
     bool     lastLoadInexact = false;
   };
   Status GetStatus() const noexcept;
@@ -84,9 +92,15 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
  private:
   void InitEngine(double sampleRate);
   void PushAllAfterInit();
+  uint32_t NextGeneration() noexcept;
   void PostStateUnit(const float* plain) noexcept;
   void ApplyStateUnit() noexcept;
-  void DrainEvents() noexcept;
+  void DrainEvents(uint64_t blockStart) noexcept;
+  void InsertPending(const WrapperEvent& e) noexcept;
+  size_t DuePending(uint64_t frame) const noexcept;
+  void ApplyPending(size_t due, WrapperEvent::Source rank) noexcept;
+  void ErasePending(size_t due) noexcept;
+  void ApplyLive(const WrapperEvent& e) noexcept;
   void ApplyEvent(const WrapperEvent& e) noexcept;
   void ApplyMidi(const uint8_t* data, int numBytes) noexcept;
   void WriteBackMirrors() noexcept;
@@ -103,18 +117,28 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   double                            engineRate_  = 0.0;
 
   // Guards prepare/state calls against each other; never taken on the audio thread.
+  // Restore generations advance only under it.
   std::mutex controlMutex_;
 
-  // State restores travel as a unit (companion §4.7): a sequence lock over one slot.
+  // State restores travel as a unit (companion §4.7): a sequence lock over one slot that
+  // also holds the restore's generation.
   std::atomic<uint32_t>                       stateSeq_{0};
-  std::atomic<uint32_t>                       statePosted_{0};
+  std::atomic<uint32_t>                       stateGen_{0};
   std::array<std::atomic<float>, kNumParams>  stateSlot_{};
-  uint32_t                                    stateApplied_ = 0;  // audio thread
+  uint32_t                                    seqApplied_ = 0;  // audio thread
+  // Audio thread: parameter and freeze events posted before the last applied restore or
+  // Init are dropped (the restore or the Init snapshot replaced them), and so are stamped
+  // events posted before the last Init (their frames counted from the replaced engine).
+  uint32_t                                    generationFloor_ = 0;
+  uint32_t                                    initGeneration_  = 0;
 
-  // Audio thread: drained events, split by same-frame rank, and the values sent.
+  // Audio thread: drained events, split by same-frame rank, events stamped for later
+  // frames (sorted by frame, then arrival), and the values sent.
   std::array<WrapperEvent, WrapperQueue::capacity()> hostEvents_{};
   std::array<WrapperEvent, WrapperQueue::capacity()> uiEvents_{};
-  size_t                                             hostCount_ = 0, uiCount_ = 0;
+  std::array<WrapperEvent, WrapperQueue::capacity()> pending_{};
+  size_t                                             hostCount_ = 0, uiCount_ = 0, pendingCount_ = 0;
+  uint64_t                                           framePos_ = 0;  // engine frames since Init
   std::array<float, kNumParams>                      sent_{};
   uint32_t                                           touched_ = 0;  // bit per ParamId - 1
 
@@ -123,7 +147,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   float                        inGain_ = 1.f, outGain_ = 1.f;
   float                        inGainDb_ = 0.f, outGainDb_ = 0.f;
 
-  std::atomic<int>   inputMode_{static_cast<int>(InputMode::Mono)};
+  std::atomic<int>   inputMode_{static_cast<int>(InputMode::Stereo)};
   std::atomic<float> inputGainDb_{0.f}, outputGainDb_{0.f};
 
   std::atomic<double>   hostRate_{0.0};

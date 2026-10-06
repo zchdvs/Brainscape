@@ -63,6 +63,7 @@ int main(int argc, char* argv[]) {
     std::printf("usage: brainscape_vst3_host_check <Brainscape.vst3>\n");
     return 2;
   }
+  ReportCrtErrorsOnStderr();
   juce::MessageManager::getInstance();  // this thread is the host's message thread
   {
     juce::AudioPluginFormatManager formats;

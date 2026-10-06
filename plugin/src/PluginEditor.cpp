@@ -96,51 +96,59 @@ void BrainscapeEditor::paint(juce::Graphics& g) {
   g.fillRect(header_.withTop(header_.getBottom() - 1));
 
   // Wordmark: a small grain cloud, the name and what this window is for.
-  auto       logo = header_.reduced(18, 0);
-  const auto icon = logo.removeFromLeft(36).withSizeKeepingCentre(32, 32).toFloat();
+  auto       logo     = header_.reduced(Scaled(18, scale_), 0);
+  const int  iconSide = Scaled(32, scale_);
+  const auto icon     = logo.removeFromLeft(Scaled(36, scale_)).withSizeKeepingCentre(iconSide, iconSide).toFloat();
   static constexpr float kDots[][3] = {{0.18f, 0.30f, 5.0f}, {0.42f, 0.16f, 4.0f}, {0.70f, 0.28f, 6.0f},
                                        {0.30f, 0.62f, 6.5f}, {0.58f, 0.52f, 4.5f}, {0.84f, 0.62f, 3.5f},
                                        {0.50f, 0.86f, 4.0f}, {0.14f, 0.84f, 3.0f}};
   for (size_t k = 0; k < sizeof kDots / sizeof kDots[0]; ++k) {
     const auto group = static_cast<ParamGroup>(k % kNumParamGroups);
     g.setColour(palette::GroupAccent(group).withAlpha(0.85f));
-    const float d = kDots[k][2];
+    const float d = kDots[k][2] * scale_;
     g.fillEllipse(icon.getX() + icon.getWidth() * kDots[k][0] - d * 0.5f,
                   icon.getY() + icon.getHeight() * kDots[k][1] - d * 0.5f, d, d);
   }
-  logo.removeFromLeft(12);
-  auto text = logo.withSizeKeepingCentre(logo.getWidth(), 44);
+  logo.removeFromLeft(Scaled(12, scale_));
+  auto text = logo.withSizeKeepingCentre(logo.getWidth(), Scaled(44, scale_));
   g.setColour(palette::kText);
-  g.setFont(UiFont(23.0f, true).withExtraKerningFactor(0.22f));
-  g.drawText("BRAINSCAPE", text.removeFromTop(26), juce::Justification::bottomLeft, false);
+  g.setFont(UiFont(23.0f * scale_, true).withExtraKerningFactor(0.22f));
+  g.drawText("BRAINSCAPE", text.removeFromTop(Scaled(26, scale_)), juce::Justification::bottomLeft, false);
   g.setColour(palette::kTextDim);
-  g.setFont(UiFont(13.0f));
+  g.setFont(UiFont(13.0f * scale_));
   g.drawText(juce::String::fromUTF8("granular delay \xc2\xb7 engine test bench"), text,
              juce::Justification::topLeft, false);
 }
 
 void BrainscapeEditor::resized() {
+  // Everything reflows with the window; above the default size, it all grows too.
+  scale_ = juce::jlimit(1.0f, 1.6f,
+                        std::min(static_cast<float>(getWidth()) / kDefaultWidth,
+                                 static_cast<float>(getHeight()) / kDefaultHeight));
+  const auto px = [this](int v) { return Scaled(v, scale_); };
+  for (auto& s : sections_) s->SetScale(scale_);
+  testPanel_.SetScale(scale_);
+  led_.SetScale(scale_);
+  inMeter_.SetScale(scale_);
+  outMeter_.SetScale(scale_);
+  trigger_.SetScale(scale_);
+  freeze_.SetScale(scale_);
+  status_.SetScale(scale_);
+
   auto r  = getLocalBounds();
-  header_ = r.removeFromTop(kHeaderHeight);
-  status_.setBounds(r.removeFromBottom(kStatusHeight));
+  header_ = r.removeFromTop(px(kHeaderHeight));
+  status_.setBounds(r.removeFromBottom(px(kStatusHeight)));
 
-  auto h = header_.reduced(16, 12);
-  freeze_.setBounds(h.removeFromRight(148));
-  h.removeFromRight(10);
-  trigger_.setBounds(h.removeFromRight(110));
-  h.removeFromRight(22);
-  auto meters = h.removeFromRight(juce::jlimit(160, 260, h.getWidth() / 3));
-  inMeter_.setBounds(meters.removeFromTop(meters.getHeight() / 2).reduced(0, 3));
-  outMeter_.setBounds(meters.reduced(0, 3));
-  h.removeFromRight(18);
-  led_.setBounds(h.removeFromRight(84).withSizeKeepingCentre(84, 34));
-
-  // Panels reflow with the window; above the default size, knobs and text grow too.
-  const float scale = juce::jlimit(1.0f, 1.6f,
-                                   std::min(static_cast<float>(getWidth()) / kDefaultWidth,
-                                            static_cast<float>(getHeight()) / kDefaultHeight));
-  for (auto& s : sections_) s->SetScale(scale);
-  testPanel_.SetScale(scale);
+  auto h = header_.reduced(px(16), px(12));
+  freeze_.setBounds(h.removeFromRight(px(148)));
+  h.removeFromRight(px(10));
+  trigger_.setBounds(h.removeFromRight(px(110)));
+  h.removeFromRight(px(22));
+  auto meters = h.removeFromRight(juce::jlimit(px(160), px(260), h.getWidth() / 3));
+  inMeter_.setBounds(meters.removeFromTop(meters.getHeight() / 2).reduced(0, px(3)));
+  outMeter_.setBounds(meters.reduced(0, px(3)));
+  h.removeFromRight(px(18));
+  led_.setBounds(h.removeFromRight(px(84)).withSizeKeepingCentre(px(84), px(34)));
 
   r              = r.reduced(12, kGap);
   const int rowH = (r.getHeight() - 2 * kGap) / 3;
@@ -150,12 +158,13 @@ void BrainscapeEditor::resized() {
   r.removeFromTop(kGap);
   auto row3 = r;
 
+  // Row 2 is the post chain in signal order (mod -> delay -> reverb -> filter).
   auto section = [this](ParamGroup g) { return sections_[static_cast<size_t>(g)].get(); };
-  LayoutRow(row1, {{section(ParamGroup::GrainDelay), 4}, {section(ParamGroup::Grains), 4},
+  LayoutRow(row1, {{section(ParamGroup::GrainDelay), 4}, {section(ParamGroup::Grains), 5},
                    {section(ParamGroup::Pitch), 3}});
-  LayoutRow(row2, {{section(ParamGroup::Window), 3}, {section(ParamGroup::PanMod), 3},
-                   {section(ParamGroup::PostDelay), 3}, {section(ParamGroup::Reverb), 2}});
-  LayoutRow(row3, {{section(ParamGroup::Filter), 3}, {section(ParamGroup::Triggers), 3},
+  LayoutRow(row2, {{section(ParamGroup::Mod), 2}, {section(ParamGroup::PostDelay), 3},
+                   {section(ParamGroup::Reverb), 2}, {section(ParamGroup::Filter), 3}});
+  LayoutRow(row3, {{section(ParamGroup::Window), 3}, {section(ParamGroup::Triggers), 3},
                    {&testPanel_, 5}});
 }
 

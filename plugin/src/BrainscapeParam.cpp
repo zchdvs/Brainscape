@@ -85,7 +85,10 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
       if (unit == "k" || unit == "khz") shift = 3;
       return unit.empty() || unit == "hz" || shift != 0;
     case DisplayKind::Percent:  // the display is in percent, so bare numbers are too
+    case DisplayKind::Amount:   // 0-100, so a bare number is a hundredth of the plain range
       shift = -2;
+      return unit.empty() || unit == "%";
+    case DisplayKind::Balance:  // not a shift: BalanceDecimal maps it
       return unit.empty() || unit == "%";
     case DisplayKind::Decibels:
       return unit.empty() || unit == "db";
@@ -99,6 +102,81 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
       return unit.empty();
   }
   return false;
+}
+
+// Unsigned decimal digit strings, most significant first.
+std::string AddDigits(const std::string& a, const std::string& b) {
+  std::string r;
+  int         carry = 0;
+  for (size_t i = 0; i < a.size() || i < b.size() || carry != 0; ++i) {
+    int d = carry;
+    if (i < a.size()) d += a[a.size() - 1 - i] - '0';
+    if (i < b.size()) d += b[b.size() - 1 - i] - '0';
+    r.push_back(static_cast<char>('0' + d % 10));
+    carry = d / 10;
+  }
+  return std::string(r.rbegin(), r.rend());
+}
+
+bool DigitsLess(const std::string& a, const std::string& b) {  // no leading zeros
+  return a.size() != b.size() ? a.size() < b.size() : a < b;
+}
+
+std::string SubDigits(const std::string& a, const std::string& b) {  // a >= b
+  std::string r;
+  int         borrow = 0;
+  for (size_t i = 0; i < a.size(); ++i) {
+    int d = a[a.size() - 1 - i] - '0' - borrow;
+    if (i < b.size()) d -= b[b.size() - 1 - i] - '0';
+    borrow = d < 0 ? 1 : 0;
+    r.push_back(static_cast<char>('0' + d + 10 * borrow));
+  }
+  while (r.size() > 1u && r.back() == '0') r.pop_back();
+  return std::string(r.rbegin(), r.rend());
+}
+
+std::string MulDigits(const std::string& a, int m) {
+  std::string r;
+  int         carry = 0;
+  for (size_t i = 0; i < a.size() || carry != 0; ++i) {
+    int d = carry;
+    if (i < a.size()) d += (a[a.size() - 1 - i] - '0') * m;
+    r.push_back(static_cast<char>('0' + d % 10));
+    carry = d / 10;
+  }
+  return std::string(r.rbegin(), r.rend());
+}
+
+// A Balance display shows plain p as b = (p - 0.5) * 200 %, so typed b is plain
+// (100 + b) / 200 = (100 + b) * 5e-3. Computed here exactly in decimal, so the parser's
+// single rounding still lands on the float nearest the typed value (companion §6.4).
+std::string BalanceDecimal(const std::string& mantissa, long exponent) {
+  const bool  negative = !mantissa.empty() && mantissa[0] == '-';
+  std::string digits;
+  long        fraction = 0;
+  bool        point    = false;
+  for (size_t i = negative ? 1u : 0u; i < mantissa.size(); ++i) {
+    if (mantissa[i] == '.') {
+      point = true;
+    } else {
+      digits.push_back(mantissa[i]);
+      fraction += point ? 1 : 0;
+    }
+  }
+  const size_t lead = digits.find_first_not_of('0');
+  if (lead == std::string::npos) return "0.5";
+  digits.erase(0, lead);
+  const long pointExp  = exponent - fraction;  // |b| = digits * 10^pointExp
+  const long magnitude = static_cast<long>(digits.size()) + pointExp;
+  if (magnitude > 3) return negative ? "0" : "1";  // |b| >= 1000 %: clamped either way
+  // |b| < 1e-12 %, so |plain - 0.5| < 5e-15, far inside half the float spacing at 0.5.
+  if (magnitude < -12) return "0.5";
+  const long        scale = pointExp < 0 ? -pointExp : 0;  // integers in units of 10^-scale
+  const std::string b     = digits + std::string(static_cast<size_t>(pointExp > 0 ? pointExp : 0), '0');
+  const std::string h     = "100" + std::string(static_cast<size_t>(scale), '0');
+  if (negative && DigitsLess(h, b)) return "0";  // below -100 %: clamped to the minimum
+  const std::string sum = negative ? SubDigits(h, b) : AddDigits(h, b);
+  return MulDigits(sum, 5) + "e-" + std::to_string(scale + 3);
 }
 
 bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::string& t,
@@ -148,8 +226,11 @@ bool ParsePlainText(ParamId id, const juce::String& text, float& plainOut) {
   if (!SplitNumber(t, mantissa, exponent, suffix) || !UnitShift(m->kind, suffix, shift)) {
     return false;
   }
+  const std::string decimal = m->kind == DisplayKind::Balance
+                                  ? BalanceDecimal(mantissa, exponent)
+                                  : mantissa + "e" + std::to_string(exponent + shift);
   float v = 0.f;
-  if (!ParseFloat(mantissa + "e" + std::to_string(exponent + shift), v)) return false;
+  if (!ParseFloat(decimal, v)) return false;
   plainOut = CanonicalizePlain(id, v);
   return true;
 }

@@ -12,7 +12,8 @@
 namespace brainscape::plugin {
 
 // One parameter: caption, rotary knob, and the plain value in units. Double-click the
-// knob for the default, double-click the value to type one.
+// knob for the default, double-click the value to type one. A two-position parameter is
+// a switch instead: one segment per position, click to select.
 class ParamKnob final : public juce::Component, public juce::SettableTooltipClient {
  public:
   ParamKnob(BrainscapeParam& param, juce::Colour accent);
@@ -23,6 +24,8 @@ class ParamKnob final : public juce::Component, public juce::SettableTooltipClie
   BrainscapePlainAttachment& Attachment() noexcept { return *attachment_; }
   juce::Slider&              Knob() noexcept { return slider_; }
   juce::Label&               ValueLabel() noexcept { return value_; }
+  bool                       IsSwitch() const noexcept { return isSwitch_; }
+  juce::TextButton&          Segment(int position) noexcept { return segments_[position != 0 ? 1 : 0]; }
   void                       resized() override;
 
  private:
@@ -37,8 +40,10 @@ class ParamKnob final : public juce::Component, public juce::SettableTooltipClie
   juce::Label                                title_;
   KnobSlider                                 slider_;
   juce::Label                                value_;
+  juce::TextButton                           segments_[2];  // switch positions 0 and 1
   std::unique_ptr<BrainscapePlainAttachment> attachment_;
-  float                                      scale_ = 1.f;
+  bool                                       isSwitch_ = false;
+  float                                      scale_    = 1.f;
 };
 
 // A titled group of knobs (companion §2.5's raw-parameter view, one panel per group).
@@ -59,8 +64,23 @@ class SectionPanel final : public juce::Component {
   float                                   scale_ = 1.f;
 };
 
+// Header and status widgets draw at a scale the editor sets, like the panels.
+template <typename Base>
+class Scalable : public Base {
+ public:
+  using Base::Base;
+  void SetScale(float scale) {
+    if (scale == scale_) return;
+    scale_ = scale;
+    this->repaint();
+  }
+
+ protected:
+  float scale_ = 1.f;
+};
+
 // Peak meter with hold, -60..+6 dBFS.
-class LevelMeter final : public juce::Component, public juce::SettableTooltipClient {
+class LevelMeter final : public Scalable<juce::Component>, public juce::SettableTooltipClient {
  public:
   explicit LevelMeter(const juce::String& label) : label_(label) {}
   void Push(float peakLinear);  // one GUI tick
@@ -74,7 +94,7 @@ class LevelMeter final : public juce::Component, public juce::SettableTooltipCli
 };
 
 // Lights for each detected onset, stretched to a visible flash (grain-engine.md §9).
-class OnsetLed final : public juce::Component, public juce::SettableTooltipClient {
+class OnsetLed final : public Scalable<juce::Component>, public juce::SettableTooltipClient {
  public:
   OnsetLed();
   void Push(uint32_t onsets);  // one GUI tick
@@ -85,15 +105,15 @@ class OnsetLed final : public juce::Component, public juce::SettableTooltipClien
   uint32_t total_      = 0;
 };
 
-class FreezeButton final : public juce::Button {
+class FreezeButton final : public Scalable<juce::Button> {
  public:
-  FreezeButton() : juce::Button("Freeze") {}
+  FreezeButton() : Scalable<juce::Button>("Freeze") {}
   void paintButton(juce::Graphics&, bool highlighted, bool down) override;
 };
 
-class TriggerButton final : public juce::Button {
+class TriggerButton final : public Scalable<juce::Button> {
  public:
-  TriggerButton() : juce::Button("Trigger") {}
+  TriggerButton() : Scalable<juce::Button>("Trigger") {}
   void Flash() { flash_ = 1.f; }
   void Tick();
   void paintButton(juce::Graphics&, bool highlighted, bool down) override;
@@ -102,8 +122,8 @@ class TriggerButton final : public juce::Button {
   float flash_ = 0.f;
 };
 
-// The status line: engine rate, pedal-exact or not, host block size, dropped events.
-class StatusBar final : public juce::Component, public juce::SettableTooltipClient {
+// The status line: engine rate (the pedal's or not), host block size, lost events.
+class StatusBar final : public Scalable<juce::Component>, public juce::SettableTooltipClient {
  public:
   void Set(const BrainscapeProcessor::Status& status, const WrapperSettings& settings);
   void paint(juce::Graphics&) override;

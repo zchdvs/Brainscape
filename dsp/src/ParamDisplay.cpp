@@ -32,15 +32,15 @@ constexpr ParamDisplay kDisplayTable[] = {
     {ParamId::ReverseProb,    G::Pitch,      "Reverse probability", "Reverse",  T::Linear,  K::Percent,      0, kAuto},
     {ParamId::Jitter,         G::Grains,     "Scheduler jitter",    "Jitter",   T::Linear,  K::Percent,      0, kAuto},
     {ParamId::WindowSustain,  G::Window,     "Window sustain",      "Sustain",  T::Linear,  K::Percent,      0, kAuto},
-    {ParamId::WindowSkew,     G::Window,     "Window skew",         "Skew",     T::Linear,  K::Percent,      0, kAuto},
+    {ParamId::WindowSkew,     G::Window,     "Window skew",         "Skew",     T::Linear,  K::Balance,      0, kAuto},
     {ParamId::WindowSmooth,   G::Window,     "Window smoothness",   "Smooth",   T::Linear,  K::Percent,      0, kAuto},
-    {ParamId::PanSpread,      G::PanMod,     "Pan spread",          "Pan",      T::Linear,  K::Percent,      0, kAuto},
-    {ParamId::ModRateHz,      G::PanMod,     "Mod rate",            "Rate",     T::Quartic, K::Hertz,        0, kAuto},
-    {ParamId::ModDepth,       G::PanMod,     "Mod depth",           "Depth",    T::Linear,  K::Percent,      0, kAuto},
+    {ParamId::PanSpread,      G::Grains,     "Pan spread",          "Pan",      T::Linear,  K::Percent,      0, kAuto},
+    {ParamId::ModRateHz,      G::Mod,        "Mod rate",            "Rate",     T::Quartic, K::Hertz,        0, kAuto},
+    {ParamId::ModDepth,       G::Mod,        "Mod depth",           "Depth",    T::Linear,  K::Percent,      0, kAuto},
     {ParamId::DelayTimeMs,    G::PostDelay,  "Post delay time",     "Time",     T::Square,  K::Milliseconds, 0, kAuto},
     {ParamId::DelayFb,        G::PostDelay,  "Post delay feedback", "Repeats",  T::Linear,  K::Percent,      0, kAuto},
     {ParamId::DelayMix,       G::PostDelay,  "Post delay mix",      "Mix",      T::Linear,  K::Percent,      0, kAuto},
-    {ParamId::ReverbTime,     G::Reverb,     "Reverb time",         "Time",     T::Linear,  K::Percent,      0, kAuto},
+    {ParamId::ReverbTime,     G::Reverb,     "Reverb time",         "Time",     T::Linear,  K::Amount,       0, kAuto},
     {ParamId::ReverbMix,      G::Reverb,     "Reverb mix",          "Mix",      T::Linear,  K::Percent,      0, kAuto},
     {ParamId::FilterCutoffHz, G::Filter,     "Filter cutoff",       "Cutoff",   T::Quartic, K::FilterCutoff, 0, kAuto},
     {ParamId::FilterRes,      G::Filter,     "Filter resonance",    "Reso",     T::Linear,  K::Percent,      0, kAuto},
@@ -61,8 +61,7 @@ constexpr bool DisplayTableMatchesDescriptors() {
 static_assert(DisplayTableMatchesDescriptors(), "kDisplayTable must follow kParamTable's order");
 
 constexpr const char* kGroupTitles[kNumParamGroups] = {
-    "Grain delay", "Grains", "Pitch", "Window", "Pan / Mod", "Post delay", "Reverb", "Filter",
-    "Triggers",
+    "Grain delay", "Grains", "Pitch", "Window", "Mod", "Post delay", "Reverb", "Filter", "Triggers",
 };
 
 uint32_t Bits(float v) noexcept {
@@ -207,6 +206,18 @@ size_t FormatPlain(ParamId id, float plain, char* out, size_t outSize) noexcept 
     case DisplayKind::Percent: {
       const double pc = static_cast<double>(v) * 100.0;
       written         = Print(out, outSize, pc < 10.0 ? "%.1f%%" : "%.0f%%", pc);
+      break;
+    }
+    case DisplayKind::Balance: {
+      const double pc  = (static_cast<double>(v) - 0.5) * 200.0;
+      const double mag = pc < 0.0 ? -pc : pc;
+      written          = mag < 0.05 ? std::snprintf(out, outSize, "0%%")
+                                    : Print(out, outSize, mag < 10.0 ? "%+.1f%%" : "%+.0f%%", pc);
+      break;
+    }
+    case DisplayKind::Amount: {
+      const double a = static_cast<double>(v) * 100.0;
+      written        = Print(out, outSize, a < 10.0 ? "%.1f" : "%.0f", a);
       break;
     }
     case DisplayKind::Decibels:

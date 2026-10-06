@@ -18,7 +18,7 @@ namespace {
 
 // The saved device rate wins over the preferred one on every launch after the first
 // (companion §2.2), so the shell asks for 48 kHz again once the device is open. A device
-// that cannot run at 48 kHz keeps its rate; the status line then says "Not pedal-exact".
+// that cannot run at 48 kHz keeps its rate; the status line then says "Not pedal rate".
 // Every device restart re-runs prepareToPlay, which re-derives the status.
 void PreferPedalRate(juce::AudioDeviceManager& devices) {
   juce::AudioIODevice* device = devices.getCurrentAudioDevice();

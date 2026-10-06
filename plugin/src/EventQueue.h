@@ -7,8 +7,8 @@
 namespace brainscape::plugin {
 
 // One control event for the engine (companion §4.7). Producers: host automation (audio or
-// host thread), the GUI (message thread). MIDI arrives with the audio block and state
-// restores travel as a unit, so neither passes through here.
+// host thread), the GUI (message thread) and scripted producers. MIDI arrives with the
+// audio block and state restores travel as a unit, so neither passes through here.
 struct WrapperEvent {
   enum class Type : uint8_t { Param, Freeze, Trigger };
   // Same-frame order is state load, host automation, MIDI, UI; Source is that rank.
@@ -17,6 +17,11 @@ struct WrapperEvent {
   Source   source = Source::Ui;
   uint32_t id     = 0;    // ParamId for Type::Param
   float    value  = 0.f;  // canonical plain value; 0/1 for Freeze
+  // Set by EventSink::Post: the restore generation the event was posted in.
+  uint32_t generation = 0;
+  // Absolute engine frame (frames since the last Init) the event applies at (companion
+  // §4.10). Live producers leave 0: a stamp at or before a block's first frame applies there.
+  uint64_t frame = 0;
 };
 
 #if defined(_MSC_VER)
@@ -90,24 +95,51 @@ class MpscQueue {
 
 using WrapperQueue = MpscQueue<WrapperEvent, 2048>;
 
-// The producers' side of the wrapper queue. An overflow is counted, never coalesced
-// (profile §5.11); the consumer then re-sends every mirror, so the live engine cannot
-// stay out of step with what the host and GUI show.
+// The producers' side of the wrapper queue. On overflow of a live event the consumer
+// re-sends every mirror at the next block's first frame, so the live engine cannot stay
+// out of step with what the host and GUI show. That is exact for a parameter or freeze
+// event, which would have applied at that same frame with the mirror's value; a trigger
+// or a scripted event cannot be re-sent, so those are counted as lost, never coalesced
+// (profile §5.11).
 class EventSink {
  public:
-  void Post(const WrapperEvent& e) noexcept {
-    if (queue_.Push(e)) return;
-    overflows_.fetch_add(1u, std::memory_order_relaxed);
+  // Any thread. Live producers: a parameter's or freeze's mirror is stored first.
+  void Post(WrapperEvent e) noexcept {
+    if (Push(e)) return;
     resync_.store(true, std::memory_order_release);
+    if (e.type == WrapperEvent::Type::Trigger) CountLost();
+  }
+  // Any thread. Scripted producers: no mirror holds the event, so an overflow loses it.
+  void PostScripted(WrapperEvent e) noexcept {
+    if (!Push(e)) CountLost();
+  }
+
+  // Restore generations (companion §4.7): an event posted before a state restore or an
+  // Init is older than the state that restore applies. Advanced only under the
+  // processor's control mutex, after the restore's state slot is complete.
+  uint32_t Generation() const noexcept { return generation_.load(std::memory_order_acquire); }
+  void     SetGeneration(uint32_t g) noexcept {
+    generation_.store(g, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
   }
 
   WrapperQueue& Queue() noexcept { return queue_; }
-  uint32_t      Overflows() const noexcept { return overflows_.load(std::memory_order_relaxed); }
+  uint32_t      Lost() const noexcept { return lost_.load(std::memory_order_relaxed); }
+  void          CountLost() noexcept { lost_.fetch_add(1u, std::memory_order_relaxed); }
   bool          TakeResync() noexcept { return resync_.exchange(false, std::memory_order_acq_rel); }
 
  private:
+  bool Push(WrapperEvent& e) noexcept {
+    // Pairs with the fence in SetGeneration: either this event carries the new
+    // generation, or the restore's mirror stores land after this producer's.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    e.generation = generation_.load(std::memory_order_acquire);
+    return queue_.Push(e);
+  }
+
   WrapperQueue          queue_;
-  std::atomic<uint32_t> overflows_{0};
+  std::atomic<uint32_t> generation_{0};
+  std::atomic<uint32_t> lost_{0};
   std::atomic<bool>     resync_{false};
 };
 

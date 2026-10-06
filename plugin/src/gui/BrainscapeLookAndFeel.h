@@ -28,6 +28,9 @@ juce::Colour GroupAccent(ParamGroup group);
 // Fonts: Segoe UI on Windows, the system sans elsewhere.
 juce::Font UiFont(float height, bool bold = false);
 
+// Editor sizes are given at scale 1 (the default window) and grow with the window.
+inline int Scaled(int px, float scale) { return juce::roundToInt(static_cast<float>(px) * scale); }
+
 // The dark, flat look shared by the editor, the standalone window and its dialogs.
 class BrainscapeLookAndFeel final : public juce::LookAndFeel_V4 {
  public:

@@ -24,6 +24,8 @@ class BrainscapePlainAttachment final : private juce::Slider::Listener {
   bool Refresh();
   // Typed text in the display's units, parsed to the exact binary32 that is sent.
   bool CommitText(const juce::String& text);
+  // An exact plain value (a switch position).
+  void CommitPlain(float plain);
   void ResetToDefault();
 
   juce::String     DisplayText() const { return FormatPlainText(param_.Id(), param_.Plain()); }

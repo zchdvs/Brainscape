@@ -28,6 +28,8 @@ enum class DisplayKind : uint8_t {
   Milliseconds,
   Hertz,
   Percent,       // 0..1 shown as 0-100 %
+  Balance,       // 0..1 shown as -100..+100 %, 0.5 = 0 % (centred)
+  Amount,        // 0..1 shown as 0-100, no unit (a scale, not a share)
   Decibels,
   Semitones,
   Cents,
@@ -37,8 +39,10 @@ enum class DisplayKind : uint8_t {
   LiveMark,      // PositionSource: >= 0.5 is POS_MARK
 };
 
+// The post-chain groups follow its signal order (grain-engine.md §2): mod -> delay ->
+// reverb -> filter.
 enum class ParamGroup : uint8_t {
-  GrainDelay, Grains, Pitch, Window, PanMod, PostDelay, Reverb, Filter, Triggers,
+  GrainDelay, Grains, Pitch, Window, Mod, PostDelay, Reverb, Filter, Triggers,
 };
 inline constexpr size_t kNumParamGroups = 9;
 

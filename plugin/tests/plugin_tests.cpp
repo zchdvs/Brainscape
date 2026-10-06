@@ -15,6 +15,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -211,13 +212,19 @@ std::string PatternName(const std::vector<int>& p) {
 
 // Text a user could type for exactly this plain value, in the display's units.
 std::string ExactText(ParamId id, float plain) {
-  char buf[64];
+  const DisplayKind kind = FindParamDisplay(id)->kind;
+  char              buf[64];
+  if (kind == DisplayKind::Balance) {  // (p - 0.5) * 200 %; 17 digits pin p for p >= 2^-24
+    std::snprintf(buf, sizeof buf, "%.17g%%", (static_cast<double>(plain) - 0.5) * 200.0);
+    return buf;
+  }
   std::snprintf(buf, sizeof buf, "%.8e", static_cast<double>(plain));  // 9 digits: round-trips
   std::string s(buf);
   const size_t e        = s.find('e');
   const int    exponent = std::atoi(s.c_str() + e + 1);
-  const bool   percent  = FindParamDisplay(id)->kind == DisplayKind::Percent;
-  return s.substr(0, e) + "e" + std::to_string(exponent + (percent ? 2 : 0)) + (percent ? "%" : "");
+  const bool   percent  = kind == DisplayKind::Percent;
+  const bool   hundreds = percent || kind == DisplayKind::Amount;
+  return s.substr(0, e) + "e" + std::to_string(exponent + (hundreds ? 2 : 0)) + (percent ? "%" : "");
 }
 
 std::vector<float> SampleValues(ParamId id, uint32_t seed, int count) {
@@ -335,7 +342,7 @@ TEST_CASE("prepareToPlay at 44.1, 48 and 96 kHz") {
     REQUIRE(st.engineReady);
     REQUIRE(st.hostRate == rate);
     REQUIRE(st.engineRate == rate);  // native at the host rate until the resampled mode lands
-    REQUIRE(st.pedalExact == (rate == 48000.0));
+    REQUIRE(st.pedalRate == (rate == 48000.0));
     REQUIRE(proc->getLatencySamples() == 0);
     const Stereo in  = MakeInput(static_cast<int>(rate));
     const Stereo got = RenderProcessor(*proc, in, h, {{static_cast<int>(rate / 100.0)}});
@@ -357,7 +364,7 @@ TEST_CASE("a rate change re-initialises; a same-rate re-prepare keeps the runnin
     auto proc = MakeProcessor(Busy(), h96);
     RenderProcessor(*proc, first, h96);
     proc->prepareToPlay(kRate, 512);  // back to the pedal's rate: a fresh engine
-    REQUIRE(proc->GetStatus().pedalExact);
+    REQUIRE(proc->GetStatus().pedalRate);
     const Stereo a = RenderProcessor(*proc, first, {});
     proc->prepareToPlay(kRate, 256);  // same rate: ring and engine state kept (§4.1)
     const Stereo b = RenderProcessor(*proc, second, {});
@@ -458,6 +465,46 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE_FALSE(delay.CommitText("fast"));
   REQUIRE_FALSE(delay.CommitText("12 st"));
   REQUIRE(proc.Param(ParamId::DelayMs).Plain() == 250.0f);
+
+  // A centred balance (Window skew) reads -100..+100 %; reverb time reads 0-100.
+  juce::Slider              skewKnob, reverbKnob;
+  BrainscapePlainAttachment skew(proc.Param(ParamId::WindowSkew), skewKnob);
+  BrainscapePlainAttachment reverb(proc.Param(ParamId::ReverbTime), reverbKnob);
+  const auto skewAfter = [&](const char* text) {
+    REQUIRE(skew.CommitText(text));
+    return proc.Param(ParamId::WindowSkew).Plain();
+  };
+  REQUIRE(skewAfter("-50%") == 0.25f);
+  REQUIRE(skewAfter("+25") == 0.625f);
+  REQUIRE(skewAfter("0") == 0.5f);
+  REQUIRE(skewAfter("-100") == 0.0f);
+  REQUIRE(skewAfter("100%") == 1.0f);
+  REQUIRE(skewAfter("-37.5%") == 0.3125f);
+  REQUIRE(Bits(skewAfter("-40%")) == Bits(0.3f));
+  REQUIRE(Bits(skewAfter("33.3333%")) == Bits(0.6666665f));
+  REQUIRE(skewAfter("1e-20%") == 0.5f);
+  REQUIRE(skewAfter("-1e3") == 0.0f);
+  REQUIRE(skewAfter("250%") == 1.0f);
+  REQUIRE(skew.DisplayText() == "+100%");
+  REQUIRE_FALSE(skew.CommitText("12 ms"));
+  REQUIRE(reverb.CommitText("60"));
+  REQUIRE(Bits(proc.Param(ParamId::ReverbTime).Plain()) == Bits(0.6f));
+  REQUIRE(reverb.DisplayText() == "60");
+  // The balance's decimal arithmetic against an independent one: b = M * 1e-6 % is plain
+  // (1e8 + M) * 5e-9, parsed by the plain-unit path of another parameter.
+  uint32_t seed = 0x5EEDu;
+  for (int i = 0; i < 4000; ++i) {
+    const int64_t m = static_cast<int64_t>(Xorshift(seed) % 200000001u) - 100000000;
+    const int64_t a = m < 0 ? -m : m;
+    char          typed[48], exact[48];
+    std::snprintf(typed, sizeof typed, "%s%lld.%06lld%%", m < 0 ? "-" : "", static_cast<long long>(a / 1000000),
+                  static_cast<long long>(a % 1000000));
+    std::snprintf(exact, sizeof exact, "%llde-9", static_cast<long long>((100000000 + m) * 5));
+    float want = 0.f;
+    REQUIRE(ParsePlainText(ParamId::FilterMorph, exact, want));  // no unit shift, range 0..3
+    INFO(typed);
+    REQUIRE(Bits(skewAfter(typed)) == Bits(want));
+  }
 
   // Every value typed as text lands on exactly that binary32, in every parameter's units.
   for (const ParamDescriptor& d : kParamTable) {
@@ -629,6 +676,290 @@ TEST_CASE("freeze is a host-automatable toggle that reaches the engine") {
               "freeze at frame 19200");
 }
 
+TEST_CASE("a plugin insert passes both channels by default; the Standalone starts in mono") {
+  auto proc = std::make_unique<BrainscapeProcessor>();
+  REQUIRE(proc->GetSettings().inputMode == InputMode::Stereo);
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.0f);
+  proc->setRateAndBufferSizeDetails(kRate, 512);
+  proc->prepareToPlay(kRate, 512);
+  const Stereo in = MakeInput(9600);
+  RequireSame(RenderProcessor(*proc, in, {}, {{480}}), in, "stereo bus, default settings, Mix 0");
+
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Standalone);
+  auto standalone = std::make_unique<BrainscapeProcessor>();
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+  REQUIRE(standalone->GetSettings().inputMode == InputMode::Mono);  // a guitar on input 1
+}
+
+TEST_CASE("a state restore wins over edits posted before it and loses to edits after it") {
+  Preset restored = Busy();
+  restored.push_back({ParamId::Mix, 0.8f});
+  auto source = std::make_unique<BrainscapeProcessor>();
+  for (const auto& v : restored) source->Param(v.first).SetPlainNotifyingHost(v.second);
+  juce::MemoryBlock blob;
+  source->getStateInformation(blob);
+  const auto restore = [&blob](BrainscapeProcessor& p) {
+    p.setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+  };
+  const auto savedMix = [](BrainscapeProcessor& p) {
+    juce::MemoryBlock saved;
+    p.getStateInformation(saved);
+    WrapperState st{};
+    REQUIRE(DecodeState(saved.getData(), saved.getSize(), st));
+    return st.plain[static_cast<size_t>(ParamId::Mix) - 1u];
+  };
+  const Preset all = Complete(restored);
+  const auto   load = [&all](Engine& e) {
+    for (const auto& v : all) e.SetParam(v.first, v.second);
+    e.SetFreeze(false);
+  };
+  const Stereo in     = MakeInput(48000);
+  const int    change = 24000;
+
+  SECTION("running: an edit and a freeze just before the restore lose to it") {
+    auto       proc = MakeProcessor({}, {});
+    HostRender r;
+    r.pattern     = {480};
+    r.beforeBlock = [&](int pos) {
+      if (pos != change) return;
+      proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.3f);
+      proc->Freeze().setValueNotifyingHost(1.0f);
+      restore(*proc);
+    };
+    RequireSame(RenderProcessor(*proc, in, {}, r), RenderReference({}, in, kRate, {{change, load}}),
+                "edit, then restore");
+    REQUIRE(proc->Param(ParamId::Mix).Plain() == 0.8f);
+    REQUIRE(savedMix(*proc) == 0.8f);
+    REQUIRE_FALSE(proc->Freeze().get());
+  }
+  SECTION("running: an edit just after the restore wins") {
+    auto       proc = MakeProcessor({}, {});
+    HostRender r;
+    r.pattern     = {480};
+    r.beforeBlock = [&](int pos) {
+      if (pos != change) return;
+      restore(*proc);
+      proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.3f);
+    };
+    const auto loadThenEdit = [&load](Engine& e) {
+      load(e);
+      e.SetParam(ParamId::Mix, 0.3f);
+    };
+    RequireSame(RenderProcessor(*proc, in, {}, r), RenderReference({}, in, kRate, {{change, loadThenEdit}}),
+                "restore, then edit");
+    REQUIRE(proc->Param(ParamId::Mix).Plain() == 0.3f);
+    REQUIRE(savedMix(*proc) == 0.3f);
+  }
+  SECTION("not yet prepared: edits before the restore stay lost after prepareToPlay") {
+    auto proc = std::make_unique<BrainscapeProcessor>();
+    proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.3f);
+    proc->Freeze().setValueNotifyingHost(1.0f);
+    restore(*proc);
+    proc->setRateAndBufferSizeDetails(kRate, 512);
+    proc->prepareToPlay(kRate, 512);
+    RequireSame(RenderProcessor(*proc, in, {}, {{512}}), RenderReference(restored, in), "inactive, then prepared");
+    REQUIRE(savedMix(*proc) == 0.8f);
+  }
+  SECTION("suspended (no blocks, no prepare): the restore still wins at the next block") {
+    auto         proc = MakeProcessor({}, {});
+    const Stereo first{std::vector<float>(in.l.begin(), in.l.begin() + change),
+                       std::vector<float>(in.r.begin(), in.r.begin() + change)};
+    const Stereo second{std::vector<float>(in.l.begin() + change, in.l.end()),
+                        std::vector<float>(in.r.begin() + change, in.r.end())};
+    Stereo got = RenderProcessor(*proc, first, {}, {{480}});
+    for (int i = 0; i < 100; ++i) proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.01f * static_cast<float>(i));
+    restore(*proc);
+    const Stereo rest = RenderProcessor(*proc, second, {}, {{480}});
+    got.l.insert(got.l.end(), rest.l.begin(), rest.l.end());
+    got.r.insert(got.r.end(), rest.r.begin(), rest.r.end());
+    RequireSame(got, RenderReference({}, in, kRate, {{change, load}}), "suspended, then resumed");
+  }
+}
+
+TEST_CASE("only events the resync cannot restore count as lost") {
+  // While no block runs, every edit waits for the same frame, where the resync re-sends
+  // the mirrors: an overflow there loses nothing. A trigger cannot be re-sent.
+  auto proc = std::make_unique<BrainscapeProcessor>();
+  for (int i = 0; i < 3000; ++i) {
+    proc->Param(ParamId::DelayMs).SetPlainNotifyingHost(10.0f + static_cast<float>(i) * 0.5f);
+  }
+  proc->setRateAndBufferSizeDetails(kRate, 512);
+  proc->prepareToPlay(kRate, 512);
+  const Stereo in = MakeInput(9600);
+  RequireSame(RenderProcessor(*proc, in, {}, {{512}}), RenderReference({{ParamId::DelayMs, 1509.5f}}, in),
+              "after 3000 edits before prepare");
+  REQUIRE(proc->GetStatus().droppedEvents == 0u);
+  for (int i = 0; i < 3000; ++i) proc->TriggerFromUi();
+  const uint32_t lostTriggers = 3000u - static_cast<uint32_t>(WrapperQueue::capacity());
+  REQUIRE(proc->GetStatus().droppedEvents == lostTriggers);
+  // A scripted event has no mirror behind it: an overflow loses it, even at frame 0.
+  proc->PostAt(0, {WrapperEvent::Type::Param, WrapperEvent::Source::Ui, static_cast<uint32_t>(ParamId::Mix), 0.3f});
+  proc->PostAt(9, {WrapperEvent::Type::Param, WrapperEvent::Source::Ui, static_cast<uint32_t>(ParamId::Mix), 0.4f});
+  REQUIRE(proc->GetStatus().droppedEvents == lostTriggers + 2u);
+}
+
+TEST_CASE("scripted events apply at their stamped frames, splitting host blocks") {
+  using E         = WrapperEvent;
+  const Stereo in = MakeInput(48000);
+  const auto   id = [](ParamId p) { return static_cast<uint32_t>(p); };
+  const auto   script = [&](BrainscapeProcessor& p) {
+    p.PostAt(0, {E::Type::Param, E::Source::Ui, id(ParamId::Feedback), 0.5f});  // the first block
+    p.PostAt(10007, {E::Type::Param, E::Source::Ui, id(ParamId::PitchSt), 5.0f});
+    p.PostAt(20011, {E::Type::Trigger, E::Source::Ui, 0u, 1.0f});
+    p.PostAt(30000, {E::Type::Param, E::Source::Ui, id(ParamId::Mix), 0.45f});  // after the host's
+    p.PostAt(30000, {E::Type::Param, E::Source::Host, id(ParamId::Mix), 0.4f});
+    p.PostAt(40013, {E::Type::Freeze, E::Source::Ui, 0u, 1.0f});
+  };
+  const auto ref = [&](int triggerAt) {
+    return RenderReference(Busy(), in, kRate,
+                           {{0, [](Engine& e) { e.SetParam(ParamId::Feedback, 0.5f); }},
+                            {10007, [](Engine& e) { e.SetParam(ParamId::PitchSt, 5.0f); }},
+                            {triggerAt, [](Engine& e) { e.Trigger(Engine::TriggerSource::Footswitch); }},
+                            {30000, [](Engine& e) {
+                               e.SetParam(ParamId::Mix, 0.4f);
+                               e.SetParam(ParamId::Mix, 0.45f);
+                             }},
+                            {40013, [](Engine& e) { e.SetFreeze(true); }}});
+  };
+  const Stereo want = ref(20011);
+  for (const std::vector<int>& pattern : std::vector<std::vector<int>>{{512}, {441}, {4096}, {0, 37, 1}}) {
+    auto proc = MakeProcessor(Busy(), {});
+    script(*proc);
+    HostRender r;
+    r.pattern = pattern;
+    RequireSame(RenderProcessor(*proc, in, {}, r), want, PatternName(pattern).c_str());
+    REQUIRE(proc->Param(ParamId::PitchSt).Plain() == 5.0f);  // mirrors follow once applied
+    REQUIRE(proc->Param(ParamId::Mix).Plain() == 0.45f);
+  }
+  REQUIRE_FALSE(SameBits(want.l, ref(20012).l));  // one frame later is audible: not vacuous
+
+  SECTION("stamps count from the latest Init") {
+    HostSetup h96;
+    h96.rate  = 96000.0;
+    auto proc = MakeProcessor(Busy(), h96);
+    RenderProcessor(*proc, MakeInput(9600), h96);
+    proc->PostAt(2000, {E::Type::Param, E::Source::Ui, id(ParamId::Mix), 0.9f});  // void after the Init
+    proc->prepareToPlay(kRate, 512);  // a rate change: a fresh engine at frame 0
+    proc->PostAt(4801, {E::Type::Param, E::Source::Ui, id(ParamId::Mix), 0.25f});
+    const Stereo short48 = MakeInput(9600);
+    RequireSame(RenderProcessor(*proc, short48, {}, {{480}}),
+                RenderReference(Busy(), short48, kRate, {{4801, [](Engine& e) { e.SetParam(ParamId::Mix, 0.25f); }}}),
+                "stamp after a re-Init");
+  }
+}
+
+namespace {
+
+juce::File WriteWav(const juce::File& file, double rate, const std::vector<std::vector<float>>& channels) {
+  file.deleteFile();
+  std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
+  REQUIRE(stream != nullptr);
+  juce::WavAudioFormat format;
+  const auto           options = juce::AudioFormatWriterOptions{}
+                               .withSampleRate(rate)
+                               .withNumChannels(static_cast<int>(channels.size()))
+                               .withBitsPerSample(32)
+                               .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);
+  std::unique_ptr<juce::AudioFormatWriter> writer = format.createWriterFor(stream, options);
+  REQUIRE(writer != nullptr);
+  const int                frames = static_cast<int>(channels[0].size());
+  juce::AudioBuffer<float> buffer(static_cast<int>(channels.size()), frames);
+  for (size_t c = 0; c < channels.size(); ++c) buffer.copyFrom(static_cast<int>(c), 0, channels[c].data(), frames);
+  REQUIRE(writer->writeFromAudioSampleBuffer(buffer, 0, frames));
+  return file;
+}
+
+}  // namespace
+
+TEST_CASE("the test input loops a file through the engine") {
+  const juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("brainscape-test-input");
+  REQUIRE(dir.createDirectory());
+  constexpr int      kLength = 1000;
+  std::vector<float> a(kLength), b(kLength);
+  for (int i = 0; i < kLength; ++i) {  // exact in binary32, never zero
+    a[static_cast<size_t>(i)] = static_cast<float>(i + 1) * 0x1p-12f;
+    b[static_cast<size_t>(i)] = -static_cast<float>(i + 1) * 0x1p-13f;
+  }
+  const juce::File stereo48 = WriteWav(dir.getChildFile("stereo48.wav"), 48000.0, {a, b});
+  const juce::File mono48   = WriteWav(dir.getChildFile("mono48.wav"), 48000.0, {a});
+  const juce::File stereo44 = WriteWav(dir.getChildFile("stereo44.wav"), 44100.0, {a, b});
+  const juce::File bad      = dir.getChildFile("bad.wav");
+  REQUIRE(bad.replaceWithText("not audio"));
+
+  auto proc = MakeProcessor({{ParamId::Mix, 0.0f}}, {});  // dry exact at Mix 0
+  TestInput& input = proc->GetTestInput();
+  juce::String error;
+  const Stereo silence{std::vector<float>(2600, 0.f), std::vector<float>(2600, 0.f)};
+
+  SECTION("a 48 kHz file plays bit for bit and wraps") {
+    REQUIRE(input.LoadFile(stereo48, error));
+    input.SetSource(TestInput::Source::FileLoop);
+    const Stereo got = RenderProcessor(*proc, silence, {}, {{480}});
+    for (size_t k = 0; k < got.l.size(); ++k) {
+      INFO("frame " << k);
+      REQUIRE(Bits(got.l[k]) == Bits(a[k % kLength]));
+      REQUIRE(Bits(got.r[k]) == Bits(b[k % kLength]));
+    }
+  }
+  SECTION("a mono file feeds both channels") {
+    REQUIRE(input.LoadFile(mono48, error));
+    input.SetSource(TestInput::Source::FileLoop);
+    const Stereo got = RenderProcessor(*proc, silence, {}, {{512}});
+    REQUIRE(SameBits(got.l, got.r));
+    REQUIRE(Bits(got.l[kLength + 3]) == Bits(a[3]));
+  }
+  SECTION("a 44.1 kHz file is stepped at its own rate across the wrap") {
+    REQUIRE(input.LoadFile(stereo44, error));
+    input.SetSource(TestInput::Source::FileLoop);
+    const Stereo got   = RenderProcessor(*proc, silence, {}, {{333}});
+    double       phase = 0.0;
+    for (size_t k = 0; k < got.l.size(); ++k) {
+      const auto  i0   = static_cast<size_t>(phase);
+      const auto  i1   = i0 + 1 < static_cast<size_t>(kLength) ? i0 + 1 : 0u;
+      const auto  frac = static_cast<float>(phase - static_cast<double>(i0));
+      const float want = a[i0] + (a[i1] - a[i0]) * frac;
+      INFO("frame " << k);
+      REQUIRE(std::fabs(got.l[k] - want) <= 1e-6f);
+      phase += 44100.0 / 48000.0;
+      if (phase >= kLength) phase = std::fmod(phase, static_cast<double>(kLength));
+    }
+  }
+  SECTION("a bad file is refused and the loaded loop stays") {
+    REQUIRE(input.LoadFile(stereo48, error));
+    REQUIRE_FALSE(input.LoadFile(bad, error));
+    REQUIRE(error.isNotEmpty());
+    REQUIRE(input.LoadedName() == "stereo48.wav");
+  }
+  SECTION("loading while the audio thread plays never frees the loop it reads") {
+    REQUIRE(input.LoadFile(stereo48, error));
+    input.SetSource(TestInput::Source::FileLoop);
+    std::atomic<bool> stop{false}, finite{true};
+    std::thread       audio([&] {
+      std::vector<float> l(256), r(256);
+      juce::MidiBuffer   midi;
+      while (!stop.load()) {
+        float*                   chans[2] = {l.data(), r.data()};
+        juce::AudioBuffer<float> buffer(chans, 2, 256);
+        proc->processBlock(buffer, midi);
+        for (int i = 0; i < 256; ++i) {
+          if (!std::isfinite(l[static_cast<size_t>(i)]) || !std::isfinite(r[static_cast<size_t>(i)])) finite = false;
+        }
+      }
+    });
+    bool loaded = true;  // no REQUIRE while the audio thread runs: a throw would skip the join
+    for (int i = 0; i < 40; ++i) {
+      loaded = input.LoadFile(i % 2 == 0 ? stereo44 : mono48, error) && loaded;
+      input.CollectGarbage();
+    }
+    stop = true;
+    audio.join();
+    REQUIRE(loaded);
+    REQUIRE(finite.load());
+    REQUIRE(input.LoadedName() == "mono48.wav");
+  }
+  dir.deleteRecursively();
+}
+
 TEST_CASE("latency, tail and supported layouts") {
   BrainscapeProcessor proc;
   REQUIRE(proc.getLatencySamples() == 0);
@@ -649,6 +980,7 @@ TEST_CASE("latency, tail and supported layouts") {
 }
 
 int main(int argc, char* argv[]) {
+  ReportCrtErrorsOnStderr();
 #if defined(_MSC_VER) && defined(_DEBUG)
   _CrtSetAllocHook(CrtAllocHook);
 #endif

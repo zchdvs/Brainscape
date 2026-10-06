@@ -49,10 +49,12 @@ bool BrainscapePlainAttachment::CommitText(const juce::String& text) {
   return true;
 }
 
-void BrainscapePlainAttachment::ResetToDefault() {
-  param_.SetPlainNotifyingHost(param_.DefaultPlain());
+void BrainscapePlainAttachment::CommitPlain(float plain) {
+  param_.SetPlainNotifyingHost(plain);
   ShowPlain(param_.Plain());
 }
+
+void BrainscapePlainAttachment::ResetToDefault() { CommitPlain(param_.DefaultPlain()); }
 
 void BrainscapePlainAttachment::sliderValueChanged(juce::Slider*) {
   // The pot path (companion §5.4): knob position -> dsp/ taper -> canonical plain bits.

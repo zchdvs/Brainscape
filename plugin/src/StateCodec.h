@@ -9,9 +9,10 @@ namespace brainscape::plugin {
 
 enum class InputMode : uint32_t { Mono = 0, Stereo = 1 };  // Mono: R := L (companion §4.8)
 
-// Global wrapper settings, saved with the session but never part of a preset (§4.8).
+// Global wrapper settings, saved with the session but never part of a preset (§4.8). The
+// processor starts the Standalone in Mono (BrainscapeProcessor's constructor).
 struct WrapperSettings {
-  InputMode inputMode    = InputMode::Mono;
+  InputMode inputMode    = InputMode::Stereo;
   float     inputGainDb  = 0.f;
   float     outputGainDb = 0.f;
 };
