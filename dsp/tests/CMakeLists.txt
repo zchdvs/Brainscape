@@ -17,6 +17,21 @@ target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()
+# The toolchain-ID test compares BuildToolchain() with the build's own flags, read here and
+# not through dsp/CMakeLists.txt's filter.
+function(_brainscape_test_flags_define config condition)
+  string(TOUPPER "${config}" cfg)
+  string(REGEX REPLACE "[\"\\\\]" "" flags "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${cfg}}")
+  target_compile_definitions(brainscape_tests PRIVATE
+    "$<${condition}:BRAINSCAPE_TEST_BUILD_FLAGS=\"${flags}\">")
+endfunction()
+if(CMAKE_CONFIGURATION_TYPES)
+  foreach(c IN LISTS CMAKE_CONFIGURATION_TYPES)
+    _brainscape_test_flags_define("${c}" "$<CONFIG:${c}>")
+  endforeach()
+else()
+  _brainscape_test_flags_define("${CMAKE_BUILD_TYPE}" 1)
+endif()
 add_test(NAME dsp_unit COMMAND brainscape_tests)
 
 # The engine built again with the FP guard's test hooks (determinism profile §6.4):

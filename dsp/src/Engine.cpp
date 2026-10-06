@@ -205,10 +205,11 @@ struct Engine::Impl {
   void RebuildDirty() noexcept;
 
   // The pieces of Process: what SetParam, SetFreeze and Trigger queued, applied at the
-  // block's first frame; one event; and the render of frames [start, start + count) of
-  // the block, which advances the sample counter.
+  // block's first frame; one event, which leaves a Freeze in *freeze for the frame's
+  // events to settle; and the render of frames [start, start + count) of the block, which
+  // advances the sample counter.
   void DrainPending() noexcept;
-  void ApplyEvent(const BlockEvent&) noexcept;
+  void ApplyEvent(const BlockEvent&, bool* freeze) noexcept;
   void RenderFrames(const ProcessContext&, uint32_t start, uint32_t count) noexcept;
 
   // A canonical value from now on: the pending value too, so the next block start does
@@ -682,6 +683,10 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
   // assert here killed the whole suite on the Debug/sanitizer CI leg (review
   // finding). The block-size assert stays — that one is a genuine caller bug.
   assert(ctx.numFrames >= 1 && ctx.numFrames <= cfg_.maxBlockSize);
+  const BlockEvent* events    = ctx.numEvents > 0 ? ctx.events : nullptr;
+  const uint32_t    numEvents = events != nullptr ? ctx.numEvents : 0u;
+  assert(ctx.numEvents == 0 || ctx.events != nullptr);
+  bool freeze = false;  // the freeze level the events at one frame leave
   if (!ready_ || ctx.in == nullptr || ctx.out == nullptr || ctx.numFrames == 0 ||
       ctx.numFrames > cfg_.maxBlockSize) {
     // Never hand back stale host memory — and never overrun the Hot-arena wet
@@ -693,28 +698,35 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
         if (ctx.out[1] != nullptr) ctx.out[1][n] = 0.f;
       }
     }
+    // The events apply after the frames the call did not render, as offsets past a
+    // block do: a dropped Freeze or load would change everything after it.
+    if (ready_) {
+      for (uint32_t i = 0; i < numEvents; ++i) ApplyEvent(events[i], &freeze);
+    }
     return;
   }
 
-  const BlockEvent* events    = ctx.numEvents > 0 ? ctx.events : nullptr;
-  const uint32_t    numEvents = events != nullptr ? ctx.numEvents : 0u;
-  assert(ctx.numEvents == 0 || ctx.events != nullptr);
 #if !defined(NDEBUG)
   for (uint32_t i = 0; i < numEvents; ++i) {
     assert(events[i].offset < ctx.numFrames);
     assert(i == 0 || events[i].offset >= events[i - 1].offset);
+    assert(i == 0 || events[i].offset != events[i - 1].offset || events[i].offset == 0 ||
+           events[i].seq > events[i - 1].seq);
   }
 #endif
 
   // The block is rendered in parts split at its events' offsets (determinism profile
   // §5.11): each part is exactly a Process call of a wrapper that splits there, so
   // block-split invariance (contract #1) carries over to event timing. Frames before an
-  // event see the old state.
+  // event see the old state. Freeze settles once per frame, after the frame's events,
+  // as DrainPending settles SetFreeze.
   DrainPending();
+  freeze        = frozen_;
   uint32_t pos  = 0;
   uint32_t next = 0;
   for (;;) {
-    while (next < numEvents && events[next].offset <= pos) ApplyEvent(events[next++]);
+    while (next < numEvents && events[next].offset <= pos) ApplyEvent(events[next++], &freeze);
+    SetFrozen(freeze);
     RebuildDirty();
     uint32_t end = ctx.numFrames;
     if (next < numEvents && events[next].offset < end) end = events[next].offset;
@@ -722,8 +734,9 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     pos = end;
     if (pos == ctx.numFrames) break;
   }
-  // Offsets past the block apply after its last frame; the next block rebuilds.
-  while (next < numEvents) ApplyEvent(events[next++]);
+  // Offsets past the block apply after its last frame; the next block rebuilds, and its
+  // DrainPending settles their freeze.
+  while (next < numEvents) ApplyEvent(events[next++], &freeze);
 }
 
 void Engine::Impl::DrainPending() noexcept {
@@ -741,19 +754,17 @@ void Engine::Impl::DrainPending() noexcept {
   pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
 }
 
-void Engine::Impl::ApplyEvent(const BlockEvent& e) noexcept {
+void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
   switch (e.type) {
     case EventType::SetParam: {
       const ParamDescriptor* d = FindParam(static_cast<ParamId>(e.id));
       if (d != nullptr) SetValue(e.id - 1u, CanonicalValue(*d, e.value));
       break;
     }
-    case EventType::Freeze: {
-      const bool on = e.value != 0.0f;
-      freezePending_.store(on, std::memory_order_relaxed);
-      SetFrozen(on);
+    case EventType::Freeze:
+      *freeze = e.value != 0.0f;
+      freezePending_.store(*freeze, std::memory_order_relaxed);
       break;
-    }
     case EventType::Trigger:
       ++pendingTriggers_;
       break;
@@ -765,6 +776,7 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e) noexcept {
         LoadReport report;
         ResolvePreset(*e.preset, values, &report);
         ApplySpillover(values);
+        *freeze = false;
       }
       break;
   }

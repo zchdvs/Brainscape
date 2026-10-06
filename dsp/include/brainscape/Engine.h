@@ -95,18 +95,20 @@ class Engine {
   // LFO; zeroes the sample counter, the random-number epoch, the write position and the
   // onset and trigger counts; turns freeze off; drains pending parameters and snaps the
   // smoothers to them. Reset is the real-time subset: it keeps the counter, the epoch,
-  // freeze and every large buffer, so a DAW's reset() maps to it.
+  // freeze and every large buffer, so a DAW's reset() maps to it. Restart begins a new
+  // timeline at frame 0: events queued against the old one are cleared with it
+  // (EventQueue::Clear), and producers stamp from the restarted counter.
   void Restart() noexcept;
 
   // Applies a decoded preset in the fixed order of determinism profile §5.10: every
   // descriptor default; every stored leaf, canonicalized, in ascending id order; freeze
-  // off; then for Exact a Restart (non-RT, Process stopped), for Spillover the
-  // random-number epoch restarted at the load frame, keeping history, grains, scheduler
-  // phase and smoothers. A direct Spillover call applies at the next Process call's first
-  // frame and must not race Process (audio thread between blocks, or Process stopped); a
-  // live load is a SpilloverLoad event instead, applied as one change at its frame, never
-  // as per-parameter stores. Returns true when the load applied and was exact (*report
-  // says why not).
+  // off; then for Exact a Restart (non-RT, Process stopped, the event queue cleared), for
+  // Spillover the random-number epoch restarted at the load frame, keeping history,
+  // grains, scheduler phase and smoothers. A direct Spillover call applies at the next
+  // Process call's first frame and must not race Process (audio thread between blocks, or
+  // Process stopped); a live load is a SpilloverLoad event instead, applied as one change
+  // at its frame, never as per-parameter stores. Returns true when the load applied and
+  // was exact (*report says why not).
   bool LoadPreset(const PresetState& preset, LoadMode mode,
                   LoadReport* report = nullptr) noexcept;
 
@@ -117,13 +119,16 @@ class Engine {
   // Frame-stamped events (determinism profile §5.11): (absolute frame, sequence number,
   // type, id, value). Frames before an event's frame use the old state, the event
   // applies from its frame on, and events stamped at one frame apply in sequence order:
-  // at a block's first frame that is exactly "SetParam, then Process". The numbering is
+  // at a block's first frame that is exactly "SetParam, then Process". So freeze is a
+  // level: the last Freeze event at a frame decides it, and a release and a re-engage at
+  // one frame keep the pin, as SetFreeze between split blocks does. The numbering is
   // permanent (events are logged and replayed).
   enum class EventType : uint8_t {
     SetParam      = 0,  // id: ParamId; value: the exact binary32 plain value (canonicalized)
     Freeze        = 1,  // value: nonzero engages, zero releases
     Trigger       = 2,  // id: TriggerSource; value: velocity (not yet read)
-    SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies
+    SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies. Its
+                        // freeze-off is immediate, so a Freeze after it at its frame pins anew
   };
   // A stamped event, as producers, scripts and the transport (EventQueue.h) carry it.
   struct Event {
@@ -132,7 +137,8 @@ class Engine {
     EventType          type   = EventType::SetParam;
     uint32_t           id     = 0;
     float              value  = 0.f;
-    const PresetState* preset = nullptr;  // SpilloverLoad: valid until the event applies
+    const PresetState* preset = nullptr;  // SpilloverLoad: valid until the event is retired
+                                          // (EventQueue::Retired)
   };
   // The same event, stamped with its offset in the block that Process renders.
   struct BlockEvent {
@@ -148,12 +154,14 @@ class Engine {
     const float* const* in  = nullptr;  // planar; in[0]=L, in[1]=R (unused if !stereoInput)
     float* const*       out = nullptr;  // planar stereo
     uint32_t numFrames      = 0;        // 1..maxBlockSize, varies freely block to block
-    // The block's events, sorted by offset (0..numFrames-1), then sequence number: events
-    // at one offset apply in span order. Process splits the block at each event's
+    // The block's events in the order they apply: offsets (0..numFrames-1) never fall, and
+    // at one offset the sequence numbers rise, except at offset 0, where the transport
+    // also puts late events in stamp order. Process splits the block at each event's
     // offset, so its output equals a wrapper that splits the block there and applies the
     // events between the parts. An event out of order applies where it is reached, and
     // an offset past the block after the block's last frame: both are caller errors,
-    // asserted in Debug, and never dropped.
+    // asserted in Debug, and never dropped. A call that renders nothing (a zero-frame or
+    // oversized block, null buffers) still applies its events, after its frames.
     const BlockEvent* events    = nullptr;
     uint32_t          numEvents = 0;
     // Reserved for the CLOCK trigger source (design §4) — not yet read by the engine.
@@ -162,8 +170,8 @@ class Engine {
     bool     transportPlaying = false;
   };
   // Audio thread only. No allocation, no locks, no syscalls, no exceptions, no RTTI.
-  // On an invalid call (not Init'd, null buffers) the outputs are zero-filled —
-  // never left with stale host memory.
+  // On an invalid call (not Init'd, null buffers, a block size outside 1..maxBlockSize)
+  // the outputs are zero-filled — never left with stale host memory.
   void Process(const ProcessContext&) noexcept;
 
   // SetParam, SetFreeze and Trigger are the unstamped path: they apply at the first

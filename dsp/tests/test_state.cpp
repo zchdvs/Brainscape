@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -14,6 +18,13 @@
 #include "brainscape/HostArenas.h"
 #include "brainscape/SoundRevision.h"
 #include "catch.hpp"
+#include "golden/Sha256.h"
+
+// The build's own compiler flags (dsp/tests/CMakeLists.txt), read without the filter that
+// builds the toolchain ID.
+#ifndef BRAINSCAPE_TEST_BUILD_FLAGS
+#define BRAINSCAPE_TEST_BUILD_FLAGS ""
+#endif
 
 using namespace brainscape;
 using testing::HostileFpScope;
@@ -228,6 +239,23 @@ Stereo RenderSplit(Engine& e, const Stereo& in, const std::vector<Ev>& events,
   return out;
 }
 
+// Renders `in` from the engine's current frame in blocks of `pattern` (repeated), each
+// block taking its events from `q`.
+Stereo RenderQueued(Engine& e, EventQueue& q, const Stereo& in,
+                    const std::vector<uint32_t>& pattern) {
+  Stereo out{std::vector<float>(in.l.size()), std::vector<float>(in.l.size())};
+  auto   buf = std::make_unique<Engine::BlockEvent[]>(EventQueue::kCapacity);
+  size_t bi = 0, pos = 0;
+  while (pos < in.l.size()) {
+    const size_t   n = std::min<size_t>(pattern[bi++ % pattern.size()], in.l.size() - pos);
+    const uint32_t k = q.PopBlock(e.SampleCounter(), static_cast<uint32_t>(n), buf.get(),
+                                  EventQueue::kCapacity);
+    ProcessBlock(e, in, &out, pos, n, std::vector<Engine::BlockEvent>(buf.get(), buf.get() + k));
+    pos += n;
+  }
+  return out;
+}
+
 const std::vector<std::vector<uint32_t>> kPatterns = {
     {1}, {7}, {48}, {127}, {512}, {48, 1, 127, 32}, {300, 512, 5, 64}};
 
@@ -345,6 +373,51 @@ TEST_CASE("SetParam, SetFreeze and Trigger apply at the block start, before its 
   REQUIRE_FALSE(Same(render(0.9f, false), render(0.25f, false)));
 }
 
+// Freeze is a level settled once per frame ("SetParam, then Process", §5.11): a release
+// and a re-engage at one frame keep the pin, exactly as SetFreeze between split blocks
+// does, and a Spillover load's freeze-off is immediate, so a Freeze after it pins anew.
+TEST_CASE("freeze events at one frame settle to one level, as the wrapper split does") {
+  const Stereo      input = Plucks(24000, 0xF00Du);
+  const Params      live  = {{ParamId::Mix, 1.0f}, {ParamId::DelayMs, 80.0f},
+                             {ParamId::GrainSizeMs, 40.0f}, {ParamId::Overlap, 0.8f}};
+  const PresetState q     = Complete({{ParamId::Mix, 1.0f}, {ParamId::DelayMs, 60.0f},
+                                      {ParamId::PitchSt, 7.0f}});
+  auto script = [&](bool pairs, int64_t releaseAt) {
+    std::vector<Ev> s;
+    if (pairs) {
+      s.push_back(Freeze(1001, 0, true));  // engaged and released while unfrozen: no pin
+      s.push_back(Freeze(1001, 1, false));
+    }
+    s.push_back(Freeze(3001, 2, true));
+    if (pairs) {
+      s.push_back(Freeze(releaseAt, 3, false));  // the pin stays at 3001 when this is 9001
+      s.push_back(Freeze(9001, 4, true));
+    }
+    s.push_back(Spill(15007, 5, &q));
+    s.push_back(Freeze(15007, 6, true));
+    s.push_back(Freeze(19001, 7, false));
+    return s;
+  };
+  auto render = [&](const std::vector<Ev>& events, const std::vector<uint32_t>& pattern,
+                    bool stamped) {
+    Rig rig(SmallConfig());
+    InitParams(rig.engine, live);
+    return stamped ? RenderStamped(rig.engine, input, events, pattern)
+                   : RenderSplit(rig.engine, input, events, pattern);
+  };
+  const std::vector<Ev> events = script(true, 9001);
+  const Stereo          ref    = render(events, {48}, false);
+  for (const auto& pattern : kPatterns) {
+    INFO("block pattern starting " << pattern[0]);
+    REQUIRE(Same(render(events, pattern, true), ref));
+  }
+  REQUIRE(Same(render(events, {512}, false), ref));
+  // The same-frame pairs change nothing, while a re-pin at 9001 would be heard.
+  REQUIRE(Same(render(script(false, 0), {48}, true), ref));
+  REQUIRE(FirstDiff(render(script(true, 9000), {48}, true), ref) >= 9000);
+  REQUIRE_FALSE(Same(render(script(true, 9000), {48}, true), ref));
+}
+
 TEST_CASE("events past the block or out of order are applied, never dropped") {
 #if defined(NDEBUG)
   // Caller errors that Debug builds assert on; Release applies such an event late.
@@ -374,6 +447,38 @@ TEST_CASE("events past the block or out of order are applied, never dropped") {
   // Offset 900 in a 512-frame block: applied after the block, at the next block's start.
   REQUIRE(Same(render(900), stamped({Param(1324, 0, ParamId::Mix, 0.1f),
                                      Param(1536, 1, ParamId::Mix, 0.6f)})));
+#else
+  SUCCEED("asserted in Debug builds");
+#endif
+}
+
+// A call that renders nothing (a zero-frame block, which hosts send, or one larger than
+// maxBlockSize) still applies its events, after its frames, as offsets past a block do.
+TEST_CASE("a call that renders nothing still applies its events") {
+#if defined(NDEBUG)
+  EngineConfig cfg = SmallConfig();
+  cfg.maxBlockSize = 256;
+  const Stereo input = Plucks(4800, 0xD00Du);
+  Stereo       ref;
+  {
+    Rig rig(cfg);
+    InitParams(rig.engine, kBusy);
+    ref = RenderStamped(rig.engine, input,
+                        {Param(0, 0, ParamId::Mix, 0.1f), Freeze(0, 1, true)}, {48});
+  }
+  for (const uint32_t frames : {0u, 300u}) {
+    INFO(frames << " frames");
+    Rig rig(cfg);
+    InitParams(rig.engine, kBusy);
+    Stereo out{std::vector<float>(300, 1.f), std::vector<float>(300, 1.f)};
+    ProcessBlock(rig.engine, input, &out, 0, frames,
+                 {ToBlock(Param(0, 0, ParamId::Mix, 0.1f), 0), ToBlock(Freeze(10, 1, true), 0)});
+    REQUIRE(rig.engine.SampleCounter() == 0);
+    REQUIRE(rig.engine.GetParam(ParamId::Mix) == 0.1f);
+    REQUIRE(rig.engine.GetFreeze());
+    REQUIRE(out.l[0] == (frames == 0 ? 1.f : 0.f));  // an oversized block is zero-filled
+    REQUIRE(Same(RenderStamped(rig.engine, input, {}, {48}), ref));
+  }
 #else
   SUCCEED("asserted in Debug builds");
 #endif
@@ -587,20 +692,24 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
 
 // ── Spillover loads and the random-number epoch (§5.9, §5.10, §2.4) ─────────────────
 
+// The load lands while frozen, at a frame where q's dense live grains read audio 333 ms
+// back but frozen ones read the cleared ring behind the pin: freeze must be off from the
+// load frame itself, not from the next block.
 TEST_CASE("a Spillover load event at an odd frame equals the wrapper-side load") {
   const Stereo      input = Plucks(24000, 0x6666u);
   const PresetState q     = Complete({{ParamId::DelayMs, 333.0f}, {ParamId::PitchSt, -12.0f},
                                       {ParamId::Feedback, 0.3f}, {ParamId::ReverbMix, 0.7f},
-                                      {ParamId::Jitter, 0.5f}});
-  const std::vector<Ev> script = {Freeze(3001, 0, true), Param(7777, 1, ParamId::Mix, 0.9f),
-                                  Spill(7777, 2, &q), Param(7777, 3, ParamId::OutTrimDb, -2.0f),
-                                  Trig(9001, 4)};
+                                      {ParamId::Jitter, 0.5f}, {ParamId::GrainSizeMs, 20.0f},
+                                      {ParamId::Overlap, 1.0f}});
+  const std::vector<Ev> script = {Freeze(3001, 0, true), Param(17777, 1, ParamId::Mix, 0.9f),
+                                  Spill(17777, 2, &q), Param(17777, 3, ParamId::OutTrimDb, -2.0f),
+                                  Trig(19001, 4)};
   Stereo ref;
   {
     Rig rig(SmallConfig());
     InitParams(rig.engine, kBusy);
     ref = RenderSplit(rig.engine, input, script, {48});
-    REQUIRE(rig.engine.EpochStart() == 7777);
+    REQUIRE(rig.engine.EpochStart() == 17777);
     REQUIRE_FALSE(rig.engine.GetFreeze());  // every load turns freeze off
     REQUIRE(rig.engine.GetParam(ParamId::Mix) == FindParam(ParamId::Mix)->def);  // the load
     REQUIRE(rig.engine.GetParam(ParamId::OutTrimDb) == -2.0f);  // then the later event
@@ -610,7 +719,7 @@ TEST_CASE("a Spillover load event at an odd frame equals the wrapper-side load")
     Rig rig(SmallConfig());
     InitParams(rig.engine, kBusy);
     REQUIRE(Same(RenderStamped(rig.engine, input, script, pattern), ref));
-    REQUIRE(rig.engine.EpochStart() == 7777);
+    REQUIRE(rig.engine.EpochStart() == 17777);
   }
 }
 
@@ -693,9 +802,10 @@ TEST_CASE("a Spillover load never reconverges, as the profile states; with Reset
 
 // ── The transport (§5.11) ─────────────────────────────────────────────────────────────
 
-TEST_CASE("EventQueue hands each block its events as offsets and counts overflows") {
-  EventQueue q;
-  Engine::BlockEvent out[EventQueue::kCapacity];
+TEST_CASE("EventQueue hands each block its events as offsets and refuses what breaks order") {
+  EventQueue     q;
+  auto           out  = std::make_unique<Engine::BlockEvent[]>(EventQueue::kCapacity);
+  const uint32_t kAll = EventQueue::kCapacity;
 
   SECTION("offsets, late stamps and blocks") {
     REQUIRE(q.Push(Param(10, 0, ParamId::Mix, 0.1f)));
@@ -703,30 +813,66 @@ TEST_CASE("EventQueue hands each block its events as offsets and counts overflow
     REQUIRE(q.Push(Param(60, 2, ParamId::Mix, 0.3f)));
     REQUIRE(q.Push(Param(100, 3, ParamId::Mix, 0.4f)));
     REQUIRE(q.Push(Param(130, 4, ParamId::Mix, 0.5f)));
-    REQUIRE(q.PopBlock(0, 48, out, EventQueue::kCapacity) == 2);
+    REQUIRE(q.PopBlock(0, 48, out.get(), kAll) == 2);
     REQUIRE((out[0].offset == 10 && out[1].offset == 10 && out[0].seq == 0 && out[1].seq == 1));
-    REQUIRE(q.PopBlock(48, 48, out, EventQueue::kCapacity) == 1);
+    REQUIRE(q.PopBlock(48, 48, out.get(), kAll) == 1);
     REQUIRE((out[0].offset == 12 && out[0].value == 0.3f));
-    REQUIRE(q.PopBlock(96, 48, out, 1) == 1);  // the rest waits for room
+    REQUIRE(q.PopBlock(96, 48, out.get(), 1) == 1);  // the rest waits for room
     REQUIRE(out[0].offset == 4);
-    REQUIRE(q.Push(Param(5, 5, ParamId::Mix, 0.6f)));  // late, or "now"
-    REQUIRE(q.PopBlock(144, 48, out, EventQueue::kCapacity) == 2);
+    REQUIRE(q.Push(Param(140, 5, ParamId::Mix, 0.6f)));  // late by the time it is popped
+    REQUIRE(q.PopBlock(144, 0, out.get(), kAll) == 0);   // a zero-frame block takes none
+    REQUIRE(q.PopBlock(144, 48, out.get(), kAll) == 2);
     REQUIRE((out[0].offset == 0 && out[0].value == 0.5f));  // 130, carried: applies late
     REQUIRE((out[1].offset == 0 && out[1].value == 0.6f));
-    REQUIRE(q.PopBlock(192, 48, out, EventQueue::kCapacity) == 0);
-    REQUIRE(q.Overflows() == 0);
+    REQUIRE(q.PopBlock(192, 48, out.get(), kAll) == 0);
+    REQUIRE(q.ConsumeRefused() == 0);
+  }
+  SECTION("a stamp below the last one accepted is refused and counted") {
+    REQUIRE(q.Push(Param(100, 4, ParamId::Mix, 0.9f)));
+    REQUIRE_FALSE(q.Push(Param(50, 5, ParamId::Mix, 0.2f)));   // an earlier frame
+    REQUIRE_FALSE(q.Push(Param(100, 4, ParamId::Mix, 0.2f)));  // the same stamp
+    REQUIRE_FALSE(q.Push(Param(100, 3, ParamId::Mix, 0.2f)));  // an earlier sequence number
+    REQUIRE(q.Push(Param(100, 5, ParamId::Mix, 0.5f)));
+    REQUIRE(q.Push(Param(101, 0, ParamId::Mix, 0.6f)));  // a later frame, any number
+    REQUIRE(q.ConsumeRefused() == 3);
+    REQUIRE(q.ConsumeRefused() == 0);
+    REQUIRE(q.PopBlock(96, 48, out.get(), kAll) == 3);
+    REQUIRE((out[0].offset == 4 && out[1].offset == 4 && out[2].offset == 5));
+    REQUIRE((out[0].value == 0.9f && out[1].value == 0.5f && out[2].value == 0.6f));
   }
   SECTION("a full queue refuses and counts, and never coalesces") {
-    for (uint32_t i = 0; i < EventQueue::kCapacity; ++i) {
+    for (uint32_t i = 0; i < kAll; ++i) {
       REQUIRE(q.Push(Param(i, i, ParamId::Mix, 0.5f)));  // one parameter, many values
     }
     REQUIRE_FALSE(q.Push(Param(999, 999, ParamId::Mix, 0.1f)));
     REQUIRE_FALSE(q.Push(Param(999, 1000, ParamId::Mix, 0.2f)));
-    REQUIRE(q.Overflows() == 2);
-    REQUIRE(q.PopBlock(0, 512, out, EventQueue::kCapacity) == EventQueue::kCapacity);
-    for (uint32_t i = 0; i < EventQueue::kCapacity; ++i) REQUIRE(out[i].seq == i);
+    REQUIRE(q.ConsumeRefused() == 2);
+    REQUIRE(q.PopBlock(0, 512, out.get(), kAll) == kAll);
+    for (uint32_t i = 0; i < kAll; ++i) REQUIRE(out[i].seq == i);
+    // The span holds its slots until the next PopBlock, when its Process call has returned.
+    REQUIRE_FALSE(q.Push(Param(600, 0, ParamId::Mix, 0.1f)));
+    REQUIRE(q.PopBlock(512, 48, out.get(), kAll) == 0);
     REQUIRE(q.Push(Param(600, 0, ParamId::Mix, 0.1f)));
-    REQUIRE(q.Overflows() == 2);
+    REQUIRE(q.ConsumeRefused() == 1);
+  }
+  SECTION("an event is retired once its Process call returns, or by Clear") {
+    uint32_t a = 99, b = 99, c = 99;
+    REQUIRE(q.Push(Param(9600, 0, ParamId::Mix, 0.1f), &a));
+    REQUIRE(q.Push(Param(9700, 1, ParamId::Mix, 0.2f), &b));
+    REQUIRE((a == 0 && b == 1));
+    REQUIRE(q.PopBlock(9600, 48, out.get(), kAll) == 1);
+    REQUIRE_FALSE(q.Retired(a));  // handed out: Process may still be reading it
+    REQUIRE(q.PopBlock(9648, 48, out.get(), kAll) == 0);
+    REQUIRE(q.Retired(a));
+    REQUIRE_FALSE(q.Retired(b));
+    // A restart: the old timeline's stamps stay ahead of the new one's until Clear.
+    REQUIRE_FALSE(q.Push(Param(0, 0, ParamId::Mix, 0.3f)));
+    REQUIRE(q.Clear() == 1);
+    REQUIRE(q.Retired(b));
+    REQUIRE(q.Push(Param(0, 0, ParamId::Mix, 0.3f), &c));
+    REQUIRE(c == 2);
+    REQUIRE(q.PopBlock(0, 48, out.get(), kAll) == 1);
+    REQUIRE((out[0].offset == 0 && out[0].value == 0.3f));
   }
   SECTION("one producer thread and one consumer keep every event in order") {
     static constexpr uint32_t kEvents = 50000;
@@ -738,7 +884,7 @@ TEST_CASE("EventQueue hands each block its events as offsets and counts overflow
     uint32_t expect = 0;
     int64_t  block  = 0;
     while (expect < kEvents) {
-      const uint32_t n = q.PopBlock(block, 48, out, EventQueue::kCapacity);
+      const uint32_t n = q.PopBlock(block, 48, out.get(), kAll);
       for (uint32_t i = 0; i < n; ++i) {
         REQUIRE(out[i].seq == expect);
         ++expect;
@@ -747,6 +893,43 @@ TEST_CASE("EventQueue hands each block its events as offsets and counts overflow
       block += 48;
     }
     producer.join();
+  }
+  SECTION("a staged preset is reused only once its load event is retired") {
+    // Companion §6.1: a Spillover's preset is staged in a free slot before its event is
+    // stamped, and the slot is free again once the event is retired.
+    static constexpr uint32_t kLoads = 20000;
+    static constexpr uint32_t kSlots = 4;
+    auto        slots = std::make_unique<PresetState[]>(kSlots);
+    std::thread producer([&] {
+      uint32_t event[kSlots]  = {};
+      bool     staged[kSlots] = {};
+      for (uint32_t i = 0; i < kLoads; ++i) {
+        const uint32_t k = i % kSlots;
+        while (staged[k] && !q.Retired(event[k])) std::this_thread::yield();
+        slots[k].leafCount = 1;
+        slots[k].leaves[0] = {static_cast<uint32_t>(ParamId::Mix), static_cast<float>(i)};
+        Ev e    = Spill(i / 4, i, &slots[k]);
+        e.value = static_cast<float>(i);
+        while (!q.Push(e, &event[k])) std::this_thread::yield();
+        staged[k] = true;
+      }
+    });
+    uint32_t expect = 0, torn = 0;
+    int64_t  block  = 0;
+    while (expect < kLoads) {
+      const uint32_t n = q.PopBlock(block, 48, out.get(), kAll);
+      for (uint32_t i = 0; i < n; ++i, ++expect) {
+        REQUIRE(out[i].seq == expect);
+        // What Process reads, read repeatedly while the producer runs.
+        for (int r = 0; r < 64; ++r) {
+          if (out[i].preset->leaves[0].value != out[i].value) ++torn;
+        }
+      }
+      if (n == 0) std::this_thread::yield();
+      block += 48;
+    }
+    producer.join();
+    REQUIRE(torn == 0);
   }
 }
 
@@ -757,18 +940,50 @@ TEST_CASE("events through the queue render as events in ProcessContext") {
   InitParams(ref.engine, kBusy);
   const Stereo expected = RenderStamped(ref.engine, input, script, {48});
 
+  for (const auto& pattern : kPatterns) {
+    INFO("block pattern starting " << pattern[0]);
+    Rig        rig(SmallConfig());
+    EventQueue q;
+    InitParams(rig.engine, kBusy);
+    for (const Ev& e : script) REQUIRE(q.Push(e));
+    REQUIRE(Same(RenderQueued(rig.engine, q, input, pattern), expected));
+    REQUIRE(q.ConsumeRefused() == 0);
+  }
+}
+
+// An Exact load restarts the timeline at frame 0 (§5.8), so the queue is cleared with it:
+// events stamped against the old counter, a Spillover load among them, never reach the
+// new session, and the new session's events apply at their own frames.
+TEST_CASE("an Exact load with its queue cleared renders what a fresh engine renders") {
+  const Stereo          prefix = Plucks(9600, 0x1357u);
+  const Stereo          input  = Plucks(9600, 0x2468u);
+  const PresetState     target = Complete(kBusy);
+  const PresetState     spill  = Complete({{ParamId::Mix, 0.05f}, {ParamId::DelayMs, 1200.0f}});
+  const std::vector<Ev> after  = {Param(480, 0, ParamId::Mix, 0.9f), Freeze(3001, 1, true)};
+  Stereo                ref;
+  {
+    Rig rig(SmallConfig());
+    REQUIRE(rig.engine.LoadPreset(target, LoadMode::Exact));
+    ref = RenderStamped(rig.engine, input, after, {48});
+  }
   Rig        rig(SmallConfig());
   EventQueue q;
-  InitParams(rig.engine, kBusy);
-  for (const Ev& e : script) REQUIRE(q.Push(e));
-  Stereo out{std::vector<float>(input.l.size()), std::vector<float>(input.l.size())};
-  Engine::BlockEvent buf[EventQueue::kCapacity];
-  for (size_t pos = 0; pos < input.l.size(); pos += 48) {
-    const uint32_t n = q.PopBlock(rig.engine.SampleCounter(), 48, buf, EventQueue::kCapacity);
-    ProcessBlock(rig.engine, input, &out, pos, 48, std::vector<Engine::BlockEvent>(buf, buf + n));
-  }
-  REQUIRE(Same(out, expected));
-  REQUIRE(q.Overflows() == 0);
+  REQUIRE(rig.engine.LoadPreset(Complete({}), LoadMode::Exact));
+  REQUIRE(q.Push(Param(4001, 0, ParamId::Feedback, 0.7f)));
+  RenderQueued(rig.engine, q, prefix, {48});
+  // Stamped for the old timeline's next blocks when the load arrives.
+  const int64_t now = rig.engine.SampleCounter();
+  REQUIRE(q.Push(Param(now + 48, 1, ParamId::Mix, 0.1f)));
+  REQUIRE(q.Push(Spill(now + 96, 2, &spill)));
+  REQUIRE(rig.engine.LoadPreset(target, LoadMode::Exact));
+  REQUIRE_FALSE(q.Push(after[0]));  // behind the old timeline's stamps
+  REQUIRE(q.ConsumeRefused() == 1);
+  REQUIRE(q.Clear() == 2);
+  for (const Ev& e : after) REQUIRE(q.Push(e));
+  REQUIRE(Same(RenderQueued(rig.engine, q, input, {48}), ref));
+  REQUIRE(rig.engine.EpochStart() == 0);
+  REQUIRE(rig.engine.GetParam(ParamId::DelayMs) == 100.0f);
+  REQUIRE(q.ConsumeRefused() == 0);
 }
 
 // ── The FP environment at the new entry points (§4.1) ─────────────────────────────────
@@ -830,8 +1045,23 @@ TEST_CASE("BuildToolchain names the compiler, target and FP flags that built the
 #else
   REQUIRE(std::strstr(id.fpFlags, "-ffp-contract=off") != nullptr);
 #endif
-  REQUIRE(std::strlen(id.fpFlagsHash) == 16);
-  for (const char* c = id.fpFlagsHash; *c != '\0'; ++c) {
-    REQUIRE(((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'f')));
+  // The hash is the flag text's, so a report cannot pair one build's text with another's hash.
+  golden::Sha256 sha;
+  sha.Update(id.fpFlags, std::strlen(id.fpFlags));
+  REQUIRE(sha.Hex().substr(0, 16) == id.fpFlagsHash);
+  // Every floating-point and target flag the build passed is named: they tell the AVX2,
+  // x86-64-v3 and Cortex-M7 legs apart in triage.
+  std::set<std::string> named;
+  std::istringstream    idWords(id.fpFlags);
+  for (std::string w; idWords >> w;) named.insert(w);
+  std::istringstream buildWords(BRAINSCAPE_TEST_BUILD_FLAGS);
+  for (std::string w; buildWords >> w;) {
+    for (const char* prefix : {"/arch:", "/fp:", "-march=", "-mcpu=", "-mfpu=", "-mfloat-abi=",
+                               "-ffp-", "-mfma", "-mavx"}) {
+      if (w.rfind(prefix, 0) == 0) {
+        INFO(w);
+        REQUIRE(named.count(w) == 1);
+      }
+    }
   }
 }

@@ -305,7 +305,7 @@ void BrainscapeProcessor::ApplyEvent(const WrapperEvent& e) noexcept {
       }
       break;
     case WrapperEvent::Type::Freeze:
-      engine_.SetFreeze(e.value >= 0.5f);
+      engine_.SetFreeze(e.value != 0.0f);  // the engine's Freeze-event rule (Engine.h)
       break;
     case WrapperEvent::Type::Trigger:
       engine_.Trigger(Engine::TriggerSource::Footswitch);
