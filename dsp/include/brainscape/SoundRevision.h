@@ -10,10 +10,11 @@ namespace brainscape {
 // rules and flags, for every input. Any change that CAN change engine output bumps
 // it; golden coverage is not the definition. It keys the golden-hash file (§6.1).
 //
-// 0 means no revision has been minted: the engine is still changing (profile §8.4
-// step 10 mints internal revision 1), so the golden harness only reports and
-// refuses to mint.
-inline constexpr uint32_t kSoundRevision = 0;
+// A bump is exactly one and regenerates dsp/tests/golden/golden.json with the harness's
+// --mode mint in the same pull request; sound-rev.yml fails a sound-relevant change
+// without one (tools/ci/sound_rev_gate.py). Revisions before the first published one
+// are internal (§1.5). 1: the first minted revision (profile §8.4 step 10).
+inline constexpr uint32_t kSoundRevision = 1;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

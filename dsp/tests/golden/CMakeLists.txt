@@ -23,18 +23,25 @@ if(BRAINSCAPE_BUILD_M7_ORACLE)
     -nostartfiles -static -Wl,-Ttext-segment=0x400000 -Wl,--gc-sections)
   set_target_properties(brainscape_golden PROPERTIES SUFFIX .elf)
 else()
-  # Report mode: passes unless a render fails or a preset's coverage is missing. Hash
-  # values gate nothing until a sound revision is minted (profile §8.4 step 10).
-  # Debug builds skip the ablation renders (Release proves coverage) but keep every
-  # vector, so assertions run over the whole corpus.
-  add_test(NAME golden_report
-    COMMAND brainscape_golden --mode report --tag ctest-$<CONFIG>
+  # Check mode (profile §6.1): every hash, per-second hash and counter must equal
+  # golden.json for this build's kSoundRevision, and a render failure or missing coverage
+  # fails too. A negative-control build cannot check (the harness refuses), so it
+  # reports. Debug builds skip the ablation renders (Release proves coverage) but keep
+  # every vector, so assertions run over the whole corpus.
+  if(BRAINSCAPE_FP_NEGATIVE_CONTROL)
+    set(golden_mode report)
+  else()
+    set(golden_mode check)
+  endif()
+  add_test(NAME golden_check
+    COMMAND brainscape_golden --mode ${golden_mode} --tag ctest-$<CONFIG>
             --report ${CMAKE_CURRENT_BINARY_DIR}/golden-report-$<CONFIG>.json
             $<IF:$<CONFIG:Debug>,--no-ablate,--ablate>)
 
   # The forced-flush control (profile §6.4): the harness again, on the engine built with
-  # the guard's test hooks, renders every preset with flushing forced on. Every vector must
-  # reproduce but the subnormal-input one, which must change. Debug skips the long vectors.
+  # the guard's test hooks, checks the golden file and renders every preset with flushing
+  # forced on. Every vector must reproduce but the subnormal-input one, which must change.
+  # Debug skips the long vectors.
   add_executable(brainscape_golden_flush
     golden_main.cpp
     Corpus.cpp
@@ -46,7 +53,8 @@ else()
   target_compile_definitions(brainscape_golden_flush PRIVATE
     BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
   add_test(NAME golden_forced_flush
-    COMMAND brainscape_golden_flush --force-flush-control --no-ablate --tag ctest-flush-$<CONFIG>
+    COMMAND brainscape_golden_flush --mode ${golden_mode} --force-flush-control --no-ablate
+            --tag ctest-flush-$<CONFIG>
             --report ${CMAKE_CURRENT_BINARY_DIR}/golden-flush-$<CONFIG>.json
             $<IF:$<CONFIG:Debug>,--quick,--no-ablate>)
 endif()
