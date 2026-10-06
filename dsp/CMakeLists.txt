@@ -27,3 +27,14 @@ endif()
 if(BRAINSCAPE_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# The golden-hash harness cross-built for the Cortex-M7 with the firmware flags and run
+# under qemu-arm user mode (docs/design/determinism-profile.md §6.2, the M7 leg). Needs
+# the arm-none-eabi toolchain file; the host harness builds with the tests.
+option(BRAINSCAPE_BUILD_M7_ORACLE "Build the golden harness as a Cortex-M7 ELF for qemu-arm" OFF)
+if(BRAINSCAPE_BUILD_M7_ORACLE)
+  if(BRAINSCAPE_BUILD_TESTS)
+    message(FATAL_ERROR "BRAINSCAPE_BUILD_M7_ORACLE needs BRAINSCAPE_BUILD_TESTS=OFF (the tests are host-only)")
+  endif()
+  add_subdirectory(tests/golden)
+endif()

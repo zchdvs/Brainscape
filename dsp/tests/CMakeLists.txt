@@ -16,3 +16,5 @@ add_test(NAME dsp_unit COMMAND brainscape_tests)
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)
+
+add_subdirectory(golden)
