@@ -125,18 +125,32 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
   At(out, Counter::LastNonzeroFrame) = -1;
   if (!ok_) return false;
 
-  // Exact-restart state (profile §2.3 #3): every buffer zero, a fresh engine, then
-  // today's equivalent of LoadPreset(P, Exact): set every stored leaf, then Reset()
-  // drains them and snaps the smoothers.
-  for (size_t t = 0; t < kNumTiers; ++t) {
-    if (arenas_.base[t] != nullptr) std::memset(arenas_.base[t], 0, arenas_.bytes[t]);
-  }
+  // Exact-restart state (profile §2.3 #3), then LoadPreset(P, Exact). The engine is
+  // Init'd once and every render restarts it, so each render after the first checks
+  // that Restart returns a used engine to the state Init leaves.
   EngineConfig cfg;
   cfg.historyFrames = 1u << cfg_.historyLog2;
-  auto engine       = std::make_unique<Engine>();
-  if (!engine->Init(cfg, arenas_)) return false;
-  for (const auto& kv : p.params) engine->SetParam(kv.first, kv.second);
-  engine->Reset();
+  if (engine_ == nullptr || cfg_.freshEngine) {
+    for (size_t t = 0; t < kNumTiers; ++t) {
+      if (arenas_.base[t] != nullptr) std::memset(arenas_.base[t], 0, arenas_.bytes[t]);
+    }
+    engine_ = std::make_unique<Engine>();
+    if (!engine_->Init(cfg, arenas_)) {
+      engine_.reset();
+      return false;
+    }
+  }
+  Engine& engine = *engine_;
+  // A complete preset (companion §6.1): every leaf, the preset's values over the defaults.
+  auto preset = std::make_unique<PresetState>();
+  for (uint32_t i = 0; i < kNumParams; ++i) {
+    preset->leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
+  }
+  preset->leafCount = static_cast<uint32_t>(kNumParams);
+  for (const auto& kv : p.params) {
+    preset->leaves[static_cast<uint32_t>(kv.first) - 1u].value = kv.second;
+  }
+  if (!engine.LoadPreset(*preset, LoadMode::Exact)) return false;  // inexact: a corpus bug
 
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(notes.data(), static_cast<uint32_t>(notes.size()));
@@ -146,21 +160,65 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
   const int64_t ring        = cfg.historyFrames;
   const int64_t reanchorAge = ring - ring / 4;  // GranularCore::Process's 3/4-ring rule
   const int64_t slack       = RingSlackFrames();
+  // The first re-anchor, or the far guard measured from the pin if that is sooner.
+  const int64_t pinReach    = reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack;
   const int64_t frames      = v.frames;
   bool          frozen      = false;
   int64_t       pinAbs      = 0;
+  float         feedback    = engine.GetParam(ParamId::Feedback);  // the smoother's target
   int64_t       reach       = slack >= ring ? 0 : frames;
   auto          reachBy     = [&reach](int64_t f) { reach = f < reach ? f : reach; };
 
   int32_t qL[512], qR[512];
   float   inL[512], inR[512], outL[512], outR[512];
+  std::vector<Engine::BlockEvent> blockEvents;
   size_t  patternIdx = 0;
   int64_t gridEnd    = cfg_.blockPattern[0];
   for (int64_t pos = 0; pos < frames;) {
-    const Event* evs   = nullptr;
-    const uint32_t nev = cursor.Apply(*engine, pos, &evs);
+    int64_t end = gridEnd < frames ? gridEnd : frames;  // clamp to what remains
+    // Onsets are reported at hop boundaries (frames 256k - 1) and counted per block, so
+    // a block whose hop boundaries straddle a freeze toggle could not say which were
+    // frozen: it ends at the toggle. Output is block-split invariant, so only counting
+    // sees this cut. Split delivery cuts at every event anyway.
+    const int64_t firstHop = pos + 255 - (pos & 255);
+    const int64_t lastHop  = (end & ~int64_t{255}) - 1;
+    if (cfg_.delivery == Delivery::Split) {
+      const int64_t next = cursor.NextAfter(pos);
+      if (next < end) end = next;
+    } else if (firstHop < lastHop) {
+      const int64_t toggle = cursor.NextFreeze(firstHop, lastHop);
+      if (toggle < end) end = toggle;
+    }
+    const auto n = static_cast<uint32_t>(end - pos);
+
+    // The block's events: their counters, and the frozen and feedback state of each
+    // stretch between them.
+    const Event*   evs = nullptr;
+    const uint32_t nev = cursor.Take(end, &evs);
+    blockEvents.clear();
+    int64_t segStart        = pos;
+    bool    frozenAtHop     = false;
+    bool    frozenAtHopSeen = false;
+    auto    closeSegment    = [&](int64_t segEnd) {
+      if (frozen) {
+        At(out, Counter::FrozenFrames) += segEnd - segStart;
+        if (pinAbs + pinReach < segEnd) reachBy(pinAbs + pinReach);
+      }
+      if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += segEnd - segStart;
+      segStart = segEnd;
+    };
     for (uint32_t i = 0; i < nev; ++i) {
       const Event& ev = evs[i];
+      if (ev.frame > segStart) closeSegment(ev.frame);
+      if (ev.frame > firstHop && !frozenAtHopSeen) {
+        frozenAtHop     = frozen;
+        frozenAtHopSeen = true;
+      }
+      if (cfg_.delivery == Delivery::Split) {
+        ApplyUnstamped(engine, ev);
+      } else {
+        blockEvents.push_back(ToBlockEvent(ev, pos));
+      }
       ++At(out, Counter::Events);
       if (ev.frame % kPedalBlock != 0) ++At(out, Counter::OffGridEvents);
       if (ev.type == EventType::Trigger) ++At(out, Counter::Triggers);
@@ -168,16 +226,16 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
         const bool on = ev.value != 0.f;
         if (on && !frozen) {
           ++At(out, Counter::FreezeEngages);
-          pinAbs = pos;
+          pinAbs = ev.frame;
         }
         frozen = on;
       }
+      if (ev.type == EventType::SetParam && ev.id == ParamId::Feedback) {
+        feedback = Canonicalize(ev.id, ev.value);
+      }
     }
-    const float feedback = engine->GetParam(ParamId::Feedback);  // the target from here on
-
-    int64_t end = gridEnd < frames ? gridEnd : frames;  // clamp to what remains
-    end         = cursor.BlockEnd(pos, end);
-    const auto n = static_cast<uint32_t>(end - pos);
+    closeSegment(end);
+    if (!frozenAtHopSeen) frozenAtHop = frozen;
 
     gen->RenderQ23(qL, qR, n);
     for (uint32_t i = 0; i < n; ++i) {
@@ -195,24 +253,19 @@ bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& 
     ctx.in        = ins;
     ctx.out       = outs;
     ctx.numFrames = n;
-    engine->Process(ctx);
+    ctx.events    = blockEvents.data();
+    ctx.numEvents = static_cast<uint32_t>(blockEvents.size());
+    engine.Process(ctx);
 
-    const uint32_t onsets = engine->ConsumeOnsetCount();
+    const uint32_t onsets = engine.ConsumeOnsetCount();
     if (onsets > 0) {
       At(out, Counter::Onsets) += onsets;
-      if (frozen) At(out, Counter::FrozenOnsets) += onsets;
+      if (frozenAtHop) At(out, Counter::FrozenOnsets) += onsets;
       if (out->firstOnsetBlock < 0) {
         out->firstOnsetBlock = pos;
         reachBy(pos + ring - slack);  // no mark is older than the first onset
       }
     }
-    if (frozen) {
-      At(out, Counter::FrozenFrames) += n;
-      // The first re-anchor, or the far guard measured from the pin if that is sooner.
-      const int64_t f = pinAbs + (reanchorAge + 1 < ring - slack ? reanchorAge + 1 : ring - slack);
-      if (f < end) reachBy(f);
-    }
-    if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += n;
 
     for (uint32_t i = 0; i < n; ++i) {
       const float l = outL[i], r = outR[i];

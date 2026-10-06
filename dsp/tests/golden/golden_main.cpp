@@ -4,6 +4,7 @@
 //
 //   brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]
 //                     [--block N | --pattern A,B,...] [--ring LOG2] [--only NAME,...]
+//                     [--delivery engine|split] [--fresh-engine]
 //                     [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]
 //                     [--wav-dir DIR] [--list]
 //
@@ -11,9 +12,13 @@
 //        a render cannot run or a preset's coverage is missing (exit 1).
 // check  also requires every hash, per-second hash and counter to equal the golden
 //        file for this build's kSoundRevision (exit 2 on any difference).
-// mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, whole
-//        corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
-//        minted until the engine stops changing (profile §8.4 step 10).
+// mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, events
+//        delivered to the engine, one restarted engine, whole corpus, ablations on). It
+//        refuses while kSoundRevision is 0: nothing is minted until the engine stops
+//        changing (profile §8.4 step 10).
+// --delivery split applies events through SetParam, SetFreeze and Trigger with blocks
+// split at their frames instead of as stamped events (profile §5.11); --fresh-engine
+// Inits an engine per render instead of restarting one (§5.8). Neither may change a hash.
 // With a golden file for this revision, report and check write a WAV of every preset
 // that misses it into --wav-dir (profile §6.1: WAV files only on mismatch).
 // --note records a fact about the build that the binary cannot see (the archive's
@@ -61,6 +66,7 @@ constexpr const char* kGoldenFormat = "brainscape-golden/1";
 constexpr const char* kUsage =
     "usage: brainscape_golden [--mode report|check|mint] [--golden FILE] [--report FILE]\n"
     "       [--block N | --pattern A,B,...] [--ring LOG2] [--only VECTOR[/PRESET],...]\n"
+    "       [--delivery engine|split] [--fresh-engine]\n"
     "       [--ablate | --no-ablate] [--quick] [--tag TAG] [--note KEY=VALUE]\n"
     "       [--wav-dir DIR] [--list]\n";
 
@@ -74,14 +80,21 @@ struct Options {
   uint32_t                 ring = 22;
   std::vector<std::string> only;
   std::vector<std::pair<std::string, std::string>> notes;
-  bool                     ablate = true;
-  bool                     quick  = false;
-  bool                     list   = false;
+  Delivery                 delivery    = Delivery::Engine;
+  bool                     freshEngine = false;
+  bool                     ablate      = true;
+  bool                     quick       = false;
+  bool                     list        = false;
 
   bool Canonical() const {
-    return pattern.size() == 1 && pattern[0] == 48 && ring == 22 && only.empty() && !quick;
+    return pattern.size() == 1 && pattern[0] == 48 && ring == 22 && only.empty() && !quick &&
+           delivery == Delivery::Engine && !freshEngine;
   }
 };
+
+const char* DeliveryName(Delivery d) {
+  return d == Delivery::Engine ? "engine-events" : "split-at-event-frames";
+}
 
 // Identifies the build for triage only (profile §5.12): compiler, version, target.
 std::string Toolchain() {
@@ -148,6 +161,13 @@ bool Parse(int argc, char** argv, Options* o) {
     else if (!std::strcmp(a, "--wav-dir") && more) o->wavDir = argv[++i];
     else if (!std::strcmp(a, "--ring") && more) o->ring = Count(argv[++i]);
     else if (!std::strcmp(a, "--only") && more) o->only = Split(argv[++i]);
+    else if (!std::strcmp(a, "--delivery") && more && !std::strcmp(argv[i + 1], "engine")) {
+      o->delivery = Delivery::Engine;
+      ++i;
+    } else if (!std::strcmp(a, "--delivery") && more && !std::strcmp(argv[i + 1], "split")) {
+      o->delivery = Delivery::Split;
+      ++i;
+    } else if (!std::strcmp(a, "--fresh-engine")) o->freshEngine = true;
     else if (!std::strcmp(a, "--note") && more && std::strchr(argv[i + 1], '=') != nullptr) {
       const std::string kv = argv[++i];
       o->notes.emplace_back(kv.substr(0, kv.find('=')), kv.substr(kv.find('=') + 1));
@@ -246,10 +266,19 @@ Json ReportHeader(const Options& o, uint32_t historyFrames) {
   Json build = Json::Obj();
   build.Set("tag", Json::Str(o.tag));
   build.Set("toolchain", Json::Str(Toolchain()));
+  const ToolchainId& id = BuildToolchain();  // the engine library's own (profile §5.12)
+  Json engineToolchain  = Json::Obj();
+  engineToolchain.Set("compiler", Json::Str(id.compiler));
+  engineToolchain.Set("version", Json::Str(id.version));
+  engineToolchain.Set("target", Json::Str(id.target));
+  engineToolchain.Set("fpFlags", Json::Str(id.fpFlags));
+  engineToolchain.Set("fpFlagsHash", Json::Str(id.fpFlagsHash));
+  build.Set("engineToolchain", engineToolchain);
   Json pattern = Json::Arr();
   for (uint32_t b : o.pattern) pattern.Push(Json::Int(b));
   build.Set("blockPattern", pattern);
-  build.Set("delivery", Json::Str("split-at-event-frames"));
+  build.Set("delivery", Json::Str(DeliveryName(o.delivery)));
+  build.Set("start", Json::Str(o.freshEngine ? "init" : "restart"));
   build.Set("ablations", Json::Bool(o.ablate));
   build.Set("canonical", Json::Bool(o.Canonical() && !kNegativeControl));
   build.Set("negativeControl", Json::Bool(kNegativeControl));
@@ -573,21 +602,26 @@ int main(int argc, char** argv) {
   }
   if (o.mode == "mint" && (!o.Canonical() || !o.ablate)) {
     std::fprintf(stderr,
-                 "mint refused: needs the whole corpus at --block 48 --ring 22 with ablations\n");
+                 "mint refused: needs the whole corpus at --block 48 --ring 22 with ablations, "
+                 "engine delivery and a restarted engine\n");
     return 3;
   }
 
   std::string pattern;
   for (uint32_t b : o.pattern) pattern += (pattern.empty() ? "" : ",") + std::to_string(b);
   std::printf("# brainscape golden: soundRevision %u, generator v%u, corpus v%u, ring 2^%u, "
-              "blocks %s, events split at their frames\n# toolchain: %s\n",
+              "blocks %s, events %s, %s\n# toolchain: %s (fp flags %s)\n",
               static_cast<unsigned>(kSoundRevision), static_cast<unsigned>(testsignal::kVersion),
               static_cast<unsigned>(kCorpusVersion), static_cast<unsigned>(o.ring),
-              pattern.c_str(), Toolchain().c_str());
+              pattern.c_str(), DeliveryName(o.delivery),
+              o.freshEngine ? "an engine Init'd per render" : "one engine restarted per render",
+              Toolchain().c_str(), BuildToolchain().fpFlagsHash);
 
   RenderConfig rc;
   rc.blockPattern = o.pattern;
   rc.historyLog2  = o.ring;
+  rc.delivery     = o.delivery;
+  rc.freshEngine  = o.freshEngine;
   Renderer renderer(rc);
   if (!renderer.ok()) {
     std::fprintf(stderr, "cannot allocate the engine arenas\n");

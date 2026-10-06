@@ -57,7 +57,7 @@ struct Requirement {
 
 struct PresetCase {
   const char*                            name;
-  std::vector<std::pair<ParamId, float>> params;  // the Exact load: set, then Reset()
+  std::vector<std::pair<ParamId, float>> params;  // over the defaults: the Exact load
   Script                                 script;  // events during the render
   std::vector<Requirement>               require;
   std::vector<Feature>                   ablate;

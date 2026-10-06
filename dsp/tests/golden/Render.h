@@ -1,20 +1,27 @@
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "Corpus.h"
+#include "brainscape/Engine.h"
 #include "brainscape/Memory.h"
 
-// Renders one (vector, preset) pair through the current public Engine API from the
-// exact-restart state, hashing the output as it goes (docs/design/determinism-
-// profile.md §6.1: SHA-256 of the interleaved little-endian float32 output, plus one
-// per second) and counting coverage.
+// Renders one (vector, preset) pair through the public Engine API from the exact-restart
+// state, hashing the output as it goes (docs/design/determinism-profile.md §6.1: SHA-256
+// of the interleaved little-endian float32 output, plus one per second) and counting
+// coverage.
 namespace brainscape::golden {
 
 struct RenderConfig {
   std::vector<uint32_t> blockPattern{48};  // grid from frame 0, repeated; each <= 512
   uint32_t              historyLog2 = 22;  // 2^22 is the canonical ring (profile §2.3)
+  Delivery              delivery    = Delivery::Engine;
+  // Init a new engine for every render instead of restarting one engine (Restart, by
+  // way of LoadPreset(..., Exact)). Both are the exact-restart state, so both must
+  // render the same bits.
+  bool                  freshEngine = false;
 };
 
 struct RenderOutput {
@@ -47,10 +54,11 @@ class Renderer {
               const PresetCase& p, RenderOutput* out, Capture* capture = nullptr);
 
  private:
-  RenderConfig cfg_;
-  Arenas       arenas_{};
-  void*        raw_[kNumTiers] = {};
-  bool         ok_ = false;
+  RenderConfig            cfg_;
+  Arenas                  arenas_{};
+  void*                   raw_[kNumTiers] = {};
+  bool                    ok_ = false;
+  std::unique_ptr<Engine> engine_;  // Init'd once unless freshEngine
 };
 
 // SHA-256 of the vector's input, interleaved little-endian float32.

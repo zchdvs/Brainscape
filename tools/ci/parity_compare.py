@@ -4,11 +4,13 @@
 Reads every brainscape-golden-report/1 JSON under the given paths and prints a
 Markdown summary:
 
-  * canonical legs (48-frame grid, 2^22 ring) against a reference leg, preset by
-    preset, with the first differing second and any counter that differs;
+  * canonical legs (48-frame grid, 2^22 ring, events delivered to the engine, one
+    restarted engine) against a reference leg, preset by preset, with the first
+    differing second and any counter that differs;
   * input hashes, which must agree on every leg (the generator is integer-only);
   * coverage failures reported by any leg;
-  * block perturbations: a leg's non-canonical runs against its own canonical run;
+  * perturbations: a leg's non-canonical runs (other block sizes, wrapper-side event
+    splitting, an engine Init'd per render) against its own canonical run;
   * negative controls (tags starting "negctl-", or reports from a build configured
     with -DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON), which are EXPECTED to differ from the
     reference: matching it would mean the corpus lost coverage.
@@ -51,7 +53,18 @@ def is_negative_control(r):
 def is_canonical(r):
     b = r.get("build", {})
     return (b.get("blockPattern") == [48] and r.get("historyFrames") == 1 << 22
+            and b.get("delivery") == "engine-events" and b.get("start") == "restart"
             and not is_negative_control(r))
+
+
+def run_label(b):
+    """Blocks, and the delivery and start when they are not the canonical ones."""
+    label = "blocks " + ",".join(map(str, b.get("blockPattern", [])))
+    if b.get("delivery") != "engine-events":
+        label += f', {b.get("delivery")}'
+    if b.get("start") != "restart":
+        label += f', start {b.get("start")}'
+    return label
 
 
 def presets(r):
@@ -124,18 +137,22 @@ def main():
                  f'{"gating" if args.gate else "report-only (nothing is minted yet)"}.')
     lines.append("")
     if ref_tag is None:
-        lines.append("No canonical (48-frame, 2^22 ring) report to compare against.")
+        lines.append("No canonical (48-frame, 2^22 ring, engine events, restarted engine) report "
+                     "to compare against.")
         return finish(lines, args, problems + 1)
     ref = canon[ref_tag]
     ref_presets, ref_vectors = presets(ref)
 
     # Toolchains.
-    lines += ["## Legs", "", "| leg | toolchain | blocks | notes | report |", "|---|---|---|---|---|"]
+    lines += ["## Legs", "", "| leg | toolchain | engine FP flags | run | notes | report |",
+              "|---|---|---|---|---|---|"]
     for r in reports:
         b = r.get("build", {})
         notes = "; ".join(f"{k}: {v}" for k, v in b.get("notes", {}).items())
-        lines.append(f'| {b.get("tag")} | {b.get("toolchain")} | {",".join(map(str, b.get("blockPattern", [])))} '
-                     f'| {notes} | {os.path.basename(r["_path"])} |')
+        fp = b.get("engineToolchain", {})
+        lines.append(f'| {b.get("tag")} | {b.get("toolchain")} | {fp.get("fpFlags", "")} '
+                     f'({fp.get("fpFlagsHash", "?")}) | {run_label(b)} | {notes} '
+                     f'| {os.path.basename(r["_path"])} |')
     lines.append("")
 
     # Canonical legs against the reference.
@@ -185,9 +202,10 @@ def main():
     problems += len(cov)
     lines.append("")
 
-    # Block perturbations (profile §6.4): with §5.7's block-split fix landed, every one
-    # must match its leg's 48-frame run (contract #1).
-    lines += ["## Block perturbations (against the same leg's 48-frame run)", ""]
+    # Perturbations (profile §6.4): with §5.7's block-split fix landed, every block size
+    # must match its leg's 48-frame run (contract #1); so must wrapper-side event
+    # splitting (§5.11) and an engine Init'd per render instead of restarted (§5.8).
+    lines += ["## Perturbations (against the same leg's canonical run)", ""]
     any_pert = False
     for r in reports:
         b = r.get("build", {})
@@ -197,8 +215,7 @@ def main():
         any_pert = True
         rows = compare(canon[tag], r)
         diff = [f"{n} ({d})" for n, s, d in rows if s != "match"]
-        pattern = ",".join(map(str, b.get("blockPattern", [])))
-        lines.append(f"- `{tag}` blocks {pattern}: {len(rows) - len(diff)}/{len(rows)} identical"
+        lines.append(f"- `{tag}` {run_label(b)}: {len(rows) - len(diff)}/{len(rows)} identical"
                      + (": differ in " + "; ".join(diff) if diff else ""))
         problems += len(diff)
     if not any_pert:

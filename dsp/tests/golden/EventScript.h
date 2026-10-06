@@ -39,27 +39,34 @@ class Script {
   uint32_t           seq_ = 0;
 };
 
-// The one place that knows how events reach the engine. Today's public API applies
-// SetParam, SetFreeze and Trigger at the start of the next Process call, so blocks
-// are split at every event frame and the frame's events are applied, in sequence
-// order, just before the block that starts there: exactly what an engine-side
-// stamped event at in-block offset 0 means (§5.11). When Process takes stamped
-// events, Apply hands each block's events over with their offsets and BlockEnd
-// stops splitting; nothing else in the harness changes.
+// How events reach the engine: as stamped events in ProcessContext (Engine, the
+// contract's delivery), or through SetParam, SetFreeze and Trigger with every block
+// split at the events' frames (Split, what a wrapper does without engine-side events).
+// Both must render the same bits.
+enum class Delivery : uint8_t { Engine, Split };
+
+// Walks a script block by block.
 class EventCursor {
  public:
   explicit EventCursor(const std::vector<Event>& events) : events_(events) {}
 
-  // Applies the events stamped at `frame`; every earlier event must already be
-  // applied. Returns them as [*first, *first + count) of the script.
-  uint32_t Apply(Engine& engine, int64_t frame, const Event** first);
-
-  // Where a block that starts at `from` and wants to end at `to` must end instead.
-  int64_t BlockEnd(int64_t from, int64_t to) const;
+  // The frame of the first event not yet taken that is stamped after `frame`, or
+  // INT64_MAX.
+  int64_t NextAfter(int64_t frame) const;
+  // The first freeze event not yet taken with a frame in (after, upTo], or INT64_MAX.
+  int64_t NextFreeze(int64_t after, int64_t upTo) const;
+  // Takes the events stamped before `end` as [*first, *first + count) of the script.
+  uint32_t Take(int64_t end, const Event** first);
 
  private:
   const std::vector<Event>& events_;
   size_t                    next_ = 0;
 };
+
+// Split delivery: applies one event through the unstamped API, which the next Process
+// call applies at its first frame.
+void ApplyUnstamped(Engine& engine, const Event& e);
+// Engine delivery: the event stamped with its offset in the block starting at blockStart.
+Engine::BlockEvent ToBlockEvent(const Event& e, int64_t blockStart);
 
 }  // namespace brainscape::golden
