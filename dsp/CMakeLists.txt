@@ -12,6 +12,7 @@ add_library(brainscape_dsp STATIC
   src/DetMath.cpp
   src/Engine.cpp
   src/Granular.cpp
+  src/InputCondition.cpp
   src/OnsetDetector.cpp
   src/PostChain.cpp
 )

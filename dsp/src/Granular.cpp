@@ -2,8 +2,12 @@
 
 #include "detail/Granular.h"
 
+#include <cassert>
+
 #include "detail/DetMath.h"
 
+// Every float-to-int conversion below has a proven range, asserted in Debug builds:
+// out-of-range conversions differ by ISA (determinism profile §3.10).
 namespace brainscape::detail {
 
 using grainmath::Draw;
@@ -45,6 +49,7 @@ inline float EnvMorphed(const grainmath::EnvSpec& e, float i, float smoothness,
                         const float* lut) noexcept {
   float env = grainmath::EnvValue(e, i);
   const float x   = env * static_cast<float>(kWindowLutSize - 1);
+  assert(x >= 0.f && x <= static_cast<float>(kWindowLutSize - 1));  // finite env in [0, 1]
   const auto  i0  = static_cast<uint32_t>(x);
   const auto  i1  = i0 + 1u < kWindowLutSize ? i0 + 1u : i0;
   const float fr  = x - static_cast<float>(i0);
@@ -93,7 +98,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
       // the grain length so the guard fits, instead of losing the transient.
       if (ratio > 1.0f) {
         const double maxOut = (d - kGuardMarginFrames) / (static_cast<double>(ratio) - 1.0);
-        if (maxOut < static_cast<double>(total)) {
+        if (maxOut < static_cast<double>(total)) {  // converted only in [16, total)
           total = maxOut >= 16.0 ? static_cast<uint32_t>(maxOut) : 16u;
         }
       }
@@ -113,9 +118,13 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   }
 
   Grain& g = grains_[slot];
+  // d is at least the margin and at most the larger of the ring and the near guard,
+  // L * (r - 1) + margin with r <= 4.
+  assert(d >= kGuardMarginFrames && d <= 0x1p27);
   const auto startFrame =
       (anchorFrame - static_cast<uint32_t>(detmath::RoundHalfAwayI32(d))) & mask_;
   g.pos    = static_cast<uint64_t>(startFrame) << 32;
+  assert(ratio >= 0.25f && ratio <= 4.0f);  // the composed pitch is clamped to ±24 st
   auto inc = detmath::RoundHalfAwayI64(static_cast<double>(ratio) * kFix);
   if (reverse) inc = -inc;
   g.inc        = inc;
@@ -239,6 +248,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
 
   const float target  = p.targetVoices >= 1.0f ? p.targetVoices : 1.0f;
   const float spacing = static_cast<float>(p.totalFrames) / target;
+  assert(target <= static_cast<float>(kGranularMaxGrains));
   const auto  targetFloor = static_cast<uint32_t>(target);
   const float targetFrac  = target - static_cast<float>(targetFloor);
 

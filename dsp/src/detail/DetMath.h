@@ -38,6 +38,13 @@ inline float Abs(float x) noexcept {  // bit-exact fabsf: clears the sign bit on
   return x;
 }
 
+// Finiteness on the bit pattern: no comparison, so no FP environment changes it.
+inline bool IsFinite(float x) noexcept {
+  uint32_t u;
+  std::memcpy(&u, &x, sizeof u);
+  return (u & 0x7F800000u) != 0x7F800000u;
+}
+
 // lround/llround semantics (round half away from zero), exact: x - trunc(x) is always
 // representable. The domain keeps t ± 1 and the truncating conversion in range;
 // out-of-range float-to-int conversion differs by ISA (§3.10).

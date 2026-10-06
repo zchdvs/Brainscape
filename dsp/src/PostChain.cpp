@@ -2,6 +2,8 @@
 
 #include "detail/PostChain.h"
 
+#include <cassert>
+
 #include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
 
@@ -14,6 +16,8 @@ inline float LpCoef(double cutoffHz, double sr) noexcept {
   return -static_cast<float>(detmath::Expm1D(-6.283185307179586 * cutoffHz / sr));
 }
 
+// Lengths from the sample rate (determinism profile §3.10): Init and PlanMemory accept
+// 8-384 kHz, so every one is a small positive count.
 inline uint32_t ScaleLen(uint32_t base32k, double sr) noexcept {
   const auto n =
       static_cast<uint32_t>(detmath::RoundHalfAwayI32(static_cast<double>(base32k) * sr / 32000.0));
@@ -27,6 +31,12 @@ constexpr uint32_t kRvAp[4]  = {113, 162, 241, 399};
 constexpr uint32_t kRvDap[4] = {1653, 2038, 1913, 1663};
 constexpr uint32_t kRvDel[2] = {3411, 4782};
 constexpr float    kRvModExcursion32k = 24.0f;  // frames of LFO wobble on the long delays
+
+inline uint32_t RvExcursionFrames(double sr) noexcept {
+  const double x = kRvModExcursion32k * sr / 32000.0;
+  assert(x >= 0.0 && x < 65536.0);  // as ScaleLen
+  return static_cast<uint32_t>(x);
+}
 
 // Wet output taps inside the tank (32 kHz frames): staggered primes so both
 // channels get early energy from ~8 ms and decorrelated reflections — the raw
@@ -123,7 +133,7 @@ uint32_t PostChain::WarmFloats(double sr) noexcept {
   for (uint32_t b : kRvAp) total += ScaleLen(b, sr);
   for (uint32_t b : kRvDap) total += ScaleLen(b, sr);
   for (uint32_t b : kRvDel) {
-    total += ScaleLen(b, sr) + static_cast<uint32_t>(kRvModExcursion32k * sr / 32000.0) + 4u;
+    total += ScaleLen(b, sr) + RvExcursionFrames(sr) + 4u;
   }
   return total;
 }
@@ -152,8 +162,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
     p += n;
   }
   for (int i = 0; i < 2; ++i) {
-    const uint32_t n =
-        ScaleLen(kRvDel[i], sr) + static_cast<uint32_t>(kRvModExcursion32k * sr / 32000.0) + 4u;
+    const uint32_t n = ScaleLen(kRvDel[i], sr) + RvExcursionFrames(sr) + 4u;
     rvDel_[i].Init(p, n);
     p += n;
   }
@@ -240,6 +249,7 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
   // Equal-power morph weights (LP/BP are in quadrature — a linear blend dipped
   // 3.1 dB at segment midpoints; review finding).
   const float m   = morph < 0.f ? 0.f : (morph > 3.f ? 3.f : morph);
+  assert(m >= 0.f && m <= 3.f);  // profile §3.10: canonical parameters are never NaN
   svfSeg_         = m >= 3.f ? 2u : static_cast<uint32_t>(m);
   const float fr  = m - static_cast<float>(svfSeg_);
   double ws, wc;
@@ -291,6 +301,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
       }
       case Stage::Delay: {
         if (delayMixSm_.target == 0.f && delayMixSm_.value == 0.f) break;
+        // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
+        assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pdL_.len));
         auto back = static_cast<uint32_t>(p.delayFrames);
         if (back < 1u) back = 1u;
         if (back > pdL_.len - 1u) back = pdL_.len - 1u;
@@ -417,6 +429,9 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
       }
     }
   }
+  // Determinism profile §3.7: smoother states stay finite (checked once per block).
+  assert(detmath::IsFinite(modDepthSm_.value) && detmath::IsFinite(delayMixSm_.value) &&
+         detmath::IsFinite(reverbMixSm_.value) && detmath::IsFinite(filterMixSm_.value));
 }
 
 }  // namespace brainscape::detail

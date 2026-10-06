@@ -2,6 +2,8 @@
 
 #include "detail/OnsetDetector.h"
 
+#include <cassert>
+
 #include "detail/DetMath.h"
 
 namespace brainscape::detail {
@@ -29,7 +31,9 @@ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
   sr_ = sampleRate;
   // aubio's 20 ms min-IOI, rounded UP to whole hops so the constant matches the
   // realized behavior (the gate only runs at hop boundaries).
-  const auto ioiHops = static_cast<int64_t>(detmath::CeilSmall(0.020 * sampleRate / kOnsetHop));
+  const double ioi   = detmath::CeilSmall(0.020 * sampleRate / kOnsetHop);
+  assert(ioi >= 1.0 && ioi <= 64.0);  // determinism profile §3.10: 8-384 kHz
+  const auto ioiHops = static_cast<int64_t>(ioi);
   minIoi_            = ioiHops * kOnsetHop;
   // Whitening memory ~0.4 s in TIME regardless of rate (review: the fixed 0.997
   // constant was a 1.78 s memory that suppressed quiet notes after loud ones).

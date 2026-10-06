@@ -113,10 +113,16 @@ struct EnvSpec {
   float total;       // grain length in output frames
   float attackEnd;   // output-frame index where the attack leg ends
   float decayStart;  // output-frame index where the decay leg starts
-  float attackInv;   // 1 / attack length (0 if no attack)
-  float decayInv;    // 1 / decay length (0 if no decay)
+  float attackInv;   // 1 / attack length (0 if the leg is shorter than kMinEnvLeg)
+  float decayInv;    // 1 / decay length (0 if the leg is shorter than kMinEnvLeg)
   float gain;        // 1 / window mean = 2 / (1 + sustain)
 };
+
+// Shortest envelope leg that gets a reciprocal (determinism profile §3.7). Under
+// gradual underflow a subnormal leg made 1/a infinite and EnvValue(0) = 0 * inf = NaN.
+// A leg shorter than one frame covers at most index 0, which is 0 either way, so the
+// guard never changes output.
+inline constexpr float kMinEnvLeg = 0x1p-20f;
 
 inline EnvSpec MakeEnv(float outFrames, float sustain, float skew) noexcept {
   if (sustain < 0.f) sustain = 0.f;
@@ -130,8 +136,8 @@ inline EnvSpec MakeEnv(float outFrames, float sustain, float skew) noexcept {
   e.total      = outFrames;
   e.attackEnd  = a;
   e.decayStart = outFrames - dcy;
-  e.attackInv  = a > 0.f ? 1.0f / a : 0.f;
-  e.decayInv   = dcy > 0.f ? 1.0f / dcy : 0.f;
+  e.attackInv  = a >= kMinEnvLeg ? 1.0f / a : 0.f;
+  e.decayInv   = dcy >= kMinEnvLeg ? 1.0f / dcy : 0.f;
   e.gain       = 2.0f / (1.0f + sustain);
   return e;
 }

@@ -45,6 +45,7 @@ struct EngineConfig {
                                       // bit-exact Tu null mode (design §10 contract #2).
 };
 
+// An empty plan for a sample rate Init would refuse (outside 8-384 kHz).
 MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 
 // The granular engine: 64-voice pool + scheduler over the int16 history ring,
@@ -53,10 +54,12 @@ MemoryPlan PlanMemory(const EngineConfig&) noexcept;
 // the design predicts (§5 Pattern A): rectangular window, abutting unity grains.
 //
 // Every entry point that runs floating-point code (Init, Reset, ClearHistory,
-// Process, SetParam, and PlanMemory) installs the determinism profile's complete FP
-// control word for its duration and restores the caller's
+// Process, SetParam, and PlanMemory and Canonicalize) installs the determinism
+// profile's complete FP control word for its duration and restores the caller's
 // (docs/design/determinism-profile.md §4.1): round to nearest, gradual underflow.
 // Callers need not set flush modes (JUCE's ScopedNoDenormals is redundant here).
+// Input must be finite: wrappers pass live input through SanitizeInput
+// (InputCondition.h); Debug builds assert that the output stays finite.
 class Engine {
  public:
   Engine() noexcept;
@@ -96,8 +99,8 @@ class Engine {
   // never left with stale host memory.
   void Process(const ProcessContext&) noexcept;
 
-  // Any thread; lock-free. Non-finite values are mapped to the descriptor minimum
-  // (NaN must never reach the smoothers — it is an absorbing state there).
+  // Any thread; lock-free. Stores Canonicalize(id, plainValue) (Params.h): NaN and
+  // ±inf become the descriptor minimum, ±0 and subnormals +0, then the clamp.
   // sampleOffset is accepted for API stability but the skeleton applies changes at
   // the next Process() start — the sample-accurate SPSC event queue lands next
   // (design §9 threading table); the hidden "[.pending-spsc]" test is its

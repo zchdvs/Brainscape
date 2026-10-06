@@ -44,13 +44,25 @@ static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice c
 
 constexpr float kInvScale = 1.0f / 32767.0f;
 
+// Init and PlanMemory accept these rates. Below ~40 Hz the ms-sized post buffers round
+// to zero length and a DelaySlice write walks off its arena (review finding); above
+// 384 kHz is outside anything the design supports. The bounds also keep every length
+// derived from the rate in range for its integer conversion (determinism profile §3.10).
+constexpr double kMinSampleRate = 8000.0;
+constexpr double kMaxSampleRate = 384000.0;
+
+inline bool SampleRateSupported(double sr) noexcept {
+  return sr >= kMinSampleRate && sr <= kMaxSampleRate;  // false for NaN
+}
+
 // Rounding-mode-independent, NaN-safe int16 quantizer. Not lrintf: lrintf follows
 // the dynamic FP rounding mode and is a libm call in the hot loop on Cortex-M7
 // (review finding, verified with arm-none-eabi-gcc). The guard now pins round to
 // nearest, but the quantizer stays independent of the mode regardless (determinism
 // profile §5.3). Round-half-away-from-zero via a plain truncating convert.
 // Clamp is symmetric at ±32767 so the ring's float range stays exactly [-1, 1],
-// and the negated comparisons map NaN to a defined endpoint on every platform.
+// and the negated comparisons map NaN to a defined endpoint on every platform, which
+// also keeps the conversion in range (§3.10).
 inline int16_t QuantizeS16(float x) noexcept {
   float s = x * 32767.0f;
   if (!(s < 32767.0f)) s = 32767.0f;
@@ -75,10 +87,26 @@ inline float Tpdf(int64_t absSample, grainmath::Draw purpose) noexcept {
   return (u1 + u2 - 1.0f) * kInvScale;
 }
 
-// Body of PlanMemory; the public function below only adds the guard
-// (detail/FpEnvGuard.h explains the split).
+// The canonical plain value (determinism profile §3.7), decided on the bit pattern:
+// under DAZ, which hosts set, comparisons treat subnormals as zero, and a
+// comparison-based rule stored different bits and changed every grain's first sample.
+// Once non-finite and subnormal values are gone, the clamp compares normal numbers.
+inline float CanonicalValue(const ParamDescriptor& d, float v) noexcept {
+  uint32_t u;
+  std::memcpy(&u, &v, sizeof u);
+  const uint32_t exponent = u & 0x7F800000u;
+  if (exponent == 0x7F800000u) return d.min;  // NaN, ±inf
+  if (exponent == 0u) v = 0.0f;               // ±0, subnormals
+  if (v < d.min) v = d.min;
+  if (v > d.max) v = d.max;
+  return v;
+}
+
+// Bodies of the free-function entry points; the public functions below only add the
+// guard (detail/FpEnvGuard.h explains the split).
 BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   MemoryPlan plan{};
+  if (!SampleRateSupported(cfg.sampleRate)) return plan;  // Init refuses the config too
   // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
   // inside the Engine object — firmware places the Engine instance in DTCM.
   plan.bytes[static_cast<size_t>(Tier::Hot)] =
@@ -102,6 +130,11 @@ BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   // Cache-line aligned: the SD/DMA coherency rule needs 32-byte-aligned ranges (design §7).
   plan.align[static_cast<size_t>(Tier::Bulk)] = 32;
   return plan;
+}
+
+BRAINSCAPE_FP_BODY float CanonicalizeBody(ParamId id, float plainValue) noexcept {
+  const ParamDescriptor* d = FindParam(id);
+  return d != nullptr ? CanonicalValue(*d, plainValue) : 0.0f;
 }
 
 }  // namespace
@@ -227,6 +260,11 @@ const ParamDescriptor* FindParam(ParamId id) noexcept {
   return &kParamTable[raw - 1];
 }
 
+float Canonicalize(ParamId id, float plainValue) noexcept {
+  const detail::FpEnvGuard guard;
+  return CanonicalizeBody(id, plainValue);
+}
+
 MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   const detail::FpEnvGuard guard;
   return PlanMemoryBody(cfg);
@@ -234,10 +272,7 @@ MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
 
 bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
-  // Rate bounds: below ~40 Hz the ms-sized post buffers round to zero length and
-  // a DelaySlice write walks off its arena (review finding); above 384 kHz is
-  // outside anything the design supports.
-  if (cfg.sampleRate < 8000.0 || cfg.sampleRate > 384000.0) return false;
+  if (!SampleRateSupported(cfg.sampleRate)) return false;
   if (cfg.maxBlockSize == 0) return false;
   if (cfg.maxBlockSize > kFeedbackDelayFrames) return false;  // wrappers chunk larger buffers
   if (!IsPowerOfTwo(cfg.historyFrames)) return false;
@@ -427,8 +462,9 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // ONE rounded integer drives grain length, spacing, and the voice budget —
   // spacing from the unrounded float opened duty-cycle holes across 80% of the
   // size_ms range (review finding, up to 48.8% silence).
-  auto total = static_cast<uint32_t>(
-      detmath::RoundHalfAwayI32(get(ParamId::GrainSizeMs) * 0.001 * sr));
+  const double sizeFrames = get(ParamId::GrainSizeMs) * 0.001 * sr;
+  assert(sizeFrames >= 0.0 && sizeFrames <= 0.5 * sr + 1.0);  // profile §3.10: 1-500 ms
+  auto total = static_cast<uint32_t>(detmath::RoundHalfAwayI32(sizeFrames));
   if (total < 1u) total = 1u;
   gp_.totalFrames = total;
 
@@ -485,12 +521,10 @@ void Engine::Impl::RebuildGranularParams() noexcept {
 void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   const ParamDescriptor* d = FindParam(id);
   if (d == nullptr) return;
-  // Negated comparisons: NaN fails both, so a non-finite value maps to the minimum
-  // instead of slipping through into the smoothers, where NaN is an absorbing
-  // state recoverable only by Reset()/Init() (review finding, verified).
-  if (!(value >= d->min)) value = d->min;
-  if (!(value <= d->max)) value = d->max;
-  pending_[static_cast<uint32_t>(id) - 1u].store(value, std::memory_order_relaxed);
+  // NaN must never reach the smoothers, where it is an absorbing state recoverable
+  // only by Reset()/Init() (review finding, verified), nor any other engine state.
+  pending_[static_cast<uint32_t>(id) - 1u].store(CanonicalValue(*d, value),
+                                                 std::memory_order_relaxed);
 }
 
 float Engine::Impl::GetParam(ParamId id) const noexcept {
@@ -658,6 +692,16 @@ void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
     outL[n] = (dryL * (1.0f - mix) + wetL_[n] * mix) * g;
     outR[n] = (dryR * (1.0f - mix) + wetR_[n] * mix) * g;
   }
+
+#if !defined(NDEBUG)
+  // The engine never makes NaN or infinity (determinism profile §3.7); a non-finite
+  // output here means non-finite input that the wrapper failed to sanitize.
+  for (uint32_t n = 0; n < ctx.numFrames; ++n) {
+    assert(detmath::IsFinite(outL[n]) && detmath::IsFinite(outR[n]));
+  }
+  assert(detmath::IsFinite(mix_.value) && detmath::IsFinite(outGain_.value) &&
+         detmath::IsFinite(feedback_.value) && detmath::IsFinite(norm_.value));
+#endif
 
   sampleCounter_ += ctx.numFrames;
 }

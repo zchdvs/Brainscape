@@ -1,6 +1,7 @@
 #pragma once
 #include "detail/FpProfilePrivate.h"
 
+#include <cassert>
 #include <cstdint>
 
 #include "detail/FlushTiny.h"
@@ -89,6 +90,7 @@ struct DelaySlice {
     return buf[i];
   }
   float ReadBackLerp(float back) const noexcept {  // back in [1, len-1)
+    assert(back >= 1.0f && back < static_cast<float>(len - 1u));  // profile §3.10: bounded excursion
     const auto  b0 = static_cast<uint32_t>(back);
     const float fr = back - static_cast<float>(b0);
     const float a  = ReadBack(b0);

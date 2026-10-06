@@ -95,4 +95,11 @@ inline constexpr size_t kNumParams = sizeof(kParamTable) / sizeof(kParamTable[0]
 const ParamDescriptor* Descriptors(size_t* count) noexcept;
 const ParamDescriptor* FindParam(ParamId id) noexcept;
 
+// The canonical form of a plain value, exactly as Engine::SetParam stores it
+// (docs/design/determinism-profile.md §3.7): NaN and ±inf become the descriptor
+// minimum, ±0 and subnormals become +0, then the value is clamped to [min, max]. The
+// tests are on the bit pattern, so the result is the same under any host FP
+// environment. Presets and events carry only canonical values. Unknown ids give +0.
+float Canonicalize(ParamId id, float plainValue) noexcept;
+
 }  // namespace brainscape
