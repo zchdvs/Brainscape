@@ -13,8 +13,11 @@ function(_brainscape_golden_harness name engine)
   target_link_libraries(${name} PRIVATE ${engine})
   # The engine's private FP-environment header, for the hostile-environment renders.
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+  # The golden file, and the corpus's committed packages (docs/design/mode-compiler.md §10.3),
+  # which the host and M7 harnesses read and decode alike.
   target_compile_definitions(${name} PRIVATE
-    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
+    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json"
+    BRAINSCAPE_GOLDEN_PRESETS="${CMAKE_CURRENT_SOURCE_DIR}/presets")
   if(BRAINSCAPE_BUILD_M7_ORACLE)
     target_sources(${name} PRIVATE m7/syscalls.c)
     target_compile_options(${name} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-Wno-psabi>")

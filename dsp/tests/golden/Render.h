@@ -43,6 +43,9 @@ struct RenderOutput {
   // The last restart mid-render and the hash of the output from it on, or -1.
   int64_t                  restartFrame = -1;
   std::string              restartHash;
+  // The committed package the preset starts from: its sound_hash and control_hash, 64 hex
+  // digits as bspc prints them (the package rule, mode-compiler.md §8.3); empty without one.
+  std::string              soundHash, controlHash;
 };
 
 // The output samples, kept only to write a WAV for a preset that misses its golden.

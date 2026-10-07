@@ -1,8 +1,8 @@
 {
   "format": "brainscape-golden/1",
-  "soundRevision": 1,
+  "soundRevision": 2,
   "generatorVersion": 1,
-  "corpusVersion": 5,
+  "corpusVersion": 6,
   "sampleRate": 48000,
   "stereoInput": true,
   "ditherRingWrite": true,
@@ -51,7 +51,11 @@
             "tailActiveFrames": 58190,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 491424,
-            "lastNonzeroFrame": 491449
+            "lastNonzeroFrame": 491449,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -89,11 +93,18 @@
             "tailActiveFrames": 142795,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
           "name": "strum_marks",
+          "package": "strum_marks",
+          "soundHash": "fa833f7c5099aeffe02953d95716dc4d5eb7e475532bd1166f06a06931fd2042",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "8941842a3d428ee27c937673040292278793314feb553fb095dd9be920da5adf",
           "secondHashes": [
             "3140db3e052c61714e97d74149fa28eff13929e13515ee0879047060407d6681",
@@ -127,7 +138,11 @@
             "tailActiveFrames": 142801,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -165,7 +180,11 @@
             "tailActiveFrames": 80680,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 514171,
-            "lastNonzeroFrame": 514262
+            "lastNonzeroFrame": 514262,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -203,7 +222,11 @@
             "tailActiveFrames": 126364,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -241,7 +264,11 @@
             "tailActiveFrames": 130052,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -279,7 +306,11 @@
             "tailActiveFrames": 141716,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -294,6 +325,9 @@
       "presets": [
         {
           "name": "freeze_marks",
+          "package": "freeze_marks",
+          "soundHash": "9547a1303d9a6bac30d6a7a2a856ff5e47cc3a323f1d367611fdcaf3db4654eb",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "36ca09e8bf28d351f8ebd135b9f0e913c5f959c9daa2d82efb24df609abd767a",
           "secondHashes": [
             "9eaf3a5a0748fb66839802a55df92d5e9194c7f9b77aefe3c7747794c9769fe1",
@@ -331,7 +365,11 @@
             "tailActiveFrames": 51364,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 767999,
-            "lastNonzeroFrame": 767999
+            "lastNonzeroFrame": 767999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -373,7 +411,11 @@
             "tailActiveFrames": 51364,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 767999,
-            "lastNonzeroFrame": 767999
+            "lastNonzeroFrame": 767999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -415,7 +457,11 @@
             "tailActiveFrames": 51364,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 767999,
-            "lastNonzeroFrame": 767999
+            "lastNonzeroFrame": 767999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -430,6 +476,9 @@
       "presets": [
         {
           "name": "dense_1ms",
+          "package": "dense_1ms",
+          "soundHash": "86436eed9433714115f81fd6f9480a1705b93298052de47423b2ff2befeb70e3",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "12dde00953562d4781a4aab106746f069392940922c9fbc67b217b9414001903",
           "secondHashes": [
             "f0bdf9936d086b109365688c62d3866734bc9baafe69a7bf3305de995e33d435",
@@ -457,7 +506,11 @@
             "tailActiveFrames": 46134,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 284808,
-            "lastNonzeroFrame": 284809
+            "lastNonzeroFrame": 284809,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -472,18 +525,18 @@
       "presets": [
         {
           "name": "post_max",
-          "hash": "6c90b335be8de4174819247c66068c0b029011e069ca6dd9feec5e0360c01dc4",
+          "hash": "f0ecc3175f8140261741090f2687864a440742188999b57bf073c716678c6c3e",
           "secondHashes": [
             "8cc9a3231b48bf205e27fed8e6af99bc629e7d8a90ba74f6bf91fe8bc5358525",
             "54147a4aed1d2a71fc31030387ed453b49bd0e69b89dea1301724bfded6b3cca",
-            "9612f412b3eee41b3712b84d9108c2d0c947ea288b1ae3c72278eb7c04c8c71f",
-            "72ecbc3a1aa286925bbe46d148f877a2724540910406a02cec79027c72200ca9",
-            "540f61cdfdf215bb7918467784bfc9682e022431b257559d9e1fcb8ee49464a5",
-            "4613cfc120b6f965e941b87d561c067909be6a8c5083146555e7fd67faf9cbcf",
-            "1f74395865de844391bcf75dc5ae8bf230a824460310b41374a2a9029a36ef95",
-            "e9ddbb4eded4ae35ef74d4aaa846228d0d2d8e19243d8cf80024eb1bac01d34b",
-            "4d26f6f12927bf0b881423cf4898efb6dd93d3bf85ff63206405e8d4d7ea9589",
-            "ac54cb45ad1c3659f85d57e299034877f2d1b78bb593b0358157ecbddc2fceca"
+            "98b7bcbb9864a53ce0492847cb7c1d0ec696b1ceb47196b75a8a4da61bb01fed",
+            "1e77c81505100a2dde8d9d93a261e42bc75d58b8610ced0951f8389ef268645a",
+            "64e8d1b08298906252865e70db12429417f02d525de48739d6e6d77a33d00d0c",
+            "64431c02e5b53fa0606dbbba0476d716ae49540e0146f2b2e7fafc091ec5ae8b",
+            "12f53e309a4e7d0bdbd401cb214f75fcd5a7379ae38947e5d819a112e16f9c21",
+            "b138ef9ddcb96803e8245e086915cdb2df15bd4bf4b12baa29ee443af85ca5e5",
+            "b2516e3a743f40608564e342d7d7b3fc71e425905c0a3dd73bb759582490de82",
+            "d93e22f9db80641d0122ed4ad39246a3d12dd724390e953026c8280dd78e9bc4"
           ],
           "counters": {
             "frames": 480000,
@@ -503,7 +556,11 @@
             "tailActiveFrames": 19200,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 479999,
-            "lastNonzeroFrame": 479999
+            "lastNonzeroFrame": 479999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -539,7 +596,11 @@
             "tailActiveFrames": 19200,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 479999,
-            "lastNonzeroFrame": 479999
+            "lastNonzeroFrame": 479999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -575,7 +636,11 @@
             "tailActiveFrames": 5758,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 466559,
-            "lastNonzeroFrame": 466559
+            "lastNonzeroFrame": 466559,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -617,7 +682,11 @@
             "tailActiveFrames": 56640,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 287999,
-            "lastNonzeroFrame": 287999
+            "lastNonzeroFrame": 287999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -673,7 +742,11 @@
             "tailActiveFrames": 784801,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 959999,
-            "lastNonzeroFrame": 959999
+            "lastNonzeroFrame": 959999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -719,7 +792,11 @@
             "tailActiveFrames": 151365,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 345676,
-            "lastNonzeroFrame": 358793
+            "lastNonzeroFrame": 358793,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -878,7 +955,11 @@
             "tailActiveFrames": 727848,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 850621,
-            "lastNonzeroFrame": 5903999
+            "lastNonzeroFrame": 5903999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -893,6 +974,9 @@
       "presets": [
         {
           "name": "freeze_long",
+          "package": "freeze_long",
+          "soundHash": "938a384150f2a3049b9797ee3cf02d910d44f24b55cea2ca2b2079d93c09ed31",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "69f7cd518d3c213d19176acc6d0dbdfb732c961d541b75b0d133aba78c6ecd1e",
           "secondHashes": [
             "c85c35a86f3ab0e824597912f99ec0854ccc0bccfc9647d6c04a088839c78772",
@@ -984,11 +1068,18 @@
             "tailActiveFrames": 232806,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 3359999,
-            "lastNonzeroFrame": 3359999
+            "lastNonzeroFrame": 3359999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
           "name": "freeze_live_long",
+          "package": "freeze_live_long",
+          "soundHash": "b95d2c36426f73186ebfecab942e9b6e845dd5915e49110680aa0d9ba0d2e3b6",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "669ebdcbe835e2c37832c9e73a24b4f554b3fd324bb263eff75b6f7c30dbcaa2",
           "secondHashes": [
             "81fb3e40e2db7f462049ad1af8aba600fe7163a6db69b3dc37d7cd520b11ea80",
@@ -1080,7 +1171,11 @@
             "tailActiveFrames": 232806,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 3359999,
-            "lastNonzeroFrame": 3359999
+            "lastNonzeroFrame": 3359999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -1095,6 +1190,9 @@
       "presets": [
         {
           "name": "reverse_mark_aging",
+          "package": "reverse_mark_aging",
+          "soundHash": "c8ad0560c4558220273bd68b18236132437193855d81f1525e06ef7a3d7461a5",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "45af699169291a6560a6cbc465d10964e23a55b6ca9b8a597df251a77b926a02",
           "secondHashes": [
             "d7cb9ab9c68e1f90ab931875838d839629b49b7cf7916fdbf64bc56bec9b9d1a",
@@ -1208,7 +1306,11 @@
             "tailActiveFrames": 4182166,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 4272171,
-            "lastNonzeroFrame": 4272172
+            "lastNonzeroFrame": 4272172,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -1223,40 +1325,44 @@
       "presets": [
         {
           "name": "automation_offgrid",
-          "hash": "993a91356589d88f393a7ff22dc8fbc8389427577281111e1b0465ff9a0870d3",
+          "hash": "4c117a25ca9dd6e5bf3c8bd35fe4b39c70e9e5f74377f1819b69e0b891e0b7cf",
           "secondHashes": [
-            "1dfa3426044dde3f3e5b19bf101126521d8fade831e672bdd4a161614318d8b9",
-            "f90e6ff9bedc1aacc965270a9531ecb43726ccff76912993a611e12580fb9128",
-            "cdc4630e38a01266b26db4a2bb27422e4b6c1cd357e8bd9075d470ac16e8ae8d",
-            "d2aa21a0b3adaefa35f774e667ef881d1e102c9857f162b745dbc3f310dc6ad0",
-            "2a1a5b45a0d3e08fea4b64885e7211be13734435907dc1e06a5fa2f7ba9cd22a",
-            "3d371c05ff4da147dbf58758be2382d96596edf74e006f4416df2f05102de791",
-            "d003782224524cb0fc4c8ac2ac13b54341266c9a899c60ec21d9bf020cdcf173",
-            "afd252bc4da99f03fc1adca32cc50a72b0afedfee4c73710815e4c98aa18b3bb",
-            "413e6759e23f4d648fdf162b8e28d03861af68a24fed246f58ae59a4df9a9d46",
-            "ed6b320e3d86ee9418af7d3891fbbb92cf9ce5e61531a4936adc17bb2bf8a9aa",
-            "0dac7785f1b0e169585107efaea7aa2f58eef7a779010d8ff2d83bd281d47aa6",
-            "6dfa943029158fd66dadfcc5d90c852440d535ee48876106865622ef6fa5ab01"
+            "d76ab32fe82ad89c2c143907f057cbe4233941f83c90331182532e11575d7c45",
+            "72e082798dadee4b59acf9ebc369b2c3ed008bb0801766fa0f22e6a1e96becf1",
+            "c9aa23d27469c856d666348e33a7216daba875dbff31f11b29b3a654d8fbe88f",
+            "491e1283dcd6342d9f41def630a569bd5220ed2a8c9d8735af41421de5e7d245",
+            "fbcb0fddd531a1248bc6a1ae79b3e0ff04f00ae94fc32e35d30e973274fce91c",
+            "fe991af2c677e8ce9f789a8239ad9150b06c0a8b20dcc656f11dab6c4e98c239",
+            "8e0dde8c46c7805f7eae73919140963b202ef01352313d1da692889ad95684b2",
+            "a674d448e2dade968b9f4cab0843a7c4b3a50a16ad0de50e1a60222f1a007033",
+            "c6755f2fbd4166af219dc80f8a793ea76392846bcbe6996ecc958c78c6c826a4",
+            "fa4e71e70e26c8e59a444307fbec3e059abb0128b9e7773f171ea58790df7b48",
+            "cd64e8c9f2929f375cda26c9f957fe880cb1e26f805eb733ab30a6a76f21cf67",
+            "834a4dcfc6b8065bdb78ecbc49bfe3388f5e8b0b39edb5a7ead1a7a29fba4e63"
           ],
           "counters": {
             "frames": 576000,
-            "events": 1358,
-            "offGridEvents": 1358,
+            "events": 1285,
+            "offGridEvents": 1285,
             "triggers": 8,
-            "loads": 0,
+            "loads": 23,
             "restarts": 0,
             "onsets": 24,
-            "frozenOnsets": 6,
-            "frozenFrames": 143974,
+            "frozenOnsets": 1,
+            "frozenFrames": 48007,
             "freezeEngages": 3,
             "fbAbove1Frames": 48016,
             "inClipFrames": 0,
             "silentInFrames": 57601,
-            "outActiveFrames": 568338,
-            "tailActiveFrames": 50250,
+            "outActiveFrames": 568564,
+            "tailActiveFrames": 50232,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
-            "lastNonzeroFrame": 575999
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 23,
+            "killedFrames": 0
           }
         }
       ]
@@ -1271,6 +1377,9 @@
       "presets": [
         {
           "name": "spillover_chain",
+          "package": "strum_chain",
+          "soundHash": "cbc6ccc4f24f6b3deb3944bb657560a9375827297a7d35f0a335df9e36c29e7a",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "885ab395515238f6d4776adf6fb836ca505f212aef2fd38b9a1e88bf1c85277f",
           "secondHashes": [
             "0bd02883ff173c7059ffc1fe9d2e21498f1fe00ae6e2b2657aa5213992810ded",
@@ -1306,11 +1415,18 @@
             "tailActiveFrames": 152401,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 671999,
-            "lastNonzeroFrame": 671999
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 2,
+            "killedFrames": 0
           }
         },
         {
           "name": "restart_kept_params",
+          "package": "restart_kept",
+          "soundHash": "f4ebf3d676b0870abc81d148f42a028141f8c5984005a149bda1d2cd062e07c6",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "30ecb54b9ce6b2252d3f3000554e079ddfd22a842dc5b7d3e584be0fe0dd439c",
           "secondHashes": [
             "69c97306b1d1ed62cc7544db3cab681220d8cc2999cfd9d587f91c560a9d68f3",
@@ -1346,7 +1462,11 @@
             "tailActiveFrames": 151211,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 671999,
-            "lastNonzeroFrame": 671999
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
@@ -1386,7 +1506,11 @@
             "tailActiveFrames": 151200,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 671999,
-            "lastNonzeroFrame": 671999
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 1,
+            "killedFrames": 0
           }
         }
       ]
@@ -1428,19 +1552,23 @@
             "tailActiveFrames": 0,
             "subnormalOutFrames": 158400,
             "lastActiveFrame": 142799,
-            "lastNonzeroFrame": 287999
+            "lastNonzeroFrame": 287999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         },
         {
           "name": "subnormal_wet",
-          "hash": "51ea23040d7f677c5b12d14679f57e854c4884dfcb2d4aeeeab374a1746aab10",
+          "hash": "98082348f101393ba7da8e141f4a416753ef931871cfb39f2b28022257ba5dee",
           "secondHashes": [
-            "d7f7d8f45755f107a59e8369b5f783251a45b695ff85d6301fc490252c9e41e0",
-            "a9de35673ee83a5b59a6ee9c650bdeacb85fb20a3fd81ee914dea490a5259b5b",
-            "e303158117c3b154dc1b0342eb470e8447dc01490934548a35eae23944b5904e",
+            "2098651cd8903e7cbb52a5e750cf8d2ade2486bdc0fd5e472c9e00de46662edd",
+            "4e9e0dbe0b675f14e9cfbb249c661ded716d6eb61d5c064eae5103237024f4a4",
+            "38bb8146a1faebca233c61a23a0109a0fb9e477cfec9120479148f350de5ef80",
             "185b831a41d129a22a900c9ff65a208967a5237d8ffd9ef30711dc4f099e095e",
-            "dab28cb52ea74666430b2de866bad6206dbad2ca984e8125c82f536e9eedd111",
-            "ecb4800debbb07f7f2ba67fbd3398b71ed7208d6d4fe4043dac9d1aece72d8ea"
+            "14cd509a32ab3bf0277678341bd4ca9a1e88e8f99b366597fc121843a4d0c3e0",
+            "8cfa5e4c69fa67e3745e700a170bc621403557ca33e602be1952eabe9d473420"
           ],
           "counters": {
             "frames": 288000,
@@ -1456,11 +1584,257 @@
             "fbAbove1Frames": 0,
             "inClipFrames": 0,
             "silentInFrames": 0,
-            "outActiveFrames": 203651,
+            "outActiveFrames": 203652,
             "tailActiveFrames": 0,
             "subnormalOutFrames": 58706,
             "lastActiveFrame": 219011,
-            "lastNonzeroFrame": 287999
+            "lastNonzeroFrame": 287999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "plucks_modes_14s",
+      "source": "plucks",
+      "generatorVersion": 1,
+      "frames": 672000,
+      "inputHash": "13282e4b1410d009eb2d24569b7d4fc4aa4258be9b80f244591d298ce8f14d42",
+      "ringSizes": [4194304],
+      "presets": [
+        {
+          "name": "macro_sweep",
+          "package": "macro_sweep",
+          "soundHash": "e1cff8be897fc4ca9a4781241d81c2fac90d51dc3f15b5ae012c4decfddf06d4",
+          "controlHash": "6b24eac57e000ac2f6e72ea0bfb1d53b8c4a0b9d7840327f62cba8c23b874371",
+          "hash": "08627e7496cdbfd9e81f6a6d2bda9f7ce251c7be79dd3379bba6b3dd40c12fdf",
+          "secondHashes": [
+            "197cfbfdae213bddfef1319a8e996e2c53ec0e3baa1909f1b924c9c1f97474d9",
+            "083ec1bd158c05b2b5e4ff132eac9cab620e8eb1f1908e39d7b6c2a45e95ae85",
+            "a2695e006a75e7c81561a06478c8da7332f0c53d5d124ccd6c9b27c3f0ca6a98",
+            "fb6c9751795b19db56579488dd55ac2780822c0044c75f6457120dc7561e7b13",
+            "cbc3ef8187e682ae20dcf40a3dbae1c3b190d81f29c565876537c4f4cb052723",
+            "d648699b850f182bc602fa0a4f97dd1cdd67ec6febaf27ec1ffd88cb3dbfae9a",
+            "15a594602cd38d32bf2010f07f2f6bf0f892dd63c445b36b6f6e6b67075aeb4d",
+            "656704b10326e9da5f3ae954b9bd4e72202d906c5ad1b7ceace334121c412baa",
+            "a5b6207ebf218ef4e4dfd3c81de51fb056235ea6a6b79b5021821048f3d81a9a",
+            "85fcd01bf4f577c63040a8b1233231d5dd7b8d1f66764911c01a4a2d512244e0",
+            "83097ac5b9a88c06429eaa1a4e3110ffe0dc60a83714fc4e46715c0a57bc98de",
+            "fc95c5826de79fdcfa0b01ebc4aa17da28a01a5ba3ca7f8547e9ef6ac79b08ae",
+            "b3b8c202f9d88b1413a951b630c5b919b7ba039c51e2b42f29d3dd92b6173383",
+            "339f037c8b87a2f9e58344f0274003439f1a9989a1e69b830694dd542337bbd7"
+          ],
+          "counters": {
+            "frames": 672000,
+            "events": 116,
+            "offGridEvents": 116,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 24,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 153601,
+            "outActiveFrames": 668316,
+            "tailActiveFrames": 149927,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 671999,
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 114,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 39933
+          }
+        },
+        {
+          "name": "expression",
+          "package": "expression",
+          "soundHash": "4b0545a6b86aa63c87ff5445db8059cfd66e9eb9d160086e4a8fa1a17919bde9",
+          "controlHash": "4ea6b076ed6996eab5ca874155e28818ef3143c518057bfa6470f5d1b2fb09f5",
+          "hash": "186f22aaefcd99356501c0ec4f27ece4187227e8fbd4292412c1d5d3523a5c54",
+          "secondHashes": [
+            "9434fc3ccaf2957e80bf95d3d346fb973eab3ff2870e531e8e7d4133ef68bd6c",
+            "19170db1440fef23dbcec72b79f8a837a49568a644c0f6ac4117d8d343883fc3",
+            "f6098b8474b616552b7a00ccee8e23499a64ac39725e69e116dc7d3f58448442",
+            "31f5889364641b0eccd236b141b2dffc4ebc8f2afd5c3936bf586ae1bc920821",
+            "c099ed9b04692ff649d73f6ccc4ee404e38e540fbba8608974c73e05b74cf581",
+            "cd47e52b8d133be793d0826d4a642b8aa6b677477351ff5841cf18d54059c55f",
+            "b1e14be8f830fdb5f1e9199f8161f0d5d17a3cdd4ab8acf7b3bff8e5e93df172",
+            "2e4b5c368001a1f6a3a72aa135189dee09c6d2d6cfce20d8ebbfe1cab0571163",
+            "a46c702f20b95557e45478a1d99723301bb35775fd5757fba6a0cf6b736750de",
+            "e48672ed79fdd6c41a3c6e2586b5489dc32c515f0c990418b26e1a5e41c982df",
+            "cf1a5bc82f31c077236ca6a940c7c0694be26319cbbf20dd0a2b8086397d5e81",
+            "a0d151ee212d3da5ab0fc0cb78f5354eb8387df48f07f6d5132a4badfb38c720",
+            "b71cecf02aa4accd03314d8ccde158cb338e414ce344cbc6183811af5c311552",
+            "1c5b904c188e04ab9aad95fc43033a2e8d93021c8baaf4550a9b28087887da27"
+          ],
+          "counters": {
+            "frames": 672000,
+            "events": 302,
+            "offGridEvents": 302,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 24,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 153601,
+            "outActiveFrames": 670774,
+            "tailActiveFrames": 152377,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 671999,
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 300,
+            "modeSwitches": 0,
+            "killedFrames": 0
+          }
+        },
+        {
+          "name": "mode_switch",
+          "package": "switch_marks",
+          "soundHash": "fb40d0b39ece8d9511c227931537be44cb118b6dd9a9d47104e39ee65e6050c1",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "446530e41f7750d080c093a43b9854ba23830ba755e33a7748961b8ba74a33a2",
+          "secondHashes": [
+            "ab586a963b5fdf1250223e8cdc3c511da8bcdad554b211e1488ba29cb185ab45",
+            "292acd489033d3ee7fa500bc13c918efc9c775dccc4e5032edd6d7a19b971152",
+            "4d469de212687fb6ca5ad903e0540a871539b47fe04913a804509d17ac6537cb",
+            "0a667ec01c06a5138b7693924b2fbb8cc34fa900dd17930b2a55624c4b787ea5",
+            "90a589a8680783a585c8e7b042ef7586ab2256cc2fa9185185fdeff9504eeaed",
+            "d137f87e295a27436b61cac13446cd0b682e1bcd2b9a720c59727c6f34ef81b2",
+            "48312d1cab39475579a608acf6a85b0059a3f9d750c750928d5ef7a83e7a5523",
+            "1322017390dbbf9212566b3ebd6a543b485be945c3e96cdf4b36081b4c106592",
+            "b244b2994fc62db2a2f69b7dc4499c8659dad5d7839677df80b4300fd89c23c6",
+            "0f3beeb7fc82264bba2aa5ed7c278cff96e3d91b901f9576a73e394741b55678",
+            "af0fda3ad80779d46107948a336ef66262130f010b85638f1249b9aa21682bea",
+            "daff970809619926c50b7fdbcc6669bd85752d02ebe14c24105b3e0c3600aef2",
+            "031543df778450e71d9d2b57478f38700647461bd8caad6a94ba9b269f4ac0cd",
+            "063e07b84ea0db6681455adbff01ff7e95ebcf04f88a0f04501980499222158b"
+          ],
+          "counters": {
+            "frames": 672000,
+            "events": 7,
+            "offGridEvents": 7,
+            "triggers": 1,
+            "loads": 6,
+            "restarts": 0,
+            "onsets": 24,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 153601,
+            "outActiveFrames": 657956,
+            "tailActiveFrames": 139558,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 671968,
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 5,
+            "killedFrames": 0
+          }
+        },
+        {
+          "name": "wet_kill",
+          "hash": "b6bc3404bb395e8b42325b7f9688945f4f6b0124a3bb45247dc886a56f7d6820",
+          "secondHashes": [
+            "4ef8ae491cb7f1aa628b381e2429a2f2573d2127a93210e01fbd91c3742abfc0",
+            "e5d7b749286ecd50eba749ee4cff797b160fa8f8c59209b46a95e2b65944a39d",
+            "a632ae02b4303c54a6380608418f36368a496694e861b5e8e14e084fde1dbb33",
+            "cf44c2a267e45b3f92e5d240f67a7e2d4ef15392784d45780d2cf432ae46725d",
+            "c60e0531c87cd0de0f8c26ab857dca763a38e8283757a91032beeea8a4fbe758",
+            "8a12ec7c9122c06784c28fe3c2b3cbcfa1b9c3c0d908777648238c635803349f",
+            "62ac6207955f67d844f9002369e8c99f7901c1c48724e9b32af415d35270b428",
+            "a51e4c7578bf198b2bfb04c4bd33585e863b3034e1094541c8c6e39e35303a86",
+            "5c26ac12f09255f559c860d61d49fde6bd81083680869b508ba01c55c50b70cd",
+            "649de6ff4205f0736a2de6437861a28f1f8df990623b7577dae15e9d61ee35c5",
+            "f7b69418d0b62c1d1b2da19b65c4b353a3ad18fe0780acf2ded1218aec3d4172",
+            "b40761cd58c603c5f0e9130a0ca6017e99a96144b5222a79d71dd7014c34ad9b",
+            "f2c8ea835012936b7eae70aec4f588ca25f8306b25cdf060bd40b1e9b795e959",
+            "f016e057c14f4ae0c6a3cd930a4849c0a8858db0e825b48f6e2aba8b5e4f8b58"
+          ],
+          "counters": {
+            "frames": 672000,
+            "events": 10,
+            "offGridEvents": 10,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 24,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 153601,
+            "outActiveFrames": 645406,
+            "tailActiveFrames": 127170,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 671999,
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 2,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 287976
+          }
+        },
+        {
+          "name": "lone_changes",
+          "package": "lone_busy",
+          "soundHash": "b22991277d733aff2f969876ec28c209cd01c04d0fc2037a1dc181c60a680409",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "2c2fbf5aacca947009c0ffe678e54bcaa2184a732d20259b0a17e2d678d533a0",
+          "secondHashes": [
+            "c04ed5e2e2610a8a1d10295d6f554ec85bb289f2a88e4bb982fe0686ef876047",
+            "16fd42f1cdebe45fec64ffdd04cba8a7dc6e935dd193c45f50e596d7a97eaeeb",
+            "6559ca8c7b0a048d5a1ebb1056d2b99f73548e76ebcbf052563bd8ebfd8b9b52",
+            "c70204c6d91c6f10847b51a999a7ccb08829baddfdd3073c5a76a7c44d55f74a",
+            "fc6db6d35ad88e6e3a8a296d60d6dfc4b8cb73a437b599a5ee7b50e7139a950d",
+            "a240879c5a07fe99ec4a02d1a2458c39b05938537df28e13e634f975e18ae497",
+            "fb98779e391d9bb887fae6d24759457b71fee8242de045b5b5e43e2feee8ad0d",
+            "c40b5beda08059fc9926b618fc6b0bb2356f5bf56ff7b47ce34381fd2551eb77",
+            "0c4560adb09a12883a8828896d46eb86335777fc14b5f99b29efa3aaa5133eed",
+            "4fc3113e858301b38e94ed1bee91b304ab894bd4a1397857b3d029ce64966141",
+            "97efac2bf2f496f5de783c01fd1e27af582b608957f3d9d95e1bf0432212c230",
+            "b0403a927832f43ec678c5cc06b76076930d5e40cdfa98bd863685de373a5a68",
+            "1334bfed42f8b278c2e686d33d48859e8969e5b92f202e949b1dbafa9f9dc7b8",
+            "a602abf1d02eac3e7f69c3f8dd6c2ee97b8adab7ab305dead9c6444e6e76caf0"
+          ],
+          "counters": {
+            "frames": 672000,
+            "events": 27,
+            "offGridEvents": 27,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 24,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 153601,
+            "outActiveFrames": 670797,
+            "tailActiveFrames": 152401,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 671999,
+            "lastNonzeroFrame": 671999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]
@@ -1500,7 +1874,11 @@
             "tailActiveFrames": 0,
             "subnormalOutFrames": 0,
             "lastActiveFrame": -1,
-            "lastNonzeroFrame": -1
+            "lastNonzeroFrame": -1,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0
           }
         }
       ]

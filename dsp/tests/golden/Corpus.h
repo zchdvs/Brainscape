@@ -21,7 +21,13 @@ namespace brainscape::golden {
 // 4: plucks_state_14s (Spillover loads, a Restart and an Exact load mid-render), the
 // loads and restarts counters, and the invariance checks.
 // 5: plucks_subnormal_6s (subnormal input) and the subnormalOutFrames counter.
-inline constexpr uint32_t kCorpusVersion = 5;
+// 6 (sound revision 2, mode-compiler.md §10.3): structure only from committed packages (the
+// onset and mark presets; the automation preset's toggles of the retired rows 27 and 28 are
+// Spillover loads between two modes, in both switch styles); post_max at 41 Hz; plucks_modes_14s
+// (macro moves, expression, mode switches, the wet kill, a lone change per leaf); the macroMoves,
+// expressionEvents, modeSwitches and killedFrames counters; the mode, macro, modeSwitch, fastCut
+// and wetKill ablations and the amongEdits invariance.
+inline constexpr uint32_t kCorpusVersion = 6;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -44,6 +50,11 @@ enum class Counter : uint8_t {
   SubnormalOutFrames,
   LastActiveFrame,    // last output frame with |out| > 2^-16, or -1
   LastNonzeroFrame,   // last output frame with a nonzero sample, or -1
+  MacroMoves,         // MacroMove events applied
+  ExpressionEvents,   // Expression events applied
+  ModeSwitches,       // loads whose mode differed by content (Engine::ModeSwitches), after
+                      // the render's first load
+  KilledFrames,       // frames rendered with the cutoff target at its minimum: the wet kill
   kCount
 };
 const char* CounterName(Counter) noexcept;
@@ -54,10 +65,16 @@ const char* CounterName(Counter) noexcept;
 // reaches the output only through the re-anchor, mark staleness and the far guard
 // (profile §6.4), so a change proves the render reached one of them. Spillover and
 // Restart drop the script's Spillover loads or its restarts.
+// Since sound revision 2 the onset trigger and mark positioning are structure (rows 27 and 28
+// retired), so MarkPosition and OnsetTrigger switch structure off in every preset the render
+// loads (Strip, EventScript.h); Mode loads the default mode and CTRL instead of each preset's;
+// Macro drops the macro and expression moves; ModeSwitch makes every load keep the starting
+// preset's mode; FastCut makes every FastCut load Trails; WetKill moves every cutoff at 40 Hz,
+// the kill, to 41 Hz.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
-  Spillover, Restart,
+  Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
 };
 const char* FeatureName(Feature) noexcept;
 
@@ -67,8 +84,12 @@ const char* FeatureName(Feature) noexcept;
 //                 every entry point, Init included, or clean if the run is hostile;
 //   RestartTail   the output from the script's last restart on equals a render from the
 //                 exact-restart state of the rest: the input from that frame, the
-//                 parameter values the restart kept or loaded, the later events.
-enum class Invariance : uint8_t { HostileFpEnv, RestartTail };
+//                 parameter values and mode the restart kept or loaded, the later events;
+//   AmongEdits    every SetParam event of the script among edits that rebuild every other
+//                 domain without changing a value (another leaf of each domain set to
+//                 another value and back at its frame) renders the same bits: a lone change
+//                 reaches its rebuild (mode-compiler.md §7.2, R1).
+enum class Invariance : uint8_t { HostileFpEnv, RestartTail, AmongEdits };
 const char* InvarianceName(Invariance) noexcept;
 
 struct Requirement {
@@ -79,11 +100,17 @@ struct Requirement {
 
 struct PresetCase {
   const char*                            name;
-  std::vector<std::pair<ParamId, float>> params;  // over the defaults: the Exact load
+  std::vector<std::pair<ParamId, float>> params;  // over the defaults (or the package's
+                                                  // leaves): the Exact load
   Script                                 script;  // events and restarts during the render
   std::vector<Requirement>               require;
   std::vector<Feature>                   ablate;
   std::vector<Invariance>                invariant;
+  // A committed package of the corpus (presets/NAME.json and NAME.bsp) the preset starts from:
+  // its leaves, mode and CTRL (mode-compiler.md §10.3). Its sound and control hashes go into
+  // the golden file, for the sound-revision gate's package rule (§8.3).
+  const char*                            package = nullptr;
+  uint8_t                                strip   = 0;  // ablations only: Strip bits
 };
 
 struct VectorCase {
@@ -105,12 +132,18 @@ std::vector<VectorCase> BuildCorpus();
 // The preset with `f` switched off.
 PresetCase Ablate(const PresetCase&, Feature f);
 
-// The parameter values of `p` from the script's frame `frame` on, before the events stamped
-// there: the Exact load, then every parameter event, Spillover load and Exact load before it.
-ParamList ParamsAt(const PresetCase& p, int64_t frame);
+// The preset in force from the script's frame `frame` on, before the events stamped there: the
+// package of the last load (whose mode the engine plays) with every leaf's value after the Exact
+// load and every parameter event, macro or expression move, Spillover load and Exact load
+// before it. Empty params when a package cannot be loaded.
+PresetSource StateAt(const PresetCase& p, int64_t frame);
 
 // What RestartTail renders: the preset from the script's last restart on, its events and
 // restarts moved to that frame; *start receives the frame.
 PresetCase TailAfterRestart(const PresetCase& p, int64_t* start);
+
+// What AmongEdits renders: the preset with every SetParam event joined by edits that rebuild
+// every other domain and change no value.
+PresetCase AmongEdits(const PresetCase& p);
 
 }  // namespace brainscape::golden
