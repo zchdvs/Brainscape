@@ -10,7 +10,9 @@ namespace {
 
 constexpr uint8_t kMagic[4] = {'B', 'S', 'W', 'S'};
 
-enum SettingKey : uint32_t { kInputMode = 1, kInputGainDb = 2, kOutputGainDb = 3, kRestartOnStart = 4 };
+enum SettingKey : uint32_t {
+  kInputMode = 1, kInputGainDb = 2, kOutputGainDb = 3, kRestartOnStart = 4, kEffectVolumeDb = 5
+};
 
 uint32_t Bits(float v) {
   uint32_t u = 0;
@@ -60,7 +62,7 @@ void EncodeState(const WrapperState& state, std::vector<uint8_t>& out) {
     PutU32(out, static_cast<uint32_t>(LeafId(i)));
     PutU32(out, Bits(state.plain[i]));
   }
-  PutU32(out, 4u);
+  PutU32(out, state.hasEffectVolume ? 5u : 4u);
   PutU32(out, kInputMode);
   PutU32(out, static_cast<uint32_t>(state.settings.inputMode));
   PutU32(out, kInputGainDb);
@@ -69,6 +71,10 @@ void EncodeState(const WrapperState& state, std::vector<uint8_t>& out) {
   PutU32(out, Bits(state.settings.outputGainDb));
   PutU32(out, kRestartOnStart);
   PutU32(out, state.settings.restartOnStart ? 1u : 0u);
+  if (state.hasEffectVolume) {
+    PutU32(out, kEffectVolumeDb);
+    PutU32(out, Bits(Canonicalize(ParamId::EffectVolumeDb, state.effectVolumeDb)));
+  }
 }
 
 bool DecodeState(const void* data, size_t bytes, WrapperState& out) {
@@ -109,6 +115,9 @@ bool DecodeState(const void* data, size_t bytes, WrapperState& out) {
       s.settings.outputGainDb = CanonicalGainDb(FromBits(bits));
     } else if (key == kRestartOnStart) {
       s.settings.restartOnStart = bits == 1u;
+    } else if (key == kEffectVolumeDb) {
+      s.effectVolumeDb  = Canonicalize(ParamId::EffectVolumeDb, FromBits(bits));
+      s.hasEffectVolume = true;
     }
   }
   out = s;

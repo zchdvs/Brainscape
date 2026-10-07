@@ -92,7 +92,10 @@ if(BRAINSCAPE_BUILD_TESTS)
   # objects every format wrapper links. The format wrappers re-export the shared code's
   # private include directories in the same way.
   add_executable(brainscape_plugin_tests tests/plugin_tests.cpp)
-  target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape)
+  # The compiler compiles the test documents (compiler/tests/data) the mode tests load.
+  target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape brainscape_compiler)
+  target_compile_definitions(brainscape_plugin_tests PRIVATE
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data")
   target_include_directories(brainscape_plugin_tests PRIVATE
     src
     ${PROJECT_SOURCE_DIR}/dsp/tests  # golden/Sha256.h: an independent check of audition hashes

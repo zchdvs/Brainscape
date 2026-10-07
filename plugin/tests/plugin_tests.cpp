@@ -26,6 +26,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Audition.h"
+#include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
 #include "PlainAttachment.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
@@ -33,6 +34,7 @@
 #include "brainscape/HostArenas.h"
 #include "TestSupport.h"
 #include "brainscape/InputCondition.h"
+#include "brainscape/ModeEval.h"
 #include "brainscape/ParamDisplay.h"
 #include "brainscape/SoundRevision.h"
 #include "golden/Sha256.h"
@@ -280,6 +282,17 @@ std::string ExactText(ParamId id, float plain) {
   return s.substr(0, e) + "e" + std::to_string(exponent + (hundreds ? 2 : 0)) + (percent ? "%" : "");
 }
 
+// A test document (compiler/tests/data), compiled and decoded as a package loads.
+std::unique_ptr<PresetState> CompiledState(const char* name) {
+  const juce::File file = juce::File(BRAINSCAPE_TEST_DATA).getChildFile(name);
+  const std::string text = file.loadFileAsString().toStdString();
+  const bsc::CompileResult r = bsc::Compile(text);
+  REQUIRE(r.ok);
+  bsc::DecodedPackage p = bsc::DecodePackage(r.package.data(), r.package.size());
+  REQUIRE(p.ok);
+  return std::move(p.state);
+}
+
 std::vector<float> SampleValues(ParamId id, uint32_t seed, int count) {
   const ParamDescriptor* d = FindParam(id);
   std::vector<float>     v = {d->min, d->max, d->def, 7.02f, 0.4f, 0.55f, 1234.5f, -3.3f, 0.1f};
@@ -452,7 +465,8 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
     p.setValue(0.3f);  // a lossy host set maps through the shared taper
     REQUIRE(Bits(p.Plain()) == Bits(PlainFromNormalized(d.id, 0.3f)));
   }
-  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 1);  // + freeze
+  // + freeze, the eight macros, the expression pedal and the effect volume
+  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 11);
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
   // Sound revision 2 retired rows 27 and 28 into mode structure: no longer registered.
   REQUIRE_FALSE(IsLeaf(ParamId::OnsetTrigger));
@@ -460,15 +474,16 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
   REQUIRE(proc.Param(ParamId::FilterMorph).getParameterID() == "post.filter.morph");
 }
 
-// The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
-// name; Reserved rows are not registered, and macro and performance rows join with the macro
-// work (§9.2). Automation follows the shared flags: host model (b) (§3.6, Q12) applies with
-// those macro parameters in lane D (§12.4), so until then sound revision 1's leaves stay
-// automatable, as freeze is.
-TEST_CASE("the plugin registers the Leaf rows under the host model") {
+// The ID table (mode-compiler.md §4, §9.2): one host parameter per Leaf row, then freeze, the
+// eight Macro rows, perf.expression and the effect volume, each keyed on its stable name;
+// Reserved and Retired rows are not registered. Automation follows host model (b) (§3.6, Q12)
+// through the shared flags: the macros, Mix, the effect volume and the performance rows are
+// automatable, every other leaf is registered but not, so a host records the knobs a player
+// turns, not the leaves they fan out to.
+TEST_CASE("the plugin registers the rows of host model (b)") {
   BrainscapeProcessor proc;
   const auto&         params = proc.getParameters();
-  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 1);
+  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 11);
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const ParamDescriptor& d = *FindParam(LeafId(i));
     INFO(d.name);
@@ -476,21 +491,44 @@ TEST_CASE("the plugin registers the Leaf rows under the host model") {
     REQUIRE(p != nullptr);
     REQUIRE(p->Id() == d.id);
     REQUIRE(&proc.Param(d.id) == p);
+    REQUIRE(proc.FindHostParam(d.id) == p);
     REQUIRE(p->getParameterID() == juce::String(d.name));
     REQUIRE(p->isAutomatable() == ((FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u));
-    REQUIRE(p->isAutomatable() == (d.sinceRev == 1u));
+    REQUIRE(p->isAutomatable() == (d.id == ParamId::Mix));
   }
   REQUIRE(proc.Param(ParamId::WetTrimDb).getParameterID() == "wet_trim_db");
   REQUIRE(proc.Param(ParamId::TransposeSt).getParameterID() == "layer0.pitch.transpose_st");
+  REQUIRE(params[static_cast<int>(kNumLeafParams)] == &proc.Freeze());
   REQUIRE(proc.Freeze().isAutomatable());
   REQUIRE(proc.Freeze().getParameterID() == FindParam(ParamId::PerfFreeze)->name);
+  for (size_t k = 0; k < kMaxMacros; ++k) {
+    const auto id = static_cast<ParamId>(static_cast<uint32_t>(ParamId::MacroActivity) + k);
+    INFO(FindParam(id)->name);
+    auto* p = dynamic_cast<BrainscapeParam*>(params[static_cast<int>(kNumLeafParams + 1 + k)]);
+    REQUIRE(p == &proc.Macro(id));
+    REQUIRE(proc.FindHostParam(id) == p);
+    REQUIRE(p->getParameterID() == juce::String(FindParam(id)->name));
+    REQUIRE(p->isAutomatable());
+    REQUIRE(BrainscapeParam::EventTypeFor(id) == WrapperEvent::Type::Macro);
+  }
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 9] == &proc.Expression());
+  REQUIRE(proc.Expression().getParameterID() == "perf.expression");
+  REQUIRE(proc.Expression().isAutomatable());
+  REQUIRE(BrainscapeParam::EventTypeFor(ParamId::PerfExpression) == WrapperEvent::Type::Expression);
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 10] == &proc.EffectVolume());
+  REQUIRE(proc.EffectVolume().getParameterID() == "global.effect_volume_db");
+  REQUIRE(proc.EffectVolume().isAutomatable());
+  REQUIRE(BrainscapeParam::EventTypeFor(ParamId::EffectVolumeDb) == WrapperEvent::Type::Param);
+  REQUIRE(proc.FindHostParam(ParamId::VoiceCount) == nullptr);   // Reserved
+  REQUIRE(proc.FindHostParam(ParamId::OnsetTrigger) == nullptr); // Retired
+  REQUIRE(proc.FindHostParam(ParamId::PerfLoopLevel) == nullptr);
   for (const auto* p : params) {
     const auto* w = dynamic_cast<const juce::AudioProcessorParameterWithID*>(p);
     REQUIRE(w != nullptr);
     INFO(w->getParameterID());
     for (const ParamDescriptor& d : kParamTable) {
-      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Macro) {
-        REQUIRE(w->getParameterID() != juce::String(d.name));
+      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Retired) {
+        REQUIRE((d.name == nullptr || w->getParameterID() != juce::String(d.name)));
       }
     }
   }
@@ -1067,7 +1105,8 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
 
 // The per-leaf touched set that replaced the 32-bit mask (mode-compiler.md §10.4): an event on
 // any Leaf row, the last ordinal included, writes that leaf's mirror back once applied, and
-// events on rows of other kinds (Reserved, Macro, Global) reach no mirror and no engine state.
+// SetParam events on rows of other kinds (Reserved, Macro) reach no mirror and no engine state.
+// (A macro moves by its own event; the effect volume, a Global row, takes SetParam.)
 TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds change nothing") {
   using E           = WrapperEvent;
   const Stereo in   = MakeInput(4800);
@@ -1084,7 +1123,7 @@ TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds ch
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(d.id), v});
     ref.push_back(RefParam(0, d.id, v));
   }
-  for (const ParamId other : {ParamId::VoiceCount, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
+  for (const ParamId other : {ParamId::VoiceCount, ParamId::MacroActivity, ParamId::PerfLoopLevel}) {
     REQUIRE_FALSE(IsLeaf(other));
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(other), FindParam(other)->min});
   }
@@ -1095,7 +1134,6 @@ TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds ch
     INFO(FindParam(LeafId(i))->name);
     REQUIRE(Bits(proc->Param(LeafId(i)).Plain()) == Bits(sent[i]));
   }
-  REQUIRE(proc->getParameters().size() == static_cast<int>(kNumLeafParams) + 1);
   RequireSame(got, RenderReference({}, in, kRate, ref), "the leaf events alone");
 }
 
@@ -1586,6 +1624,227 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
     reader.reset();
     dir.deleteRecursively();
   }
+}
+
+// ── Modes, macros and device settings (mode-compiler.md §3.4-§3.8, §9.2) ─────────────────
+
+TEST_CASE("a document loaded before anything has played is an Exact load of its mode") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  auto         proc  = MakeProcessor(Busy(), {});
+  LoadReport   report;
+  REQUIRE(proc->LoadPresetState(*state, &report));
+  REQUIRE(report.exact);
+  REQUIRE_FALSE(proc->GetStatus().lastLoadInexact);
+  const Stereo got = RenderProcessor(*proc, in, {}, {{441}});
+  RequireSame(got, RenderStateReference(*state, in), "engram, Exact");
+  // The mirrors hold the document: its leaves, and its CTRL positions as the macros'.
+  for (uint32_t k = 0; k < state->leafCount; ++k) {
+    INFO(FindParam(static_cast<ParamId>(state->leaves[k].id))->name);
+    REQUIRE(Bits(proc->Param(static_cast<ParamId>(state->leaves[k].id)).Plain()) == Bits(state->leaves[k].value));
+  }
+  REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+  REQUIRE(Bits(proc->Macro(ParamId::MacroSpace).Plain()) == Bits(0.24f));
+  REQUIRE(Bits(proc->Macro(ParamId::MacroFilter).Plain()) == Bits(1.0f));
+  // What the wrapper plays, as a preset: the same state.
+  const auto now = proc->CurrentPreset();
+  REQUIRE(now->leafCount == state->leafCount);
+  for (uint32_t k = 0; k < now->leafCount; ++k) REQUIRE(Bits(now->leaves[k].value) == Bits(state->leaves[k].value));
+  REQUIRE(std::memcmp(&now->mode, &state->mode, sizeof(ModeBlob)) == 0);
+  REQUIRE(std::memcmp(&now->control, &state->control, sizeof(ControlState)) == 0);
+}
+
+TEST_CASE("a document loaded while running is a Spillover load with Trails at the next block") {
+  const auto   state  = CompiledState("engram.json");
+  const Stereo in     = MakeInput(96000);
+  const int    change = 48000;
+  auto         proc   = MakeProcessor(Busy(), {});
+  proc->Freeze().setValueNotifyingHost(1.0f);
+  HostRender r;
+  r.pattern     = {480};
+  r.beforeBlock = [&](int pos) {
+    if (pos == change) REQUIRE(proc->LoadPresetState(*state));
+  };
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  RequireSame(got, RenderReference(Busy(), in, kRate, {RefFreeze(0, true), RefLoad(change, state.get()),
+                                                       RefFreeze(change, false)}),
+              "engram over Busy at frame 48000");
+  REQUIRE_FALSE(proc->Freeze().get());  // the load turned it off
+}
+
+TEST_CASE("a mode whose structure is invalid is refused and changes nothing") {
+  auto state = CompiledState("engram.json");
+  state->mode.macros.macroCount = 9;  // over kMaxMacros
+  BrainscapeProcessor proc;
+  const float before = proc.Param(ParamId::Mix).Plain();
+  LoadReport  report;
+  REQUIRE_FALSE(proc.LoadPresetState(*state, &report));
+  REQUIRE(report.invalidMode);
+  REQUIRE(Bits(proc.Param(ParamId::Mix).Plain()) == Bits(before));
+}
+
+// A host's macro move (§3.6) is a MacroMove: the engine applies the mode's targets, and the
+// wrapper mirrors the same fan-out on the leaves, computed by the same evaluator, so a session
+// saved after the move holds what plays. At every host block pattern.
+TEST_CASE("a host macro move is a MacroMove; the leaf mirrors follow its fan-out") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  for (const auto& pattern : std::vector<std::vector<int>>{{480}, {1, 7, 513}, {0, 4096, 37}}) {
+    auto proc = MakeProcessor({}, {});
+    REQUIRE(proc->LoadPresetState(*state));
+    int        appliedAt = -1;
+    HostRender r;
+    r.pattern     = pattern;
+    r.beforeBlock = [&](int pos) {
+      if (appliedAt >= 0 || pos < 20011) return;
+      proc->Macro(ParamId::MacroTime).setValue(0.8f);
+      proc->Macro(ParamId::MacroActivity).setValue(0.3f);
+      appliedAt = pos;
+    };
+    const Stereo got  = RenderProcessor(*proc, in, {}, r);
+    const float  time = PlainFromNormalized(ParamId::MacroTime, 0.8f);
+    const float  act  = PlainFromNormalized(ParamId::MacroActivity, 0.3f);
+    RequireSame(got, RenderStateReference(*state, in, kRate,
+                                          {RefMacro(appliedAt, ParamId::MacroTime, time),
+                                           RefMacro(appliedAt, ParamId::MacroActivity, act)}),
+                PatternName(pattern).c_str());
+    for (const auto& move : {std::make_pair(ParamId::MacroTime, time), std::make_pair(ParamId::MacroActivity, act)}) {
+      REQUIRE(Bits(proc->Macro(move.first).Plain()) == Bits(move.second));
+      PresetLeaf   out[kMaxMacroTargets];
+      const size_t n = EvalMacro(state->mode, move.first, move.second, out, kMaxMacroTargets);
+      REQUIRE(n > 0u);
+      for (size_t k = 0; k < n; ++k) {
+        INFO(FindParam(static_cast<ParamId>(out[k].id))->name);
+        REQUIRE(Bits(proc->Param(static_cast<ParamId>(out[k].id)).Plain()) == Bits(out[k].value));
+      }
+    }
+    REQUIRE(proc->Param(ParamId::DelayTimeMs).Plain() > 405.0f);  // Time 0.8 is later than 0.5
+  }
+}
+
+TEST_CASE("a macro the mode leaves undefined moves nothing") {
+  const auto   state = CompiledState("engram.json");  // no aux macros
+  const Stereo in    = MakeInput(9600);
+  auto         proc  = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  proc->PostAt(4800, {WrapperEvent::Type::Macro, WrapperEvent::Source::Ui,
+                      static_cast<uint32_t>(ParamId::MacroAux1), 0.9f});
+  const Stereo got = RenderProcessor(*proc, in, {}, {{480}});
+  RequireSame(got, RenderStateReference(*state, in), "aux1 undefined");
+}
+
+TEST_CASE("an expression move fans out through CTRL's assignments") {
+  const auto   state = CompiledState("controls.json");
+  const Stereo in    = MakeInput(48000);
+  auto         proc  = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  REQUIRE(state->control.exprCount > 0u);
+  int        appliedAt = -1;
+  HostRender r;
+  r.pattern     = {441};
+  r.beforeBlock = [&](int pos) {
+    if (appliedAt >= 0 || pos < 12000) return;
+    proc->Expression().setValue(0.6f);
+    appliedAt = pos;
+  };
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  const float  pos = PlainFromNormalized(ParamId::PerfExpression, 0.6f);
+  RequireSame(got, RenderStateReference(*state, in, kRate, {RefExpression(appliedAt, pos)}), "expression 0.6");
+  PresetLeaf   out[kMaxTargets];
+  const size_t n = EvalExpression(state->mode, state->control, pos, out, kMaxTargets);
+  REQUIRE(n > 0u);
+  for (size_t k = 0; k < n; ++k) {
+    if (!IsLeaf(out[k].id)) continue;
+    // A leaf two assignments write ends on the later one.
+    bool later = false;
+    for (size_t j = k + 1; j < n; ++j) later = later || out[j].id == out[k].id;
+    if (later) continue;
+    INFO(FindParam(static_cast<ParamId>(out[k].id))->name);
+    REQUIRE(Bits(proc->Param(static_cast<ParamId>(out[k].id)).Plain()) == Bits(out[k].value));
+  }
+}
+
+// global.effect_volume_db (§3.8): a Global row the engine keeps across loads and restarts, so
+// the wrapper restores it after Init and keeps it in the session, never in a preset.
+TEST_CASE("the effect volume is a device setting: kept across loads, re-prepares and sessions") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  SECTION("an edit applies at the next block, and a document load keeps it") {
+    auto proc = MakeProcessor({}, {});
+    proc->EffectVolume().SetPlainNotifyingHost(-6.0f);
+    HostRender r;
+    r.pattern     = {480};
+    r.beforeBlock = [&](int pos) {
+      if (pos == 24000) REQUIRE(proc->LoadPresetState(*state));
+    };
+    const Stereo got = RenderProcessor(*proc, in, {}, r);
+    RequireSame(got, RenderReference({}, in, kRate, {RefParam(0, ParamId::EffectVolumeDb, -6.0f),
+                                                     RefLoad(24000, state.get())}),
+                "-6 dB, then engram");
+    REQUIRE(Bits(proc->EffectVolume().Plain()) == Bits(-6.0f));
+  }
+  SECTION("Init restores it before the start state's Exact load") {
+    auto proc = std::make_unique<BrainscapeProcessor>();
+    proc->EffectVolume().SetPlainNotifyingHost(-9.5f);
+    REQUIRE(proc->LoadPresetState(*state));
+    proc->setRateAndBufferSizeDetails(kRate, 512);
+    proc->prepareToPlay(kRate, 512);
+    const Stereo got = RenderProcessor(*proc, in, {}, {{512}});
+    RequireSame(got, RenderStateReference(*state, in, kRate, {}, {}, -9.5f), "-9.5 dB from Init");
+  }
+  SECTION("the session keeps it; a v1 session plays the default mode") {
+    BrainscapeProcessor a;
+    REQUIRE(a.LoadPresetState(*state));
+    a.EffectVolume().SetPlainNotifyingHost(-3.0f);
+    juce::MemoryBlock blob;
+    a.getStateInformation(blob);
+    auto b = MakeProcessor({}, {});
+    REQUIRE(b->LoadPresetState(*CompiledState("controls.json")));
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(Bits(b->EffectVolume().Plain()) == Bits(-3.0f));
+    const ModeState mode = b->CurrentMode();
+    REQUIRE(std::memcmp(&mode.mode, &ModeState{}.mode, sizeof(ModeBlob)) == 0);
+    REQUIRE(Bits(b->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+    const Stereo got = RenderProcessor(*b, in, {}, {{480}});
+    auto         leaves = std::make_unique<PresetState>();
+    *leaves             = *state;
+    const ModeState defaults{};
+    leaves->mode    = defaults.mode;
+    leaves->control = defaults.control;
+    RequireSame(got, RenderStateReference(*leaves, in, kRate, {RefParam(0, ParamId::EffectVolumeDb, -3.0f)}),
+                "engram's leaves on the default mode, -3 dB");
+  }
+}
+
+TEST_CASE("restart on transport start restarts with the document's mode") {
+  const auto   state   = CompiledState("engram.json");
+  const Stereo source  = MakeInput(4 * 48000);
+  const Stereo preroll = Slice(source, 0, 24000);
+  const Stereo take    = Slice(source, 48000, 120000);
+  const Stereo gap     = Slice(source, 130000, 140000);
+  const Stereo ref     = RenderStateReference(*state, take, kRate, {}, {}, -2.0f);
+  TestPlayHead head;
+  auto         proc = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  proc->EffectVolume().SetPlainNotifyingHost(-2.0f);
+  WrapperSettings s = proc->GetSettings();
+  s.restartOnStart  = true;
+  proc->SetSettings(s);
+  proc->setPlayHead(&head);
+  const auto play = [&](const Stereo& in, std::vector<int> pattern) {
+    head.playing     = true;
+    const Stereo out = RenderProcessor(*proc, in, {}, {std::move(pattern)});
+    head.playing     = false;
+    return out;
+  };
+  RenderProcessor(*proc, preroll, {}, {{441}});
+  REQUIRE(WaitForSpare(*proc));
+  RequireSame(play(take, {441}), ref, "real time: the spare holds the mode and the volume");
+  REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+  RenderProcessor(*proc, gap, {}, {{441}});
+  proc->setNonRealtime(true);
+  RequireSame(play(take, {512}), ref, "offline: restarted in place with the mode");
+  proc->setPlayHead(nullptr);
 }
 
 TEST_CASE("latency, tail and supported layouts") {

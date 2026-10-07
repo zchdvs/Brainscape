@@ -33,6 +33,10 @@ inline constexpr float kWrapperGainRangeDb = 24.f;
 struct WrapperState {
   float           plain[kNumLeafParams];
   WrapperSettings settings;
+  // global.effect_volume_db (mode-compiler.md §3.8), a device setting outside presets: setting
+  // key 5, absent from sessions written before it.
+  float           effectVolumeDb  = 0.f;
+  bool            hasEffectVolume = false;
   uint32_t        unknownIds = 0;  // ids in the blob this build lacks (ignored)
   uint32_t        missingIds = 0;  // ids this build has that the blob lacks (defaults)
 };
