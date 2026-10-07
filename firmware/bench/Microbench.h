@@ -16,6 +16,8 @@ enum class FpOp : uint8_t {
   MulPair,   // vmul.f32 x = (x * a) * b, two instructions per step: an underflowing product
              // and its way back, so every other result is subnormal when a = 2^-100
   MulF64,    // vmul.f64 x = x * a
+  AddPair,   // vadd.f32 x = x + a, then vsub.f32 x = x - a: with x and a subnormal and
+             // nonzero, every operand and result is subnormal (no zero-operand shortcut)
 };
 
 // x and a are the operand bit patterns (binary32; MulF64 widens them); b is MulPair's second
@@ -24,10 +26,12 @@ uint32_t RunFpChain(FpOp op, uint32_t xBits, uint32_t aBits, uint32_t bBits, uin
                     uint32_t iterations);
 
 // The state-update-plus-flush pattern of the engine's recursive filters (detail/FlushTiny.h:
-// the bit-pattern test |x| < 1e-20f), eight independent one-poles per step, against the same
-// loop without the flush and with the two-compare form the profile first proposed. Returns
-// cycles for `iterations` steps.
+// the bit-pattern test |x| < 1e-20f), against the same loop without the flush and with the
+// two-compare form the profile first proposed. `chains` 8: eight independent one-poles per
+// step, where instruction-level parallelism hides most of the flush's latency (a lower
+// bound); 1: one one-pole, the flush on its recursion's critical path every step, as at the
+// engine's state-update sites (an upper bound). Returns cycles for `iterations` steps.
 enum class FlushForm : uint8_t { None, BitTest, Compare };
-uint32_t RunFlushLoop(FlushForm form, uint32_t iterations);
+uint32_t RunFlushLoop(FlushForm form, uint32_t iterations, uint32_t chains);
 
 }  // namespace brainscape::fw::bench

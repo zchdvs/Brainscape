@@ -9,24 +9,31 @@
 // code-placement A/B of profile §7.1) and brainscape_bench_hooks (the engine built with the
 // FP guard's test hooks: renders with flushing forced on inside the guard, and the
 // exception flags of every block: profile §4.2's FZ = 0/1 silent-tail test and flag census).
+// The firmware's memcpy, memmove and memset (platform/MemFunctions.c) sit with the engine's
+// code: in ITCM in brainscape_bench and _hooks, in QSPI in _xip.
 //
 // Commands: info | run [quick] | memory | micro | restart | blocks [quick] | stages [quick]
 //           | births [quick] | tail | dfu
 // Suites:
 //   memory   PlanMemory, the placement and the linker map
 //   micro    FPU latency with normal and subnormal operands at FZ = 0 and 1 (§4.2 test a),
-//            and the cost of the engine's flush idiom (§4.3, §8.3 Q5)
+//            and the cost of the engine's flush idiom on 8 independent chains and on 1
+//            (§4.3, §8.3 Q5)
 //   restart  Restart (the SDRAM clear of the canonical config), LoadPreset(Exact), Reset,
-//            ClearHistory and Init
-//   blocks   cycles per 48-frame block, nominal to pessimistic, caches warm and cold
+//            ClearHistory, a raw 16 MiB SDRAM clear (memset, and an 8-register STM loop: the
+//            hardware floor) and Init
+//   blocks   cycles per 48-frame block, nominal to pessimistic, caches warm and cold, and the
+//            pessimistic configuration under a stream of events (parameter sweeps every
+//            block, trigger bursts, freeze toggles, Spillover loads)
 //   stages   per-stage cost by difference: the pessimistic configuration with one stage off
 //            (the engine has no per-stage counters, and none are added: they would be
 //            instrumentation inside dsp/)
-//   births   per-birth cost at the maximum birth rate (one per sample): equal voice counts,
-//            48 vs 2.4 births per block
+//   births   an upper bound on the per-birth cost at the maximum birth rate (one per
+//            sample): equal voice counts, 48 vs 2.4 births per block
 //   tail     §4.2 test b: 123 s of the golden tail vector and 2 s of noise then 120 s of
-//            silence, worst block and (hooks build) the blocks raising IDC or UFC, at FZ = 0
-//            and (hooks build) FZ = 1; output hashes for the golden comparison
+//            silence, at FZ = 0 and (hooks build) FZ = 1, with statistics for the active
+//            part and the silent tail separately and (hooks build) the blocks raising IDC or
+//            UFC; output hashes for the golden comparison
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -41,6 +48,8 @@
 #include "Sha256.h"
 #include "bench/Microbench.h"
 #include "brainscape/Engine.h"
+#include "brainscape/EventQueue.h"
+#include "brainscape/Params.h"
 #include "brainscape/TestSignal.h"
 #include "platform/Placement.h"
 #include "platform/Platform.h"
@@ -70,13 +79,21 @@ constexpr uint32_t kFpscrFz     = 1u << 24;
 constexpr uint32_t kFlagIdc     = 0x80u;  // input denormal
 constexpr uint32_t kFlagUfc     = 0x08u;  // underflow
 
-// Per-block cycles of the current run, in SDRAM (written between measurements only).
+// Per-block cycles and FPSCR flags of the current run, and a scratch copy for percentiles, in
+// SDRAM (written between measurements only).
 __attribute__((section(".bss.brainscape_sdram_cycles"))) uint32_t g_cycles[kMaxBlocks];
+__attribute__((section(".bss.brainscape_sdram_sorted"))) uint32_t g_sorted[kMaxBlocks];
+__attribute__((section(".bss.brainscape_sdram_flags"))) uint8_t   g_flags[kMaxBlocks];
 
 Engine*                  g_engine = nullptr;
 fw::EnginePlacement      g_place;
 std::vector<VectorCase>* g_corpus   = nullptr;
 uint32_t                 g_overhead = 0;  // DWT cycles of an empty measurement
+
+// The "events" configuration's transport, as the live image delivers events.
+EventQueue         g_queue;
+Engine::BlockEvent g_blockEvents[EventQueue::kCapacity];
+std::unique_ptr<PresetState> g_loadA, g_loadB;  // Spillover payloads (never modified)
 
 void Emit(const std::string& json) {
   Serial().WriteLine(json, UsbSerial::Mode::Block);
@@ -109,17 +126,85 @@ struct Spec {
   uint32_t                      frames     = 0;
   bool                          cold       = false;  // clean+invalidate D and I caches per block
   bool                          forceFlush = false;  // hooks build: FZ inside the guard
+  bool                          events     = false;  // the event stream of PushBlockEvents
+  // > 0: statistics for the active part [0, tail) and the silent tail [tail, end) too, the
+  // tail starting at the first block after the last input frame.
+  uint32_t                      tailStartFrame = 0;
+};
+
+// Statistics of blocks [first, first + blocks) of the run.
+struct Stats {
+  uint32_t first = 0, blocks = 0;
+  uint64_t sum = 0;
+  uint32_t min = 0, max = 0, maxIndex = 0, p50 = 0, p90 = 0, p99 = 0, p999 = 0;
+  uint32_t idcBlocks = 0, ufcBlocks = 0, flaggedBlocks = 0, worstFlaggedCycles = 0;
 };
 
 struct Result {
   bool        loaded = false;
   uint32_t    blocks = 0;
-  uint64_t    sum    = 0;
-  uint32_t    min = 0, max = 0, maxIndex = 0, p50 = 0, p90 = 0, p99 = 0, p999 = 0;
-  uint32_t    idcBlocks = 0, ufcBlocks = 0;
-  uint32_t    worstFlaggedCycles = 0;
+  Stats       whole, active, tail;
+  bool        segmented      = false;
+  uint32_t    tailStartBlock = 0;
+  uint32_t    eventsPushed = 0, eventsRefused = 0;
   std::string hash;
 };
+
+Stats Summarize(uint32_t first, uint32_t end) {
+  Stats s;
+  s.first  = first;
+  s.blocks = end > first ? end - first : 0;
+  if (s.blocks == 0) return s;
+  s.min = s.max = g_cycles[first];
+  s.maxIndex    = first;
+  for (uint32_t b = first; b < end; ++b) {
+    const uint32_t c = g_cycles[b];
+    s.sum += c;
+    if (c < s.min) s.min = c;
+    if (c > s.max) {
+      s.max      = c;
+      s.maxIndex = b;
+    }
+    const uint8_t f = g_flags[b];
+    if (f & kFlagIdc) ++s.idcBlocks;
+    if (f & kFlagUfc) ++s.ufcBlocks;
+    if (f & (kFlagIdc | kFlagUfc)) {
+      ++s.flaggedBlocks;
+      if (c > s.worstFlaggedCycles) s.worstFlaggedCycles = c;
+    }
+  }
+  std::copy(g_cycles + first, g_cycles + end, g_sorted);
+  std::sort(g_sorted, g_sorted + s.blocks);
+  auto pct = [&](uint32_t permille) {
+    const uint64_t i = static_cast<uint64_t>(s.blocks - 1u) * permille / 1000u;
+    return g_sorted[i];
+  };
+  s.p50  = pct(500);
+  s.p90  = pct(900);
+  s.p99  = pct(990);
+  s.p999 = pct(999);
+  return s;
+}
+
+std::string StatsJson(const Stats& s) {
+  JsonObj o;
+  o.UInt("firstBlock", s.first)
+      .UInt("blocks", s.blocks)
+      .UInt("sum", s.sum)
+      .UInt("mean", s.blocks != 0 ? s.sum / s.blocks : 0)
+      .UInt("min", s.min)
+      .UInt("p50", s.p50)
+      .UInt("p90", s.p90)
+      .UInt("p99", s.p99)
+      .UInt("p999", s.p999)
+      .UInt("max", s.max)
+      .UInt("maxBlock", s.maxIndex);
+  if (kHooks) {
+    o.UInt("idcBlocks", s.idcBlocks).UInt("ufcBlocks", s.ufcBlocks).UInt("flaggedBlocks", s.flaggedBlocks);
+    o.UInt("worstFlaggedCycles", s.worstFlaggedCycles);
+  }
+  return o.Done();
+}
 
 void PackFrames(const float* l, const float* r, uint32_t n, uint8_t* bytes) {
   for (uint32_t i = 0; i < n; ++i) {
@@ -132,9 +217,55 @@ void PackFrames(const float* l, const float* r, uint32_t n, uint8_t* bytes) {
   }
 }
 
+// 0 -> 1 -> 0 over `period` blocks.
+float Tri(uint32_t b, uint32_t period) {
+  const uint32_t phase = b % period;
+  const uint32_t half  = period / 2u;
+  return phase < half ? static_cast<float>(phase) / static_cast<float>(half)
+                      : static_cast<float>(period - phase) / static_cast<float>(half);
+}
+
+// The "events" configuration: what a player and the pedal's control loop throw at the engine,
+// stamped into block b of the engine timeline in (frame, seq) order. Every block: cutoff,
+// pitch and grain size sweeps (RebuildDirty and the filter coefficients every block); every
+// 250 ms a burst of four footswitch triggers 12 frames apart (manual births); every 1.5 s a
+// freeze toggle; every second a Spillover load, alternating two presets.
+void PushBlockEvents(uint32_t b, uint32_t* seq, Result* r) {
+  const int64_t f0   = static_cast<int64_t>(b) * kBlock;
+  auto          push = [&](int64_t frame, Engine::EventType type, uint32_t id, float value,
+                  const PresetState* preset) {
+    Engine::Event e;
+    e.frame  = frame;
+    e.seq    = (*seq)++;
+    e.type   = type;
+    e.id     = id;
+    e.value  = value;
+    e.preset = preset;
+    ++r->eventsPushed;
+    if (!g_queue.Push(e)) ++r->eventsRefused;
+  };
+  if (b % 1000u == 500u) {
+    push(f0, Engine::EventType::SpilloverLoad, 0, 0.f, (b / 1000u) % 2u == 0u ? g_loadB.get() : g_loadA.get());
+  }
+  if (b % 1500u == 750u) push(f0, Engine::EventType::Freeze, 0, (b / 1500u) % 2u == 0u ? 1.f : 0.f, nullptr);
+  const auto set = [&](ParamId id, float v) {
+    push(f0, Engine::EventType::SetParam, static_cast<uint32_t>(id), Canonicalize(id, v), nullptr);
+  };
+  set(ParamId::FilterCutoffHz, 500.f + 7500.f * Tri(b, 2000u));
+  set(ParamId::PitchSt, -12.f + 36.f * Tri(b, 3000u));
+  set(ParamId::GrainSizeMs, 5.f + 195.f * Tri(b, 4000u));
+  if (b % 250u == 0u) {
+    for (uint32_t k = 0; k < 4u; ++k) {
+      push(f0 + 12 * static_cast<int64_t>(k), Engine::EventType::Trigger,
+           static_cast<uint32_t>(Engine::TriggerSource::Footswitch), 1.f, nullptr);
+    }
+  }
+}
+
 Result Run(const Spec& s) {
   Result r;
   r.loaded = g_engine->LoadPreset(*CompletePreset(s.params), LoadMode::Exact);
+  g_queue.Clear();  // the Exact load started a new engine timeline at frame 0
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(s.notes.data(), static_cast<uint32_t>(s.notes.size()));
   Sha256  sha;
@@ -143,6 +274,7 @@ Result Run(const Spec& s) {
   uint8_t bytes[kBlock * 8];
   const float* ins[2]  = {inL, inR};
   float*       outs[2] = {outL, outR};
+  uint32_t     seq     = 0;
   r.blocks             = std::min(s.frames / kBlock, kMaxBlocks);
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
   detail::fpenv_test::forceFlush = s.forceFlush;
@@ -157,27 +289,33 @@ Result Run(const Spec& s) {
     ctx.in        = ins;
     ctx.out       = outs;
     ctx.numFrames = kBlock;
-    if (s.cold) {
-      SCB_CleanInvalidateDCache();
-      SCB_InvalidateICache();
+    if (s.events) {
+      PushBlockEvents(b, &seq, &r);
+      ctx.events    = g_blockEvents;
+      ctx.numEvents = g_queue.PopBlock(static_cast<int64_t>(b) * kBlock, kBlock, g_blockEvents,
+                                       EventQueue::kCapacity);
     }
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
     detail::fpenv_test::flags = 0;
 #endif
     __disable_irq();
+    if (s.cold) {
+      // Inside the interrupts-off region, so no interrupt handler re-warms the caches
+      // between the invalidate and the measured call.
+      SCB_CleanInvalidateDCache();
+      SCB_InvalidateICache();
+    }
     __DSB();
     __ISB();
     const uint32_t t0 = DWT->CYCCNT;
     g_engine->Process(ctx);
     const uint32_t t1 = DWT->CYCCNT;
     __enable_irq();
-    const uint32_t c = t1 - t0 > g_overhead ? t1 - t0 - g_overhead : 0;
-    g_cycles[b]      = c;
+    g_cycles[b] = t1 - t0 > g_overhead ? t1 - t0 - g_overhead : 0;
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
-    const uint32_t flags = detail::fpenv_test::flags;
-    if (flags & kFlagIdc) ++r.idcBlocks;
-    if (flags & kFlagUfc) ++r.ufcBlocks;
-    if ((flags & (kFlagIdc | kFlagUfc)) != 0 && c > r.worstFlaggedCycles) r.worstFlaggedCycles = c;
+    g_flags[b] = static_cast<uint8_t>(detail::fpenv_test::flags & (kFlagIdc | kFlagUfc));
+#else
+    g_flags[b] = 0;
 #endif
     PackFrames(outL, outR, kBlock, bytes);
     sha.Update(bytes, sizeof bytes);
@@ -185,31 +323,21 @@ Result Run(const Spec& s) {
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
   detail::fpenv_test::forceFlush = false;
 #endif
-  r.hash = sha.Hex();
-  if (r.blocks == 0) return r;
-  r.min = r.max = g_cycles[0];
-  for (uint32_t b = 0; b < r.blocks; ++b) {
-    r.sum += g_cycles[b];
-    if (g_cycles[b] < r.min) r.min = g_cycles[b];
-    if (g_cycles[b] > r.max) {
-      r.max      = g_cycles[b];
-      r.maxIndex = b;
-    }
+  g_queue.Clear();
+  r.hash  = sha.Hex();
+  r.whole = Summarize(0, r.blocks);
+  if (s.tailStartFrame != 0) {
+    r.segmented      = true;
+    r.tailStartBlock = std::min((s.tailStartFrame + kBlock - 1u) / kBlock, r.blocks);
+    r.active         = Summarize(0, r.tailStartBlock);
+    r.tail           = Summarize(r.tailStartBlock, r.blocks);
   }
-  std::sort(g_cycles, g_cycles + r.blocks);
-  auto pct = [&](uint32_t permille) {
-    const uint64_t i = static_cast<uint64_t>(r.blocks - 1u) * permille / 1000u;
-    return g_cycles[i];
-  };
-  r.p50  = pct(500);
-  r.p90  = pct(900);
-  r.p99  = pct(990);
-  r.p999 = pct(999);
   return r;
 }
 
 std::string ResultJson(const char* type, const Spec& s, const Result& r) {
-  JsonObj o;
+  const Stats& w = r.whole;
+  JsonObj      o;
   o.Str("type", type)
       .Str("config", s.config)
       .Str("input", s.input)
@@ -218,19 +346,23 @@ std::string ResultJson(const char* type, const Spec& s, const Result& r) {
       .Bool("exactLoad", r.loaded)
       .UInt("blocks", r.blocks)
       .UInt("frames", static_cast<uint64_t>(r.blocks) * kBlock)
-      .UInt("sum", r.sum)
-      .UInt("mean", r.blocks != 0 ? r.sum / r.blocks : 0)
-      .UInt("min", r.min)
-      .UInt("p50", r.p50)
-      .UInt("p90", r.p90)
-      .UInt("p99", r.p99)
-      .UInt("p999", r.p999)
-      .UInt("max", r.max)
-      .UInt("maxBlock", r.maxIndex)
+      .UInt("sum", w.sum)
+      .UInt("mean", r.blocks != 0 ? w.sum / r.blocks : 0)
+      .UInt("min", w.min)
+      .UInt("p50", w.p50)
+      .UInt("p90", w.p90)
+      .UInt("p99", w.p99)
+      .UInt("p999", w.p999)
+      .UInt("max", w.max)
+      .UInt("maxBlock", w.maxIndex)
       .Str("hash", r.hash);
   if (kHooks) {
-    o.UInt("idcBlocks", r.idcBlocks).UInt("ufcBlocks", r.ufcBlocks);
-    o.UInt("worstFlaggedCycles", r.worstFlaggedCycles);
+    o.UInt("idcBlocks", w.idcBlocks).UInt("ufcBlocks", w.ufcBlocks).UInt("flaggedBlocks", w.flaggedBlocks);
+    o.UInt("worstFlaggedCycles", w.worstFlaggedCycles);
+  }
+  if (s.events) o.UInt("eventsPushed", r.eventsPushed).UInt("eventsRefused", r.eventsRefused);
+  if (r.segmented) {
+    o.UInt("tailStartBlock", r.tailStartBlock).Raw("active", StatsJson(r.active)).Raw("tail", StatsJson(r.tail));
   }
   return o.Done();
 }
@@ -322,6 +454,8 @@ struct FpCase {
 void SuiteMicro() {
   constexpr uint32_t kOne = 0x3F800000u, kOnePointFive = 0x3FC00000u, kZero = 0u;
   constexpr uint32_t kSub = 0x00400000u;      // 2^-127, subnormal
+  constexpr uint32_t kSubSmall = 0x00000200u; // 2^-140, subnormal: 2^-127 +- 2^-140 stays subnormal
+  constexpr uint32_t kEps = 0x3A800000u;      // 2^-10: 1.5 +- 2^-10 is exact
   constexpr uint32_t kMid = 0x30C00000u;      // 1.5 * 2^-30
   constexpr uint32_t kTiny = 0x0D800000u;     // 2^-100: kMid * kTiny = 1.5 * 2^-130, subnormal
   constexpr uint32_t kHuge = 0x71800000u;     // 2^100
@@ -333,8 +467,10 @@ void SuiteMicro() {
       {"vmul subnormal operand and result", mb::FpOp::Mul, kSub, kOne, 0},
       {"vmul pair, normal throughout", mb::FpOp::MulPair, kMid, kSmall, kLarge},
       {"vmul pair, every other result subnormal (underflow)", mb::FpOp::MulPair, kMid, kTiny, kHuge},
-      {"vadd normal", mb::FpOp::Add, kOnePointFive, kZero, 0},
-      {"vadd subnormal operand and result", mb::FpOp::Add, kSub, kZero, 0},
+      {"vadd normal (+0)", mb::FpOp::Add, kOnePointFive, kZero, 0},
+      {"vadd subnormal operand and result (+0)", mb::FpOp::Add, kSub, kZero, 0},
+      {"vadd/vsub pair, normal throughout", mb::FpOp::AddPair, kOnePointFive, kEps, 0},
+      {"vadd/vsub pair, subnormal operands and results (nonzero addend)", mb::FpOp::AddPair, kSub, kSubSmall, 0},
       {"vdiv normal", mb::FpOp::Div, kOnePointFive, kOne, 0},
       {"vdiv subnormal dividend and result", mb::FpOp::Div, kSub, kOne, 0},
       {"vsqrt normal", mb::FpOp::Sqrt, 0, kTwo, 0},
@@ -355,14 +491,17 @@ void SuiteMicro() {
     }
   }
   static const char* const kForms[] = {"none", "bit test (engine, FlushTiny.h)", "two compares"};
-  for (uint32_t f = 0; f < 3; ++f) {
-    const uint32_t cycles = mb::RunFlushLoop(static_cast<mb::FlushForm>(f), kIterations);
-    Emit(JsonObj()
-             .Str("type", "flush-micro")
-             .Str("form", kForms[f])
-             .UInt("updates", 8u * kIterations)
-             .UInt("cycles", cycles)
-             .Done());
+  for (const uint32_t chains : {8u, 1u}) {
+    for (uint32_t f = 0; f < 3; ++f) {
+      const uint32_t cycles = mb::RunFlushLoop(static_cast<mb::FlushForm>(f), kIterations, chains);
+      Emit(JsonObj()
+               .Str("type", "flush-micro")
+               .Str("form", kForms[f])
+               .UInt("chains", chains)
+               .UInt("updates", chains * kIterations)
+               .UInt("cycles", cycles)
+               .Done());
+    }
   }
 }
 
@@ -385,6 +524,31 @@ void EmitOp(const char* op, const char* state, uint32_t cycles) {
            .Done());
 }
 
+constexpr uint32_t kRawClearBytes = 16u * 1024u * 1024u;  // the canonical 2^22 ring's bytes
+
+// Eight registers per store, 32 bytes, in a tight loop: the most the core can push into
+// the SDRAM without DMA, for comparing Restart with the hardware (profile §8.3 Q9).
+void StmClear(void* p, uint32_t bytes) {
+  uint32_t*       q   = static_cast<uint32_t*>(p);
+  uint32_t* const end = q + bytes / 4u;
+  __asm__ volatile(
+      "mov r2, #0\n\t"
+      "mov r3, #0\n\t"
+      "mov r4, #0\n\t"
+      "mov r5, #0\n\t"
+      "mov r6, #0\n\t"
+      "mov r8, #0\n\t"
+      "mov r9, #0\n\t"
+      "mov r12, #0\n\t"
+      "1:\n\t"
+      "stmia %[q]!, {r2-r6, r8, r9, r12}\n\t"
+      "cmp %[q], %[end]\n\t"
+      "bne 1b\n\t"
+      : [q] "+r"(q)
+      : [end] "r"(end)
+      : "r2", "r3", "r4", "r5", "r6", "r8", "r9", "r12", "cc", "memory");
+}
+
 void SuiteRestart() {
   // Dirty buffers first: a Restart after rendering clears the ring, the post delay and the
   // reverb (the canonical config's 16 MiB ring and 0.75 MiB post delay in SDRAM).
@@ -401,6 +565,13 @@ void SuiteRestart() {
   Run(s);
   EmitOp("Reset", "after 2 s of rendering (real-time subset)", Timed([] { g_engine->Reset(); }));
   EmitOp("ClearHistory", "after rendering", Timed([] { g_engine->ClearHistory(); }));
+  // The hardware floor of the clear: 16 MiB of the Bulk arena (the engine's state; Init
+  // below rebuilds it), through the firmware's memset (what the engine's clears call) and an
+  // 8-register STM loop.
+  EmitOp("raw clear, 16 MiB SDRAM", "memset (platform/MemFunctions.c)",
+         Timed([] { std::memset(g_place.arenas.base[2], 0, kRawClearBytes); }));
+  EmitOp("raw clear, 16 MiB SDRAM", "STM loop, 8 registers (hardware floor)",
+         Timed([] { StmClear(g_place.arenas.base[2], kRawClearBytes); }));
   EmitOp("Init", "canonical config, maxBlockSize 48", Timed([] {
            EngineConfig ec;
            ec.maxBlockSize = kBlock;
@@ -415,6 +586,10 @@ void SuiteBlocks(bool quick) {
   specs.push_back(Make("nominal", "strums_16s", Nominal(), sec));
   specs.push_back(Make("pess_render", "onset_bursts_6s", Pessimistic(20.0f), 6));
   specs.push_back(Make("pess_births", "onset_bursts_6s", Pessimistic(1.0f), 6));
+  Spec events = Make("pess_events: sweeps every block, triggers, freeze, loads", "strums_16s",
+                     Pessimistic(20.0f), sec);
+  events.events = true;
+  specs.push_back(events);
   specs.push_back(Make("corpus:tail_post_fb", "strums_16s", CorpusParams("strums_tail_123s", "tail_post_fb"), sec));
   specs.push_back(Make("corpus:pitch_reverse_spray", "plucks_12s", CorpusParams("plucks_12s", "pitch_reverse_spray"), sec));
   specs.push_back(Make("corpus:max_delay_spray_rev_up24", "plucks_12s",
@@ -458,7 +633,9 @@ void SuiteBirths(bool quick) {
   // binary32 target is >= 48 and 16): 1 ms grains are born every 48/T frames and live 48,
   // 20 ms grains every 960/T frames and live 960, so the voices rendered per block match and
   // the births per block differ by (T - T/20). Per-birth DetMath paths on: pitch with cents
-  // spread, reverse, spray, pan; jitter 0 for an exact birth count; post stages off.
+  // spread, reverse, spray, pan; jitter 0 for an exact birth count; post stages off. The
+  // difference also carries the short grains' ring-read locality (a new spray position per
+  // birth), so it bounds ScheduleGrain's cost from above rather than isolating it.
   struct Birth {
     float    overlap;
     uint32_t voices;
@@ -487,15 +664,17 @@ void SuiteBirths(bool quick) {
 void SuiteTail() {
   // The golden tail vector exactly as the corpus renders it (one Exact load, 48-frame blocks,
   // no events): its hash must equal golden.json's strums_tail_123s/tail_post_fb at FZ = 0,
-  // and at FZ = 1 too (profile §6.4's forced-flush control).
+  // and at FZ = 1 too (profile §6.4's forced-flush control). The silent tail starts after
+  // the vector's active frames (3 s of strums).
   const VectorCase* tailVec = FindVector("strums_tail_123s");
   Spec goldenTail;
   goldenTail.config = "golden:strums_tail_123s/tail_post_fb";
   goldenTail.input  = "strums_tail_123s";
   goldenTail.params = CorpusParams("strums_tail_123s", "tail_post_fb");
   if (tailVec != nullptr) {
-    goldenTail.notes  = VectorNotes(*tailVec);
-    goldenTail.frames = tailVec->frames;
+    goldenTail.notes          = VectorNotes(*tailVec);
+    goldenTail.frames         = tailVec->frames;
+    goldenTail.tailStartFrame = tailVec->activeFrames;
   }
   // 2 s of noise, then 120 s of silence through feedback and every post stage (§4.2 b).
   Spec noise;
@@ -509,9 +688,10 @@ void SuiteTail() {
   n.level   = 1 << 22;  // -6 dBFS
   n.seed    = 0x7A11u;
   n.attack  = 48;
-  n.release = 480;
+  n.release = 480;  // ends at start + length
   noise.notes.push_back(n);
-  noise.frames = 122u * 48000u;
+  noise.frames         = 122u * 48000u;
+  noise.tailStartFrame = n.start + n.length;
   for (Spec* s : {&goldenTail, &noise}) {
     for (const bool fz : {false, true}) {
       if (fz && !kHooks) continue;
@@ -541,6 +721,8 @@ void Begin(const char* suite) {
            .Str("engineArchiveSha256", kHooks ? fw::Build().hooksArchiveSha256
                                               : fw::Build().engineArchiveSha256)
            .Str("firmwareCommit", fw::Build().commit)
+           .Bool("firmwareDirty", fw::Build().dirty)
+           .Raw("cpu", fw::CpuStateJson())
            .Done());
 }
 
@@ -585,13 +767,13 @@ void Command(const std::vector<std::string>& w) {
     Begin("restart");
     SuiteRestart();
   } else if (c == "blocks") {
-    Begin("blocks");
+    Begin(quick ? "blocks quick" : "blocks");
     SuiteBlocks(quick);
   } else if (c == "stages") {
-    Begin("stages");
+    Begin(quick ? "stages quick" : "stages");
     SuiteStages(quick);
   } else if (c == "births") {
-    Begin("births");
+    Begin(quick ? "births quick" : "births");
     SuiteBirths(quick);
   } else if (c == "tail") {
     Begin("tail");
@@ -609,6 +791,8 @@ void Command(const std::vector<std::string>& w) {
              .Str("suite", c)
              .UInt("cycles", fw::Cycles64() - t0)
              .UInt("fpscr", fw::ReadFpscr())
+             .UInt("droppedBytes", Serial().DroppedBytes())
+             .UInt("droppedLines", Serial().DroppedLines())
              .Done());
   }
   fw::SetLedMode(fw::LedMode::Idle);
@@ -624,6 +808,8 @@ int main() {
   const char* why = nullptr;
   if (!fw::CheckPlacement(ec, g_place, &why)) fw::Fatal(why);
   g_corpus = new std::vector<VectorCase>(BuildCorpus());
+  g_loadA  = CompletePreset(Pessimistic(20.0f));
+  g_loadB  = CompletePreset(Nominal());
   g_engine = new (g_place.engine) Engine();
   if (!g_engine->Init(ec, g_place.arenas)) fw::Fatal("Engine::Init refused the placement");
 

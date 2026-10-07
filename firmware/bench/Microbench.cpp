@@ -46,6 +46,9 @@ uint32_t Chain(FpOp op, uint32_t x, uint32_t a, uint32_t b, uint32_t n) {
       BS_TIMED_LOOP("vcvt.f64.f32 d4, s14\n\tvcvt.f64.f32 d5, s15\n\t",
                     BS_X16("vmul.f64 d4, d4, d5\n\t"), "vcvt.f32.f64 s14, d4\n\t");
       break;
+    case FpOp::AddPair:
+      BS_TIMED_LOOP("", BS_X8("vadd.f32 s14, s14, s15\n\tvsub.f32 s14, s14, s15\n\t"), "");
+      break;
   }
   (void)result;
   return t1 - t0;
@@ -78,6 +81,26 @@ __attribute__((noinline)) uint32_t FlushLoop(uint32_t n) {
   return t1 - t0;
 }
 
+// One one-pole, s = s * k + c, with the flush on the recursion: every step waits for the
+// previous step's flushed value (the engine's tamer, SVF and reverb states).
+template <FlushForm kForm>
+__attribute__((noinline)) uint32_t FlushChain(uint32_t n) {
+  volatile float vk = 0.999f, vc = 0.001f, v0 = 0.5f;
+  const float    k = vk, c = vc;
+  float          v  = v0;
+  const uint32_t t0 = DWT->CYCCNT;
+  for (uint32_t i = 0; i < n; ++i) {
+    v = v * k + c;
+    if (kForm == FlushForm::BitTest) detail::FlushTiny(v);
+    if (kForm == FlushForm::Compare && v < 0x1.79ca10p-67f && v > -0x1.79ca10p-67f) v = 0.f;
+    __asm__ volatile("" : "+t"(v) : : "memory");
+  }
+  const uint32_t t1   = DWT->CYCCNT;
+  volatile float sink = v;
+  (void)sink;
+  return t1 - t0;
+}
+
 }  // namespace
 
 uint32_t RunFpChain(FpOp op, uint32_t xBits, uint32_t aBits, uint32_t bBits, uint32_t fpscr,
@@ -91,13 +114,21 @@ uint32_t RunFpChain(FpOp op, uint32_t xBits, uint32_t aBits, uint32_t bBits, uin
   return cycles;
 }
 
-uint32_t RunFlushLoop(FlushForm form, uint32_t iterations) {
+uint32_t RunFlushLoop(FlushForm form, uint32_t iterations, uint32_t chains) {
   __disable_irq();
   uint32_t cycles = 0;
-  switch (form) {
-    case FlushForm::None: cycles = FlushLoop<FlushForm::None>(iterations); break;
-    case FlushForm::BitTest: cycles = FlushLoop<FlushForm::BitTest>(iterations); break;
-    case FlushForm::Compare: cycles = FlushLoop<FlushForm::Compare>(iterations); break;
+  if (chains == 1u) {
+    switch (form) {
+      case FlushForm::None: cycles = FlushChain<FlushForm::None>(iterations); break;
+      case FlushForm::BitTest: cycles = FlushChain<FlushForm::BitTest>(iterations); break;
+      case FlushForm::Compare: cycles = FlushChain<FlushForm::Compare>(iterations); break;
+    }
+  } else {
+    switch (form) {
+      case FlushForm::None: cycles = FlushLoop<FlushForm::None>(iterations); break;
+      case FlushForm::BitTest: cycles = FlushLoop<FlushForm::BitTest>(iterations); break;
+      case FlushForm::Compare: cycles = FlushLoop<FlushForm::Compare>(iterations); break;
+    }
   }
   __enable_irq();
   return cycles;
