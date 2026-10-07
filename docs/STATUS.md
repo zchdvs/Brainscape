@@ -19,9 +19,9 @@ revision 3 is minted** (2026-10-07): the engine plays compiled modes (revision 2
 lane C) and mixes by the Mix law, the dry at unity up to the knob's middle and the wet at unity
 from it (revision 3, the owner's provisional answer to Q13), and
 `dsp/tests/golden/golden.json` holds the hashes of a 33-preset corpus, 12 of them loaded from
-packages that `bspc` compiled, that MSVC reproduces at any block size and from a hostile caller
-floating-point environment (revision 2's file GCC, Clang and the Cortex-M7 code run under
-emulation reproduced too; at revision 3 those legs have not run yet); CI fails a pull request
+packages that `bspc` compiled, that MSVC, GCC 11 and Clang 14 reproduce at any block size and
+from a hostile caller floating-point environment (revision 2's file the Cortex-M7 code run under
+emulation reproduced too; at revision 3 that leg is only partly run); CI fails a pull request
 that changes them (see [Internal sound revision 3](#internal-sound-revision-3),
 [2](#internal-sound-revision-2) and [1](#internal-sound-revision-1)). A JUCE
 plugin and standalone skeleton hosts the engine through its stamped events and `LoadPreset`,
@@ -103,7 +103,8 @@ dry·(1 − m) + wet·m, so at the first factory set's stored Mix of 0.35–0.55
 quieter engaged than bypassed (review finding P1). Now the dry stays at unity up to the knob's
 middle and the wet is at unity from it: dry·min(1, 2(1 − m)) + wet·min(1, 2m), on the smoothed
 Mix ([`dsp/src/detail/MixLaw.h`](../dsp/src/detail/MixLaw.h)). Both gains are exact in binary32,
-so Mix 0 is the dry input bit for bit, Mix 1 the wet alone and the middle both at unity, and at
+so Mix 0 is the dry input bit for bit (up to the sign of a zero: a −0 input sample comes out +0
+where the wet sample is positive or +0), Mix 1 the wet alone and the middle both at unity, and at
 the two ends the arithmetic is revision 2's. `Engine::Impl` keeps its size: the law is a pure
 function of the smoothed Mix and adds no state (6,600 bytes on the M7, measured).
 
@@ -149,12 +150,23 @@ delivery ({300, 512, 5, 64} and random 3), fresh engines and the forced-flush co
 stream's host ctests match the file and `MANIFEST` at `maxBlockSize` 48 and 512; the package
 fuzzer's re-minted digest and the 15 frozen fixtures match. The five firmware images build at
 revision 3, and their engine archives are byte-identical to the M7 oracle built on Windows with the
-pinned arm-none-eabi 10.3: `1d6fe1dc41f02fd9…` (hooks `023a9fa933fa9c0d…`). **Still to run at
-revision 3:** GCC 11 (Release and Debug) and Clang 14 in Docker, and the M7 oracle under
-`qemu-arm -cpu cortex-m7` (the golden check at blocks of 1, 48 and 512 and mixed patterns, a
-hostile caller, the forced-flush control, the package fuzzer and fixtures, and the parity stream
-in the image's placement): Docker was unavailable when this revision was minted. CI's host and
-parity jobs run them on the pull request, and an unexplained difference there blocks it.
+pinned arm-none-eabi 10.3: `1d6fe1dc41f02fd9…` (hooks `023a9fa933fa9c0d…`), and so is the M7
+oracle built on Linux in Docker. In Docker, on the pre-commit tree (`dsp/src`, `dsp/include` and
+`golden.json` identical to the commit's; `test_modes.cpp` different only in a comment, a test name
+and formatting), GCC 11 and Clang 14 reproduce it too: GCC 11 Release ctest 19/19 with 0 warnings
+and the harness at blocks of 1, 48 and 512, both mixed patterns, random patterns 1 and 2, a
+hostile caller, split delivery and fresh engines (33 of 33 presets each), and the package
+fuzzer's re-minted digest; GCC 11 Debug ctest 19/19 and four harness patterns; Clang 14 Release
+ctest 19/19 and blocks of 48 and 512 and a hostile caller. **Still to run at revision 3:** the M7
+oracle under `qemu-arm -cpu cortex-m7`. Its run was cut off when Docker stopped: every hash that
+arrived matches the file (17 of 33 presets at blocks of 48 and 512, {48, 1, 127, 32}, random 1
+and a hostile caller, 11 at blocks of 1, 10 under the forced-flush control, 17 in the parity
+streams at `maxBlockSize` 48 and 512 and 25 in the hostile quick set), but `tail_post_fb`,
+`freeze_long`, `freeze_live_long`, `reverse_mark_aging`, `mode_switch`, `wet_kill`, `lone_changes`
+and `default_silence` never rendered on the M7, and the package fuzzer and fixtures gave no
+verdict. Docker Desktop has not started on this machine since (a stale socket file under
+`%LOCALAPPDATA%\Docker\run`). CI's parity jobs run the M7 on the pull request, and an unexplained
+difference there blocks it.
 
 ## Internal sound revision 2
 
@@ -409,7 +421,7 @@ implementing:
 - **The Mix law** ([mode-compiler.md](design/mode-compiler.md) §7.1, sound revision 3): the dry
   signal stays at unity up to the Mix knob's middle and the wet is at unity from it, so engaging
   a mode below the middle never takes dry level away; Mix 0 is the dry input and Mix 1 the wet
-  alone, bit for bit.
+  alone, bit for bit up to the sign of a zero (a −0 sample can come out +0; `MixLaw.h`).
 - **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
   - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
     `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
@@ -452,7 +464,8 @@ implementing:
   far-rail defect found on 2026-10-05 is fixed (see determinism-profile.md, "The block-split
   bug").
 - **Bit-exact degenerate-delay null** through the int16 ring (the one-engine proof).
-- **The Mix law, exact**: Mix 0 plays the dry input bit for bit and Mix 1 the wet alone, and every
+- **The Mix law, exact**: Mix 0 plays the dry input bit for bit, hostile input included, but for
+  the sign of a zero (a −0 sample comes out with the wet sample's sign), Mix 1 the wet alone, and every
   Mix between plays dry·min(1, 2(1 − m)) + wet·min(1, 2m) bit for bit against the wet rendered at
   Mix 1; a Mix move lands on the endpoints' bits.
 - **Level consistency** within ±1 dB across the whole overlap sweep, including
@@ -495,8 +508,8 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (170 test cases / ~4.1M assertions in Release, 169 in Debug; 29 are the package's, `test_blob.cpp`, 7 the
-evaluators', `test_mode_eval.cpp`, and 16 the mode runtime's and the Mix law's, `test_modes.cpp`), the
+**Suite** (`ctest`): `dsp_unit` (171 test cases / ~4.1M assertions in Release, 170 in Debug; 29 are the package's, `test_blob.cpp`, 7 the
+evaluators', `test_mode_eval.cpp`, and 17 the mode runtime's and the Mix law's, `test_modes.cpp`), the
 forced-flush tests, the undefined-symbol audit and its negative control, the configure-check self-test, `golden_check` (every golden hash of sound
 revision 3), `golden_check_edits` (check mode fails on edited copies of the golden file), the
 corpus's forced-flush control `golden_forced_flush`, `blob_fuzz` (200,000 mutated packages, a
@@ -512,7 +525,8 @@ a hosted-VST3 check. The `dsp/` and compiler
 tests are green in Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14,
 the compiler's digests and manifest identical on all three (GCC 14, and Clang 14 in Debug,
 were last run before the ID table; at sound revisions 2 and 3 MSVC AVX2 ran the whole suite too;
-at revision 3 only the MSVC legs have run so far), and the emulated M7 runs
+at revision 3 GCC 11 and Clang 14 ran on the pre-commit tree, whose engine and golden file are the
+commit's, and the emulated M7 is still to run), and the emulated M7 runs
 the package fuzzer and fixtures beside the golden check; the plugin tests with MSVC, Release
 and Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
@@ -639,11 +653,11 @@ records live in [docs/design/reviews/](design/reviews/).
     M7); the 136 KiB Warm arena holds `PlanMemory`'s 131,296 bytes at both block sizes.
   - **Verified** (firmware/README.md §9): all five images build with `-Werror` and fit; their
     engine archives equal the M7 oracle's, Windows and Linux builds alike (`89b73b51…`, hooks
-    `71a38352…`; at sound revision 3 `1d6fe1dc…` and `023a9fa9…`, so far against the Windows
-    oracle build, with ITCM use within 0.1 KiB of the figures above); the parity stream in the
+    `71a38352…`; at sound revision 3 `1d6fe1dc…` and `023a9fa9…`, with ITCM use within 0.1 KiB
+    of the figures above); the parity stream in the
     image's placement under `qemu-arm -cpu cortex-m7` matches the revision-2 `golden.json` and
     `MANIFEST` on the whole corpus at `maxBlockSize` 48 and 512 and on the quick set from a hostile
-    caller (at revision 3 still to run); the static audits report 0 on the firmware build (256
+    caller (at revision 3 cut off part-way, every hash that arrived matching; still to run); the static audits report 0 on the firmware build (256
     translation units); `parity_check.py` passes the intact stream and gives the intended verdict
     on 14 damaged revision-2 streams. Still needs the board: everything in firmware/README.md §6.
   - The firmware now spells IDs 4 and 8 `WetTrimDb` and `TransposeSt`; the old `OutTrimDb` and

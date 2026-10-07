@@ -344,7 +344,8 @@ TEST_CASE("onset and mark positioning come from the mode", "[modes]") {
 
 TEST_CASE("the trim and the effect volume scale the wet signal only, as one gain", "[modes]") {
   const Stereo input = Plucks(14400);
-  // At mix 0 the output is the dry input, bit for bit, whatever the trim and effect volume.
+  // At mix 0 the output is the dry input, bit for bit, whatever the trim and effect volume (the
+  // plucks hold no −0; the Mix law's hostile-input case below pins the sign of a zero).
   for (const float trim : {-24.0f, 0.0f, 24.0f}) {
     Rig rig;
     rig.engine.SetParam(ParamId::EffectVolumeDb, -9.0f);
@@ -489,6 +490,59 @@ TEST_CASE("Mix 0 plays the dry input and Mix 1 the wet only; the middle plays bo
     sounding += (Bits(muted.l[i]) << 1 | Bits(muted.r[i]) << 1) != 0u ? 1u : 0u;  // not ±0
   }
   CHECK(sounding == 0u);
+}
+
+TEST_CASE("Mix 0 passes hostile input through bit for bit, up to the sign of a zero", "[modes]") {
+  // Every 7th frame of the plucks replaced, per channel, by −0, +0, a subnormal or a value near
+  // ±FLT_MAX. At Mix 0 the engine plays dry·1 + wet·0 (detail/MixLaw.h): every sample is the
+  // input's bits except a −0 input, which comes out −0 + (wet·0), a zero with the wet sample's
+  // sign (−0 + +0 is +0). The wet sample there is the Mix 1 render's, −0·0 + wet, the wet's bits.
+  Stereo   input = Plucks(14400);
+  uint32_t x     = 0x2468ACE1u;
+  auto     next  = [&x] {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+  };
+  auto fromBits = [](uint32_t u) {
+    float v;
+    std::memcpy(&v, &u, sizeof v);
+    return v;
+  };
+  size_t injected[4] = {};
+  for (size_t i = 0; i < input.l.size(); i += 7) {
+    for (float* s : {&input.l[i], &input.r[i]}) {
+      const uint32_t kind = next() % 4u, r = next(), sign = next() & 0x80000000u;
+      ++injected[kind];
+      *s = kind == 0u   ? fromBits(0x80000000u)
+           : kind == 1u ? 0.0f
+           : kind == 2u ? fromBits(sign | ((r & 0x007FFFFFu) | 1u))
+                        : fromBits(sign | 0x7F000000u | (r & 0x007FFFFFu));  // 1.7e38 to FLT_MAX
+    }
+  }
+  for (const size_t n : injected) CHECK(n > 400u);
+  const Stereo wet = RenderFrom(*Complete(WithMix(kBusy, 1.0f)), input, {});
+  const Stereo out = RenderFrom(*Complete(WithMix(kBusy, 0.0f)), input, {});
+  size_t       wrong = 0, keptNegative = 0, cleared = 0;
+  for (size_t i = 0; i < input.l.size(); ++i) {
+    for (int c = 0; c < 2; ++c) {
+      const uint32_t in = Bits(c == 0 ? input.l[i] : input.r[i]);
+      const uint32_t o  = Bits(c == 0 ? out.l[i] : out.r[i]);
+      if (in != 0x80000000u) {
+        wrong += o != in ? 1u : 0u;
+        continue;
+      }
+      const uint32_t w = Bits(c == 0 ? wet.l[i] : wet.r[i]);
+      wrong += o != (w & 0x80000000u) ? 1u : 0u;  // a zero with the wet sample's sign
+      (o == 0u ? cleared : keptNegative) += 1u;
+    }
+  }
+  CHECK(wrong == 0u);
+  // Both outcomes occur: the sign of a zero at Mix 0 follows the wet, so "bit for bit" holds up
+  // to it and no further.
+  CHECK(cleared > 0u);
+  CHECK(keptNegative > 0u);
 }
 
 TEST_CASE("a Mix move lands on the endpoints' bits once smoothed", "[modes]") {

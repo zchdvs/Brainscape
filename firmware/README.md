@@ -36,8 +36,10 @@ changes only how Mix blends: the dry stays at unity up to the knob's middle and 
 unity from it, instead of a linear crossfade, so `set mix 0` is still the clean pass-through and
 `set mix 1` the wet alone. The corpus is version 8, `golden.json` re-minted for it, and its
 packages are re-stamped (their sound and control hashes unchanged). At revision 3 the five images
-build and their engine archives equal the Windows M7 oracle build's; the emulated checks of §9
-(the parity stream under `qemu-arm`, the Linux oracle build) have not been re-run yet.
+build and their engine archives equal the M7 oracle's, built on Windows and on Linux alike; the
+emulated checks of §9 (the golden check and the parity stream under `qemu-arm`) were cut off
+part-way when Docker stopped, every hash that arrived matching the file, and are still to run in
+full.
 
 ## 1. What to flash, in order
 
@@ -496,9 +498,9 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
   `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (sound revision 3: `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`, so far against the Windows
-  oracle build; revision 2: `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
-  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1 and 2, to the M7 oracle
+  (sound revision 3: `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
+  `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
+  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1, 2 and 3, to the M7 oracle
   built on Linux with the same pinned toolchain (in
   Docker, whose CMake 3.22 is too old for libDaisy's, so the images themselves build on Windows).
 - The packages the images carry are the committed ones: the table is generated from

@@ -835,12 +835,17 @@ public release): the law exactly as above, on the smoothed Mix (`dsp/src/detail/
 mix keeps its two-multiply form, `dry·gd + (wet·g)·gw`. Both gains are exact in binary32: 2m is a
 power-of-two scale, above the middle 1 − m is exact (Sterbenz's lemma), and below it the minimum
 returns 1. So Mix 0 and 1 give exactly (1, 0) and (0, 1), revision 2's products, and a preset that
-stays at either end keeps its bits; the middle plays both at unity. Mix's 10 ms smoother and linear
+stays at either end keeps its bits; the middle plays both at unity. "Mix 0 is the dry input" holds
+up to the sign of a zero, as at revisions 1 and 2: x·0 is a zero with x's sign and −0 + +0 is +0,
+so a −0 input sample comes out with the wet sample's sign (and at Mix 1 a −0 wet sample comes out
++0 where the dry's sign is clear). Mix's 10 ms smoother and linear
 taper are unchanged. Tests (`dsp/tests/test_modes.cpp`): the gains against the law over every
 binary32 Mix within 2¹⁴ ulps of 0, 0.5 and 1 and one in 4,093 elsewhere (exact, dry never rising,
 wet never falling, the two never summing below 1); renders at eight Mix values equal dry·gd +
 wet·gw bit for bit, the wet being the Mix 1 render (the wet path never reads Mix), and Mix 0 is the
-dry input bit for bit; with the wet killed from the load, the dry alone plays at unity up to the
+dry input bit for bit; at Mix 0, hostile input (−0, +0, subnormals and values near ±FLT_MAX on
+every 7th frame) comes out bit for bit but for its −0 samples, which take the wet sample's sign
+(both outcomes occur); with the wet killed from the load, the dry alone plays at unity up to the
 middle, at half at 0.75 and not at all at Mix 1; a Mix move lands on the endpoints' bits. The gain
 and render cases fail under the linear crossfade. §11.1's note has the first set's re-measurement.
 

@@ -88,7 +88,8 @@ memory and CPU are budgeted here), **footswitch assignment and bypass topology**
 > [mode-compiler.md](mode-compiler.md) §7.1 (R3b, owner question Q13, provisionally): the dry
 > signal stays at unity up to the knob's middle and the wet is at unity from it,
 > `min(1, 2(1 − m))` and `min(1, 2m)`, instead of a linear crossfade; Mix 0 is still the dry input
-> bit for bit and Mix 1 the wet alone. That design amends this section when it is accepted (its
+> bit for bit (up to the sign of a zero, as before: a −0 sample can come out +0) and Mix 1 the
+> wet alone. That design amends this section when it is accepted (its
 > §12.5).
 
 Structural commitments, each corpus-grounded:
