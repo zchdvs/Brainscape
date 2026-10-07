@@ -3,8 +3,8 @@
   "id": "example.leaves",
   "name": "Every leaf",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "b450691091c63e21d60860cdb92c5f10eea8223f51ea8a2372519350a99e6dbe",
+  "sound_rev": 7,
+  "sound_hash": "37a9826bd794d3794714d882830461f0ab7f1ceb744c30be7d31030539f3c4c6",
   "meta": {
     "author": "",
     "description": "",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 5000,

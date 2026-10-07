@@ -18,9 +18,9 @@ namespace brainscape::blobtest {
 // Re-minted at sound revision 3 for the samples' soundRev alone (kSoundRevision): built with
 // kSoundRevision 2, the same tree gives revision 2's digest. Re-minted at sound revision 4: the
 // samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read; at
-// 5 for the same two (pitch sets); and at 6 for the soundRev and the Leaf rows 29 and 30, which
-// CTRL's and MACR's targets may name.
-const char* const kFuzzDigest = "04221c2847c766df743a4ac4969d19907b27aabb4a77b9085bf7f6b504502de9";
+// 5 for the same two (pitch sets); at 6 for the soundRev and the Leaf rows 29 and 30, which
+// CTRL's and MACR's targets may name; and at 7 for the soundRev and the Leaf row 31.
+const char* const kFuzzDigest = "ba5744ed337433c94e2274f86991a56d57d061258576ad1f5b11023e896773ba";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",

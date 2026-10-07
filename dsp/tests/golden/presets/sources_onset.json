@@ -3,8 +3,8 @@
   "id": "corpus.sources_onset",
   "name": "Sources onset",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "e7a7f5745ee909e8c0e4b7f022454a9b968c6014c03b2d67cf48aa85255ec7ef",
+  "sound_rev": 7,
+  "sound_hash": "342fa1662bee163185540ba6df204075a690bbb9d54edab771c4c552628a4712",
   "meta": {
     "author": "",
     "description": "Golden corpus: onsets alone trigger (sound revision 4): no free-running births; footswitch and MIDI triggers are dropped.",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 180,

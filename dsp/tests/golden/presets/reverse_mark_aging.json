@@ -3,8 +3,8 @@
   "id": "corpus.reverse_mark_aging",
   "name": "Reverse mark aging",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "2be748b1745c5cc10a68bcdb5e78f9527c5ddfa5b905562fb5000c499a314558",
+  "sound_rev": 7,
+  "sound_hash": "e01c923936a2c2cad7d88c2f384ac29778b4b930b2227a4d15913ca3cd007901",
   "meta": {
     "author": "",
     "description": "Golden corpus: a mark aging past one ring, reverse grains on the far rail.",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 250,

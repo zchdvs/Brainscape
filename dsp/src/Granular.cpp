@@ -376,18 +376,24 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
                                 uint32_t anchorFrame, uint32_t liveFrame,
                                 uint32_t* renderedTo, uint32_t n, int64_t absSample,
                                 float* wetL, float* wetR) noexcept {
-  // Flush up to the trigger sample so a reused/stolen slot's tail is emitted.
+  // Flush up to the trigger sample so a reused/stolen slot's tail is emitted. Every grain that
+  // ended by birthAbs is then retired, so orderCount_ counts the voices sounding there.
   RenderSpan(*renderedTo, n, absSample, wetL, wetR);
   *renderedTo = n;
 
+  // voice_count (mode-compiler.md §7.5, R12): with that many voices sounding the trigger takes
+  // the oldest, as it does when all 64 are, so at 64 this is revision 6's allocation.
   uint32_t slot = kGranularMaxGrains;
-  for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
-    if (!grains_[i].active || grains_[i].endAbs <= birthAbs) {
-      slot = i;
-      break;
+  if (orderCount_ < p.voiceCount) {
+    for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
+      if (!grains_[i].active || grains_[i].endAbs <= birthAbs) {
+        slot = i;
+        break;
+      }
     }
   }
   if (slot == kGranularMaxGrains) {
+    ++stats_.steals;
     // Oldest-steal (design §4): the order_ list is ascending birth order, so the
     // head is the oldest live voice. Its un-rendered remainder is cut hard —
     // partikkel's documented policy; tight response beats a fade here.

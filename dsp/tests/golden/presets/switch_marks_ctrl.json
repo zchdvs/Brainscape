@@ -3,8 +3,8 @@
   "id": "corpus.switch_marks_ctrl",
   "name": "Switch marks CTRL",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "ffae1c9e2e90c5b664ec4b725c18b7c97839c442a7c4a363033d274b2c084516",
+  "sound_rev": 7,
+  "sound_hash": "e5d12743c238d6a7920e1061c1fe2386494d4dd5ef621c289d965dff500e9c1b",
   "meta": {
     "author": "",
     "description": "Golden corpus: mode switches, the marks mode with the pedal assigned.",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 250,

@@ -3,8 +3,8 @@
   "id": "example.controls",
   "name": "Controls",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "53dd1d3d3491455c5be491e81f6e5b26d6de3e09c84109c393a40e2a88ed902f",
+  "sound_rev": 7,
+  "sound_hash": "1f9b8508583dee411b524cc9dae207846846fd353feb06b74c73d5e844f349f7",
   "meta": {
     "author": "",
     "description": "",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,

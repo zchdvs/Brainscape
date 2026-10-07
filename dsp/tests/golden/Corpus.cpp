@@ -474,6 +474,30 @@ PresetCase DecayMarks() {
   return p;
 }
 
+// ── Sound revision 7: wave 1's voice count (mode-compiler.md §7.5 R12). ──────────────────────
+
+// A dense cloud held to few voices (presets/voice_limit.json: overlap 0.9, voice_count 6, onset
+// bursts of 5 stealing the oldest), the count moved alone to 2 and back to 64.
+PresetCase VoiceLimit() {
+  PresetCase p = PackagePreset("voice_limit", "voice_limit");
+  Script&    s = p.script;
+  s.Param(S(4) + 129, P::VoiceCount, 2.0f);
+  s.Param(S(8) + 55, P::VoiceCount, 64.0f);
+  p.require   = {{C::Events, 2, 2}, {C::OffGridEvents, 2}, {C::Steals, 20}, {C::Onsets, 10}};
+  p.ablate    = {Feature::VoiceCount, Feature::Burst};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// One voice from onsets alone (presets/mono_stutter.json: bursts of 4 every 30 ms, voice_count
+// 1, the Blocks sketch): every grain cuts the one before it, so each onset stutters.
+PresetCase MonoStutter() {
+  PresetCase p = PackagePreset("mono_stutter", "mono_stutter");
+  p.require    = {{C::Onsets, 10}, {C::Steals, 40}, {C::BurstBirths, 40}};
+  p.ablate     = {Feature::VoiceCount, Feature::Burst};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -505,6 +529,7 @@ const char* CounterName(Counter c) noexcept {
     case C::BurstBirths: return "burstBirths";
     case C::Skips: return "skips";
     case C::RepeatPasses: return "repeatPasses";
+    case C::Steals: return "steals";
     case C::kCount: break;
   }
   return "unknown";
@@ -539,6 +564,7 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::PitchSelect: return "pitchSelect";
     case Feature::Repeat: return "repeat";
     case Feature::Decay: return "decay";
+    case Feature::VoiceCount: return "voiceCount";
   }
   return "unknown";
 }
@@ -630,6 +656,7 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::PitchSelect: out.strip |= kStripPitchSelect; break;
     case Feature::Repeat: neutral(P::Repeat, 1.0f); break;
     case Feature::Decay: neutral(P::DecayMs, 0.0f); break;
+    case Feature::VoiceCount: neutral(P::VoiceCount, 64.0f); break;
   }
   return out;
 }
@@ -1056,6 +1083,8 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(PitchRandom());
     v.presets.push_back(RepeatLoops());  // sound revision 6 on: repeat and decay
     v.presets.push_back(DecayMarks());
+    v.presets.push_back(VoiceLimit());  // sound revision 7 on: voice count
+    v.presets.push_back(MonoStutter());
     corpus.push_back(std::move(v));
   }
 

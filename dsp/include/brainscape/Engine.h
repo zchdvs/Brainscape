@@ -280,6 +280,8 @@ class Engine {
     uint64_t burstBirths = 0;  // of them, bursts' second and later grains (§7.5)
     uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
     uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, §7.5)
+    uint64_t steals       = 0;  // triggered grains that took a sounding voice: the oldest,
+                                // at voice_count or with every voice busy (§7.5)
   };
   // Audio thread only (plain 64-bit counts, as SampleCounter).
   GrainStats Stats() const noexcept;

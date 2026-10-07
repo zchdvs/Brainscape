@@ -1,42 +1,42 @@
 {
   "schema_version": 1,
-  "id": "corpus.strum_chain",
-  "name": "Strum chain",
+  "id": "corpus.voice_limit",
+  "name": "Voice limit",
   "family": "none",
   "sound_rev": 7,
-  "sound_hash": "86817de7e1ce635dbdb662e17ba6c8ab0c8cd5b11cc4241edb43b3d8490b92cd",
+  "sound_hash": "624072f47399330d0850910b6813457387daf6162c85d31ffd56bcfefab52df2",
   "meta": {
     "author": "",
-    "description": "Golden corpus: the Spillover chain’s marks and onsets.",
+    "description": "Golden corpus: a dense cloud held to six voices, onset bursts of five stealing the oldest (sound revision 7).",
     "tags": []
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.7
   },
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.6,
+    "overlap": 0.9,
     "jitter": 0.5,
     "intermittency": 0,
     "burst": {
-      "count": 1,
+      "count": 5,
       "spacing_ms": 0
     }
   },
   "layers": [
     {
-      "voice_count": 64,
+      "voice_count": 6,
       "position": {
-        "source": "mark",
-        "base_ms": 250,
-        "spray_ms": 30,
+        "source": "live",
+        "base_ms": 160,
+        "spray_ms": 40,
         "repeat": 1
       },
-      "size_ms": 80,
+      "size_ms": 200,
       "decay_ms": 0,
       "window": {
         "sustain": 0.3,
-        "skew": 0.5,
+        "skew": 0.4,
         "smoothness": 0.7
       },
       "pitch": {
@@ -49,13 +49,13 @@
         "select": "cycle",
         "transpose_st": 0,
         "spread_cents": 0,
-        "reverse_prob": 0.2
+        "reverse_prob": 0
       },
-      "pan_spread": 0.5
+      "pan_spread": 0.7
     }
   ],
   "feedback": {
-    "amount": 0.5
+    "amount": 0.2
   },
   "post": {
     "mod": {

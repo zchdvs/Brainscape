@@ -3,8 +3,8 @@
   "id": "corpus.repeat_loops",
   "name": "Repeat loops",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "39b4e8deea8bf9c96ff6d2e1f4a9d1260cc050e728165cdb57a2715237d27580",
+  "sound_rev": 7,
+  "sound_hash": "748f050727146ffba4e6d84357bfffa485541ba0fb459a1a1ef7e24613d9fe30",
   "meta": {
     "author": "",
     "description": "Golden corpus: micro-loops of four 70 ms passes with a 900 ms decay over the cycled set {0, +12}, from the free-running scheduler and onsets (sound revision 6).",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 120,

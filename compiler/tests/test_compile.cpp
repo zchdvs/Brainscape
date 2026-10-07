@@ -613,8 +613,8 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
     REQUIRE(t.macros[6].count == 0u);
     REQUIRE(r.doc.displayName[2] == "Contour");
   }
-  // E11: two layers share the slots and the voices (voice_count is W1's, so its default 64 per
-  // layer already sums past 64).
+  // E11: two layers share the slots and the voices (voice_count's default of 64 per layer
+  // already sums past 64).
   Refused(With("layers", Parse(R"([{"slot_share": 0.5}, {"slot_share": 0.5}])")), "E11", "/layers",
           AllFeatures());
   Refused(With("layers", Parse(R"([{"slot_share": 0.75}, {"slot_share": 0.5}])")), "E11", "/layers",
@@ -668,7 +668,7 @@ TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   REQUIRE(sched.Find("subdiv") == nullptr);  // the default structure is not written
   const json::Value& layer = v.Find("layers")->items[0];
   REQUIRE(layer.Find("slot_share") == nullptr);
-  REQUIRE(layer.Find("voice_count") == nullptr);  // a W1 leaf: not a Leaf row of this build
+  REQUIRE(layer.Find("voice_count")->text == "64");  // a Leaf row since sound revision 7
   REQUIRE(layer.Find("size_ms")->text == "100");
   REQUIRE(layer.Find("pitch")->Find("transpose_st")->text == "0");
   REQUIRE(layer.Find("pitch")->Find("select")->text == "cycle");  // core: the pitch set

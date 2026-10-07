@@ -3,8 +3,8 @@
   "id": "corpus.decay_marks",
   "name": "Decay marks",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "15386131279b2e4a64474365ba8820a99b9481b9960711f0b125951cd520065f",
+  "sound_rev": 7,
+  "sound_hash": "a754613a0c3819c50db8f5cd316242f7efdf88a14bcf1d550cce37e3d577eec9",
   "meta": {
     "author": "",
     "description": "Golden corpus: grains on the newest onset's mark fading 60 dB over 700 ms as the mark ages (sound revision 6).",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 200,

@@ -3,8 +3,8 @@
   "id": "corpus.pitchset_random",
   "name": "Pitch set random",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "7b69c7056dbaa4b5ea639a9c76d800c36ba54f34a39a9c6422a53b5c5db208bf",
+  "sound_rev": 7,
+  "sound_hash": "ed3aecf1d41606623d1dbc3ebdeb5eeb530ccf0d929d805e3d1a0cc3659a338b",
   "meta": {
     "author": "",
     "description": "Golden corpus: a weighted random pitch set {0: 3, -12: 1, +7: 2} from the free-running scheduler and onsets, with reverse grains (sound revision 5).",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 300,

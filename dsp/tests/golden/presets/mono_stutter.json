@@ -1,61 +1,65 @@
 {
   "schema_version": 1,
-  "id": "corpus.strum_chain",
-  "name": "Strum chain",
+  "id": "corpus.mono_stutter",
+  "name": "Mono stutter",
   "family": "none",
   "sound_rev": 7,
-  "sound_hash": "86817de7e1ce635dbdb662e17ba6c8ab0c8cd5b11cc4241edb43b3d8490b92cd",
+  "sound_hash": "068b7b06f0542582820ad3f6e210946e7fb8ecfb2b0ffe3059fae3ec22d0ede6",
   "meta": {
     "author": "",
-    "description": "Golden corpus: the Spillover chain’s marks and onsets.",
+    "description": "Golden corpus: onsets alone into one voice, bursts of four every 30 ms each cutting the last (sound revision 7).",
     "tags": []
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.6,
-    "jitter": 0.5,
+    "sources": ["onset"],
+    "overlap": 0.5,
+    "jitter": 0,
     "intermittency": 0,
     "burst": {
-      "count": 1,
-      "spacing_ms": 0
+      "count": 4,
+      "spacing_ms": 30
     }
   },
   "layers": [
     {
-      "voice_count": 64,
+      "voice_count": 1,
       "position": {
         "source": "mark",
-        "base_ms": 250,
-        "spray_ms": 30,
+        "base_ms": 100,
+        "spray_ms": 0,
         "repeat": 1
       },
-      "size_ms": 80,
-      "decay_ms": 0,
+      "size_ms": 150,
+      "decay_ms": 1500,
       "window": {
-        "sustain": 0.3,
-        "skew": 0.5,
-        "smoothness": 0.7
+        "sustain": 0.6,
+        "skew": 0.2,
+        "smoothness": 0.5
       },
       "pitch": {
         "set": [
           {
             "st": 0,
             "weight": 1
+          },
+          {
+            "st": 12,
+            "weight": 1
           }
         ],
         "select": "cycle",
         "transpose_st": 0,
         "spread_cents": 0,
-        "reverse_prob": 0.2
+        "reverse_prob": 0.5
       },
-      "pan_spread": 0.5
+      "pan_spread": 0.3
     }
   ],
   "feedback": {
-    "amount": 0.5
+    "amount": 0.15
   },
   "post": {
     "mod": {
@@ -79,7 +83,7 @@
   },
   "wet_trim_db": 0,
   "trigger": {
-    "sensitivity": 0.6
+    "sensitivity": 0.65
   },
   "macros": [
     {

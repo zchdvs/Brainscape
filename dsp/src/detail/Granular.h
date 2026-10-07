@@ -98,6 +98,10 @@ struct GranularParams {
   uint32_t repeat;           // layer0.position.repeat, read as an integer (1-16): passes a voice
                              // reads its region; the scheduler spaces births by the whole life
   float    decayRate;        // log2(1000) / layer0.decay_ms in frames, 0 when decay is off
+  // Voice count (mode-compiler.md §7.5, R12; sound revision 7):
+  uint32_t voiceCount;       // layer0.voice_count, read as an integer (1-64): voices that sound
+                             // at once; targetVoices is at most it, and a trigger beyond it
+                             // steals the oldest
 };
 
 // What the scheduler has done (Engine::Stats): counts since Init, kept by Reset and Restart.
@@ -106,6 +110,7 @@ struct GranularStats {
   uint64_t burstBirths = 0;  // ... of them a burst's second and later grains
   uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
   uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, sound revision 6)
+  uint64_t steals       = 0;  // triggered grains that took a sounding voice (sound revision 7)
 };
 
 // The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
@@ -203,8 +208,9 @@ class GranularCore {
   // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                      uint32_t anchorFrame, uint32_t liveFrame) noexcept;
-  // Fire an explicit trigger: free slot if available, else steal the OLDEST voice
-  // (design §4 allocation policy — explicit triggers never drop a hit).
+  // Fire an explicit trigger: free slot if available and fewer than voice_count voices sound,
+  // else steal the OLDEST voice (design §4 allocation policy — explicit triggers never drop a
+  // hit; mode-compiler.md §7.5 R12).
   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
                     uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
                     int64_t absSample, float* wetL, float* wetR) noexcept;

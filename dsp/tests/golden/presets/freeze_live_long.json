@@ -3,8 +3,8 @@
   "id": "corpus.freeze_live_long",
   "name": "Freeze live long",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "ceec2d0981e8fd434178d8f8c1736973f392be038a77b771d3d62ac390a7e491",
+  "sound_rev": 7,
+  "sound_hash": "765c23bc0e7d16ee539ed8822ae00af467cbf29f773064706f82fb5d39b166a0",
   "meta": {
     "author": "",
     "description": "Golden corpus: a 69 s freeze on the live position.",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,

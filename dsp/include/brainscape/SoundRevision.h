@@ -28,7 +28,10 @@ namespace brainscape {
 // micro-loops (mode-compiler.md §7.5 R11): layer0.position.repeat passes over one region, each
 // windowed, with the far rail over the whole life, and layer0.decay_ms's 60 dB fall as the
 // position reference ages, as leaves 29 and 30; repeat 1 and decay 0 keep revision 5's bits.
-inline constexpr uint32_t kSoundRevision = 6;
+// 7: wave 1's voice count (mode-compiler.md §7.5 R12): at most layer0.voice_count (leaf 31)
+// voices sound, free-running births beyond it refused and triggers stealing the oldest; 64
+// keeps revision 6's bits.
+inline constexpr uint32_t kSoundRevision = 7;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

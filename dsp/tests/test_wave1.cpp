@@ -1,6 +1,6 @@
 // Wave 1 of the mode runtime (docs/design/mode-compiler.md §7.5, §10.3, §10.4), one feature and
 // one sound revision at a time: trigger sources, bursts and intermittency (R9, sound revision 4);
-// pitch sets (R10, 5); repeat and decay (R11, 6).
+// pitch sets (R10, 5); repeat and decay (R11, 6); voice count (R12, 7).
 // Each feature's cases run block-split invariance (contract #1) and the level contract (#3).
 #include <algorithm>
 #include <cmath>
@@ -917,5 +917,143 @@ TEST_CASE("R11: repeat keeps the level across its range (contract #3)", "[wave1]
     const double db = level(repeat);
     INFO("repeat " << repeat << ": " << db << " dB, repeat 1 " << one << " dB");
     CHECK(std::fabs(db - one) < 1.0);
+  }
+}
+
+// ── Voice count (R12, sound revision 7) ──────────────────────────────────────────────────────
+
+TEST_CASE("R12: the free-running target is min(64 * overlap^3, voice_count, the life)",
+          "[wave1]") {
+  // Overlap 1 asks for 64 voices of 100 ms; jitter 0, so a birth every 4800 / target frames.
+  const Stereo in = Sine(9600);
+  auto births = [&](float voices) {
+    return Track(*Preset({{ParamId::Overlap, 1.0f}, {ParamId::Jitter, 0.0f},
+                          {ParamId::GrainSizeMs, 100.0f}, {ParamId::VoiceCount, voices}}),
+                 in, {})
+        .births;
+  };
+  CHECK(births(4.0f) == Frames{0, 1200, 2400, 3600, 4800, 6000, 7200, 8400});
+  CHECK(births(1.0f) == Frames{0, 4800});
+  CHECK(births(64.0f).size() == 128u);  // every 75 frames: revision 6's
+  CHECK(births(3.5f) == births(4.0f));  // read as RoundHalfAwayI32
+}
+
+TEST_CASE("R12: at voice_count voices a trigger steals the oldest", "[wave1]") {
+  // Two voices: the third trigger takes the first's voice at its frame. From there the render
+  // is the one without the first trigger, bit for bit (draws are per frame, the sum in birth
+  // order); before it, it is not.
+  const Stereo in     = Sine(9600);
+  const auto   preset = Preset({{ParamId::VoiceCount, 2.0f}, {ParamId::GrainSizeMs, 100.0f},
+                                {ParamId::SprayMs, 5.0f}, {ParamId::DelayMs, 10.0f},
+                                {ParamId::Mix, 1.0f}},
+                               kSourceFootswitch);
+  const std::vector<Ev> three = {Trig(1000, 0, TS::Footswitch), Trig(1100, 0, TS::Footswitch),
+                                 Trig(1200, 0, TS::Footswitch)};
+  const std::vector<Ev> two   = {Trig(1100, 0, TS::Footswitch), Trig(1200, 0, TS::Footswitch)};
+  Rig rig;
+  REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+  const Stereo all = Render(rig.engine, in, three);
+  CHECK(rig.engine.Stats().births == 3u);
+  CHECK(rig.engine.Stats().steals == 1u);
+  const Stereo later = RenderFrom(*preset, in, two);
+  CHECK(SameSpan(all, 1200, later, 1200, 9600 - 1200));
+  CHECK_FALSE(SameSpan(all, 1000, later, 1000, 200));
+  // With 64 voices, nothing is stolen: three grains overlap.
+  Rig wide;
+  REQUIRE(wide.engine.LoadPreset(*Preset({{ParamId::GrainSizeMs, 100.0f}, {ParamId::SprayMs, 5.0f},
+                                          {ParamId::DelayMs, 10.0f}, {ParamId::Mix, 1.0f}},
+                                         kSourceFootswitch),
+                                 LoadMode::Exact));
+  Render(wide.engine, in, three);
+  CHECK(wide.engine.Stats().steals == 0u);
+}
+
+TEST_CASE("R12: periodic births stop at voice_count, triggers never do", "[wave1]") {
+  // Bursts of 8 from the footswitch over a free-running cloud of 3 voices: the burst steals,
+  // and while triggered grains fill the voices the scheduler waits.
+  const Stereo in = Plucks(19200);
+  const auto preset = Preset({{ParamId::VoiceCount, 3.0f}, {ParamId::Overlap, 1.0f},
+                              {ParamId::BurstCount, 8.0f}, {ParamId::BurstSpacingMs, 2.0f},
+                              {ParamId::GrainSizeMs, 80.0f}});
+  Rig rig;
+  REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+  const Engine::GrainStats before = rig.engine.Stats();
+  Render(rig.engine, in, {Trig(5000, 0, TS::Footswitch), Trig(12000, 0, TS::MidiNote)});
+  const Engine::GrainStats after = rig.engine.Stats();
+  CHECK(after.burstBirths - before.burstBirths == 14u);  // every trigger's grain fired
+  CHECK(after.steals - before.steals >= 14u);
+  // Never more than 3 at once: at overlap 1 one birth per 1,280 frames (3,840 / 3) at most.
+  CHECK(after.births - before.births <= 16u + 19200u / 1280u + 1u);
+}
+
+TEST_CASE("R12: voice counts are block-split invariant (contract #1)", "[wave1]") {
+  const Stereo  in      = Plucks(28800);
+  const uint8_t sources = kDefaultSources | kSourceOnset;
+  const auto a = Preset({{ParamId::VoiceCount, 4.0f}, {ParamId::Overlap, 0.9f},
+                         {ParamId::BurstCount, 3.0f}, {ParamId::TriggerSens, 0.6f},
+                         {ParamId::SprayMs, 25.0f}, {ParamId::Jitter, 0.5f},
+                         {ParamId::Repeat, 2.0f}, {ParamId::Mix, 0.8f}},
+                        sources);
+  const auto b = Preset({{ParamId::VoiceCount, 1.0f}, {ParamId::BurstCount, 4.0f},
+                         {ParamId::BurstSpacingMs, 10.0f}, {ParamId::TriggerSens, 0.6f},
+                         {ParamId::Mix, 0.8f}},
+                        kSourceOnset | kSourceFootswitch);
+  const std::vector<Ev> events = {
+      Trig(777, 0, TS::Footswitch),             Set(3001, 0, ParamId::VoiceCount, 2.0f),
+      Load(6007, 0, b.get(), SwitchStyle::FastCut), Trig(6007, 1, TS::Footswitch),
+      Set(9999, 0, ParamId::VoiceCount, 9.0f),  Load(14001, 0, a.get()),
+      Set(17003, 0, ParamId::VoiceCount, 64.0f), Trig(20011, 0, TS::MidiNote)};
+  const Stereo ref = RenderFrom(*a, in, events, {48});
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{1}, {512}, {37, 5, 300, 1}, {64, 3}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    CHECK(Same(RenderFrom(*a, in, events, pattern), ref));
+  }
+}
+
+TEST_CASE("R12: the level holds across voice counts (contract #3)", "[wave1]") {
+  // Noise, spray 30 ms, overlap 1: 4 to 64 voices within 1 dB of each other, the normalization
+  // following the target voice_count caps; and without a free-running source, a coherent burst
+  // of 8 at 2 voices plays at one grain's level (N = min(voice_count, burst.count)).
+  Stereo   in{std::vector<float>(96000), std::vector<float>(96000)};
+  uint32_t x = 0x7F4A7C15u;
+  for (size_t i = 0; i < in.l.size(); ++i) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    in.l[i] = 0.3f * (static_cast<float>(x & 0xFFFFFFu) / 8388608.0f - 1.0f);
+    in.r[i] = in.l[i];
+  }
+  auto level = [&](float voices) {
+    const Params p = {{ParamId::Overlap, 1.0f},     {ParamId::SprayMs, 30.0f},
+                      {ParamId::GrainSizeMs, 40.0f}, {ParamId::Mix, 1.0f},
+                      {ParamId::PanSpread, 0.0f},   {ParamId::VoiceCount, voices}};
+    return 20.0 * std::log10(Rms(RenderFrom(*Preset(p), in, {}).l, 24000, 96000));
+  };
+  const double all = level(64.0f);
+  for (const float voices : {4.0f, 8.0f, 16.0f, 32.0f}) {
+    const double db = level(voices);
+    INFO(voices << " voices: " << db << " dB, 64: " << all << " dB");
+    CHECK(std::fabs(db - all) < 1.0);
+  }
+  const Stereo tone = Sine(48000);
+  std::vector<Ev> triggers;
+  for (uint32_t k = 0; k < 8; ++k) triggers.push_back(Trig(4800 + 4800 * k, 0, TS::Footswitch));
+  auto burst = [&](float count, float voices) {
+    const Params p = {{ParamId::Mix, 1.0f},          {ParamId::GrainSizeMs, 50.0f},
+                      {ParamId::SprayMs, 0.0f},      {ParamId::DelayMs, 20.0f},
+                      {ParamId::WindowSustain, 1.0f}, {ParamId::WindowSmooth, 0.0f},
+                      {ParamId::PanSpread, 0.0f},    {ParamId::BurstCount, count},
+                      {ParamId::VoiceCount, voices}};
+    const Stereo out = RenderFrom(*Preset(p, kSourceFootswitch), tone, triggers);
+    double       sum = 0.0;
+    for (uint32_t k = 0; k < 8; ++k) sum += Rms(out.l, 4800 + 4800 * k + 600, 4800 + 4800 * k + 1800);
+    return sum / 8.0;
+  };
+  const double one = burst(1.0f, 64.0f);
+  for (const float voices : {1.0f, 2.0f, 5.0f}) {
+    const double db = 20.0 * std::log10(burst(8.0f, voices) / one);
+    INFO("burst of 8 at " << voices << " voices: " << db << " dB");
+    CHECK(std::fabs(db) < 0.5);
   }
 }

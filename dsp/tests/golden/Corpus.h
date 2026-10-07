@@ -47,7 +47,10 @@ namespace brainscape::golden {
 // fading as its mark ages) in plucks_wave1_12s, and repeat_mark_aging in plucks_markage_92s (16
 // reverse passes of 500 ms on an aging mark, on the life's far rail from about 79 s); the
 // repeatPasses counter; the repeat and decay ablations.
-inline constexpr uint32_t kCorpusVersion = 11;
+// 12 (sound revision 7, wave 1's voice count, R12): voice_limit (a cloud held to 6 voices, then
+// 2, then 64, onset bursts stealing) and mono_stutter (onsets alone, one voice, spaced bursts
+// cutting each other) in plucks_wave1_12s; the steals counter; the voiceCount ablation.
+inline constexpr uint32_t kCorpusVersion = 12;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -89,6 +92,9 @@ enum class Counter : uint8_t {
   // Passes begun after a voice's first: repeat voices re-reading their region (Engine::Stats,
   // from sound revision 6, mode-compiler.md §7.5 R11).
   RepeatPasses,
+  // Triggered grains that took a sounding voice, the oldest, at voice_count or with all 64
+  // busy (Engine::Stats, from sound revision 7, mode-compiler.md §7.5 R12).
+  Steals,
   kCount
 };
 const char* CounterName(Counter) noexcept;
@@ -109,12 +115,12 @@ const char* CounterName(Counter) noexcept;
 // scheduler.burst.count to 1 and Intermittency scheduler.intermittency to 0. Sound revision 5:
 // PitchSet gives every loaded mode the default set {0: 1} by `cycle`, PitchSelect makes its
 // `random` selection `cycle`. Sound revision 6: Repeat sets layer0.position.repeat to 1 and
-// Decay layer0.decay_ms to 0.
+// Decay layer0.decay_ms to 0. Sound revision 7: VoiceCount sets layer0.voice_count to 64.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
-  Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay,
+  Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay, VoiceCount,
 };
 const char* FeatureName(Feature) noexcept;
 

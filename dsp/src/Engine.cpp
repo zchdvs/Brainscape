@@ -521,6 +521,7 @@ Engine::GrainStats Engine::Stats() const noexcept {
   out.burstBirths = s.burstBirths;
   out.skips       = s.skips;
   out.repeatPasses = s.repeatPasses;
+  out.steals       = s.steals;
   return out;
 }
 
@@ -838,10 +839,17 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   gp_.repeat         = static_cast<uint32_t>(repeat);
   const uint32_t life = total * gp_.repeat;  // <= 16 * 24,000 frames
 
+  // Voice count (design §7.5, R12; sound revision 7): at most voice_count voices sound. The
+  // free-running target is min(64 * overlap^3, voice_count, a voice's life); 64 is revision 6's.
+  const int32_t voices = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::VoiceCount)));
+  assert(voices >= 1 && voices <= static_cast<int32_t>(kMaxGrains));
+  gp_.voiceCount = static_cast<uint32_t>(voices);
+
   const float overlap = get(ParamId::Overlap);
   float target        = static_cast<float>(kMaxGrains) * overlap * overlap * overlap;
   if (target < 1.0f) target = 1.0f;
   if (target > static_cast<float>(kMaxGrains)) target = static_cast<float>(kMaxGrains);
+  if (target > static_cast<float>(gp_.voiceCount)) target = static_cast<float>(gp_.voiceCount);
   // The 1-frame inter-arrival floor caps sustainable voices at a voice's life, the grain
   // length times the repeat: normalizing to an unreachable target read up to -12.9 dB low
   // (review finding).
@@ -937,9 +945,12 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
   // N, the voices normalized for (design §7.5): the free-running target, or without a free-
-  // running source the grains one trigger births.
-  const float voices = gp_.periodic ? gp_.targetVoices : static_cast<float>(gp_.burstCount);
-  norm_.target       = detmath::PowF(voices, -p);
+  // running source the grains one trigger births that can sound at once, min(voice_count,
+  // burst.count).
+  const uint32_t burstVoices =
+      gp_.burstCount < gp_.voiceCount ? gp_.burstCount : gp_.voiceCount;
+  const float normVoices = gp_.periodic ? gp_.targetVoices : static_cast<float>(burstVoices);
+  norm_.target           = detmath::PowF(normVoices, -p);
 }
 
 // Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro

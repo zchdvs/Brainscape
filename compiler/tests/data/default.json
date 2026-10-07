@@ -3,8 +3,8 @@
   "id": "example.default",
   "name": "Default",
   "family": "none",
-  "sound_rev": 6,
-  "sound_hash": "0f6ed60f462cd849d95e9defa9d7c2b550238b8b697ffc211b127ebca5c53915",
+  "sound_rev": 7,
+  "sound_hash": "3d8bf7893f8a70698dd1827b7c53595ae5fad3c856378d02c5e6534cc2e98ee1",
   "meta": {
     "author": "",
     "description": "",
@@ -25,6 +25,7 @@
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,

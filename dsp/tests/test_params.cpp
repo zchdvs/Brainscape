@@ -176,6 +176,7 @@ TEST_CASE("the ID table runs 1-82 with the design's kinds for this build") {
     if (id == 27 || id == 28) want = ParamKind::Retired;  // into structure at r2 (§7.6 item 4)
     if (id >= 57 && id <= 59) want = ParamKind::Leaf, since = 4;  // W1's R9 (§7.5)
     if (id == 29 || id == 30) want = ParamKind::Leaf, since = 6;  // W1's R11
+    if (id == 31) want = ParamKind::Leaf, since = 7;              // W1's R12
     if (id >= 69 && id <= 76) want = ParamKind::Macro;
     if (id == 77 || id == 78) want = ParamKind::Performance;
     if (id == 82) want = ParamKind::Global;
@@ -277,8 +278,8 @@ TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
 
 TEST_CASE("the Leaf rows are the presets' leaves, in ascending id order") {
   // Sound revision 1's rows but the retired 27 and 28, and wave 1's leaves as they land: 57-59
-  // (sound revision 4), 29 and 30 (6).
-  REQUIRE(kNumLeafParams == 31u);
+  // (sound revision 4), 29 and 30 (6), 31 (7).
+  REQUIRE(kNumLeafParams == 32u);
   uint32_t prev = 0;
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const auto id = static_cast<uint32_t>(LeafId(i));
@@ -359,10 +360,11 @@ TEST_CASE("a preset naming a row that is not a Leaf loads inexact and changes no
   Engine& e = rig.engine;
   e.SetParam(ParamId::EffectVolumeDb, -6.0f);
   const PresetState base = Complete({{ParamId::DelayMs, 300.0f}});
-  // IDs 27 and 28 are Retired, 31 and 81 Reserved, 69 a Macro, 77 Performance, 82 Global: none
-  // is stored in a preset (§10.4).
+  // IDs 27 and 28 are Retired, 32 and 81 Reserved, 69 a Macro, 77 Performance, 82 Global: none
+  // is stored in a preset (§10.4; the design's 31 became a Leaf row at sound revision 7, so a W3
+  // row stands in for it).
   PresetState p = base;
-  for (const uint32_t id : {27u, 28u, 31u, 69u, 77u, 81u, 82u}) p.leaves[p.leafCount++] = {id, 1.0f};
+  for (const uint32_t id : {27u, 28u, 32u, 69u, 77u, 81u, 82u}) p.leaves[p.leafCount++] = {id, 1.0f};
   std::sort(p.leaves, p.leaves + p.leafCount,
             [](const PresetLeaf& a, const PresetLeaf& b) { return a.id < b.id; });
   for (const LoadMode mode : {LoadMode::Exact, LoadMode::Spillover}) {
@@ -375,7 +377,7 @@ TEST_CASE("a preset naming a row that is not a Leaf loads inexact and changes no
     CHECK(report.changedValues == 0u);
     CHECK(e.GetParam(ParamId::DelayMs) == 300.0f);
     CHECK(e.GetParam(ParamId::EffectVolumeDb) == -6.0f);  // the stored 1.0 is ignored
-    CHECK(e.GetParam(ParamId::VoiceCount) == 0.0f);
+    CHECK(e.GetParam(ParamId::LevelDb) == 0.0f);
   }
   LoadReport checked;
   CHECK_FALSE(CheckPreset(p, &checked));
@@ -456,7 +458,7 @@ const std::map<ParamId, float> kChangeTo = {
     {ParamId::ReverbMix, 1.0f},       {ParamId::FilterCutoffHz, 400.0f}, {ParamId::FilterRes, 1.0f},
     {ParamId::FilterMorph, 2.0f},     {ParamId::TriggerSens, 1.0f},   {ParamId::EffectVolumeDb, -9.0f},
     {ParamId::Intermittency, 0.5f},   {ParamId::BurstCount, 5.0f},    {ParamId::BurstSpacingMs, 40.0f},
-    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f}};
+    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f},     {ParamId::VoiceCount, 2.0f}};
 
 constexpr int64_t kChangeFrame = 2401;  // off the 48-frame grid, before the second pluck
 

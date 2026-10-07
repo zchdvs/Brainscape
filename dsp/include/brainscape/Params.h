@@ -62,7 +62,8 @@ enum class ParamId : uint32_t {
   // Leaves since sound revision 6 (mode-compiler.md §7.5, R11): 29 and 30.
   Repeat          = 29,  // layer0.position.repeat: passes over one region, integer
   DecayMs         = 30,  // layer0.decay_ms: 60 dB fall as the position ages, 0 = off
-  VoiceCount      = 31,  // layer0.voice_count: voices this layer may sound, integer
+  VoiceCount      = 31,  // layer0.voice_count: voices this layer may sound, integer (a Leaf
+                         // row since sound revision 7, R12)
   LevelDb         = 32,  // layer0.level_db
   GlideCurve      = 33,  // layer0.pitch.glide.curve
   SvfCutoffHz     = 34,  // layer0.svf.cutoff_hz: the per-grain filter modifier
@@ -212,7 +213,7 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::PositionSource,     nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
     {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Leaf,        kDomainGranular,               6},
     {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Leaf,        kDomainGranular,               6},
-    {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
+    {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Leaf,        kDomainGranular,               7},
     {ParamId::LevelDb,            "layer0.level_db",              -24.0f,  6.0f,     0.0f,     "dB", ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::GlideCurve,         "layer0.pitch.glide.curve",     -1.0f,   1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::SvfCutoffHz,        "layer0.svf.cutoff_hz",         20.0f,   20000.0f, 20000.0f, "Hz", ParamKind::Reserved,    kDomainGranular,               0},
