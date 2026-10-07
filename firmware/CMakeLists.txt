@@ -219,9 +219,15 @@ brainscape_firmware_image(brainscape_bench_hooks
   LIBS brainscape_fw_golden_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
+brainscape_firmware_image(brainscape_live
+  SOURCES live/main.cpp
+  LIBS brainscape_fw_golden
+  ENGINE_CODE ITCM
+  MIN_HEAP 4M)
 
 add_custom_target(brainscape_firmware ALL
-  DEPENDS brainscape_parity brainscape_bench brainscape_bench_xip brainscape_bench_hooks)
+  DEPENDS brainscape_parity brainscape_bench brainscape_bench_xip brainscape_bench_hooks
+          brainscape_live)
 
 # The Daisy bootloader binary libDaisy ships, beside the images, for a BOOT_QSPI setup.
 if(BRAINSCAPE_FIRMWARE_APP_TYPE STREQUAL "BOOT_QSPI")
