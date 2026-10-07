@@ -1,0 +1,254 @@
+/* Brainscape firmware linker script for the Daisy Seed (STM32H750IB), one per app type,
+ * configured by firmware/CMakeLists.txt from this template (@BRAINSCAPE_FIRMWARE_APP_TYPE@).
+ * Derived from libDaisy v9.0.0's core/STM32H750IB_{flash,sram,qspi}.lds (BSD licence, from
+ * VisualGDB's LinkerScriptGenerator): the same regions, entry point, startup symbols
+ * (_sidata, _sdata, _edata, _sbss, _ebss, _estack) and libDaisy section names
+ * (.sram1_bss, .dtcmram_bss, .sdram_bss, .backup_sram), plus the engine arena sections of
+ * docs/design/grain-engine.md §7 and checks that everything fits:
+ *
+ *   .dtcmram_bss  DTCM, not cached: the Hot arena and the Engine object (Tier::Hot)
+ *   .axi_bss      AXI SRAM (D1), cached: the Warm arena and the USB serial rings (Tier::Warm)
+ *   .sram1_bss    D2 SRAM, first 32 KiB, MPU non-cacheable: libDaisy's audio DMA buffers
+ *   .sdram_bss    SDRAM, cached write-back: the Bulk arena (Tier::Bulk)
+ *   .backup_sram  libDaisy's boot_info (the Daisy bootloader's handshake, first), then the
+ *                 platform's fault record (platform/Fault.cpp), kept across a reset
+ *   .heap         what is left of @BRAINSCAPE_LD_HEAP@, for the golden harness's containers
+ *                 (never engine state; the firmware's _sbrk waits for the SDRAM init)
+ *
+ * Code: @BRAINSCAPE_LD_TEXT@ (the engine's: @BRAINSCAPE_LD_ENGINE_CODE@). Initialized data and .bss:
+ * @BRAINSCAPE_LD_DATA@.
+ */
+
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+	FLASH       (RX)  : ORIGIN = 0x08000000, LENGTH = 128K
+	DTCMRAM     (RWX) : ORIGIN = 0x20000000, LENGTH = 128K
+	SRAM        (RWX) : ORIGIN = 0x24000000, LENGTH = @BRAINSCAPE_LD_AXI_LENGTH@
+	RAM_D2_DMA  (RWX) : ORIGIN = 0x30000000, LENGTH = 32K
+	RAM_D2      (RWX) : ORIGIN = 0x30008000, LENGTH = 256K
+	RAM_D3      (RWX) : ORIGIN = 0x38000000, LENGTH = 64K
+	BACKUP_SRAM (RWX) : ORIGIN = 0x38800000, LENGTH = 4K
+	ITCMRAM     (RWX) : ORIGIN = 0x00000000, LENGTH = 64K
+	SDRAM       (RWX) : ORIGIN = 0xC0000000, LENGTH = 64M
+	QSPIFLASH   (RX)  : ORIGIN = @BRAINSCAPE_LD_QSPI_ORIGIN@, LENGTH = @BRAINSCAPE_LD_QSPI_LENGTH@
+}
+
+REGION_ALIAS("REGION_TEXT", @BRAINSCAPE_LD_TEXT@);
+REGION_ALIAS("REGION_DATA", @BRAINSCAPE_LD_DATA@);
+REGION_ALIAS("REGION_HEAP", @BRAINSCAPE_LD_HEAP@);
+
+/* The main stack grows down from the top of DTCM. Everything else placed in DTCM must
+ * leave it this much room (checked below). */
+_estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);
+__brainscape_min_stack = 32K;
+
+SECTIONS
+{
+	.isr_vector :
+	{
+		. = ALIGN(4);
+		KEEP(*(.isr_vector))
+		. = ALIGN(4);
+	} > REGION_TEXT
+
+	/* The engine's code and constants in ITCM (zero-wait, beside the 16 KiB I-cache), as
+	 * determinism-profile.md §7.1 requires for the inner loops: @BRAINSCAPE_LD_ENGINE_CODE@.
+	 * With them, libgcc's helpers and the firmware's memcpy, memmove and memset
+	 * (platform/MemFunctions.c), which the engine calls every block. Copied from its load
+	 * address by the platform's preinit hook before any constructor runs: nothing that runs
+	 * earlier (the startup code, SysTick) may call into it, which the build checks
+	 * (firmware/cmake/BootCheck.cmake). It starts 64 bytes in, so no object sits at address
+	 * 0, which a pointer test would read as null. Calls between ITCM and QSPI or flash go
+	 * through linker veneers. */
+	/* The unwind index of the run-time helpers moved to ITCM: a PREL31 entry in .exidx
+	 * (QSPI or flash) cannot reach ITCM at address 0, and nothing unwinds (the images and the
+	 * engine build without exceptions). */
+	/DISCARD/ :
+	{
+		@BRAINSCAPE_LD_ITCM_DISCARD@
+	}
+
+	.itcm_text (ORIGIN(ITCMRAM) + 64) :
+	{
+		__itcm_text_start = .;
+		@BRAINSCAPE_LD_ITCM_INPUTS@
+		. = ALIGN(8);
+		__itcm_text_end = .;
+	} > ITCMRAM AT > REGION_TEXT
+	__itcm_text_load = LOADADDR(.itcm_text);
+
+	.text :
+	{
+		. = ALIGN(4);
+		_stext = .;
+		*(.text)
+		*(.text*)
+		*(.rodata)
+		*(.rodata*)
+		*(.glue_7)
+		*(.glue_7t)
+		KEEP(*(.init))
+		KEEP(*(.fini))
+		. = ALIGN(4);
+		_etext = .;
+	} > REGION_TEXT
+
+	.ARM.extab :
+	{
+		. = ALIGN(4);
+		*(.ARM.extab)
+		*(.gnu.linkonce.armextab.*)
+		. = ALIGN(4);
+	} > REGION_TEXT
+
+	.exidx :
+	{
+		. = ALIGN(4);
+		PROVIDE(__exidx_start = .);
+		*(.ARM.exidx*)
+		. = ALIGN(4);
+		PROVIDE(__exidx_end = .);
+	} > REGION_TEXT
+
+	.ARM.attributes 0 : { *(.ARM.attributes) }
+
+	.preinit_array :
+	{
+		PROVIDE_HIDDEN(__preinit_array_start = .);
+		KEEP(*(.preinit_array*))
+		PROVIDE_HIDDEN(__preinit_array_end = .);
+	} > REGION_TEXT
+
+	.init_array :
+	{
+		PROVIDE_HIDDEN(__init_array_start = .);
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array*))
+		PROVIDE_HIDDEN(__init_array_end = .);
+	} > REGION_TEXT
+
+	.fini_array :
+	{
+		PROVIDE_HIDDEN(__fini_array_start = .);
+		KEEP(*(.fini_array*))
+		KEEP(*(SORT(.fini_array.*)))
+		PROVIDE_HIDDEN(__fini_array_end = .);
+	} > REGION_TEXT
+
+	/* The arena sections come before .data and .bss, whose catch-all patterns would otherwise
+	 * take them: Brainscape names them .bss.brainscape_* so the compiler emits them as NOBITS
+	 * (a custom name does not, and a 17 MiB arena would be 17 MiB of object file). They are
+	 * not zeroed by the startup code: Engine::Init clears what it reads, and the owners clear
+	 * the rest. libDaisy's own .dtcmram_bss and .sdram_bss land here too. */
+	.dtcmram_bss (NOLOAD) :
+	{
+		. = ALIGN(32);
+		__dtcm_bss_start = .;
+		*(.bss.brainscape_dtcm*)
+		*(.dtcmram_bss)
+		*(.dtcmram_bss*)
+		. = ALIGN(4);
+		__dtcm_bss_end = .;
+	} > DTCMRAM
+
+	.axi_bss (NOLOAD) :
+	{
+		. = ALIGN(32);
+		__axi_bss_start = .;
+		*(.bss.brainscape_axi*)
+		. = ALIGN(4);
+		__axi_bss_end = .;
+	} > SRAM
+
+	.sdram_bss (NOLOAD) :
+	{
+		. = ALIGN(32);
+		_ssdram_bss = .;
+		PROVIDE(__sdram_bss_start = _ssdram_bss);
+		*(.bss.brainscape_sdram*)
+		*(.sdram_bss)
+		*(.sdram_bss*)
+		. = ALIGN(4);
+		_esdram_bss = .;
+		PROVIDE(__sdram_bss_end = _esdram_bss);
+	} > SDRAM
+
+	.data :
+	{
+		. = ALIGN(4);
+		_sdata = .;
+		PROVIDE(__data_start__ = _sdata);
+		*(.data)
+		*(.data*)
+		. = ALIGN(4);
+		_edata = .;
+		PROVIDE(__data_end__ = _edata);
+	} > REGION_DATA AT > REGION_TEXT
+
+	_sidata = LOADADDR(.data);
+	__brainscape_image_start = LOADADDR(.isr_vector);
+	__brainscape_image_end = LOADADDR(.data) + SIZEOF(.data);
+
+	.bss (NOLOAD) :
+	{
+		. = ALIGN(4);
+		_sbss = .;
+		PROVIDE(__bss_start__ = _sbss);
+		*(.bss)
+		*(.bss*)
+		*(COMMON)
+		. = ALIGN(4);
+		_ebss = .;
+		PROVIDE(__bss_end__ = _ebss);
+	} > REGION_DATA
+
+	.sram1_bss (NOLOAD) :
+	{
+		. = ALIGN(4);
+		_ssram1_bss = .;
+		PROVIDE(__sram1_bss_start__ = _ssram1_bss);
+		*(.sram1_bss)
+		*(.sram1_bss*)
+		. = ALIGN(4);
+		_esram1_bss = .;
+		PROVIDE(__sram1_bss_end__ = _esram1_bss);
+	} > RAM_D2_DMA
+
+	.backup_sram (NOLOAD) :
+	{
+		. = ALIGN(4);
+		_sbackup_sram = .;
+		PROVIDE(__backup_sram_start = _sbackup_sram);
+		*(.backup_sram)
+		*(.backup_sram*)
+		. = ALIGN(4);
+		_ebackup_sram = .;
+		PROVIDE(__backup_sram_end = _ebackup_sram);
+	} > BACKUP_SRAM
+
+	/* The heap is the rest of its region; the firmware's _sbrk refuses to pass its end. */
+	.heap (NOLOAD) :
+	{
+		. = ALIGN(8);
+		PROVIDE(__heap_start__ = .);
+		PROVIDE(__heap_start = .);
+		KEEP(*(.heap))
+		. = ALIGN(8);
+	} > REGION_HEAP
+	PROVIDE(end = __heap_start);
+	__brainscape_heap_end = ORIGIN(REGION_HEAP) + LENGTH(REGION_HEAP);
+
+	/* What DTCM holds below the stack: .data and .bss when the app runs from SRAM, and
+	 * always .dtcmram_bss. */
+	__brainscape_dtcm_top = MAX(__dtcm_bss_end,
+	                            (ORIGIN(REGION_DATA) == ORIGIN(DTCMRAM)) ? _ebss : ORIGIN(DTCMRAM));
+}
+
+ASSERT(_estack - __brainscape_dtcm_top >= __brainscape_min_stack,
+       "brainscape: DTCM leaves less than 32 KiB for the main stack")
+ASSERT(__brainscape_heap_end - __heap_start >= @BRAINSCAPE_LD_MIN_HEAP@,
+       "brainscape: the heap region is smaller than the image needs (BRAINSCAPE_LD_MIN_HEAP)")
+ASSERT(_ZN5daisy9boot_infoE == ORIGIN(BACKUP_SRAM),
+       "brainscape: libDaisy's boot_info must open the backup SRAM, where the Daisy bootloader looks")

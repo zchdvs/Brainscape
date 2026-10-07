@@ -17,7 +17,7 @@ Two deliverables from one shared DSP core:
 | --- | --- |
 | `dsp/` | Platform-agnostic C++ DSP core shared by firmware and plugin |
 | `compiler/` | Desktop-only preset compiler: preset documents (JSON) to `.bsp` packages; its tool is [`tools/bspc`](tools/bspc/README.md) |
-| `firmware/` | Daisy Seed firmware (C++, libDaisy/DaisySP) |
+| `firmware/` | Daisy Seed firmware (C++, libDaisy); today the Rev7 bring-up images ([firmware/README.md](firmware/README.md)) |
 | `plugin/` | Desktop plugin and companion app (JUCE: VST3, AU, standalone; CLAP optional) |
 | `hardware/` | Schematics, PCB, enclosure design |
 | `docs/` | Documentation and research |

@@ -46,7 +46,10 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BRAINSCAPE_BUILD_FIRMWARE)
-  message(STATUS "brainscape: firmware/ build not yet implemented — lands with hardware bring-up")
+  # The Daisy Seed bring-up images (firmware/README.md). libDaisy compiles C sources; C is
+  # enabled here, at the top, only in this branch, so every other configure stays C++-only.
+  enable_language(C)
+  add_subdirectory(firmware)
 endif()
 
 if(BRAINSCAPE_BUILD_PLUGIN)
