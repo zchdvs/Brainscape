@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "id": "example.leaves",
+  "name": "Every leaf",
+  "family": "none",
+  "sound_rev": 3,
+  "sound_hash": "fe3aa432ac054259d2781d4f6bee08f8f1d039937e6320027a750b2f3f6f77b2",
+  "meta": {
+    "author": "",
+    "description": "",
+    "tags": []
+  },
+  "global": {
+    "mix": 0.35
+  },
+  "scheduler": {
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.999,
+    "jitter": 1
+  },
+  "layers": [
+    {
+      "position": {
+        "source": "live",
+        "base_ms": 5000,
+        "spray_ms": 7.0385307e-26
+      },
+      "size_ms": 1,
+      "window": {
+        "sustain": 0,
+        "skew": 1,
+        "smoothness": 0.12345679
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": -24,
+        "spread_cents": 100,
+        "reverse_prob": 0.333333
+      },
+      "pan_spread": 1
+    }
+  ],
+  "feedback": {
+    "amount": 1.1
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.01,
+      "depth": 1
+    },
+    "delay": {
+      "time_ms": 2000,
+      "fb": 0.9,
+      "mix": 0.5
+    },
+    "reverb": {
+      "time": 1,
+      "mix": 1
+    },
+    "filter": {
+      "cutoff_hz": 40,
+      "res": 1,
+      "morph": 3
+    }
+  },
+  "wet_trim_db": -24,
+  "trigger": {
+    "sensitivity": 0.85
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.25, 0.85],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [0, 200],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "feedback.amount",
+          "range": [0, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.9, 0.1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.3, 0.7],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [20, 2000],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0,
+      "repeats": 1,
+      "shape": 0.25,
+      "time": 0.75,
+      "space": 0.5,
+      "filter": 0.1
+    }
+  }
+}

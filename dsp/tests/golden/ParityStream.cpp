@@ -1,6 +1,11 @@
 #include "ParityStream.h"
 
+#include <algorithm>
+#include <memory>
+
 #include "Corpus.h"
+#include "Sha256.h"
+#include "brainscape/Preset.h"
 #include "brainscape/SoundRevision.h"
 #include "brainscape/TestSignal.h"
 
@@ -8,7 +13,7 @@ namespace brainscape::golden {
 
 namespace {
 
-constexpr const char* kStreamFormat = "brainscape-parity-stream/2";
+constexpr const char* kStreamFormat = "brainscape-parity-stream/3";
 
 const char* DeliveryName(Delivery d) {
   return d == Delivery::Engine ? "engine-events" : "split-at-event-frames";
@@ -50,6 +55,28 @@ bool Selected(const StreamOptions& o, const VectorCase& v, const PresetCase& p) 
 }
 
 uint64_t Now(const StreamOptions& o) { return o.clock != nullptr ? o.clock() : 0; }
+
+// Every package the corpus loads (mode-compiler.md §10.3): each preset's own and every staged
+// load's, Spillover and Exact alike, by name. golden.json records only the packages presets
+// start from; this is the whole set the renders read.
+std::vector<std::string> CorpusPackages(const std::vector<VectorCase>& corpus) {
+  std::vector<std::string> names;
+  const auto add = [&names](const char* name) {
+    if (name != nullptr && std::find(names.begin(), names.end(), name) == names.end()) {
+      names.emplace_back(name);
+    }
+  };
+  for (const VectorCase& v : corpus) {
+    for (const PresetCase& p : v.presets) {
+      add(p.package);
+      for (const StagedLoad& s : p.script.Staged()) add(s.preset.package);
+    }
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+std::string Hex(const Digest32& d) { return Sha256::ToHex(d.bytes, sizeof d.bytes); }
 
 using Obj = JsonObj;
 
@@ -104,6 +131,30 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
   sink.Line(Header(renderer, o, seq++));
   const uint64_t                start  = Now(o);
   const std::vector<VectorCase> corpus = BuildCorpus();
+  // The packages the renders read, as this program decodes them (on the Seed and in
+  // brainscape_parity_stream, its embedded copies, EmbeddedPackages.h), whatever the run
+  // selects: parity_check.py compares their hashes with presets/MANIFEST.
+  int packages = 0;
+  {
+    const auto state = std::make_unique<PresetState>();
+    for (const std::string& name : CorpusPackages(corpus)) {
+      PackageInfo info;
+      const bool  loaded = LoadPackage(name.c_str(), state.get(), &info);
+      if (!loaded) info = PackageInfo{};
+      ++packages;
+      sink.Line(Obj()
+                    .Str("type", "package")
+                    .UInt("seq", seq++)
+                    .Str("name", name)
+                    .Bool("loaded", loaded)
+                    .UInt("bytes", info.totalBytes)
+                    .UInt("soundRev", info.soundRev)
+                    .Str("packageHash", Hex(info.packageHash))
+                    .Str("soundHash", Hex(info.soundHash))
+                    .Str("controlHash", Hex(info.controlHash))
+                    .Done());
+    }
+  }
   for (const VectorCase& v : corpus) {
     bool any = false;
     for (const PresetCase& p : v.presets) any = any || Selected(o, v, p);
@@ -140,13 +191,16 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
       for (size_t i = 0; i < static_cast<size_t>(Counter::kCount); ++i) {
         counters.Int(CounterName(static_cast<Counter>(i)), r.counters[i]);
       }
-      sink.Line(Obj()
-                    .Str("type", "preset")
-                    .UInt("seq", seq++)
-                    .Str("vector", v.name)
-                    .Str("name", p.name)
-                    .Bool("rendered", rendered)
-                    .Str("hash", r.hash)
+      Obj line;
+      line.Str("type", "preset")
+          .UInt("seq", seq++)
+          .Str("vector", v.name)
+          .Str("name", p.name)
+          .Bool("rendered", rendered);
+      if (p.package != nullptr) {  // as golden.json records it: the package rule's tie
+        line.Str("package", p.package).Str("soundHash", r.soundHash).Str("controlHash", r.controlHash);
+      }
+      sink.Line(line.Str("hash", r.hash)
                     .Raw("secondHashes", seconds)
                     .Raw("counters", counters.Done())
                     .Int("frames", r.counters[static_cast<size_t>(Counter::Frames)])
@@ -159,6 +213,7 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
                 .UInt("seq", seq)
                 .Int("presets", result.presets)
                 .Int("vectors", vectors)
+                .Int("packages", packages)
                 .UInt("lines", seq)
                 .Int("renderFailures", result.renderFailures)
                 .UInt("cycles", Now(o) - start)

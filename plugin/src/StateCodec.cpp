@@ -55,9 +55,9 @@ void EncodeState(const WrapperState& state, std::vector<uint8_t>& out) {
   out.clear();
   out.insert(out.end(), kMagic, kMagic + 4);
   PutU32(out, kStateFormatVersion);
-  PutU32(out, static_cast<uint32_t>(kNumParams));
-  for (size_t i = 0; i < kNumParams; ++i) {
-    PutU32(out, static_cast<uint32_t>(kParamTable[i].id));
+  PutU32(out, static_cast<uint32_t>(kNumLeafParams));
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    PutU32(out, static_cast<uint32_t>(LeafId(i)));
     PutU32(out, Bits(state.plain[i]));
   }
   PutU32(out, 4u);
@@ -81,17 +81,18 @@ bool DecodeState(const void* data, size_t bytes, WrapperState& out) {
   if (!r.U32(count) || count > r.left / 8) return false;
 
   WrapperState s{};
-  bool         seen[kNumParams] = {};
-  for (size_t i = 0; i < kNumParams; ++i) s.plain[i] = Canonicalize(kParamTable[i].id, kParamTable[i].def);
+  bool         seen[kNumLeafParams] = {};
+  for (size_t i = 0; i < kNumLeafParams; ++i) s.plain[i] = Canonicalize(LeafId(i), FindParam(LeafId(i))->def);
   for (uint32_t k = 0; k < count; ++k) {
     uint32_t id = 0, bits = 0;
     if (!r.U32(id) || !r.U32(bits)) return false;
-    if (id < 1 || id > kNumParams) {
+    const size_t i = LeafIndex(id);
+    if (i == kNumLeafParams) {
       ++s.unknownIds;
       continue;
     }
-    s.plain[id - 1] = Canonicalize(static_cast<ParamId>(id), FromBits(bits));
-    seen[id - 1]    = true;
+    s.plain[i] = Canonicalize(static_cast<ParamId>(id), FromBits(bits));
+    seen[i]    = true;
   }
   for (bool b : seen) s.missingIds += b ? 0u : 1u;
 

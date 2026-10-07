@@ -33,6 +33,7 @@ the separate Python implementation of the generator that derives the known-answe
 | [`juce/`](juce/) | The float-normalisation round trip that rules out JUCE's normalised parameter path for exact preset values. |
 | [`preset/`](preset/) | Exhaustive binary32 number-formatting check for canonical JSON (`probe_float.cpp`), and the restart/load-order/Spillover probes (`probe_state.cpp`, which needs a scratch engine copy with probe hooks). |
 | [`review-numerics/`](review-numerics/) | Probes from the numerics review: Spillover as specified, DetMath domain edges, DAZ canonicalization, the write-ahead invariant counter. |
+| [`modes/`](modes/) | The mode-compiler design's probes ([mode-compiler.md](../../docs/design/mode-compiler.md), evidence in its [record](../../docs/design/reviews/mode-compiler-record.md)): the parameter-routing bug, the factory-mode curation renders, the exact binary32 number code, the package sketch with its fuzzers, macro-curve cost, layout hazards, and the reviews' checks. See [Mode-compiler probes](#mode-compiler-probes-modes). |
 
 Probes for findings that depended on third-party source trees (libDaisy, TinyUSB, the Daisy bootloader,
 JUCE) are not stored here; their method and results are written up in the review records.
@@ -77,3 +78,34 @@ Do not commit the recreated trees.
 
 Always clamp each rendered block to `min(block, remaining)`: a fixed block size over a length that is
 not a multiple of it overruns the output buffers and crashes later with a heap-corruption error.
+
+## Mode-compiler probes (`modes/`)
+
+The probes behind [mode-compiler.md](../../docs/design/mode-compiler.md), copied from the design
+session's scratch directory by mode-compiler lane G so the record's measured numbers can be
+reproduced. Each directory keeps its scratch name, so the paths the
+[evidence record](../../docs/design/reviews/mode-compiler-record.md) cites (§1.3, "`tech/bsnum.h`",
+"`review-implementation-tooling/exact_check.py`") resolve under `modes/`. Sources and run scripts
+only: their outputs, binaries and build trees are not kept (the record quotes the results), nor is
+the Microcosm manual text the curation read. The probes ran against `dsp/` at `42773a2`, before the
+mode-compiler lanes; the number code and the package sketch grew into `compiler/src/Number.*` and
+`dsp/src/blob/`, whose own tests now carry their checks, so these describe the prototypes, not the
+built code. The only edits are paths: absolute paths became relative to the repository, and the
+gate probe also prints what today's package rule says.
+
+| Directory | Record | What it shows |
+| --- | --- | --- |
+| [`inventory_probe/`](modes/inventory_probe/) | §2.1 | A change to only ID 27 or 28 by an event is lost (the routing bug); build `probe.cpp` against `dsp/` (MSVC: `dsp/include`, `dsp/src` and its sources). |
+| [`probe/`](modes/probe/) | §2.2 | The curation probe: 14 factory-mode recipes (`recipes.inc`; `recipes_draft.inc` is the first pass) rendered over three integer-generated scores, with level, tail and periodicity figures. `cmake -S tools/parity/modes/probe -B build/mode_probe` (`MODE_PROBE_DSP_DIR` picks another tree). |
+| [`tech/`](modes/tech/) | §2.3–§2.7 | `bsnum.h` and `numtest.cpp`: the exact binary32 reader and shortest writer with the exhaustive, halfway, random and edge checks against `<charconv>`; `blob_format.h`, `blob_runtime.cpp`, `blob_compile.cpp`: the fixed-capacity package sketch, its decoder, validator and mutation fuzzer; `blob_libfuzzer.cpp`; `macro_cost.cpp` (macro-curve cost, `mca_run.sh` for llvm-mca); `hazard.cpp` (struct layout across targets), `chkstk.cpp` (MSVC's `__chkstk`), `jsonh_probe.cpp` (what the golden harness's JSON reader accepts). `batch.sh` runs `linux_run.sh` in the GCC 11, GCC 14 and Clang 14 containers (`/w` is this directory, `/b` the repository); `arm_run.sh`, `arm_fp.sh` and the fuzz scripts run inside the GCC 11 image; `msvc.bat` and `dumpsyms.bat` are the MSVC wrappers. |
+| [`review-engine-determinism/`](modes/review-engine-determinism/) | §2.8 | `keyalias.cpp`: draft v1's key extension aliasing at fixed frame offsets; `gate_probe.py`: the gate at `42773a2` missed a changed `soundHash`, the hole the package rule closes. |
+| [`review-implementation-tooling/`](modes/review-implementation-tooling/) | §2.3, §2.8 | `exact_check.py` and `js_probe.js`: the two double-rounding values and what JavaScript prints; `audit_probe_fp.cpp` and `audit_probe_int.cpp` with `run.bat`: MSVC imports nothing that names its float conversions (why the compiler audit's import check runs on GCC and Clang only); `comdat_probe.cpp` with `run2.bat`: `kParamTable` as COMDAT data in a `bsc` object; `numtest-threads.patch`: the thread-count variant of `tech/numtest.cpp` that showed its hashes depend on the core count. |
+| [`review-product-microcosm/`](modes/review-product-microcosm/) | §2.2, §2.8 | `engram_check.py` (Engram's FIFO drift, macro values, feedback energy) and `outdelta.py` (output against dry levels). |
+| [`revise/`](modes/revise/) | §2.6 | `evalmacro.cpp` with `build.bat`: the evaluator's values on the Engram example, against `dsp/src/DetMath.cpp`. |
+| [`mixlaw/`](modes/mixlaw/) | §2.2 | Added at sound revision 3, not from the design session, and built against this repository's `dsp/`: the first set's recipes re-measured under the Mix law, engaged against bypass in K-weighted loudness (BS.1770-4) and RMS, with peaks, over the curation probe's scores and the Plucks, Strums and SoftNotes vectors; it also checks that the engine's render equals the law's composition of dry and wet bit for bit. `cmake -S tools/parity/modes/mixlaw -B build/mixlaw`. |
+
+The production checks grown from these: `compiler/tests/` (the number code's hashed sets, the JSON
+grammar, the property and reader-fuzz digests), `dsp/tests/blob/` (the mutation fuzzer with its
+committed digest, the libFuzzer harness, the frozen fixtures), and in CI `bspc-roundtrip`,
+`blob-libfuzzer`, the compiler audit (`tools/ci/audit_compiler.py`) and the sound-revision gate's
+package rule (`.github/workflows/parity.yml`, `nightly.yml`, `sound-rev.yml`).

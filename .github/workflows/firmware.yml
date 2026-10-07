@@ -5,7 +5,9 @@ name: firmware
 # fails when an image stops building or stops fitting its memory regions (the linker's
 # region and stack/heap checks, firmware/linker/seed_h750.ld.in), when its boot path calls
 # into ITCM before ITCM is filled (firmware/cmake/BootCheck.cmake, part of the build), when
-# the engine archive the images link differs from the M7 oracle's (parity-m7), fails the
+# an ITCM image keeps one of the engine's shared tables or template instantiations outside
+# ITCM (firmware/cmake/ItcmCheck.cmake, part of the build), when the engine archive the
+# images link differs from the M7 oracle's (parity-m7), fails the
 # static audits of determinism-profile.md §6.3, or carries a GOT relocation. The images link ST's SLA0044 USB code through libDaisy on
 # purpose (companion-app.md §7.2): firmware-elf-audit runs in its prototype mode, which
 # lists that code and labels the images not distributable instead of failing.

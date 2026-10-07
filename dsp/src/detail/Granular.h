@@ -19,6 +19,10 @@ inline constexpr double   kGuardMarginFrames = 64.0;
 // Engine.cpp static_asserts it covers kFeedbackDelayFrames, which bounds
 // maxBlockSize.
 inline constexpr uint32_t kBlockWriteAheadFrames = 512;
+// A FastCut load's fade, in frames (Engine.cpp checks it equals kFastCutFrames), and a grain's
+// fadeStart while it is not fading.
+inline constexpr uint32_t kGranularFastCutFrames = 128;
+inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
 // schedule-time; grains never re-read a global parameter).
@@ -27,7 +31,9 @@ struct Grain {
   int64_t  inc;        // signed 32.32 increment — pitch AND direction
   int64_t  endAbs;     // absolute engine sample where the grain finishes
   uint32_t rendered;   // output frames rendered so far
-  uint32_t total;      // output frames in the grain
+  uint32_t total;      // output frames in the grain; a FastCut shortens it to its fade's end
+  uint32_t fadeStart;  // the output frame at which a FastCut load began fading the grain
+                       // (mode-compiler.md §7.3), or kNoFade
   grainmath::EnvSpec env;
   float    smoothness;  // piecewise->LUT window morph
   float    gainL, gainR;
@@ -47,15 +53,20 @@ struct GranularParams {
   float    targetVoices;     // effective target: min(kMaxGrains*overlap^3, totalFrames),
                              // since the 1-frame interval floor caps sustainable voices
   float    jitter;           // 0 = periodic, 1 = Poisson inter-arrival
-  float    ratioBase;        // from layer0.pitch.st (semitones)
+  float    ratioBase;        // the pitch set's entry plus layer0.pitch.transpose_st
+                             // (semitones; the set is {0} until W1)
   float    spreadCents;
   float    reverseProb;
   float    sustain, skew, smoothness;
   float    panSpread;
-  bool     onsetTrigger;     // OR'd ONSET source: each detected onset fires a grain
-                             // (oldest-steal — explicit triggers never drop, design §4)
-  bool     posFromMark;      // POS_MARK: grains read from the most recent onset mark
-                             // (the Strum family's mechanism) instead of POS_LIVE
+  // From the active mode's structure (mode-compiler.md §7.3), not from leaves since sound
+  // revision 2 retired rows 27 and 28 into it:
+  bool     onsetTrigger;     // `onset` in scheduler.sources, OR'd with the free-running
+                             // scheduler: each detected onset fires a grain (oldest-steal —
+                             // explicit triggers never drop, design §4)
+  bool     posFromMark;      // layer 0's position.source is `mark`: grains read from the most
+                             // recent onset mark (the Strum family's mechanism) instead of
+                             // the live position
 };
 
 // External trigger events for one block, collected by the Engine (onset detector,
@@ -90,6 +101,13 @@ class GranularCore {
     intervalRemaining_ = 1.0f;
   }
 
+  // A FastCut load at absolute frame `abs` (mode-compiler.md §7.3): every grain still sounding
+  // there that is not already fading starts a linear fade to zero over kFastCutFrames from
+  // that frame, and its life ends with the fade. Every grain is rendered up to `abs` (the
+  // engine splits its blocks at events), so each fades from where it is. Several loads within
+  // the fade each fade their own grains.
+  void FastCut(int64_t abs) noexcept;
+
   // Schedules and renders one block. wetL/wetR are overwritten (not accumulated).
   // drawEpoch: random draws are keyed on absSample - drawEpoch (determinism profile
   // §5.9); lifetimes and mark ages stay absolute.
@@ -123,6 +141,10 @@ class GranularCore {
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
                   float* wetR) noexcept;
+  // One grain over block frames [s, e), from its current read position and frame count;
+  // kFade multiplies its envelope by a FastCut's linear fade (only frames past fadeStart).
+  template <bool kFade>
+  void RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept;
 
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;

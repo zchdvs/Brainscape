@@ -63,10 +63,9 @@ int main(int argc, char* argv[]) {
   BrainscapeProcessor proc;
   proc.prepareToPlay(48000.0, 480);
   proc.GetTestInput().SetSource(TestInput::Source::Pluck);
-  proc.Param(ParamId::PitchSt).SetPlainNotifyingHost(7.0f);
+  proc.Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.0f);
   proc.Param(ParamId::Feedback).SetPlainNotifyingHost(0.45f);
   proc.Param(ParamId::ReverbMix).SetPlainNotifyingHost(0.3f);
-  proc.Param(ParamId::OnsetTrigger).SetPlainNotifyingHost(1.0f);
   proc.Param(ParamId::FilterCutoffHz).SetPlainNotifyingHost(3200.0f);
   proc.Param(ParamId::FilterMorph).SetPlainNotifyingHost(0.4f);
 
@@ -99,7 +98,7 @@ int main(int argc, char* argv[]) {
   juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
   app.prepareToPlay(48000.0, 480);
   app.GetTestInput().SetSource(TestInput::Source::Pluck);
-  app.Param(ParamId::PitchSt).SetPlainNotifyingHost(7.0f);
+  app.Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.0f);
   app.Param(ParamId::ReverbMix).SetPlainNotifyingHost(0.3f);
   const juce::File take = dir.getChildFile("audition-take.wav");
   juce::String     error;

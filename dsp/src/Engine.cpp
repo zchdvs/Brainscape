@@ -8,11 +8,16 @@
 #include <new>
 #include <type_traits>
 
+#include "blob/Blob.h"
+#include "brainscape/Preset.h"
+#include "brainscape/SoundRevision.h"
 #include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
 #include "detail/Granular.h"
+#include "detail/MixLaw.h"
+#include "detail/ModeEvalBody.h"
 #include "detail/OnsetDetector.h"
 #include "detail/PostChain.h"
 #include "detail/Smoother.h"
@@ -29,6 +34,139 @@ constexpr bool TableIsContiguous() {
 }
 static_assert(TableIsContiguous(), "kParamTable must be ordered by contiguous ids from 1");
 
+// ── The parameter table's per-kind invariants (docs/design/mode-compiler.md §4.1) ────────
+
+constexpr bool SameName(const char* a, const char* b) {
+  for (; *a != '\0' && *a == *b; ++a, ++b) {
+  }
+  return *a == *b;
+}
+
+constexpr bool RowIsWellFormed(const ParamDescriptor& d) {
+  if (d.kind == ParamKind::Retired) return d.name == nullptr;  // a tombstone keeps only its id
+  if (d.name == nullptr || d.name[0] == '\0' || d.unit == nullptr) return false;
+  if (!(d.min < d.max) || !(d.def >= d.min) || !(d.def <= d.max)) return false;
+  if ((d.domain & ~kAllParamDomains) != 0u) return false;
+  // A Leaf row names the revision that made it one, and this build plays it; no other kind
+  // has a revision. Rows that hold a value (Leaf, Global) rebuild something; Macro and
+  // Performance rows act through their own events.
+  switch (d.kind) {
+    case ParamKind::Leaf:
+      return d.sinceRev >= 1u && d.sinceRev <= kSoundRevision && d.domain != kDomainNone;
+    case ParamKind::Global: return d.sinceRev == 0u && d.domain != kDomainNone;
+    case ParamKind::Macro:
+    case ParamKind::Performance: return d.sinceRev == 0u && d.domain == kDomainNone;
+    case ParamKind::Reserved: return d.sinceRev == 0u;
+    case ParamKind::Retired: break;
+  }
+  return false;
+}
+
+constexpr bool TableIsWellFormed() {
+  for (size_t i = 0; i < kNumParams; ++i) {
+    if (!RowIsWellFormed(kParamTable[i])) return false;
+    for (size_t j = 0; j < i; ++j) {
+      if (kParamTable[i].name != nullptr && kParamTable[j].name != nullptr &&
+          SameName(kParamTable[i].name, kParamTable[j].name)) {
+        return false;  // names are the hosts' and the schema's keys
+      }
+    }
+  }
+  return true;
+}
+static_assert(TableIsWellFormed(),
+              "kParamTable: a row breaks its kind's rules (range, default, domain, sinceRev) or "
+              "repeats a name");
+
+// The rows the engine stores (pending_ and active_): Leaf and Global (design §4.1). Every
+// other kind is a no-op for SetParam and LoadPreset.
+constexpr bool IsStored(ParamKind k) { return k == ParamKind::Leaf || k == ParamKind::Global; }
+
+constexpr size_t CountStored() {
+  size_t n = 0;
+  for (const ParamDescriptor& d : kParamTable) n += IsStored(d.kind) ? 1u : 0u;
+  return n;
+}
+constexpr size_t kNumStored = CountStored();
+
+struct StoredRows {
+  uint16_t row[kNumStored];      // slot -> row index (id - 1)
+  uint16_t slot[kNumParams];     // row index -> slot, or kNumStored for rows not stored
+};
+constexpr StoredRows MakeStoredRows() {
+  StoredRows s{};
+  uint16_t   k = 0;
+  for (size_t i = 0; i < kNumParams; ++i) {
+    if (IsStored(kParamTable[i].kind)) {
+      s.row[k]  = static_cast<uint16_t>(i);
+      s.slot[i] = k++;
+    } else {
+      s.slot[i] = static_cast<uint16_t>(kNumStored);
+    }
+  }
+  return s;
+}
+constexpr StoredRows kStored = MakeStoredRows();
+
+// The slot of a stored row's id, or kNumStored.
+constexpr size_t SlotOf(ParamId id) {
+  const auto raw = static_cast<uint32_t>(id);
+  return raw >= 1u && raw <= kNumParams ? kStored.slot[raw - 1u] : kNumStored;
+}
+constexpr const ParamDescriptor& RowOfSlot(size_t slot) { return kParamTable[kStored.row[slot]]; }
+
+// Leaf ordinals are slots too (Leaf rows are stored), so a complete preset's values map to
+// slots through the leaf's id.
+static_assert(kNumLeafParams <= kNumStored, "every Leaf row is stored");
+
+// A change rebuilds what its row's domain bits name (design §7.2, R1), so a stored row needs a
+// domain (TableIsWellFormed) and every domain bit a rebuild (RebuildDirty's switch).
+static_assert(kAllParamDomains == 0x3Fu, "a new parameter domain needs its rebuild in RebuildDirty");
+
+// The cutoff's minimum is the wet kill (design §7.2): the Filter macro's universal endpoint.
+constexpr float kCutoffKillHz =
+    kParamTable[static_cast<size_t>(ParamId::FilterCutoffHz) - 1u].min;
+
+// The active mode and its CTRL (design §7.3): one active mode, copied in at a load's frame from
+// the staged PresetState, in the Warm arena (PlanMemory) rather than the DTCM-bound Impl. The
+// macro positions it carries are pickup references the engine never reads; the expression
+// assignments drive Expression events.
+struct ActiveMode {
+  ModeBlob     mode;
+  ControlState control;
+};
+static_assert(std::is_trivially_destructible<ActiveMode>::value, "the Warm arena never destructs");
+constexpr size_t kActiveModeBytes = (sizeof(ActiveMode) + 15u) & ~size_t{15};
+
+// Two modes are the same when their content is (design §7.3): compared word by word up to
+// modeHash, which the engine never trusts. ModeBlob has no implicit padding (Mode.h), so every
+// byte is a field, and equal modes are equal word for word.
+static_assert(offsetof(ModeBlob, modeHash) % 4u == 0u, "ModeBlob compares by words");
+bool SameModeContent(const ModeBlob& a, const ModeBlob& b) noexcept {
+  const auto* x = reinterpret_cast<const unsigned char*>(&a);
+  const auto* y = reinterpret_cast<const unsigned char*>(&b);
+  uint32_t    d = 0;
+  for (size_t i = 0; i < offsetof(ModeBlob, modeHash); i += 4u) {
+    uint32_t u, v;
+    std::memcpy(&u, x + i, sizeof u);
+    std::memcpy(&v, y + i, sizeof v);
+    d |= u ^ v;
+  }
+  return d == 0u;
+}
+
+// The smoothed wet gain's target (design §7.2): exactly 0 at the cutoff minimum, which kills the
+// wet signal after the post chain, else the mode's level match (wet_trim_db) and the player's
+// effect volume (a device setting) as one gain. The one place the three meet, so a lone cutoff
+// change engages the kill at its frame and a lone trim change while killed stays muted.
+inline float WetGainTarget(float trimDb, float effectVolumeDb, float cutoffHz) noexcept {
+  if (!(cutoffHz > kCutoffKillHz)) return 0.0f;
+  const float db = trimDb + effectVolumeDb;
+  // exp2, not pow: one kernel instead of two (schedule-time transcendentals are charged in
+  // design §8). dB -> linear.
+  return detmath::Exp2F(db * 0.16609640474436813f);
+}
+
 // SetParam/GetParam are documented lock-free from any thread (design §9 threading
 // table); make the assumption a compile error on the day it stops being true.
 static_assert(std::atomic<float>::is_always_lock_free,
@@ -42,6 +180,7 @@ static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
+static_assert(kFastCutFrames == detail::kGranularFastCutFrames, "public and core fades differ");
 
 // Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
 // live head within one block; that window must cover the largest legal block.
@@ -115,11 +254,13 @@ BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
   // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
   // + onset-detector analysis/FFT/whitening state.
+  // Then the active mode (design §7.3).
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
       (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
        detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
        detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
-      sizeof(float);
+          sizeof(float) +
+      kActiveModeBytes;
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
   // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
@@ -138,24 +279,55 @@ BRAINSCAPE_FP_BODY float CanonicalizeBody(ParamId id, float plainValue) noexcept
   return d != nullptr ? CanonicalValue(*d, plainValue) : 0.0f;
 }
 
-// Determinism profile §5.10 steps 1 and 2: every descriptor default, then every stored
-// leaf, canonicalized, by ascending id (values[] is indexed by id - 1, and is applied in
-// that order). The report counts what makes the load inexact.
+// A stored leaf this build plays (design §7.3 step 2): its row is a Leaf that became one at
+// or before this build's revision. Any other id in a preset is unknown and ignored: an id
+// this build lacks, and a Macro, Performance, Global, Reserved or Retired row, none of which
+// a preset stores (§4.1).
+const ParamDescriptor* PlayableLeaf(uint32_t id) noexcept {
+  const ParamDescriptor* d = FindParam(static_cast<ParamId>(id));
+  return d != nullptr && d->kind == ParamKind::Leaf && d->sinceRev <= kSoundRevision ? d
+                                                                                      : nullptr;
+}
+
+// Stored performance fields this build cannot play (design §7.3 step 4): every field away from
+// its default, until W2 plays them.
+uint32_t UnsupportedPerformance(const PerformanceState& p) noexcept {
+  const PerformanceState def{};
+  return static_cast<uint32_t>(p.reverse != def.reverse) +
+         static_cast<uint32_t>(p.timeMode != def.timeMode) +
+         static_cast<uint32_t>(p.subdiv != def.subdiv) +
+         static_cast<uint32_t>(p.tempoSource != def.tempoSource) +
+         static_cast<uint32_t>(p.usPerQuarter != def.usPerQuarter);
+}
+
+// Design §7.3 steps 0, 1 and 2, and step 4's count (determinism profile §5.10 with the per-kind
+// rules of §4.1): the mode and CTRL must pass ValidateMode's structural and semantic rules, else
+// invalidMode and nothing more; then every Leaf row's default, then every stored leaf,
+// canonicalized, by ascending id (values[] is indexed by leaf ordinal, ascending by id, and is
+// applied in that order). Global rows are not part of a preset and keep their values. A Leaf
+// row the preset lacks is missing only if it existed at the preset's sound revision (sinceRev),
+// so a leaf a later revision adds does not make an older package inexact; a revision of 0 (a
+// state not from a package) or above this build's counts as this build's, so a leafless state
+// is never exact. The report counts what makes the load inexact.
 void ResolvePreset(const PresetState& preset, float* values, LoadReport* report) noexcept {
   *report = LoadReport{};
-  bool seen[kNumParams] = {};
-  for (size_t i = 0; i < kNumParams; ++i) values[i] = kParamTable[i].def;
+  if (!blob::ValidateStructure(preset, kSupportedModeFeatures, nullptr)) {
+    report->invalidMode = true;
+    return;
+  }
+  bool seen[kNumLeafParams] = {};
+  for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = FindParam(LeafId(i))->def;
   const uint32_t count =
       preset.leafCount < PresetState::kMaxLeaves ? preset.leafCount : PresetState::kMaxLeaves;
   report->unknownIds = preset.leafCount - count;
   for (uint32_t k = 0; k < count; ++k) {
     const PresetLeaf&      leaf = preset.leaves[k];
-    const ParamDescriptor* d    = FindParam(static_cast<ParamId>(leaf.id));
+    const ParamDescriptor* d    = PlayableLeaf(leaf.id);
     if (d == nullptr) {
       ++report->unknownIds;
       continue;
     }
-    const size_t i = leaf.id - 1u;
+    const size_t i = LeafIndex(leaf.id);
     if (seen[i]) {
       ++report->duplicateIds;
       continue;
@@ -168,15 +340,19 @@ void ResolvePreset(const PresetState& preset, float* values, LoadReport* report)
     if (canonical != stored) ++report->changedValues;
     values[i] = v;
   }
-  for (const bool s : seen) {
-    if (!s) ++report->missingIds;
+  const uint32_t rev =
+      preset.soundRev == 0u || preset.soundRev > kSoundRevision ? kSoundRevision : preset.soundRev;
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    if (!seen[i] && FindParam(LeafId(i))->sinceRev <= rev) ++report->missingIds;
   }
+  report->unsupported = UnsupportedPerformance(preset.performance);
   report->exact = report->unknownIds == 0 && report->missingIds == 0 &&
-                  report->duplicateIds == 0 && report->changedValues == 0;
+                  report->duplicateIds == 0 && report->changedValues == 0 &&
+                  report->unsupported == 0;
 }
 
 BRAINSCAPE_FP_BODY bool CheckPresetBody(const PresetState& preset, LoadReport* report) noexcept {
-  float values[kNumParams];
+  float values[kNumLeafParams];
   ResolvePreset(preset, values, report);
   return report->exact;
 }
@@ -192,17 +368,22 @@ struct Engine::Impl {
   BRAINSCAPE_FP_BODY void ClearHistory() noexcept;
   BRAINSCAPE_FP_BODY void Process(const ProcessContext&) noexcept;
   BRAINSCAPE_FP_BODY void SetParam(ParamId id, float plainValue) noexcept;
-  BRAINSCAPE_FP_BODY bool LoadPreset(const PresetState&, LoadMode, LoadReport*) noexcept;
+  BRAINSCAPE_FP_BODY bool LoadPreset(const PresetState&, LoadMode, LoadReport*,
+                                      SwitchStyle) noexcept;
   float GetParam(ParamId id) const noexcept;  // a load, no FP arithmetic
 
   using Smoother = detail::Smoother;
 
-  void ApplyParam(size_t index, float value) noexcept;
+  // R1 (design §7.2): a change to a stored row marks each domain its row's bitmask names, and
+  // RebuildDirty rebuilds each marked domain once, before the next frame renders. Nothing is
+  // dispatched by ID.
+  void MarkDirty(size_t slot) noexcept { dirty_ |= RowOfSlot(slot).domain; }
   void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
                                           // param actually changed (keeps exp2/pow
                                           // off the steady-state audio path)
   void RebuildPostParams() noexcept;      // same discipline for the post chain
   void RebuildDirty() noexcept;
+  float Active(ParamId id) const noexcept { return active_[SlotOf(id)]; }
 
   // The pieces of Process: what SetParam, SetFreeze and Trigger queued, applied at the
   // block's first frame; one event, which leaves a Freeze in *freeze for the frame's
@@ -214,9 +395,14 @@ struct Engine::Impl {
 
   // A canonical value from now on: the pending value too, so the next block start does
   // not re-apply an older SetParam.
-  void SetValue(size_t index, float value) noexcept;
+  void SetValue(size_t slot, float value) noexcept;
+  // A macro's or the expression pedal's leaves (design §3.4), as SetParam events would set them.
+  void SetLeaves(const PresetLeaf* leaves, size_t n) noexcept;
   void SetFrozen(bool on) noexcept;
-  void ApplySpillover(const float* values) noexcept;
+  // Design §7.3 step 3: the preset's mode and CTRL become the active ones, compared with the
+  // active mode by content, and every domain rebuilds.
+  void InstallMode(const PresetState& preset) noexcept;
+  void ApplySpillover(const float* values, const PresetState& preset, SwitchStyle style) noexcept;
 
   EngineConfig cfg_{};
   int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
@@ -226,15 +412,19 @@ struct Engine::Impl {
   float*       fbFifo_     = nullptr;  // Warm arena: interleaved stereo,
                                        // kFeedbackDelayFrames frames (NOT maxBlockSize —
                                        // see the constant's rationale in Engine.h)
+  ActiveMode*  mode_       = nullptr;  // Warm arena: the active mode and CTRL (design §7.3)
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
-  Smoother     mix_, outGain_, feedback_, norm_;
+  // mix_: the Mix knob, smoothed (its law: detail/MixLaw.h); wetGain_: the wet signal's gain
+  // after the post chain (trim, effect volume, the cutoff kill: WetGainTarget); feedback_;
+  // norm_: the voice normalization.
+  Smoother     mix_, wetGain_, feedback_, norm_;
   int64_t      sampleCounter_ = 0;
   int64_t      epochStart_    = 0;  // random draws are keyed on sampleCounter_ - epochStart_
   uint32_t     pendingTriggers_ = 0;  // due triggers, fired one per frame (audio thread)
+  uint32_t     modeSwitches_  = 0;  // loads whose mode differed by content (ModeSwitches)
   bool         ready_         = false;
-  bool         granularDirty_ = true;
-  bool         postDirty_     = true;
+  uint8_t      dirty_         = kAllParamDomains;  // ParamDomain bits to rebuild
   bool         frozen_        = false;
   uint32_t     frozenAnchor_  = 0;
   // Nothing rendered since Init or ClearHistory cleared the ring and the post buffers, so
@@ -248,11 +438,13 @@ struct Engine::Impl {
   detail::FeedbackTamer  tamer_;
   detail::OnsetDetector  detector_;
 
-  std::atomic<float>    pending_[kNumParams]{};
+  // Leaf and Global rows only, by slot (kStored): what SetParam stored and what the
+  // engine applies.
+  std::atomic<float>    pending_[kNumStored]{};
   std::atomic<bool>     freezePending_{false};
   std::atomic<uint32_t> onsetCount_{0};
   std::atomic<uint32_t> manualTriggers_{0};
-  float                 active_[kNumParams]{};
+  float                 active_[kNumStored]{};
 };
 
 Engine::Engine() noexcept {
@@ -295,9 +487,10 @@ void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexce
   const detail::FpEnvGuard guard;
   impl().SetParam(id, value);
 }
-bool Engine::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report) noexcept {
+bool Engine::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
+                        SwitchStyle style) noexcept {
   const detail::FpEnvGuard guard;
-  return impl().LoadPreset(preset, mode, report);
+  return impl().LoadPreset(preset, mode, report, style);
 }
 float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
 
@@ -319,6 +512,7 @@ uint32_t Engine::ConsumeOnsetCount() noexcept {
 
 int64_t Engine::SampleCounter() const noexcept { return impl().sampleCounter_; }
 int64_t Engine::EpochStart() const noexcept { return impl().epochStart_; }
+uint32_t Engine::ModeSwitches() const noexcept { return impl().modeSwitches_; }
 
 const ParamDescriptor* Descriptors(size_t* count) noexcept {
   if (count != nullptr) *count = kNumParams;
@@ -393,6 +587,10 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   post_.Init(warm, postBulk, cfg.sampleRate);
   warm += detail::PostChain::WarmFloats(cfg.sampleRate);
   detector_.Init(warm, cfg.sampleRate);
+  warm += detail::OnsetDetector::WarmFloats();
+  // The default mode (Mode.h), which plays as sound revision 1 did, until a load brings one.
+  mode_          = ::new (static_cast<void*>(warm)) ActiveMode();
+  modeSwitches_  = 0;
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
   sampleCounter_ = 0;
@@ -421,22 +619,22 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   granular_.Init(ring_, mask_, windowLut_);
 
   mix_.SetTau(10.0f, cfg.sampleRate);
-  outGain_.SetTau(10.0f, cfg.sampleRate);
+  wetGain_.SetTau(10.0f, cfg.sampleRate);
   feedback_.SetTau(10.0f, cfg.sampleRate);
   norm_.SetTau(100.0f, cfg.sampleRate);  // design §3: τ ≈ 100 ms
 
-  for (size_t i = 0; i < kNumParams; ++i) {
-    pending_[i].store(kParamTable[i].def, std::memory_order_relaxed);
-    active_[i] = kParamTable[i].def;
-    ApplyParam(i, kParamTable[i].def);
+  // Every stored row's default, Global rows included: Init is the one place that resets a
+  // device setting (design §4.1).
+  for (size_t i = 0; i < kNumStored; ++i) {
+    const float def = RowOfSlot(i).def;
+    pending_[i].store(def, std::memory_order_relaxed);
+    active_[i] = def;
   }
-  RebuildGranularParams();
-  RebuildPostParams();
+  dirty_ = kAllParamDomains;
+  RebuildDirty();
   post_.Reset(pp_);  // primes the post-chain mix smoothers from the ACTUAL params
-  granularDirty_ = false;
-  postDirty_     = false;
   mix_.Prime(mix_.target);
-  outGain_.Prime(outGain_.target);
+  wetGain_.Prime(wetGain_.target);
   feedback_.Prime(feedback_.target);
   norm_.Prime(norm_.target);
 
@@ -454,21 +652,17 @@ void Engine::Impl::Reset() noexcept {
   manualTriggers_.store(0u, std::memory_order_relaxed);
   pendingTriggers_ = 0;
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
-  for (size_t i = 0; i < kNumParams; ++i) {
-    const float p = pending_[i].load(std::memory_order_relaxed);
-    active_[i]    = p;
-    ApplyParam(i, p);
+  for (size_t i = 0; i < kNumStored; ++i) {
+    active_[i] = pending_[i].load(std::memory_order_relaxed);
   }
-  RebuildGranularParams();
-  RebuildPostParams();
+  dirty_ = kAllParamDomains;
+  RebuildDirty();
   // RT-safe post reset: small state + smoother priming only — clearing the
   // 750 KiB SDRAM post-delay here cost 2-4 consecutive audio deadlines (review
   // finding). The full buffer clear lives in ClearHistory (non-RT).
   post_.Reset(pp_);
-  granularDirty_ = false;
-  postDirty_     = false;
   mix_.Prime(mix_.target);
-  outGain_.Prime(outGain_.target);
+  wetGain_.Prime(wetGain_.target);
   feedback_.Prime(feedback_.target);
   norm_.Prime(norm_.target);
 }
@@ -495,45 +689,73 @@ void Engine::Impl::ClearHistory() noexcept {
   historyClear_ = true;
 }
 
-bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
-                              LoadReport* report) noexcept {
+bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
+                              SwitchStyle style) noexcept {
   LoadReport r;
-  float      values[kNumParams];
-  ResolvePreset(preset, values, &r);
-  if (ready_) {
+  float      values[kNumLeafParams];
+  ResolvePreset(preset, values, &r);  // steps 0-2, and step 4's count
+  if (ready_ && !r.invalidMode) {      // an invalid mode applies nothing (step 0)
     r.applied = true;
     if (mode == LoadMode::Exact) {
-      // The values become pending; Restart turns freeze off and drains them, snapping
-      // every smoother.
-      for (size_t i = 0; i < kNumParams; ++i) {
-        pending_[i].store(values[i], std::memory_order_relaxed);
+      // The leaves become pending and the mode active; Restart turns freeze off, drains the
+      // leaves and rebuilds every domain from the new mode, snapping every smoother. Global
+      // rows keep their pending values (design §4.1).
+      for (size_t i = 0; i < kNumLeafParams; ++i) {
+        pending_[SlotOf(LeafId(i))].store(values[i], std::memory_order_relaxed);
       }
+      InstallMode(preset);
       Restart();
     } else {
-      ApplySpillover(values);
+      ApplySpillover(values, preset, style);
     }
   }
   if (report != nullptr) *report = r;
   return r.applied && r.exact;
 }
 
-// A Spillover load at the current frame (determinism profile §5.10): the complete preset
-// as one change, freeze off, and the random-number epoch restarted here. Grains, marks,
-// the scheduler phase, smoothers and every buffer carry over, so the output never
-// reconverges with an Exact load's (§2.4), but it stays a deterministic function of the
-// event stream.
-void Engine::Impl::ApplySpillover(const float* values) noexcept {
-  for (size_t i = 0; i < kNumParams; ++i) SetValue(i, values[i]);
+void Engine::Impl::InstallMode(const PresetState& preset) noexcept {
+  if (!SameModeContent(mode_->mode, preset.mode)) {
+    ++modeSwitches_;
+    // A different mode resets the sequencing state a load of the same mode keeps (design
+    // §7.3): the pitch-cycle index, bursts, the step position and modulator phases, which the
+    // waves that build them reset here. Sound revision 2 has none; scheduler phase, marks and
+    // grains always carry over.
+  }
+  std::memcpy(&mode_->mode, &preset.mode, sizeof(ModeBlob));
+  std::memcpy(&mode_->control, &preset.control, sizeof(ControlState));
+  dirty_ = kAllParamDomains;  // the structure feeds the rebuilds (design §7.3 step 3)
+}
+
+// A Spillover load at the current frame (determinism profile §5.10; design §7.3): the complete
+// preset and its mode as one change, the grains sounding now as `style` says (Trails: they
+// finish as resolved at birth; FastCut: they fade out over kFastCutFrames), freeze off, and the
+// random-number epoch restarted here. Marks, the scheduler phase, smoothers and every buffer
+// carry over, so the output never reconverges with an Exact load's (§2.4), but it stays a
+// deterministic function of the event stream. `values` holds every leaf by ordinal; Global rows
+// are untouched.
+void Engine::Impl::ApplySpillover(const float* values, const PresetState& preset,
+                                  SwitchStyle style) noexcept {
+  for (size_t i = 0; i < kNumLeafParams; ++i) SetValue(SlotOf(LeafId(i)), values[i]);
+  InstallMode(preset);
+  if (style == SwitchStyle::FastCut) granular_.FastCut(sampleCounter_);
   freezePending_.store(false, std::memory_order_relaxed);
   SetFrozen(false);
   epochStart_ = sampleCounter_;
 }
 
-void Engine::Impl::SetValue(size_t index, float value) noexcept {
-  pending_[index].store(value, std::memory_order_relaxed);
-  if (value != active_[index]) {
-    active_[index] = value;
-    ApplyParam(index, value);
+void Engine::Impl::SetValue(size_t slot, float value) noexcept {
+  pending_[slot].store(value, std::memory_order_relaxed);
+  if (value != active_[slot]) {
+    active_[slot] = value;
+    MarkDirty(slot);
+  }
+}
+
+void Engine::Impl::SetLeaves(const PresetLeaf* leaves, size_t n) noexcept {
+  for (size_t i = 0; i < n; ++i) {
+    const size_t slot = SlotOf(static_cast<ParamId>(leaves[i].id));
+    if (slot == kNumStored || RowOfSlot(slot).kind != ParamKind::Leaf) continue;
+    SetValue(slot, CanonicalValue(RowOfSlot(slot), leaves[i].value));
   }
 }
 
@@ -541,7 +763,7 @@ void Engine::Impl::SetFrozen(bool on) noexcept {
   if (on == frozen_) return;
   frozen_ = on;
   if (frozen_) frozenAnchor_ = writeFrame_;  // pin the anchor at engage (design §2.4)
-  granularDirty_ = true;  // the normalization exponent depends on it
+  dirty_ |= kDomainGranular;  // the normalization exponent depends on it
 }
 
 void Engine::ClearLooper() noexcept {
@@ -549,40 +771,8 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
-void Engine::Impl::ApplyParam(size_t index, float value) noexcept {
-  switch (kParamTable[index].id) {
-    case ParamId::Mix:
-      mix_.target = value;
-      break;
-    case ParamId::Feedback:
-      feedback_.target = value;
-      tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
-      break;
-    case ParamId::OutTrimDb:
-      // exp2, not pow: one kernel instead of two (schedule-time transcendentals are
-      // charged in design §8).
-      outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
-      break;
-    case ParamId::TriggerSens:
-      detector_.SetSensitivity(value);
-      break;
-    default:
-      // Scheduler/voice params vs post-chain params rebuild their own blocks,
-      // once, at control rate.
-      if (static_cast<uint32_t>(kParamTable[index].id) >=
-          static_cast<uint32_t>(ParamId::ModRateHz)) {
-        postDirty_ = true;
-      } else {
-        granularDirty_ = true;
-      }
-      break;
-  }
-}
-
 void Engine::Impl::RebuildPostParams() noexcept {
-  const auto get = [&](ParamId id) {
-    return active_[static_cast<uint32_t>(id) - 1u];
-  };
+  const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   pp_.modRateHz    = get(ParamId::ModRateHz);
   pp_.modDepth     = get(ParamId::ModDepth);
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
@@ -602,9 +792,7 @@ void Engine::Impl::RebuildPostParams() noexcept {
 }
 
 void Engine::Impl::RebuildGranularParams() noexcept {
-  const auto get = [&](ParamId id) {
-    return active_[static_cast<uint32_t>(id) - 1u];
-  };
+  const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   const double sr = cfg_.sampleRate;
 
   gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
@@ -628,15 +816,21 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   gp_.targetVoices = target;
 
   gp_.jitter      = get(ParamId::Jitter);
-  gp_.ratioBase   = get(ParamId::PitchSt);
+  // The pitch (design §7.5): the pitch set's entry, then the transpose leaf (ID 8) as an offset
+  // over it; detune is added at birth. Sound revision 2 plays only the default set {0: 1} (sets
+  // are W1's, R10), whose entry 0 + t is t exactly for every canonical t, as revision 1 read it.
+  const ModeBlob& mode = mode_->mode;
+  gp_.ratioBase   = mode.pitch[0].entries[0].st + get(ParamId::TransposeSt);
   gp_.spreadCents = get(ParamId::SpreadCents);
   gp_.reverseProb = get(ParamId::ReverseProb);
   gp_.sustain      = get(ParamId::WindowSustain);
   gp_.skew         = get(ParamId::WindowSkew);
   gp_.smoothness   = get(ParamId::WindowSmooth);
   gp_.panSpread    = get(ParamId::PanSpread);
-  gp_.onsetTrigger = get(ParamId::OnsetTrigger) >= 0.5f;
-  gp_.posFromMark  = get(ParamId::PositionSource) >= 0.5f;
+  // Structure, from the active mode (design §7.3; rows 27 and 28 retired into it at r2). The
+  // validated mode's sources and position are this build's: onset on or off, live or mark.
+  gp_.onsetTrigger = (mode.schedule.sources & kSourceOnset) != 0u;
+  gp_.posFromMark  = mode.layers[0].source == PositionSource::Mark;
 
   // Coherence-aware normalization exponent (design §3): unity-rate, zero-spray
   // grains all read the SAME source sample and sum coherently (1/N); anything
@@ -668,19 +862,20 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   norm_.target  = detmath::PowF(gp_.targetVoices, -p);
 }
 
+// Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro
+// moves through MacroMove, a Performance row through its own events.
 void Engine::Impl::SetParam(ParamId id, float value) noexcept {
-  const ParamDescriptor* d = FindParam(id);
-  if (d == nullptr) return;
+  const size_t slot = SlotOf(id);
+  if (slot == kNumStored) return;
   // NaN must never reach the smoothers, where it is an absorbing state recoverable
   // only by Reset()/Init() (review finding, verified), nor any other engine state.
-  pending_[static_cast<uint32_t>(id) - 1u].store(CanonicalValue(*d, value),
-                                                 std::memory_order_relaxed);
+  pending_[slot].store(CanonicalValue(RowOfSlot(slot), value), std::memory_order_relaxed);
 }
 
 float Engine::Impl::GetParam(ParamId id) const noexcept {
-  const ParamDescriptor* d = FindParam(id);
-  if (d == nullptr) return 0.f;
-  return pending_[static_cast<uint32_t>(id) - 1u].load(std::memory_order_relaxed);
+  const size_t slot = SlotOf(id);
+  if (slot == kNumStored) return 0.f;
+  return pending_[slot].load(std::memory_order_relaxed);
 }
 
 void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
@@ -750,11 +945,11 @@ void Engine::Impl::DrainPending() noexcept {
   // grains are decorrelated). Re-anchor-on-wrap (design §2.4) runs per sample inside
   // granular_.Process: decided here at block start, the splice moved with the block grid.
   SetFrozen(freezePending_.load(std::memory_order_relaxed));
-  for (size_t i = 0; i < kNumParams; ++i) {
+  for (size_t i = 0; i < kNumStored; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
       active_[i] = p;
-      ApplyParam(i, p);
+      MarkDirty(i);
     }
   }
   pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
@@ -762,9 +957,9 @@ void Engine::Impl::DrainPending() noexcept {
 
 void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
   switch (e.type) {
-    case EventType::SetParam: {
-      const ParamDescriptor* d = FindParam(static_cast<ParamId>(e.id));
-      if (d != nullptr) SetValue(e.id - 1u, CanonicalValue(*d, e.value));
+    case EventType::SetParam: {  // Leaf and Global rows only, as SetParam
+      const size_t slot = SlotOf(static_cast<ParamId>(e.id));
+      if (slot != kNumStored) SetValue(slot, CanonicalValue(RowOfSlot(slot), e.value));
       break;
     }
     case EventType::Freeze:
@@ -776,26 +971,62 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       break;
     case EventType::SpilloverLoad:
       // The producer learns whether the preset is exact from CheckPreset, when it stages
-      // the preset; here only the values count.
+      // the preset; here only the values count, and an invalid mode applies nothing.
       if (e.preset != nullptr) {
-        float      values[kNumParams];
+        float      values[kNumLeafParams];
         LoadReport report;
         ResolvePreset(*e.preset, values, &report);
-        ApplySpillover(values);
+        if (report.invalidMode) break;
+        const SwitchStyle style = e.id == static_cast<uint32_t>(SwitchStyle::FastCut)
+                                      ? SwitchStyle::FastCut
+                                      : SwitchStyle::Trails;
+        ApplySpillover(values, *e.preset, style);
         *freeze = false;
       }
       break;
+    case EventType::MacroMove: {  // design §3.4: the targets in list order, as SetParams
+      PresetLeaf   out[kMaxMacroTargets];
+      const size_t n = detail::EvalMacroBody(mode_->mode, static_cast<ParamId>(e.id), e.value,
+                                             out, kMaxMacroTargets);
+      SetLeaves(out, n);
+      break;
+    }
+    case EventType::Expression: {  // CTRL's assignments in order
+      PresetLeaf   out[kMaxExpressions * kMaxMacroTargets];
+      const size_t n = detail::EvalExpressionBody(mode_->mode, mode_->control, e.value, out,
+                                                  kMaxExpressions * kMaxMacroTargets);
+      SetLeaves(out, n);
+      break;
+    }
   }
 }
 
+// Each marked domain's rebuild, once (design §7.2, R1). The switch names every domain, so a new
+// one cannot land without its rebuild (the static_assert on kAllParamDomains, and -Wswitch).
 void Engine::Impl::RebuildDirty() noexcept {
-  if (granularDirty_) {
-    RebuildGranularParams();
-    granularDirty_ = false;
-  }
-  if (postDirty_) {
-    RebuildPostParams();
-    postDirty_ = false;
+  const uint8_t dirty = dirty_;
+  dirty_              = 0;
+  for (uint32_t bit = 0; bit < 6u; ++bit) {
+    const auto domain = static_cast<ParamDomain>(1u << bit);
+    if ((dirty & domain) == 0u) continue;
+    switch (domain) {
+      case kDomainNone: break;
+      case kDomainGranular: RebuildGranularParams(); break;
+      case kDomainPost: RebuildPostParams(); break;
+      case kDomainMix: mix_.target = Active(ParamId::Mix); break;
+      case kDomainFeedback: {
+        const float fb   = Active(ParamId::Feedback);
+        feedback_.target = fb;
+        tamer_.SetFeedback(fb, cfg_.sampleRate);  // LP corner rides regeneration
+        break;
+      }
+      case kDomainWet:
+        wetGain_.target = WetGainTarget(Active(ParamId::WetTrimDb),
+                                        Active(ParamId::EffectVolumeDb),
+                                        Active(ParamId::FilterCutoffHz));
+        break;
+      case kDomainDetector: detector_.SetSensitivity(Active(ParamId::TriggerSens)); break;
+    }
   }
 }
 
@@ -891,22 +1122,30 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
   // mod -> delay -> reverb -> filter, ordered and bypassable).
   post_.Process(pp_, count, wetL_, wetR_);
 
-  // ── Pass 3c: wet/dry mix and output trim.
+  // ── Pass 3c: the wet gain, then the wet/dry mix.
   for (uint32_t n = 0; n < count; ++n) {
-    const float mix = mix_.Next();
-    const float g   = outGain_.Next();
-    // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
-    // Two-multiply form, not dry + mix*(wet-dry): the lerp form is not bit-exact at
-    // the endpoints, which would break the Tu null contract (design §10 #2).
+    // The Mix law (mode-compiler.md §7.1, R3b; sound revision 3): dry at unity up to the
+    // middle, wet at unity from it, on the smoothed Mix (detail/MixLaw.h).
+    const detail::MixGains mix = detail::MixLaw(mix_.Next());
+    // The wet signal's gain after the post chain (design §7.2, R3): the mode's trim and the
+    // player's effect volume, or exactly 0 under the cutoff kill; it never scales the dry. At
+    // gain 1 every product below is exact, so a preset with no trim plays revision 1's bits.
+    const float g   = wetGain_.Next();
+    // Dry is never delayed (grain-delay-theory.md §3.11). Two-multiply form, not dry +
+    // mix*(wet-dry): the lerp form is not bit-exact at the endpoints, which would break the Tu
+    // null contract (design §10 #2); at Mix 0 and 1 the law's gains are exactly (1, 0) and
+    // (0, 1), revision 2's products.
     // Both dry reads precede either write: hosts process in place (in[0] == out[0])
     // and mono input aliases inR to inL, so writing outL first corrupted every outR.
     const float dryL = inL[n];
     const float dryR = inR[n];
-    float       oL   = (dryL * (1.0f - mix) + wetL_[n] * mix) * g;
-    float       oR   = (dryR * (1.0f - mix) + wetR_[n] * mix) * g;
-    // Finite input gives finite output (determinism profile §3.7): a dry sample near
-    // FLT_MAX under a positive trim saturates instead of overflowing. One-sided
-    // compares, so NaN from unsanitized input still reaches the Debug check below.
+    const float wl   = wetL_[n] * g;
+    const float wr   = wetR_[n] * g;
+    float       oL   = dryL * mix.dry + wl * mix.wet;
+    float       oR   = dryR * mix.dry + wr * mix.wet;
+    // Finite input gives finite output (determinism profile §3.7): a sum near FLT_MAX
+    // saturates instead of overflowing. One-sided compares, so NaN from unsanitized input
+    // still reaches the Debug check below.
     if (oL > kMaxFinite) oL = kMaxFinite;
     if (oL < -kMaxFinite) oL = -kMaxFinite;
     if (oR > kMaxFinite) oR = kMaxFinite;
@@ -922,7 +1161,7 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
   for (uint32_t n = 0; n < count; ++n) {
     assert(detmath::IsFinite(outL[n]) && detmath::IsFinite(outR[n]));
   }
-  assert(detmath::IsFinite(mix_.value) && detmath::IsFinite(outGain_.value) &&
+  assert(detmath::IsFinite(mix_.value) && detmath::IsFinite(wetGain_.value) &&
          detmath::IsFinite(feedback_.value) && detmath::IsFinite(norm_.value));
 #endif
 

@@ -1,0 +1,4 @@
+# Canonical JSON is LF by definition (docs/design/mode-compiler.md §6.4), and MANIFEST hashes
+# packages whose JSON section is these exact bytes: no line-ending conversion on any checkout.
+*.json text eol=lf
+MANIFEST text eol=lf

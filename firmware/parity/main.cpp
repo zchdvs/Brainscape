@@ -4,7 +4,10 @@
 // render, the integer test signal as input), offline in the main loop, never in the audio
 // callback. Each preset's SHA-256, per-second hashes, counters and DWT cycles stream over
 // USB serial as JSON lines (dsp/tests/golden/ParityStream.h); tools/hil/parity_check.py
-// compares them with golden.json (determinism-profile.md §6.6, §8.4 step 13).
+// compares them with golden.json (determinism-profile.md §6.6, §8.4 step 13). Since sound
+// revision 2 the corpus takes its structure from committed packages, which the image carries
+// compiled in (dsp/tests/golden/EmbeddedPackages.h): the stream lists each as decoded, for
+// parity_check.py to compare with presets/MANIFEST.
 //
 // Commands, one per line:
 //   info                     the hello line (build, board, FP registers, memory map)
@@ -16,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "EmbeddedPackages.h"
 #include "ParityStream.h"
 #include "platform/Placement.h"
 #include "platform/Platform.h"
@@ -71,8 +75,11 @@ std::vector<std::string> SplitCommas(const std::string& s) {
 }
 
 std::string Hello() {
+  size_t packages = 0;
+  EmbeddedPackages(&packages);
   return fw::HelloJson("parity", "\"target\":" + JsonString(BRAINSCAPE_FW_IMAGE) +
                                      ",\"engineCode\":" + JsonString(BRAINSCAPE_FW_ENGINE_CODE) +
+                                     ",\"packages\":" + JsonUInt(packages) +
                                      ",\"commands\":[\"info\",\"run [pedal] [hostile] [quick] "
                                      "[only=...]\",\"dfu\"]");
 }

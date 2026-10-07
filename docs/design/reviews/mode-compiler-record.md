@@ -49,6 +49,10 @@ reviews' `review-engine-determinism/`, `review-product-microcosm/` and
 committed. Design §12.4 lane G copies those worth keeping into `tools/parity/modes/`, as the
 determinism work did with `tools/parity/`; the number code and the package sketch are the
 starting points of lanes A and B.
+Lane G did so (2026-10-07): the sources and run scripts, under the same directory names, are in
+[`tools/parity/modes/`](../../../tools/parity/modes/) ([`tools/parity/README.md`](../../../tools/parity/README.md),
+"Mode-compiler probes"); outputs, binaries and the manual text stayed out. The Mix law's
+re-measurement (sound revision 3, §2.2) is committed there too, as `mixlaw/`.
 
 ### 1.4 External sources
 
@@ -191,11 +195,12 @@ leaf is then derived from its stored position. Draft v2's changes: Engram re-aut
 post delay (the v1 recipe, measured above, used DelayMs 375 and grain Feedback 0.45 with Time
 DelayMs [40 → 1500]^2 and Repeats Feedback [0 → 0.92]^1.3); Lull's Activity loses ModDepth and
 Pinhole's Shape loses Res, both Shift secondaries (L7); Afterimage and Runaway move to the
-reserves; Refrain and Shards join the set. Rows marked "not rendered" have no measurement.
+reserves; Refrain and Shards join the set. Rows marked "not rendered" had no measurement at r1;
+the Mix law's re-measurement below renders both.
 
 | Mode | Leaves | Macros |
 |---|---|---|
-| Engram (v2, not rendered) | DelayMs 1, Mix 0.35, Feedback 0, Size 100, Overlap 0, Spray 0, Jitter 0, Sustain 1, Smooth 0, Pan 0, ModDepth 0.05, ModRate 0.6, DelayTime 405, DelayFb 0.45, DelayMix 1, ReverbMix 0.12, ReverbTime 0.4 | Time DelayTime [40 → 1500]^2; Repeats DelayFb [0 → 0.9]; Activity Overlap [0 → 0.45]^2, Spray [0 → 40]^2, Jitter [0 → 0.5], Spread [0 → 8]; Shape Sustain [1 → 0.25], Smooth [0 → 1], Skew [0.5 → 0.8]; Space ReverbMix [0 → 0.5] |
+| Engram (v2, not rendered at r1) | DelayMs 1, Mix 0.35, Feedback 0, Size 100, Overlap 0, Spray 0, Jitter 0, Sustain 1, Smooth 0, Pan 0, ModDepth 0.05, ModRate 0.6, DelayTime 405, DelayFb 0.45, DelayMix 1, ReverbMix 0.12, ReverbTime 0.4 | Time DelayTime [40 → 1500]^2; Repeats DelayFb [0 → 0.9]; Activity Overlap [0 → 0.45]^2, Spray [0 → 40]^2, Jitter [0 → 0.5], Spread [0 → 8]; Shape Sustain [1 → 0.25], Smooth [0 → 1], Skew [0.5 → 0.8]; Space ReverbMix [0 → 0.5] |
 | Callback | DelayMs 250, Mix 0.4, Feedback 0, Size 100, Overlap 0, Spray 0, Jitter 0, Sustain 1, Smooth 0, Pan 0, DelayTime 375, DelayFb 0.5, DelayMix 0.55, ReverbMix 0.12 | Time DelayMs [60 → 1000]^2 and DelayTime [90 → 1500]^2; Repeats DelayFb [0.15 → 0.85]; Activity DelayMix [0.25 → 0.75], Feedback [0 → 0.35]; Shape as Engram; Space ReverbMix only |
 | Retrograde | DelayMs 40, Mix 0.5, Feedback 0.35, Size 400, Overlap 0.32, Spray 0, Jitter 0, Reverse 1, Sustain 0.6, Skew 0.5, Smooth 1, Pan 0.3, ReverbMix 0.2 | Time Size [120 → 500], DelayMs [20 → 200]; Repeats Feedback [0 → 0.85]; Activity Overlap [0.26 → 0.5], Spray [0 → 120]; Shape Skew [0.2 → 0.95], Sustain [0.7 → 0.1] |
 | Updraft | DelayMs 400, Mix 0.45, Feedback 0.55, Size 120, Overlap 0.45, Spray 8, Jitter 0.15, Pitch +12, Spread 6, Sustain 0.35, Smooth 0.9, Pan 0.6, ReverbMix 0.3, ReverbTime 0.6 | Time DelayMs [150 → 1200]^2; Repeats Feedback [0 → 0.95]; Activity Spray [0 → 80], Overlap [0.35 → 0.6], Spread [0 → 15]; Shape Skew [0.2 → 0.8], Sustain [0.6 → 0.1] |
@@ -210,11 +215,73 @@ reserves; Refrain and Shards join the set. Rows marked "not rendered" have no me
 | Kaleido | PositionSource 1, OnsetTrigger 0, Sens 0.65, DelayMs 300, Mix 0.5, Feedback 0.3, Size 240, Overlap 0.4, Spray 40, Jitter 0.35, Pitch +12, Sustain 0.5, Smooth 0.8, Pan 0.7, ReverbMix 0.35 | Activity Overlap [0.25 → 0.55] ("loopers"); Time Size [100 → 400]; Repeats Feedback [0 → 0.8]; Shape window |
 | Runaway (reserve) | DelayMs 500, Mix 0.5, Feedback 1.05, Size 200, Overlap 0.5, Spray 30, Jitter 0.4, Pitch +12, Sustain 0.3, Smooth 1, Pan 0.7, ReverbMix 0.6, ReverbTime 0.9 | Repeats Feedback [0.6 → 1.1]^0.7; Activity Spray [0 → 200], Spread [0 → 20]; Shape window; Time DelayMs [250 → 2000]^2 |
 | Shards | PositionSource 1, OnsetTrigger 1, Size 70, Overlap 0.45, Spray 400, Jitter 1, Reverse 0.5, Pitch +12, Sustain 0.7, Skew 0.1, Smooth 0.2, Pan 1, DelayMix 0.2, DelayTime 250; W1: sources {onset} only | needs onset-only scheduling (W1); macros to author |
-| Refrain (not rendered) | W1: live position, set {0, +12} cycle, repeat 4, voice_count 4; DelayMs 250, Mix 0.5, Size 120, Overlap 0.5, Sustain 0.5, Smooth 0.8, Pan 0.7, ReverbMix 0.25 | Activity voice_count [1 → 8]; Repeats repeat [2 → 8]; Time Size [60 → 400]^1.5; Shape window (product review's Mosaic A sketch) |
+| Refrain (not rendered at r1) | W1: live position, set {0, +12} cycle, repeat 4, voice_count 4; DelayMs 250, Mix 0.5, Size 120, Overlap 0.5, Sustain 0.5, Smooth 0.8, Pan 0.7, ReverbMix 0.25 | Activity voice_count [1 → 8]; Repeats repeat [2 → 8]; Time Size [60 → 400]^1.5; Shape window (product review's Mosaic A sketch) |
 
 Pitched recipes keep `base_ms ≥ size·(r − 1) + 1.33 ms` over their macro ranges (the near
 guard, engine §3). Overlap maps to voices as 64·overlap³: 0.25 → 1, 0.4 → 4, 0.5 → 8,
 0.55 → 11, 0.6 → 14, 0.7 → 22, 0.8 → 33.
+
+**Re-measured under the Mix law** (sound revision 3, 2026-10-07; design §7.1 R3b, §11.1;
+review finding P1). The probe [`tools/parity/modes/mixlaw/`](../../../tools/parity/modes/mixlaw/)
+renders each recipe above as stored leaves in revision 3's vocabulary: ID 4 is `wet_trim_db`, so
+the trims of Murmuration (+2), Halation (+2) and Undertow (+1), whole-output trims at r1, scale
+the wet only, and Echolalia and Déjà Vu take the table's −3 dB; onset and mark are mode
+structure; Engram is v2, rendered for the first time; Refrain leaves out its W1 fields and Shards
+ORs the onset source with the scheduler; Afterimage and Runaway are the reserves. Inputs: the
+curation probe's three scores ("scores": phrase / chord / pad) and the shared test-signal vectors
+Plucks, Strums and SoftNotes, 10 s each ("vectors"). The wet path never reads Mix, so one render
+at Mix 1 is the wet signal and the output at the stored Mix *m* is dry·*g*d + wet·*g*w under
+either law: revision 2's (1 − *m*, *m*) is composed from it, and revision 3's engine render
+equals the same composition with the law's gains bit for bit in all 96 renders, a check of the
+engine against the law. Levels are integrated K-weighted loudness (ITU-R BS.1770-4: the K filter
+at 48 kHz, 400 ms blocks, the −70 LKFS and −10 LU gates; computed in the probe, outside `dsp/`)
+over the frames the input sounds, in LU against the dry input. "Engaged" is the output at the
+stored Mix against the dry, which is what bypass plays: the pre-screen passes −1 to +4 LU (design
+§11.3). Where a recipe's stored values mean what they meant at r1 (Callback, Retrograde, Updraft,
+Pinhole, Lull, Kaleido, Afterimage), the probe's RMS figures reproduce the table above to its
+rounding (Callback's output against dry: −2.8 / −2.3 / −2.7 dB). So do Murmuration's, Halation's
+and Undertow's wet−dry (at Mix 1 a whole-output trim and a wet trim scale the wet alike), and
+Shards' within 0.1 dB. The curation probe's `probe/recipes.inc` also carried whole-output trims
+that the recipe table leaves out, Echolalia −4, Déjà Vu −3 and Runaway −2 dB: at the table's
+wet-only −3 dB, Déjà Vu's wet−dry reproduces r1's and Echolalia's is 1.0 dB above it, and Runaway
+plays untrimmed. All *measured*; peaks in dBFS:
+
+| Mode | Mix | Wet−dry, scores | Engaged r2, scores | Engaged r3, scores | Wet−dry, vectors | Engaged r3, vectors | Peak r3, vectors |
+|---|---|---|---|---|---|---|---|
+| Engram | 0.35 | +0.5 / +0.1 / −0.6 | −2.7 / −3.0 / −4.1 | +1.7 / +1.2 / −0.1 | +0.1 / +0.4 / +1.3 | +1.7 / +1.6 / +1.6 | −3.2 / −3.2 / −1.4 |
+| Callback | 0.40 | +0.3 / −0.2 / −0.5 | −2.8 / −3.6 / −2.8 | +2.2 / +1.5 / +2.1 | +0.2 / +0.2 / +1.7 | +2.1 / +2.0 / +3.2 | −2.4 / −3.6 / −0.4 |
+| Retrograde | 0.50 | −2.5 / −3.5 / −2.1 | −4.2 / −5.1 / −4.5 | +1.8 / +0.9 / +1.6 | −2.7 / −2.4 / −1.3 | +1.8 / +1.8 / +2.5 | −2.9 / −3.3 / −1.5 |
+| Updraft | 0.45 | −1.3 / −2.7 / −0.7 | −3.5 / −4.4 / −3.4 | +2.0 / +0.9 / +2.1 | −1.7 / −1.4 / −0.7 | +1.8 / +1.8 / +2.2 | −3.2 / −3.5 / −0.4 |
+| Pinhole | 0.50 | +1.8 / −0.7 / −10.7 | −2.2 / −4.2 / −6.9 | +3.8 / +1.8 / −0.9 | +0.2 / +0.2 / −6.1 | +2.9 / +2.9 / +0.9 | −1.5 / −2.8 / −2.7 |
+| Murmuration | 0.55 | −1.6 / −3.9 / −1.7 | −3.9 / −5.2 / −4.3 | +1.7 / +0.5 / +1.2 | −1.9 / −1.8 / −1.1 | +1.6 / +1.5 / +2.0 | −3.2 / −4.4 / +0.9 |
+| Halation | 0.50 | −0.3 / −1.7 / +0.2 | −3.2 / −4.4 / −3.0 | +2.8 / +1.6 / +3.0 | −0.5 / −0.1 / −0.3 | +2.7 / +2.8 / +2.8 | −2.8 / −3.6 / +0.2 |
+| Undertow | 0.50 | −2.2 / −1.7 / −1.7 | −4.0 / −4.0 / −3.9 | +2.0 / +2.0 / +2.1 | −2.8 / −2.7 / −2.3 | +1.7 / +1.8 / +2.0 | −3.5 / −3.7 / +0.1 |
+| Lull | 0.55 | −1.5 / −2.4 / −0.6 | −4.0 / −5.7 / −3.5 | +1.6 / −0.1 / +2.1 | −2.1 / −1.4 / −1.0 | +1.4 / +1.6 / +1.8 | −3.4 / −3.8 / −0.1 |
+| Echolalia | 0.50 | −1.4 / +2.6 / −7.2 | −3.7 / −2.1 / −5.5 | +2.3 / +3.9 / +0.5 | −1.5 / +2.9 / −5.4 | +2.6 / +4.6 / +1.6 | −1.9 / −0.2 / −2.3 |
+| Déjà Vu | 0.50 | −3.1 / +1.1 / −5.3 | −4.4 / −3.4 / −5.6 | +1.7 / +2.6 / +0.4 | −3.3 / +0.9 / −5.2 | +1.6 / +3.3 / −0.1 | −3.2 / −2.8 / −3.6 |
+| Kaleido | 0.50 | −2.0 / +1.5 / −2.2 | −3.9 / −3.1 / −4.1 | +2.2 / +2.9 / +2.0 | −1.7 / +3.3 / −2.5 | +2.2 / +4.9 / +1.9 | −2.9 / −2.9 / −0.6 |
+| Refrain | 0.50 | −5.8 / −5.6 / −6.0 | −5.1 / −5.1 / −5.0 | +1.0 / +1.0 / +1.0 | −5.7 / −5.9 / −5.6 | +0.9 / +0.9 / +1.0 | −3.8 / −3.7 / −1.6 |
+| Shards | 0.50 | −2.9 / 0.0 / −3.4 | −4.2 / −4.1 / −4.5 | +1.8 / +2.0 / +1.5 | −3.4 / −0.2 / −3.0 | +1.5 / +2.8 / +1.7 | −2.8 / −2.9 / 0.0 |
+| Afterimage (reserve) | 0.45 | −2.9 / −3.5 / −2.6 | −3.8 / −4.1 / −3.8 | +1.6 / +1.3 / +1.6 | −3.3 / −3.0 / −2.6 | +1.3 / +1.5 / +1.6 | −2.8 / −2.6 / +0.1 |
+| Runaway (reserve) | 0.50 | −0.2 / −1.8 / +1.4 | −3.3 / −5.2 / −2.6 | +2.7 / +0.8 / +3.5 | −0.9 / −0.4 / +2.4 | +2.5 / +2.6 / +4.2 | −2.5 / −3.4 / +2.6 |
+
+- **The law closes P1's gap.** Under revision 2's crossfade every one of the 84 first-set renders
+  (14 recipes, 6 inputs) plays quieter engaged than bypassed, −1.2 to −6.9 LU, and fails
+  "Engaged". Under the law 82 of 84 pass, from −0.9 to +4.9 LU; the law adds 4.0 to 6.1 LU at
+  these Mix settings (+6.0 dB of gain on both signals at 0.5). The two above +4 LU are Echolalia
+  (+4.6) and Kaleido (+4.9) on Strums, where their wet runs 2.9 and 3.3 LU above the dry, which
+  "Level" sends back to `wet_trim_db` anyway; so does the reserve Runaway on SoftNotes (+4.2).
+- **Peaks rise with it.** The same gains raise the output's peak by 3.7 to 6.1 dB. No revision-2
+  render peaked above −4.6 dBFS (−3.4 with the reserves); under the law 10 of the 84 exceed the
+  pre-screen's −1 dBFS at stored positions, eight on SoftNotes (the hottest input: −12.1 LUFS,
+  peaks at −7.2 dBFS), Halation on the pad and Echolalia on Strums, and three exceed 0 dBFS:
+  Murmuration (+0.9), Halation (+0.2) and Undertow (+0.1), all on SoftNotes and all with a
+  positive wet trim. The engine saturates only near `FLT_MAX`, so the pedal's codec would clip
+  them: lane E's trims and each mode's declared input class settle the peak check, and the
+  owner's listening pass judges the law itself.
+- **Level trims are still to be set.** 36 of the 84 renders have their wet more than 2 LU from
+  the dry (Refrain's static approximation about −6 LU on every input, Pinhole −10.7 LU on the
+  pad): the recipes' trims predate the wet-only trim, and setting them is lane E's.
 
 **Names to avoid in product strings** [curation]: Hologram's marks and names (Microcosm,
 Chroma Console, Infinite Jets, Mosaic, Seq, Glide, Haze, Tunnel, Strum, Blocks, Interrupt, Arp,
@@ -626,7 +693,7 @@ linear fast path in `EvalMacro` (§2.6).
 | E7 | Round-trip evidence from another format; no canonical chunk rules | applied with I9: chunk rules, invariant scoped to STAT, MODE, CTRL, fuzz re-run required, unknown-section placement (5.2, 5.3, 6.1) |
 | E8 | The key extension aliases after the fold | applied: `Hash32` re-key for `ext` ≠ 0, corrected text, offset test (7.5, 10.4) |
 | E9 | `Engine::Impl` growth understated | applied: growth per wave, a raise per wave, per-grain `fadeStart` (7.1, 7.3) |
-| P1 | Every mode is quieter than bypass; nothing checks it | applied, threshold changed (§4): "Engaged" check, Mix law as Q13 with its own bump, re-measurement before rating (7.1, 7.6, 11.1, 11.3) |
+| P1 | Every mode is quieter than bypass; nothing checks it | applied, threshold changed (§4): "Engaged" check, Mix law as Q13 with its own bump, re-measurement before rating (7.1, 7.6, 11.1, 11.3); the law built as sound revision 3 and the recipes re-measured under it (§2.2) |
 | P2 | One leaf is both level match and Effect Volume | applied, Global option: `global.effect_volume_db` (82) (3.1, 3.8, 4.2) |
 | P3 | Pickup jumps where stored leaves disagree with positions | applied: derived leaves, "solve position", `bspc derive`, L4 with tolerance and factory error, example fixed (2.1, 3.5, 8.2) |
 | P4 | Display-only fan-out has no mechanism | applied: host model as owner decision Q12, (b) recommended; lane warning dropped; recording test (3.6, 10.4) |

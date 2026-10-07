@@ -5,6 +5,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -431,7 +432,7 @@ TEST_CASE("a rate change re-initialises; a same-rate re-prepare keeps the runnin
 
 TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
   BrainscapeProcessor proc;
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     INFO(d.name);
     BrainscapeParam& p = proc.Param(d.id);
     for (float v : SampleValues(d.id, static_cast<uint32_t>(d.id) * 7919u, 2000)) {
@@ -451,10 +452,48 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
     p.setValue(0.3f);  // a lossy host set maps through the shared taper
     REQUIRE(Bits(p.Plain()) == Bits(PlainFromNormalized(d.id, 0.3f)));
   }
-  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumParams) + 1);  // + freeze
+  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 1);  // + freeze
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
-  REQUIRE(proc.Param(ParamId::OnsetTrigger).isDiscrete());
-  REQUIRE(proc.Param(ParamId::OnsetTrigger).getNumSteps() == 2);
+  // Sound revision 2 retired rows 27 and 28 into mode structure: no longer registered.
+  REQUIRE_FALSE(IsLeaf(ParamId::OnsetTrigger));
+  REQUIRE_FALSE(IsLeaf(ParamId::PositionSource));
+  REQUIRE(proc.Param(ParamId::FilterMorph).getParameterID() == "post.filter.morph");
+}
+
+// The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
+// name; Reserved rows are not registered, and macro and performance rows join with the macro
+// work (§9.2). Automation follows the shared flags: host model (b) (§3.6, Q12) applies with
+// those macro parameters in lane D (§12.4), so until then sound revision 1's leaves stay
+// automatable, as freeze is.
+TEST_CASE("the plugin registers the Leaf rows under the host model") {
+  BrainscapeProcessor proc;
+  const auto&         params = proc.getParameters();
+  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 1);
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    const ParamDescriptor& d = *FindParam(LeafId(i));
+    INFO(d.name);
+    auto* p = dynamic_cast<BrainscapeParam*>(params[static_cast<int>(i)]);
+    REQUIRE(p != nullptr);
+    REQUIRE(p->Id() == d.id);
+    REQUIRE(&proc.Param(d.id) == p);
+    REQUIRE(p->getParameterID() == juce::String(d.name));
+    REQUIRE(p->isAutomatable() == ((FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u));
+    REQUIRE(p->isAutomatable() == (d.sinceRev == 1u));
+  }
+  REQUIRE(proc.Param(ParamId::WetTrimDb).getParameterID() == "wet_trim_db");
+  REQUIRE(proc.Param(ParamId::TransposeSt).getParameterID() == "layer0.pitch.transpose_st");
+  REQUIRE(proc.Freeze().isAutomatable());
+  REQUIRE(proc.Freeze().getParameterID() == FindParam(ParamId::PerfFreeze)->name);
+  for (const auto* p : params) {
+    const auto* w = dynamic_cast<const juce::AudioProcessorParameterWithID*>(p);
+    REQUIRE(w != nullptr);
+    INFO(w->getParameterID());
+    for (const ParamDescriptor& d : kParamTable) {
+      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Macro) {
+        REQUIRE(w->getParameterID() != juce::String(d.name));
+      }
+    }
+  }
 }
 
 TEST_CASE("edits after prepare reach the engine as exact bits at the next block") {
@@ -466,12 +505,12 @@ TEST_CASE("edits after prepare reach the engine as exact bits at the next block"
   r.pattern     = {480};
   r.beforeBlock = [&](int pos) {
     if (pos != change) return;
-    proc->Param(ParamId::PitchSt).SetPlainNotifyingHost(7.02f);
+    proc->Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.02f);
     proc->Param(ParamId::FilterMorph).SetPlainNotifyingHost(0.4f);
   };
   const Stereo got = RenderProcessor(*proc, in, {}, r);
   const auto   at  = [&](float pitch, float morph) {
-    return std::vector<RefEvent>{RefParam(change, ParamId::PitchSt, pitch),
+    return std::vector<RefEvent>{RefParam(change, ParamId::TransposeSt, pitch),
                                  RefParam(change, ParamId::FilterMorph, morph)};
   };
   RequireSame(got, RenderReference(Busy(), in, kRate, at(7.02f, 0.4f)), "UI edits");
@@ -482,21 +521,20 @@ TEST_CASE("edits after prepare reach the engine as exact bits at the next block"
 
 TEST_CASE("the plain slider attachment edits and shows exact values") {
   BrainscapeProcessor proc;
-  juce::Slider        pitchKnob, morphKnob, mixKnob, delayKnob, cutoffKnob, posKnob;
-  BrainscapePlainAttachment pitch(proc.Param(ParamId::PitchSt), pitchKnob);
+  juce::Slider        pitchKnob, morphKnob, mixKnob, delayKnob, cutoffKnob;
+  BrainscapePlainAttachment pitch(proc.Param(ParamId::TransposeSt), pitchKnob);
   BrainscapePlainAttachment morph(proc.Param(ParamId::FilterMorph), morphKnob);
   BrainscapePlainAttachment mix(proc.Param(ParamId::Mix), mixKnob);
   BrainscapePlainAttachment delay(proc.Param(ParamId::DelayMs), delayKnob);
   BrainscapePlainAttachment cutoff(proc.Param(ParamId::FilterCutoffHz), cutoffKnob);
-  BrainscapePlainAttachment pos(proc.Param(ParamId::PositionSource), posKnob);
 
   pitchKnob.setValue(0.6, juce::sendNotificationSync);  // a knob turn: the pot path
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(PlainFromNormalized(ParamId::PitchSt, 0.6f)));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(PlainFromNormalized(ParamId::TransposeSt, 0.6f)));
 
   REQUIRE(pitch.CommitText("7.02"));
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(7.02f));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(7.02f));
   REQUIRE(pitch.CommitText("-0.37 st"));
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(-0.37f));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(-0.37f));
   REQUIRE(morph.CommitText("0.4"));
   REQUIRE(Bits(proc.Param(ParamId::FilterMorph).Plain()) == Bits(0.4f));
   REQUIRE(morph.CommitText("hp"));
@@ -511,8 +549,9 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 2500.0f);
   REQUIRE(cutoff.CommitText("Off"));
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 20000.0f);
-  REQUIRE(pos.CommitText("Mark"));
-  REQUIRE(proc.Param(ParamId::PositionSource).Plain() == 1.0f);
+  REQUIRE(cutoff.CommitText("Kill"));  // the minimum, the wet kill, as it is shown
+  REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 40.0f);
+  REQUIRE(cutoff.DisplayText() == "Kill");
   REQUIRE_FALSE(delay.CommitText("fast"));
   REQUIRE_FALSE(delay.CommitText("12 st"));
   REQUIRE(proc.Param(ParamId::DelayMs).Plain() == 250.0f);
@@ -558,7 +597,7 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   }
 
   // Every value typed as text lands on exactly that binary32, in every parameter's units.
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     if (FindParamDisplay(d.id)->steps >= 2) continue;
     INFO(d.name);
     juce::Slider              knob;
@@ -583,14 +622,62 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE_FALSE(delay.Refresh());
 }
 
+TEST_CASE("typed text is read by the compiler's exact reader, typed forms included") {
+  // mode-compiler.md §6.5, §10.4: text looser than JSON, with JSON's exact rounding.
+  float v = 0.f;
+  REQUIRE(ParsePlainText(ParamId::DelayMs, ".5 s", v));
+  REQUIRE(v == 500.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "5. ms", v));
+  REQUIRE(v == 5.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "05", v));
+  REQUIRE(v == 5.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "+25", v));
+  REQUIRE(v == 25.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "0.5e3", v));
+  REQUIRE(v == 500.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "-.5", v));  // canonicalized: the minimum
+  REQUIRE(v == 1.0f);
+  REQUIRE(ParsePlainText(ParamId::Mix, "55%", v));
+  REQUIRE(Bits(v) == 0x3F0CCCCDu);  // the bits canonical JSON writes as 0.55
+  REQUIRE(ParsePlainText(ParamId::TransposeSt, "7.02 st", v));
+  REQUIRE(Bits(v) == Bits(7.02f));
+  // At a binary32 midpoint, ties go to even, as the compiler reads them: 1 + 2^-24.
+  REQUIRE(ParsePlainText(ParamId::GrainSizeMs, "1.000000059604644775390625", v));
+  REQUIRE(Bits(v) == 0x3F800000u);
+  REQUIRE(ParsePlainText(ParamId::GrainSizeMs, "1.000000059604644775390626", v));
+  REQUIRE(Bits(v) == 0x3F800001u);
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, ".", v));
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "1..5", v));
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "4e38 ms", v));  // past FLT_MAX
+}
+
+TEST_CASE("the text shown at a parameter's ends and default can be typed back") {
+  // What the host shows can be typed in and shows the same: the named ends (Off, Kill, the
+  // filter types) included, which a missing name left unparsable (review finding).
+  for (const ParamDescriptor& d : LeafRows()) {
+    for (const float v : {d.min, d.max, d.def}) {
+      const juce::String shown = FormatPlainText(d.id, Canonicalize(d.id, v));
+      INFO(d.name << ": " << shown);
+      float back = 0.f;
+      REQUIRE(ParsePlainText(d.id, shown, back));
+      REQUIRE(FormatPlainText(d.id, back) == shown);
+    }
+  }
+  float v = 0.f;
+  REQUIRE(ParsePlainText(ParamId::FilterCutoffHz, "Kill", v));
+  REQUIRE(Bits(v) == Bits(40.0f));
+  REQUIRE(ParsePlainText(ParamId::FilterCutoffHz, "off", v));
+  REQUIRE(Bits(v) == Bits(20000.0f));
+}
+
 TEST_CASE("session state round-trips bit for bit") {
   BrainscapeProcessor a;
   uint32_t            seed = 42u;
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     const auto values = SampleValues(d.id, seed += 977u, 1);
     a.Param(d.id).SetPlainNotifyingHost(values.back());
   }
-  a.Param(ParamId::PitchSt).SetPlainNotifyingHost(7.02f);
+  a.Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.02f);
   WrapperSettings s;
   s.inputMode      = InputMode::Stereo;
   s.inputGainDb    = -3.5f;
@@ -604,7 +691,7 @@ TEST_CASE("session state round-trips bit for bit") {
   BrainscapeProcessor b;
   b.Freeze().setValueNotifyingHost(1.0f);
   b.setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     INFO(d.name);
     REQUIRE(Bits(b.Param(d.id).Plain()) == Bits(a.Param(d.id).Plain()));
   }
@@ -637,13 +724,62 @@ TEST_CASE("session state round-trips bit for bit") {
     const uint32_t odd[2] = {999u, Bits(1.0f)};
     std::memcpy(bytes.data() + 12 + 8, odd, sizeof odd);  // ...the second one unknown
     std::vector<uint8_t> cut(bytes.begin(), bytes.begin() + 12 + 16);
-    cut.insert(cut.end(), bytes.begin() + 12 + 8 * static_cast<long>(kNumParams), bytes.end());
+    cut.insert(cut.end(), bytes.begin() + 12 + 8 * static_cast<long>(kNumLeafParams), bytes.end());
     WrapperState partial{};
     REQUIRE(DecodeState(cut.data(), cut.size(), partial));
     REQUIRE(partial.unknownIds == 1u);
-    REQUIRE(partial.missingIds == kNumParams - 1u);
+    REQUIRE(partial.missingIds == kNumLeafParams - 1u);
     REQUIRE(Bits(partial.plain[0]) == Bits(st.plain[0]));
-    REQUIRE(partial.plain[1] == kParamTable[1].def);
+    REQUIRE(partial.plain[1] == FindParam(LeafId(1))->def);
+  }
+  // This build writes IDs 1-26 in order, its Leaf rows. Sessions saved at sound revision 1 hold
+  // IDs 1-28: 27 and 28 retired into mode structure at sound revision 2, which the plugin does
+  // not load yet (session v2 migrates them, mode-compiler.md §4.4, lane D), so they are unknown
+  // and every other value decodes unchanged. Rows of other kinds in a session (a macro, the
+  // effect volume, a Reserved row) are unknown too.
+  SECTION("v1 sessions of sound revision 1 decode; 27, 28 and other kinds are unknown") {
+    WrapperState st{};
+    REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
+    REQUIRE(kNumLeafParams == 26u);
+    const auto put = [](std::vector<uint8_t>* out, uint32_t u) {
+      for (int k = 0; k < 4; ++k) out->push_back(static_cast<uint8_t>(u >> (8 * k)));
+    };
+    std::vector<uint8_t> v2 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 26, 0, 0, 0};
+    for (uint32_t id = 1; id <= 26; ++id) {
+      put(&v2, id);
+      put(&v2, Bits(st.plain[id - 1u]));
+    }
+    std::vector<uint8_t> now;
+    EncodeState(st, now);
+    REQUIRE(std::equal(v2.begin(), v2.end(), now.begin()));
+    const std::vector<uint8_t> settings(now.begin() + static_cast<long>(v2.size()), now.end());
+
+    std::vector<uint8_t> v1 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 28, 0, 0, 0};
+    for (uint32_t id = 1; id <= 28; ++id) {
+      put(&v1, id);
+      put(&v1, id <= 26u ? Bits(st.plain[id - 1u]) : Bits(1.0f));  // onset and marks on
+    }
+    v1.insert(v1.end(), settings.begin(), settings.end());
+    WrapperState old{};
+    REQUIRE(DecodeState(v1.data(), v1.size(), old));
+    REQUIRE(old.unknownIds == 2u);
+    REQUIRE(old.missingIds == 0u);
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(old.plain[i]) == Bits(st.plain[i]));
+
+    std::vector<uint8_t> extra(v1.begin(), v1.begin() + 12 + 8 * 28);
+    extra[8] = 31;  // three more leaves, of other kinds
+    put(&extra, static_cast<uint32_t>(ParamId::VoiceCount));  // Reserved
+    put(&extra, Bits(8.0f));
+    put(&extra, static_cast<uint32_t>(ParamId::MacroTime));  // Macro
+    put(&extra, Bits(0.25f));
+    put(&extra, static_cast<uint32_t>(ParamId::EffectVolumeDb));  // Global
+    put(&extra, Bits(-6.0f));
+    extra.insert(extra.end(), settings.begin(), settings.end());
+    WrapperState mixed{};
+    REQUIRE(DecodeState(extra.data(), extra.size(), mixed));
+    REQUIRE(mixed.unknownIds == 5u);
+    REQUIRE(mixed.missingIds == 0u);
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(mixed.plain[i]) == Bits(st.plain[i]));
   }
 }
 
@@ -689,8 +825,7 @@ TEST_CASE("a restore before anything has played is an Exact load") {
 }
 
 TEST_CASE("MIDI note-on fires a grain at its sample offset, at every host block pattern") {
-  Preset preset = Busy();
-  preset.push_back({ParamId::OnsetTrigger, 0.0f});
+  Preset preset = Busy();  // the default mode: no onset source
   const Stereo in = MakeInput(72000);
   // Chunk and block edges, odd offsets and same-frame pairs.
   const std::vector<int> notes = {0, 1, 511, 512, 513, 4095, 4096, 30037, 30038, 40192, 51200, 51200, 51201};
@@ -716,6 +851,8 @@ TEST_CASE("MIDI note-on fires a grain at its sample offset, at every host block 
 
 TEST_CASE("host automation applies at the first frame of its block, at every host block pattern") {
   const Stereo in = MakeInput(48000);
+  // Mix: automatable under every host model (mode-compiler.md §3.6).
+  REQUIRE(BrainscapeProcessor().Param(ParamId::Mix).isAutomatable());
   for (const auto& pattern : std::vector<std::vector<int>>{
            {1}, {7}, {256}, {512}, {513}, {4096}, {0, 480}, {0, 0, 1, 0, 7, 512, 513, 0, 4096, 37, 0, 441}}) {
     auto       proc      = MakeProcessor(Busy(), {});
@@ -724,13 +861,13 @@ TEST_CASE("host automation applies at the first frame of its block, at every hos
     r.pattern     = pattern;
     r.beforeBlock = [&](int pos) {  // a VST3 parameter change, as the wrapper delivers it
       if (appliedAt >= 0 || pos < 20011) return;
-      proc->Param(ParamId::PitchSt).setValue(0.73f);
+      proc->Param(ParamId::Mix).setValue(0.73f);
       appliedAt = pos;
     };
     const Stereo got  = RenderProcessor(*proc, in, {}, r);
-    const float  sent = PlainFromNormalized(ParamId::PitchSt, 0.73f);
-    REQUIRE(Bits(proc->Param(ParamId::PitchSt).Plain()) == Bits(sent));
-    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::PitchSt, sent)}),
+    const float  sent = PlainFromNormalized(ParamId::Mix, 0.73f);
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(sent));
+    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::Mix, sent)}),
                 PatternName(pattern).c_str());
   }
 }
@@ -888,7 +1025,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
   const auto   id = [](ParamId p) { return static_cast<uint32_t>(p); };
   const auto   script = [&](BrainscapeProcessor& p) {
     p.PostAt(0, {E::Type::Param, E::Source::Ui, id(ParamId::Feedback), 0.5f});  // the first block
-    p.PostAt(10007, {E::Type::Param, E::Source::Ui, id(ParamId::PitchSt), 5.0f});
+    p.PostAt(10007, {E::Type::Param, E::Source::Ui, id(ParamId::TransposeSt), 5.0f});
     p.PostAt(20011, {E::Type::Trigger, E::Source::Ui, 0u, 1.0f});
     p.PostAt(30000, {E::Type::Param, E::Source::Ui, id(ParamId::Mix), 0.45f});  // after the host's
     p.PostAt(30000, {E::Type::Param, E::Source::Host, id(ParamId::Mix), 0.4f});
@@ -896,7 +1033,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
   };
   const auto ref = [&](int triggerAt) {
     return RenderReference(Busy(), in, kRate,
-                           {RefParam(0, ParamId::Feedback, 0.5f), RefParam(10007, ParamId::PitchSt, 5.0f),
+                           {RefParam(0, ParamId::Feedback, 0.5f), RefParam(10007, ParamId::TransposeSt, 5.0f),
                             RefTrigger(triggerAt), RefParam(30000, ParamId::Mix, 0.4f),
                             RefParam(30000, ParamId::Mix, 0.45f), RefFreeze(40013, true)});
   };
@@ -907,7 +1044,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
     HostRender r;
     r.pattern = pattern;
     RequireSame(RenderProcessor(*proc, in, {}, r), want, PatternName(pattern).c_str());
-    REQUIRE(proc->Param(ParamId::PitchSt).Plain() == 5.0f);  // mirrors follow once applied
+    REQUIRE(proc->Param(ParamId::TransposeSt).Plain() == 5.0f);  // mirrors follow once applied
     REQUIRE(proc->Param(ParamId::Mix).Plain() == 0.45f);
     // The engine splits at the stamps: one Process call per chunk, as with no events.
     REQUIRE(proc->GetStatus().engineCalls == ChunkCalls(pattern, 48000));
@@ -926,6 +1063,40 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
     RequireSame(RenderProcessor(*proc, short48, {}, {{480}}),
                 RenderReference(Busy(), short48, kRate, {RefParam(4801, ParamId::Mix, 0.25f)}), "stamp after a re-Init");
   }
+}
+
+// The per-leaf touched set that replaced the 32-bit mask (mode-compiler.md §10.4): an event on
+// any Leaf row, the last ordinal included, writes that leaf's mirror back once applied, and
+// events on rows of other kinds (Reserved, Macro, Global) reach no mirror and no engine state.
+TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds change nothing") {
+  using E           = WrapperEvent;
+  const Stereo in   = MakeInput(4800);
+  auto         proc = MakeProcessor({}, {});
+  std::vector<float>    sent(kNumLeafParams);
+  std::vector<RefEvent> ref;
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    const ParamDescriptor& d = *FindParam(LeafId(i));
+    float v = Canonicalize(d.id, d.min + 0.25f * (d.max - d.min));
+    if (Bits(v) == Bits(d.def)) v = Canonicalize(d.id, d.min + 0.75f * (d.max - d.min));
+    INFO(d.name);
+    REQUIRE(Bits(v) != Bits(proc->Param(d.id).Plain()));
+    sent[i] = v;
+    proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(d.id), v});
+    ref.push_back(RefParam(0, d.id, v));
+  }
+  for (const ParamId other : {ParamId::VoiceCount, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
+    REQUIRE_FALSE(IsLeaf(other));
+    proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(other), FindParam(other)->min});
+  }
+  HostRender r;
+  r.pattern        = {480};
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    INFO(FindParam(LeafId(i))->name);
+    REQUIRE(Bits(proc->Param(LeafId(i)).Plain()) == Bits(sent[i]));
+  }
+  REQUIRE(proc->getParameters().size() == static_cast<int>(kNumLeafParams) + 1);
+  RequireSame(got, RenderReference({}, in, kRate, ref), "the leaf events alone");
 }
 
 TEST_CASE("scripted parameter values are canonicalized like every other producer's") {
@@ -1238,8 +1409,7 @@ TEST_CASE("restart on transport start: an automated passage bounces the same eve
 }
 
 TEST_CASE("restart on transport start: bounces with MIDI match the reference") {
-  Preset preset = Busy();
-  preset.push_back({ParamId::OnsetTrigger, 0.0f});
+  Preset preset = Busy();  // the default mode: no onset source
   const Stereo           source = MakeInput(4 * 48000);
   const Stereo           pre    = Slice(source, 0, 24000);
   const Stereo           take   = Slice(source, 48000, 120000);
@@ -1325,8 +1495,8 @@ TEST_CASE("reset() is Engine::Reset: the ring and the counter run on") {
 TEST_CASE("the offline audition renders the input from the exact-restart state") {
   const Preset preset = Busy();
   const Preset all    = Complete(preset);
-  float        values[kNumParams];
-  for (size_t i = 0; i < kNumParams; ++i) values[i] = all[i].second;
+  float        values[kNumLeafParams];
+  for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = all[i].second;
 
   SECTION("the test signal, in both input modes") {
     for (const InputMode mode : {InputMode::Stereo, InputMode::Mono}) {
@@ -1410,7 +1580,7 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
       INFO("segment " << k);
       REQUIRE(recipe["outputSegmentSha256"][static_cast<int>(k)].toString().toStdString() == segments[k]);
     }
-    REQUIRE(recipe["preset"].size() == static_cast<int>(kNumParams));
+    REQUIRE(recipe["preset"].size() == static_cast<int>(kNumLeafParams));
     REQUIRE(recipe["preset"][1]["bits"].toString() == juce::String::toHexString(static_cast<juce::int64>(Bits(values[1]))).paddedLeft('0', 8));
     REQUIRE(static_cast<int>(recipe["soundRevision"]) == static_cast<int>(kSoundRevision));
     reader.reset();

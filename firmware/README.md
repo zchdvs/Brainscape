@@ -8,29 +8,57 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 
 | Image | `.bin` | What it does | Host tool |
 | --- | --- | --- | --- |
-| **A, parity** | `brainscape_parity.bin` | Renders the golden corpus on the Seed exactly as the golden harness does and streams every hash | [`tools/hil/parity_check.py`](../tools/hil/parity_check.py) |
+| **A, parity** | `brainscape_parity.bin` | Renders the golden corpus on the Seed exactly as the golden harness does, from the corpus's packages compiled in, and streams every hash | [`tools/hil/parity_check.py`](../tools/hil/parity_check.py) |
 | **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block (with and without a stream of events), per stage, an upper bound per birth, `Restart` against the SDRAM's own floor, subnormal latency, the flush idiom, silent tails | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
 | B, code-placement A/B | `brainscape_bench_xip.bin` | Image B with the engine's code (and the firmware's `memcpy`/`memmove`/`memset`) executing in place from QSPI instead of ITCM (profile §7.1) | `bench_report.py` |
 | B, flush A/B | `brainscape_bench_hooks.bin` | Image B on the engine built with the FP guard's test hooks: the FZ = 0/1 silent-tail test and flag census of profile §4.2 | `bench_report.py` |
-| **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets and parameters over USB | [`tools/hil/console.py`](../tools/hil/console.py) |
+| **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets, modes, macros and parameters over USB | [`tools/hil/console.py`](../tools/hil/console.py) |
 
 Every image links the engine archive `libbrainscape_dsp.a` exactly as CI's `parity-m7` job builds,
 audits and renders it under QEMU (same toolchain, flags and deterministic archive: SHA-256
-`4f4ddaa3583e46f2…` at sound revision 1; `firmware.yml` checks the two are byte-identical), reports
-that hash in its hello line, and the firmware build writes it to
+`1d6fe1dc41f02fd9…` at sound revision 3, `89b73b51fe4261bf…` at revision 2, `4f4ddaa3583e46f2…` at
+revision 1; `firmware.yml` checks the two are
+byte-identical), reports that hash in its hello line, and the firmware build writes it to
 `build/fw/firmware/engine-archives.sha256` for the host tools' `--expect-archive`.
+
+**Sound revision 2** ([mode-compiler.md](../docs/design/mode-compiler.md) §7). The engine plays
+compiled modes: the onset trigger and mark positioning are a mode's structure (rows 27 and 28
+are retired), macro and expression-pedal moves are events, a mode switch is a Trails or FastCut
+Spillover load, and the trim and the effect volume scale only the wet signal. The golden corpus
+(version 7, `golden.json` re-minted for revision 2) takes its structure from 18 committed packages
+(`dsp/tests/golden/presets/*.bsp`, listed in its `MANIFEST`), which every image carries compiled
+in, since the Seed has no file system ([`EmbeddedPackages.h`](../dsp/tests/golden/EmbeddedPackages.h),
+generated from the committed bytes at build time): the parity image renders the corpus from
+them, and the live and bench images take their modes from them.
+
+**Sound revision 3** (the Mix law, [mode-compiler.md](../docs/design/mode-compiler.md) §7.1)
+changes only how Mix blends: the dry stays at unity up to the knob's middle and the wet is at
+unity from it, instead of a linear crossfade, so `set mix 0` is still the clean pass-through and
+`set mix 1` the wet alone. The corpus is version 8, `golden.json` re-minted for it, and its
+packages are re-stamped (their sound and control hashes unchanged). At revision 3 the five images
+build and their engine archives equal the M7 oracle's, built on Windows and on Linux alike; the
+emulated checks of §9 (the golden check and the parity stream under `qemu-arm`) were cut off
+part-way when Docker stopped, every hash that arrived matching the file, and are still to run in
+full.
 
 ## 1. What to flash, in order
 
 Everything goes through Electrosmith's web programmer, **<https://flash.daisy.audio>** (WebUSB:
 Chrome or Edge; Firefox and Safari have no WebUSB). No `dfu-util` is needed.
 
-**App type: `BOOT_QSPI`.** Every image is 210–220 KiB, past the 128 KiB internal flash, so the images
+**App type: `BOOT_QSPI`.** Every image is 328–368 KiB, past the 128 KiB internal flash, so the images
 run from the 8 MB QSPI flash and are loaded by the **Daisy bootloader**, which lives in the internal
 flash. `grain-engine.md` §7 plans the pedal this way. The engine's code and constants, the 64-bit
 division helpers it calls and the firmware's `memcpy`/`memmove`/`memset` are copied into the 64 KiB
 ITCM at boot, as profile §7.1 asks for the inner loops; everything else executes in place from QSPI
-behind the 16 KiB I-cache.
+behind the 16 KiB I-cache. That excludes the engine archive's members that never run in the audio
+path: the package decoder, encoder and SHA-256 (a producer decodes a package before it stages the
+state) and the test-signal generator (the harness's input). At sound revision 2 the archive's
+linked code would not fit the 64 KiB with them (the parity image needed 76,871 bytes). The
+engine's shared tables (C++17 inline variables such as `kParamTable`) go to ITCM whichever object
+supplied the copy the linker kept, which is often a golden-harness object's, not the archive's
+(`_bs_engine_comdat` in [`CMakeLists.txt`](CMakeLists.txt), checked by
+[`cmake/ItcmCheck.cmake`](cmake/ItcmCheck.cmake)).
 
 **Two DFU devices.** In DFU mode the Seed shows up as one of two USB devices with the same ID
 (`0483:DF11`), and the web page's device picker tells them apart by name:
@@ -134,27 +162,33 @@ python tools/hil/parity_check.py --port auto --save parity-rev7.log --expect-arc
 ```
 
 The tool asks the device for its hello line (board, clock, FP registers, caches, archive hash,
-last fault), sends `run`, and prints each preset as it arrives. The device renders all 13 vectors
-and 28 presets (639 s of audio) offline in its main loop, never in the audio callback: one engine in
+last fault), sends `run`, and prints each preset as it arrives. The device renders all 14 vectors
+and 33 presets (709 s of audio) offline in its main loop, never in the audio callback: one engine in
 the pedal's memory placement (Hot arena and Engine object in DTCM, Warm in AXI SRAM, Bulk in SDRAM),
 restarted with `LoadPreset(…, Exact)` for every render, 48-frame blocks, the integer test signal as
-input, events through the engine's `EventQueue` — the golden harness's own code
+input, events through the engine's `EventQueue`, the packages decoded from the image's own copies —
+the golden harness's own code
 ([`dsp/tests/golden/ParityStream.h`](../dsp/tests/golden/ParityStream.h)), not a copy. It takes
-roughly 4–8 minutes (the profile estimates 1.3–3.1× realtime); the stream carries DWT cycles per
+roughly 4–9 minutes (the profile estimates 1.3–3.1× realtime); the stream carries DWT cycles per
 preset, so the tool prints the measured realtime factor too. It ends with
 
 ```text
-VERDICT: PASS - 28 preset(s) match golden.json bit for bit (sound revision 1, whole corpus)
+VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match MANIFEST (sound revision 3, whole corpus)
 ```
 
-or `FAIL` with the first differing second of every preset that differs (exit 1). The tool checks
-the stream as strictly as the hashes: every line is numbered (format
-`brainscape-parity-stream/2`), and a gap, a line that is not a JSON object or lacks a key, a
-preset or vector count that disagrees with `parity-end`, a `resync` notice from the device's USB
-serial, or a missing or nonzero `droppedBytes` on the device's final `idle` line gives
-`VERDICT: FAIL (TRANSPORT)` (exit 2): the stream was damaged on the way, which says nothing about
-parity; run it again. It also fails a run whose header is not the configuration the command asked
-for, and, with `--expect-archive`, a device whose engine archive is not the one the build hashed.
+or `FAIL` with the first differing second of every preset that differs (exit 1). Before the
+vectors the stream lists every package the corpus loads, as the image decoded it (its package,
+sound and control hashes): they must be exactly `dsp/tests/golden/presets/MANIFEST`'s, and every
+preset that starts from a package must name it with the sound and control hashes `golden.json`
+records (mode-compiler.md §8.3, the package rule). The tool checks the stream as strictly as the
+hashes: every line is numbered (format `brainscape-parity-stream/3`), and a gap, a line that is
+not a JSON object or lacks a key, a preset, vector or package count that disagrees with
+`parity-end`, a `resync` notice from the device's USB serial, or a missing or nonzero
+`droppedBytes` on the device's final `idle` line gives `VERDICT: FAIL (TRANSPORT)` (exit 2): the
+stream was damaged on the way, which says nothing about parity; run it again. It also fails a
+run whose header is not the configuration the command asked for, and, with `--expect-archive`, a
+device whose engine archive is not the one the build hashed. A revision-1 parity image (format
+`/2`) fails the format check: flash the image built from this tree.
 
 Then repeat in the other two configurations worth having on silicon:
 
@@ -188,8 +222,8 @@ and where `memset` runs. The suites (each also a command):
 | `memory` | `PlanMemory` against the arenas, and the linker map | — |
 | `micro` | Dependent `vmul`/`vadd`/`vsub`/`vdiv`/`vsqrt` chains with normal and subnormal operands and results at FZ = 0, including a `vadd`/`vsub` pair whose addend is a nonzero subnormal (the `+0` case may take a zero-operand shortcut); the same programs at FZ = 1, which flushes the operands to zero (so that column times zero arithmetic, not subnormals under FZ); the engine's flush idiom (`FlushTiny`) against no flush and the two-compare form, on 8 independent one-poles (instruction-level parallelism hides the flush: a lower bound) and on 1 recursive one-pole (the flush on the critical path every sample: an upper bound) | profile §4.2 test a, §8.3 Q1, Q5 |
 | `restart` | `Restart` after rendering (the 16 MiB ring, post delay and reverb clear) and on a clean engine, `LoadPreset(Exact)`, `Reset`, `ClearHistory`, `Init`, and a raw 16 MiB SDRAM clear through the firmware's `memset` and through an 8-register `STM` loop (the core's floor without DMA) | §8.3 Q9, the `Restart` half: the watermark (§5.8) does not exist yet |
-| `blocks` | Cycles per block, mean/p50/p90/p99/p99.9/max, **warm and cold caches** (cold: D-cache cleaned and invalidated and I-cache invalidated before every block, interrupts off), for engine defaults, the design's nominal row, the pessimistic configuration (64 voices at +24 st with full cents spread, reverse, spray, jitter, feedback 1.05, every post stage, onset grains at marks) with 20 ms and 1 ms grains, **`pess_events`** (the pessimistic configuration under parameter sweeps every block — cutoff, pitch, grain size — four footswitch triggers every 250 ms, a freeze toggle every 1.5 s and a Spillover load every second, all through the `EventQueue`), and four corpus presets | grain-engine.md §8, profile §7.2; §7.3's explicit-FMA rule (below) |
-| `stages` | The pessimistic configuration with one stage switched off at a time: each stage's mean cost by difference (the engine has no per-stage counters, and none were added: that would be instrumentation in `dsp/`) | where the cycles go |
+| `blocks` | Cycles per block, mean/p50/p90/p99/p99.9/max, **warm and cold caches** (cold: D-cache cleaned and invalidated and I-cache invalidated before every block, interrupts off), for engine defaults, the design's nominal row, the pessimistic configuration (64 voices at +24 st with full cents spread, reverse, spray, jitter, feedback 1.05, every post stage, and the mode of the corpus package `strum_marks`: onset grains at marks) with 20 ms and 1 ms grains, **`pess_events`** (the pessimistic configuration under parameter sweeps every block — cutoff, pitch, grain size — four footswitch triggers every 250 ms, a freeze toggle every 1.5 s and a Spillover load every second, each a mode switch, alternately a FastCut to the nominal preset in the default mode and Trails back, all through the `EventQueue`), and four corpus presets (`dense_1ms` with its package's mode) | grain-engine.md §8, profile §7.2; §7.3's explicit-FMA rule (below) |
+| `stages` | The pessimistic configuration with one stage switched off at a time (the onset grains and marks by loading the default mode instead): each stage's mean cost by difference (the engine has no per-stage counters, and none were added: that would be instrumentation in `dsp/`) | where the cycles go |
 | `births` | 48 and 16 voices with 1 ms vs 20 ms grains: equal voices rendered per block, 48 vs 2.4 births per block. The difference is the birth cost at the maximum rate plus the short grains' ring-read locality, so it bounds `ScheduleGrain` from above | an upper bound for grain-engine §8's `ScheduleGrain` row |
 | `tail` | 123 s of the golden tail vector (`strums_tail_123s/tail_post_fb`) and 2 s of noise then 120 s of silence through the pessimistic configuration: statistics for the active part and for the **silent tail** separately, and the output hash | §4.2 test b |
 
@@ -271,19 +305,27 @@ python tools/hil/console.py --port auto list "preset 5" stats
 
 | Command | Effect |
 | --- | --- |
-| `list` | The eight presets: engine defaults, clean delay, strum marks, pitch/reverse/spray, freeze marks, the ambient tail preset, an octave shimmer with onset grains, 1 ms glitch grains — the parameters of musically useful golden-corpus presets, taken from the corpus at boot |
-| `preset N` | A **Spillover** load as a stamped event: trails, grains and history carry over (real time) |
+| `list` | The eight presets: engine defaults, clean delay, strum marks, pitch/reverse/spray, freeze marks, the ambient tail preset, an octave shimmer with onset grains at marks, 1 ms glitch onset grains — musically useful golden-corpus presets, built from the corpus at boot: their parameters, and their package's leaves, mode and CTRL when they start from one (each row says whether it plays onset grains and marks) |
+| `preset N` | A **Spillover** load as a stamped event: trails, grains and history carry over (real time); a change of mode is a Trails switch |
+| `preset N cut` | A Spillover load with **FastCut**: the grains sounding at the load fade out over 128 frames (2.7 ms) |
 | `preset N exact` | An **Exact** load: the output is muted while `Restart` clears 16 MiB; the reply gives how long it took |
-| `set NAME VALUE` | A parameter event; NAME is a descriptor name (`layer0.size_ms`), a ParamId (`GrainSizeMs`) or an alias (`delay mix feedback out size density spray pitch spread reverse jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix reverbtime reverbmix cutoff res morph sens onset marks`); the reply echoes the canonical value and its bits |
+| `set NAME VALUE` | A parameter event; NAME is a descriptor name (`layer0.size_ms`), a ParamId (`GrainSizeMs`) or an alias (`delay mix feedback trim out size density spray pitch transpose spread reverse jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix reverbtime reverbmix cutoff res morph sens volume`); the reply echoes the canonical value and its bits. `trim` (`wet_trim_db`) and `volume` (the effect volume, `global.effect_volume_db`, a device setting that every load keeps) scale only the wet signal; `cutoff 40` kills it |
+| `onset on`/`off`, `marks on`/`off` | The **mode structure**: onset-triggered grains, and layer 0 positioned at marks. A Spillover load of the current parameters (as last set) with the mode of a corpus package that differs from the default mode in exactly that (`lone_busy`, `reverse_mark_aging`, `strum_marks`; neither: the default mode), checked at boot. `set onset V` and `set marks V` (V ≥ 0.5 is on, as sessions migrate rows 27 and 28) do the same |
+| `macro NAME POS` | A **macro move** (`activity repeats shape time space filter aux1 aux2`, position 0–1): the playing mode's targets of that macro, as the pedal's knobs will send them |
+| `expression POS` | The **expression pedal** (0–1): the playing preset's assignments; nothing without any |
 | `freeze on`, `freeze off`, `trigger` | Freeze and footswitch-trigger events |
-| `params`, `get` | Every parameter with range and current value |
-| `stats [reset]` | **CPU load**: DWT cycles of `Engine::Process` per callback, mean and peak, as a share of the 48-frame budget; blocks over budget; onsets; event-queue refusals |
+| `params`, `get` | Every parameter (the 26 leaves and the effect volume) with range and current value |
+| `stats [reset]` | **CPU load**: DWT cycles of `Engine::Process` per callback, mean and peak, as a share of the 48-frame budget; blocks over budget; onsets; mode switches; event-queue refusals; the structure playing |
 | `info`, `dfu` | The hello line; reboot into the bootloader |
 
 Every change reaches the engine as a frame-stamped event through its `EventQueue`, stamped at the
 next block boundary (a late stamp applies at the start of the block that takes it), exactly as the
 pedal's control loop will deliver them (profile §5.11). The engine runs the pedal's configuration:
 48 kHz, `maxBlockSize` 48, the 2²² ring, stereo input. The LED flashes on every detected onset.
+The image keeps its own copy of what it sent (the last load, then every parameter, macro and
+pedal move, evaluated with the engine's own `EvalMacro` and `EvalExpression`), from which `onset`
+and `marks` build their load. The presets and structures are checked on every host ctest run too
+(`firmware_live_presets`: each loads exactly, alone and with each structure).
 
 ## 6. Hardware checklist
 
@@ -302,8 +344,12 @@ pedal's control loop will deliver them (profile §5.11). The engine runs the ped
 - [ ] Bench: `run` on all three bench builds, none INCOMPLETE; keep the logs (`--save`) for the
       decisions of profile §8.3 (Q1 subnormals and the §4.2 rule, Q5 flush form, the `Restart`
       half of Q9, §7.3's explicit-FMA rule) and §7.1 (ITCM against XIP).
-- [ ] Live: clean pass-through at `set mix 0`; presets switch without clicks (Spillover) and with
-      a mute (exact); `stats` mean and peak under 100 % for every preset; the LED follows plucks.
+- [ ] Live: clean pass-through at `set mix 0`; presets switch without clicks (Spillover, and
+      `preset N cut`) and with a mute (exact); `onset on` and `marks on` audibly change the
+      texture (grains born on each pluck; grains read from the plucks' attacks) and `stats`
+      counts each as a mode switch; `macro time 0.9` lengthens the delay; `cutoff 40` and
+      `volume -24` take the wet down, never the dry; `stats` mean and peak under 100 % for every
+      preset and structure.
 - [ ] Look for USB dropouts during a long render (a `resync` line, a nonzero `droppedBytes`) and
       for audio clicks while typing commands (the USB interrupts run below the audio DMA's
       priority).
@@ -332,7 +378,14 @@ nothing that runs before the preinit hook has filled ITCM — libDaisy's `Reset_
 `__libc_init_array`, the hook itself and the SysTick path the Daisy bootloader leaves running — may
 call into ITCM. libDaisy's startup file is compiled with `-fno-tree-loop-distribute-patterns` for
 that ([`cmake/LibDaisy.cmake`](cmake/LibDaisy.cmake)): otherwise GCC turns its `.data` and `.bss`
-loops into calls to `memcpy` and `memset`, which an ITCM image keeps in ITCM.
+loops into calls to `memcpy` and `memset`, which an ITCM image keeps in ITCM. An ITCM image is
+also checked for the engine's COMDAT sections ([`cmake/ItcmCheck.cmake`](cmake/ItcmCheck.cmake)):
+an inline table such as `kParamTable`, or a template instantiation, is carried by every object
+that uses it, and the linker keeps the first copy it reads, often a golden-harness object's,
+which the per-archive patterns of the linker script would leave in QSPI beside the ITCM code
+that reads it. The linker script names the engine's tables so that the kept copy goes to ITCM,
+and the check fails the build when any COMDAT section of the archive's ITCM members lands
+elsewhere (it flags the four tables when they are not named, as a negative control).
 
 The configure step downloads the pinned libDaisy (below) into the build tree;
 `-DFETCHCONTENT_SOURCE_DIR_LIBDAISY=<checkout>` builds offline from a libDaisy checkout at that
@@ -343,22 +396,35 @@ oracle build's byte for byte, and runs the static audits on the firmware build.
 
 ### Sizes (`.bin`, all flashed to QSPI at `0x90040000`)
 
+At sound revision 3 (revision 1's in brackets). At revision 2 the images grew by the 18 embedded
+corpus packages (77,768 bytes), the package decoder, validator and encoder, the macro evaluator and
+the engine's mode runtime; revision 3's Mix law added 40–56 bytes to each.
+
 | Image | Bytes | ITCM used (of 64 KiB) |
 | --- | --- | --- |
-| `brainscape_parity.bin` | 223,312 | 42.9 KiB |
-| `brainscape_bench.bin` | 220,692 | 42.8 KiB |
-| `brainscape_bench_xip.bin` | 220,552 | 0 |
-| `brainscape_bench_hooks.bin` | 221,068 | 43.1 KiB |
-| `brainscape_live.bin` | 214,616 | 38.9 KiB |
+| `brainscape_parity.bin` | 337,896 (223,312) | 54.0 KiB, 84.4 % (42.9 KiB) |
+| `brainscape_bench.bin` | 335,924 (220,692) | 53.9 KiB, 84.2 % (42.8 KiB) |
+| `brainscape_bench_xip.bin` | 335,744 (220,552) | 0 |
+| `brainscape_bench_hooks.bin` | 336,428 (221,068) | 54.3 KiB, 84.9 % (43.1 KiB) |
+| `brainscape_live.bin` | 376,392 (214,616) | 56.0 KiB, 87.5 % (38.9 KiB) |
+
+The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostChain` 11.0,
+`Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`,
+and the shared tables `kParamTable`, `kLeafParams`, `kLeafOrdinal` and `kDefaultModeHash`,
+2.5 KiB, that the parity and bench images would otherwise take from a harness object in QSPI),
+libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetParam`,
+`ModeSwitches` and the rest of what the console reads) and has about 8 KiB left: a wave that grows the
+engine past that moves `Validate` (it runs once per load) out of ITCM next, or places the engine
+by function rather than by object.
 
 ### Memory map
 
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
-| QSPI flash `0x90040000` | the image: vector table, code, constants, initial data | 218 KiB |
-| ITCM | the engine's code and constants, libgcc's helpers and the firmware's `mem*` functions, copied at boot | 43 KiB of 64 |
-| DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (7 KiB), the main stack (32 KiB reserved at the top, linker-checked) | 33 KiB + stack |
-| AXI SRAM (D1) | Warm arena (136 KiB; 126.6 KiB asked), USB serial rings (33 KiB), `.data` and `.bss` | 193 KiB of 512 |
+| QSPI flash `0x90040000` | the image: vector table, code, constants (the 18 corpus packages among them, 76 KiB), initial data, ITCM's load image | 330 KiB |
+| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 54 KiB of 64 |
+| DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (an 8 KiB slot; `sizeof(Engine)` is 7,168 bytes at sound revision 2, `kEngineImplBytes`), the main stack (32 KiB reserved at the top, linker-checked) | 34 KiB + stack |
+| AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
 | Backup SRAM | libDaisy's `boot_info` (the Daisy bootloader's handshake, kept first: linker-checked), then the fault record | 148 B |
 | SDRAM | Bulk arena (17 MiB; 16.73 MiB asked: the 2²² ring and the post delay), the bench's per-block results, the heap (the harness's containers only, never engine state) | 17 MiB + heap |
@@ -414,11 +480,12 @@ lock masks interrupts because libDaisy's USB stack allocates inside the USB inte
 One text command per line to the device; one JSON object per line back, integers and strings only
 (`brainscape-hil/1`). Every image answers `info` with `{"type":"hello"}`: image, build (commit,
 dirty, app type, libDaisy, toolchain, engine archive SHA-256s, the engine's `BuildToolchain()`),
-board (revision, clocks, boot region, bootloader, audio configuration), FP registers, `cpu` (cache
-bits, MPU regions, QSPI registers, where `memset` runs), `lastFault` (or null), `uptimeMs` and the
-memory map. The parity image streams `parity-begin`, `vector`, `preset` and `parity-end` lines
-(`brainscape-parity-stream/2`: every line numbered by `seq`; documented in `ParityStream.h`) and then
-`idle` (with `droppedBytes`, `droppedLines`); the bench streams `bench-begin`, `memory`, `micro`,
+sound revision, board (revision, clocks, boot region, bootloader, audio configuration), FP
+registers, `cpu` (cache bits, MPU regions, QSPI registers, where `memset` runs), `lastFault` (or
+null), `uptimeMs` and the memory map. The parity image streams `parity-begin`, `package`, `vector`,
+`preset` and `parity-end` lines (`brainscape-parity-stream/3`: every line numbered by `seq`;
+documented in `ParityStream.h`) and then `idle` (with `droppedBytes`, `droppedLines`); the live
+image answers `mode`, `macro` and `expression` besides its revision-1 replies; the bench streams `bench-begin`, `memory`, `micro`,
 `flush-micro`, `restart`, `blocks`, `stage`, `births`, `tail` and `bench-end` (with the drop counts).
 Any image may emit `{"type":"resync",…}` after its USB serial lost lines; errors are
 `{"type":"error","message":...}`.
@@ -426,30 +493,46 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
 ## 9. Verified without hardware
 
 - All five images build with `-Werror` and fit their regions, and pass the boot-path check
-  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control). The engine
+  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control); the four
+  ITCM images pass `ItcmCheck.cmake` (6 of 6 COMDAT sections in ITCM), and no word in their
+  `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
+  `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (`4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`). (On Linux the same pinned toolchain gave the
-  same archive earlier, in Docker, whose CMake 3.22 needed libDaisy's CMP0135 line removed for that
-  test only.)
+  (sound revision 3: `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
+  `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
+  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1, 2 and 3, to the M7 oracle
+  built on Linux with the same pinned toolchain (in
+  Docker, whose CMake 3.22 is too old for libDaisy's, so the images themselves build on Windows).
+- The packages the images carry are the committed ones: the table is generated from
+  `presets/MANIFEST` and the `.bsp` files at build time, the parity stream lists every package
+  as the program decoded it, and `parity_check.py` compares those hashes with `MANIFEST`.
 - The static audits pass on the firmware build: no import outside the allowlist (no libm), no
-  fused instruction in either engine archive, no forbidden flag in any of the 242 translation
-  units (libDaisy's included), no GOT relocation. The only fused instructions in the images are in
+  fused instruction in either engine archive, no forbidden flag in any of the 256 translation
+  units (libDaisy's included; 242 at sound revision 1), no GOT relocation. The only fused instructions in the images are in
   the prebuilt libgcc's float-to-`uint64` helpers and newlib's `strtod` (the live image's `set`
   parsing), outside the engine.
 - `platform/MemFunctions.c`, built with the firmware's flags, matches a byte-loop reference in
   119,748 cases under `qemu-arm -cpu cortex-m7` (every size to 300 bytes at every source and
   destination alignment, `memmove` overlaps from −70 to +70 bytes, `memset` with sign-bit and
   out-of-range values, 60 KB copies); its disassembly uses no floating-point register.
-- The parity stream's code, built for the Cortex-M7 with the oracle's syscall shim and run under
-  `qemu-arm -cpu cortex-m7` **in the parity image's own placement** (`--placement`: the firmware's
-  arena sizes and alignments, `Renderer(cfg, Placement)`, a second renderer over the same storage),
-  matches `golden.json` on all 28 presets with `maxBlockSize` 48 and 512, and the hostile FP run on
-  the quick set, checked by `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull
-  request). On the host the same check is the ctests `golden_parity_stream_mb512` and `_mb48`.
-- `parity_check.py` was run on 17 damaged streams (lost, spliced, truncated and renamed lines, a
-  missing `parity-end`, a `resync` notice, device captures without or with a lossy `idle` line, a
-  wrong configuration, a wrong hash, a wrong archive, the old format) with the intended verdict and
-  exit status each time; `bench_report.py` and `console.py` on synthetic logs only.
+- The parity stream's code, built for the Cortex-M7 with the oracle's syscall shim, the packages
+  compiled in as the image has them, and run under `qemu-arm -cpu cortex-m7` **in the parity
+  image's own placement** (`--placement`: the firmware's arena sizes and alignments,
+  `Renderer(cfg, Placement)`, a second renderer over the same storage), matches the revision-2
+  `golden.json` on all 33 presets, with their package hashes, and `MANIFEST` on all 18 packages,
+  with `maxBlockSize` 48 and 512, and the hostile FP run on the quick set, checked by
+  `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull request). On the host the
+  same check is the ctests `golden_parity_stream_mb512` and `_mb48`.
+- `parity_check.py` was run on 17 damaged streams at revision 1 (lost, spliced, truncated and
+  renamed lines, a missing `parity-end`, a `resync` notice, device captures without or with a lossy
+  `idle` line, a wrong configuration, a wrong hash, a wrong archive, the old format) and, at
+  revision 2, on streams with a package line lost, a package missing, a package not in `MANIFEST`,
+  a package or a preset's package hash changed, a preset's package renamed, a counter changed and
+  the revision-1 format, with the intended verdict and exit status each time; `bench_report.py`
+  and `console.py` on synthetic logs only.
+- The live image's presets and structures load exactly on the host (`firmware_live_presets`), and
+  its structure check refuses a package with other macros (`switch_onset`) in place of
+  `lone_busy`.
 - Not verifiable without the board: anything electrical, the bootloader handoff, the fault
   handler's LED and reset, USB enumeration and throughput, the SAI/codec path, and every cycle
   count.

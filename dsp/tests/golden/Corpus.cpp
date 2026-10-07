@@ -2,9 +2,15 @@
 
 #include <algorithm>
 
+#include "brainscape/ModeEval.h"
+
 // Parameter values are float literals, or an integer converted and then put through
 // at most ONE float operation: a single IEEE operation rounds the same everywhere
 // and cannot be contracted, so the harness's own flags never change a script.
+//
+// Structure (the onset source, mark positioning, macros, CTRL) comes only from committed
+// packages (mode-compiler.md §4.4, §10.3): presets/NAME.json, compiled by bspc to NAME.bsp,
+// which the harness decodes. A preset with a package names it; its leaves are the document's.
 namespace brainscape::golden {
 
 namespace {
@@ -24,15 +30,21 @@ PresetCase Preset(const char* name, std::vector<std::pair<ParamId, float>> param
   return p;
 }
 
+// A preset that starts from a committed package (presets/PACKAGE.json): its leaves, mode, CTRL.
+PresetCase PackagePreset(const char* name, const char* package) {
+  PresetCase p;
+  p.name    = name;
+  p.package = package;
+  return p;
+}
+
 // The contract-#1 freeze case of profile §5.7 (pitch 7 st, reverse 0.3, spray 50 ms,
 // POS_MARK, onset trigger): freeze engages at an odd frame with onsets still arriving,
 // so marks newer than the pin position grains (mechanism D1).
 PresetCase FreezeMarks() {
-  PresetCase p = Preset("freeze_marks",
-      {{P::DelayMs, 100.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 60.0f}, {P::Overlap, 0.55f},
-       {P::SprayMs, 50.0f}, {P::PitchSt, 7.0f}, {P::SpreadCents, 20.0f}, {P::ReverseProb, 0.3f},
-       {P::Jitter, 1.0f}, {P::TriggerSens, 0.8f}, {P::OnsetTrigger, 1.0f},
-       {P::PositionSource, 1.0f}});
+  // presets/freeze_marks.json: delay 100 ms, mix 1, size 60 ms, overlap 0.55, spray 50 ms,
+  // +7 st, spread 20 c, reverse 0.3, jitter 1, sensitivity 0.8, onset and mark.
+  PresetCase p = PackagePreset("freeze_marks", "freeze_marks");
   p.script.Freeze(S(4) + 1, true);
   p.script.Freeze(S(11) + 37, false);
   p.require = {{C::Onsets, 10},       {C::FrozenOnsets, 3},  {C::FrozenFrames, S(6)},
@@ -42,21 +54,36 @@ PresetCase FreezeMarks() {
 }
 
 // Every parameter moved every 250 ms at frames off the 48-frame grid, with freeze
-// toggles and footswitch triggers among them (grown from the prototype battery).
+// toggles and footswitch triggers among them (grown from the prototype battery). Until sound
+// revision 2 it toggled rows 27 and 28 too; now that they are structure, every other step is a
+// Spillover load between two modes (presets/mode_onset_marks.json, onset and marks, and the
+// default mode), in both switch styles, before the step's leaves are set again. A load turns
+// freeze off (profile §5.10), so none lands while a freeze is held (steps k % 17 = 6 to 8): each
+// freeze holds its second, as before revision 2.
 PresetCase AutomationOffGrid(int64_t frames) {
   PresetCase p = Preset("automation_offgrid", {});
   Script&    s = p.script;
   int64_t    k = 0;
   for (int64_t base = 0; base < frames; base += S(1) / 4, ++k) {
-    const int64_t f = base + 1 + (k * 37) % 47;  // never a multiple of 48
-    s.Param(f, P::OutTrimDb, I2F((k * 7) % 49 - 24));
+    const int64_t f      = base + 1 + (k * 37) % 47;  // never a multiple of 48
+    const bool    frozen = k % 17 >= 6 && k % 17 <= 8;  // engaged at 5, released at 9
+    if (k > 0 && k % 2 == 0 && !frozen) {  // the mode changes with (k / 2) % 2
+      // FastCut and Trails each into both modes: FastCut at k = 2, 10, 16, 18, 26, ...
+      const SwitchStyle style = k % 8 == 0 || k % 8 == 2 ? SwitchStyle::FastCut : SwitchStyle::Trails;
+      if ((k / 2) % 2 == 1) {
+        s.SpilloverPackage(f, "mode_onset_marks", style);
+      } else {
+        s.Spillover(f, {}, style);
+      }
+    }
+    s.Param(f, P::WetTrimDb, I2F((k * 7) % 49 - 24));
     s.Param(f, P::Feedback, I2F(k % 12) * 0.1f);
     s.Param(f, P::FilterCutoffHz, I2F(100 + 397 * (k % 51)));
     s.Param(f, P::FilterRes, I2F(k % 11) * 0.1f);
     s.Param(f, P::FilterMorph, I2F(k % 13) * 0.25f);
     s.Param(f, P::Overlap, I2F(k % 7) / 7.0f);
     s.Param(f, P::GrainSizeMs, I2F(5 + 37 * (k % 13)));
-    s.Param(f, P::PitchSt, I2F((k * 5) % 49 - 24));
+    s.Param(f, P::TransposeSt, I2F((k * 5) % 49 - 24));
     s.Param(f, P::SpreadCents, I2F((k * 3) % 101));
     s.Param(f, P::Jitter, I2F(k % 5) * 0.25f);
     s.Param(f, P::SprayMs, I2F(25 * (k % 9)));
@@ -75,49 +102,44 @@ PresetCase AutomationOffGrid(int64_t frames) {
     s.Param(f, P::ReverbMix, I2F((k + 1) % 3) * 0.5f);
     s.Param(f, P::TriggerSens, I2F(k % 11) * 0.1f);
     s.Param(f, P::Mix, I2F(k % 5) * 0.25f);
-    s.Param(f, P::OnsetTrigger, I2F(k % 2));
-    s.Param(f, P::PositionSource, I2F((k / 2) % 2));
     if (k % 17 == 5) s.Freeze(f, true);
     if (k % 17 == 9) s.Freeze(f, false);
     if (k % 6 == 3) s.Trigger(f + 5);
   }
-  p.require   = {{C::Events, 1000},     {C::OffGridEvents, 1000}, {C::Triggers, 5},
-                 {C::FreezeEngages, 2}, {C::Onsets, 5}};
+  p.require   = {{C::Events, 1000},       {C::OffGridEvents, 1000}, {C::Triggers, 5},
+                 {C::FreezeEngages, 3},   {C::FrozenFrames, S(2)},  {C::FrozenOnsets, 3},
+                 {C::Onsets, 5},          {C::Loads, 18},           {C::ModeSwitches, 17}};
+  p.ablate    = {Feature::ModeSwitch, Feature::FastCut};
   p.invariant = {Invariance::HostileFpEnv};
   return p;
 }
 
-// Strum-style marks and onset triggering, the starting point of the load chain. A function,
-// not a global: the M7 harness has no static destructors (no __dso_handle).
-ParamList StrumMarks() {
-  return {{P::DelayMs, 250.0f},       {P::Feedback, 0.5f},    {P::GrainSizeMs, 80.0f},
-          {P::Overlap, 0.6f},         {P::Jitter, 0.5f},      {P::SprayMs, 30.0f},
-          {P::ReverseProb, 0.2f},     {P::OnsetTrigger, 1.0f}, {P::PositionSource, 1.0f},
-          {P::TriggerSens, 0.6f}};
-}
-
 // Spillover loads as stamped events at odd frames (profile §5.10, §5.11): history, grains,
 // marks, pending triggers and the scheduler phase carry over each load, the random-number
-// epoch restarts at it, and events after a load at its frame apply after it.
+// epoch restarts at it, and events after a load at its frame apply after it. It starts from
+// Strum-style marks and onset triggering (presets/strum_chain.json: delay 250 ms, feedback 0.5,
+// size 80 ms, overlap 0.6, jitter 0.5, spray 30 ms, reverse 0.2, sensitivity 0.6, onset and
+// mark), switches to the default mode with the first load and back with the last.
 PresetCase SpilloverChain() {
-  PresetCase p = Preset("spillover_chain", StrumMarks());
+  PresetCase p = PackagePreset("spillover_chain", "strum_chain");
   Script&    s = p.script;
   // Into a reverse loop above unity feedback, so the trails are loud when the next load lands.
   s.Spillover(S(2) + 4321,
       {{P::DelayMs, 700.0f}, {P::Feedback, 1.05f}, {P::GrainSizeMs, 120.0f}, {P::Overlap, 0.3f},
-       {P::Jitter, 0.0f}, {P::SprayMs, 0.0f}, {P::PitchSt, -12.0f}, {P::ReverseProb, 0.5f},
+       {P::Jitter, 0.0f}, {P::SprayMs, 0.0f}, {P::TransposeSt, -12.0f}, {P::ReverseProb, 0.5f},
        {P::DelayMix, 0.4f}, {P::DelayTimeMs, 333.0f}, {P::DelayFb, 0.5f}});
   s.Trigger(S(5) + 1);
   s.Spillover(S(5) + 1,
       {{P::GrainSizeMs, 5.0f}, {P::Overlap, 1.0f}, {P::Jitter, 1.0f}, {P::SprayMs, 200.0f},
-       {P::PitchSt, 7.0f}, {P::PanSpread, 1.0f}, {P::ReverbMix, 0.5f}, {P::ReverbTime, 0.8f},
+       {P::TransposeSt, 7.0f}, {P::PanSpread, 1.0f}, {P::ReverbMix, 0.5f}, {P::ReverbTime, 0.8f},
        {P::Feedback, 0.3f}});
   s.Param(S(5) + 1, P::Mix, 0.8f);
   s.Param(S(5) + 1, P::FilterCutoffHz, 1500.0f);
-  s.Spillover(S(8) + 77, StrumMarks());
+  s.SpilloverPackage(S(8) + 77, "strum_chain");
   s.Trigger(S(8) + 77);
   p.require   = {{C::Loads, 3, 3},         {C::Triggers, 2, 2}, {C::Events, 7},
-                 {C::OffGridEvents, 7},    {C::Onsets, 10},     {C::FbAbove1Frames, S(2)}};
+                 {C::OffGridEvents, 7},    {C::Onsets, 10},     {C::FbAbove1Frames, S(2)},
+                 {C::ModeSwitches, 2, 2}};
   p.ablate    = {Feature::Spillover};
   p.invariant = {Invariance::HostileFpEnv};
   return p;
@@ -127,26 +149,19 @@ PresetCase SpilloverChain() {
 // marks and a Spillover epoch, has two triggers still due and feedback ringing through
 // every post stage, and must come back exactly as a fresh engine with those values.
 PresetCase RestartKeptParams() {
-  const ParamList base = {
-      {P::DelayMs, 180.0f},     {P::Feedback, 0.8f},       {P::GrainSizeMs, 70.0f},
-      {P::Overlap, 0.7f},       {P::SprayMs, 40.0f},       {P::PitchSt, 5.0f},
-      {P::ReverseProb, 0.3f},   {P::Jitter, 0.6f},         {P::OnsetTrigger, 1.0f},
-      {P::PositionSource, 1.0f}, {P::DelayMix, 0.3f},      {P::DelayTimeMs, 420.0f},
-      {P::DelayFb, 0.6f},       {P::ReverbMix, 0.3f},      {P::ReverbTime, 0.7f}};
-  ParamList loaded = base;
-  loaded.emplace_back(P::PitchSt, -7.0f);
-  loaded.emplace_back(P::GrainSizeMs, 40.0f);
-  loaded.emplace_back(P::Feedback, 0.9f);
-  PresetCase p = Preset("restart_kept_params", base);
+  // presets/restart_kept.json: delay 180 ms, feedback 0.8, size 70 ms, overlap 0.7, spray 40 ms,
+  // +5 st, reverse 0.3, jitter 0.6, onset and mark, post delay 0.3 at 420 ms with 0.6, reverb
+  // 0.3 at 0.7; restart_kept_loaded.json the same at -7 st, 40 ms and feedback 0.9.
+  PresetCase p = PackagePreset("restart_kept_params", "restart_kept");
   Script&    s = p.script;
   s.Param(S(1) + 17, P::DelayMs, 333.0f);
   s.Freeze(S(2) + 101, true);
-  s.Spillover(S(3) + 55, loaded);
+  s.SpilloverPackage(S(3) + 55, "restart_kept_loaded");
   s.Param(S(3) + 2000, P::Mix, 0.7f);
   s.Freeze(S(4) + 7, true);
   for (int i = 0; i < 3; ++i) s.Trigger(S(6) + 9);  // one per frame from S(6) + 9
   s.Restart(S(6) + 10);
-  s.Param(S(6) + 10, P::PitchSt, 12.0f);  // frame 0 of the restarted timeline
+  s.Param(S(6) + 10, P::TransposeSt, 12.0f);  // frame 0 of the restarted timeline
   s.Freeze(S(9) + 3, true);
   s.Trigger(S(10) + 5);
   p.require   = {{C::Restarts, 1, 1},     {C::Loads, 1, 1},  {C::Triggers, 4, 4},
@@ -163,15 +178,160 @@ PresetCase ExactLoadMid() {
       {{P::Feedback, 1.1f}, {P::ReverseProb, 1.0f}, {P::DelayMs, 300.0f}, {P::GrainSizeMs, 100.0f},
        {P::Overlap, 0.25f}, {P::SprayMs, 0.0f}, {P::Jitter, 0.0f}, {P::WindowSustain, 1.0f},
        {P::WindowSmooth, 0.0f}, {P::PanSpread, 0.0f}});
-  p.script.ExactLoad(S(7) + 12345,
-      {{P::GrainSizeMs, 30.0f}, {P::Overlap, 0.9f}, {P::Jitter, 1.0f}, {P::SprayMs, 60.0f},
-       {P::PitchSt, 12.0f}, {P::SpreadCents, 30.0f}, {P::OnsetTrigger, 1.0f},
-       {P::PositionSource, 1.0f}, {P::ModDepth, 0.5f}, {P::FilterCutoffHz, 2500.0f},
-       {P::FilterMorph, 1.0f}});
+  // presets/exact_load_marks.json: size 30 ms, overlap 0.9, jitter 1, spray 60 ms, +12 st,
+  // spread 30 c, onset and mark, mod depth 0.5, a band-pass at 2.5 kHz.
+  p.script.ExactLoadPackage(S(7) + 12345, "exact_load_marks");
   p.script.Param(S(7) + 12345, P::Feedback, 0.6f);
   p.require   = {{C::Restarts, 1, 1}, {C::FbAbove1Frames, S(7)}, {C::Onsets, 10}};
   p.ablate    = {Feature::Restart};
   p.invariant = {Invariance::RestartTail};
+  return p;
+}
+
+// ── Sound revision 2: macros, expression, mode switches, the wet kill (mode-compiler.md
+// §10.3). Every event is off the 48-frame grid: bases are multiples of 48 plus 1-47.
+
+// Every macro swept from 0 to 1 and back, one move every 104 blocks (presets/macro_sweep.json:
+// the six default macros and two auxiliary ones, with reversed ranges, curves below and above
+// 1 and an in_range window), the Filter macro through the wet kill at 0; and a SetParam and a
+// MacroMove on one leaf at one frame, in both orders: the later one wins (profile §5.11).
+PresetCase MacroSweep() {
+  PresetCase p = PackagePreset("macro_sweep", "macro_sweep");
+  Script&    s = p.script;
+  for (int64_t k = 0; k < 112; ++k) {
+    const int64_t f     = S(1) / 2 + 4992 * k + 1 + (k * 29) % 47;
+    const int64_t j     = k / 8;  // the macro's j-th move: up in sevenths, then down
+    const auto    macro = static_cast<ParamId>(static_cast<uint32_t>(P::MacroActivity) + k % 8);
+    s.Macro(f, macro, I2F(j <= 7 ? j : 14 - j) / 7.0f);
+  }
+  s.Param(S(3) + 777, P::Feedback, 0.8f);
+  s.Macro(S(3) + 777, P::MacroRepeats, 0.25f);
+  s.Macro(S(9) + 555, P::MacroRepeats, 0.9f);
+  s.Param(S(9) + 555, P::Feedback, 0.1f);
+  p.require   = {{C::MacroMoves, 114, 114}, {C::Events, 116}, {C::OffGridEvents, 116},
+                 {C::KilledFrames, S(1) / 2}};
+  p.ablate    = {Feature::Macro, Feature::Mode};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// The expression pedal on macros and on leaves (presets/expression.json: CTRL assigns
+// macro.time over 0.1-0.9 at curve 2, post.reverb.mix over 0-0.8, layer0.window.sustain over
+// 0.9-0.2 at curve 0.5 and macro.filter over 1-0.4): heel to toe and back twice, a move every 40
+// blocks; a SetParam after a move at one frame, and one before.
+PresetCase ExpressionPedal() {
+  PresetCase p = PackagePreset("expression", "expression");
+  Script&    s = p.script;
+  for (int64_t k = 0; k < 300; ++k) {
+    const int64_t f = S(1) / 2 + 1920 * k + 1 + (k * 13) % 47;
+    const int64_t t = k % 150;
+    if (k == 200) s.Param(f, P::ReverbMix, 0.9f);  // before the move: the move wins
+    s.Expression(f, I2F(t <= 75 ? t : 150 - t) / 75.0f);
+    if (k == 138) s.Param(f, P::ReverbMix, 0.05f);  // after the move: the SetParam wins
+  }
+  p.require   = {{C::ExpressionEvents, 300, 300}, {C::Events, 302}, {C::OffGridEvents, 302}};
+  p.ablate    = {Feature::Macro, Feature::Mode};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Mode changes are Spillover loads (mode-compiler.md §7.3), here with long dense grains (about
+// 33 voices, so past the 8 Hermite ones): from onsets and marks at unity (presets/
+// switch_marks.json) to the default mode at -5 st with Trails (switch_live.json), to onsets
+// alone at +7 st with FastCut (switch_onset.json), back to marks with FastCut 77 frames later,
+// inside the first fade (each load fades its own grains), the same mode again with another CTRL
+// and FastCut (switch_marks_ctrl.json: no switch, but a cut, and the pedal assigned), onsets
+// with Trails, and the default mode with FastCut and a footswitch trigger at its frame. So the
+// FastCuts fade unity, Hermite and linear grains alike. Each switch package has its own macro
+// table and CTRL (aux1 only in switch_live, aux2 and another Repeats range only in
+// switch_onset), and macro and expression moves follow the loads, some at a load's own frame
+// after it: each evaluates on the mode and CTRL just loaded (§3.4, §7.3 step 3).
+PresetCase ModeSwitchChain() {
+  PresetCase p = PackagePreset("mode_switch", "switch_marks");
+  Script&    s = p.script;
+  s.Macro(S(1) + 4321, P::MacroSpace, 0.4f);
+  s.SpilloverPackage(S(2) + 101, "switch_live", SwitchStyle::Trails);
+  s.Macro(S(2) + 101, P::MacroAux1, 0.8f);  // at the load's frame, after it
+  s.Expression(S(3) + 1234, 0.7f);
+  s.SpilloverPackage(S(4) + 333, "switch_onset", SwitchStyle::FastCut);
+  s.Expression(S(4) + 333, 0.25f);
+  s.Macro(S(4) + 400, P::MacroRepeats, 0.9f);
+  s.SpilloverPackage(S(4) + 410, "switch_marks", SwitchStyle::FastCut);
+  s.Macro(S(5) + 2000, P::MacroAux2, 0.5f);  // switch_marks has no aux2: nothing moves
+  s.SpilloverPackage(S(6) + 5, "switch_marks_ctrl", SwitchStyle::FastCut);
+  s.Expression(S(7) + 777, 0.5f);
+  s.SpilloverPackage(S(8) + 999, "switch_onset", SwitchStyle::Trails);
+  s.Macro(S(8) + 999, P::MacroAux2, 0.7f);
+  s.Expression(S(9) + 3333, 0.9f);
+  s.SpilloverPackage(S(10) + 4, "switch_live", SwitchStyle::FastCut);
+  s.Trigger(S(10) + 4);
+  s.Expression(S(10) + 4, 0.4f);
+  s.Macro(S(11) + 555, P::MacroAux1, 0.3f);
+  p.require   = {{C::Loads, 6, 6},          {C::ModeSwitches, 5, 5}, {C::Triggers, 1, 1},
+                 {C::MacroMoves, 6, 6},     {C::ExpressionEvents, 5, 5},
+                 {C::Onsets, 10},           {C::OffGridEvents, 18}};
+  p.ablate    = {Feature::ModeSwitch,   Feature::FastCut,      Feature::Spillover,
+                 Feature::MarkPosition, Feature::OnsetTrigger, Feature::Macro};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// The wet kill (mode-compiler.md §7.2): into and out of the 40 Hz minimum by SetParam and by
+// the Filter macro (the default mode's, 40 Hz-20 kHz), lone trim and effect-volume changes
+// while killed (they stay muted), and the effect volume, a device setting, scaling the wet
+// only. A high-pass, so 41 Hz, one hertz above the kill, passes nearly everything. The kills by
+// the macro and by the second SetParam run at mix 1, where a killed wet path leaves the output
+// exactly ±0 under a sounding input (mutedFrames): the output shows the kill, not only the
+// script's cutoff target (killedFrames).
+PresetCase WetKillCase() {
+  PresetCase p = Preset("wet_kill",
+      {{P::Mix, 0.5f}, {P::FilterMorph, 2.0f}, {P::FilterCutoffHz, 800.0f}, {P::Feedback, 0.3f},
+       {P::DelayMs, 200.0f}, {P::Jitter, 0.3f}, {P::ReverbMix, 0.3f}});
+  Script& s = p.script;
+  s.Param(S(1) + 13, P::FilterCutoffHz, 40.0f);
+  s.Param(S(2) + 29, P::WetTrimDb, -6.0f);
+  s.Param(S(3) + 7, P::FilterCutoffHz, 41.0f);
+  s.Macro(S(5) + 5, P::MacroFilter, 0.0f);
+  s.Param(S(5) + 5, P::Mix, 1.0f);
+  s.Param(S(6) + 77, P::WetTrimDb, 3.0f);
+  s.Macro(S(7) + 9, P::MacroFilter, 1.0f);
+  s.Param(S(7) + 9, P::Mix, 0.5f);
+  s.Param(S(8) + 1, P::EffectVolumeDb, -12.0f);
+  s.Param(S(9) + 33, P::FilterCutoffHz, 40.0f);
+  s.Param(S(9) + 33, P::Mix, 1.0f);
+  s.Param(S(10) + 3, P::EffectVolumeDb, 0.0f);
+  s.Param(S(11) + 11, P::FilterCutoffHz, 20000.0f);
+  s.Param(S(11) + 11, P::Mix, 0.5f);
+  p.require   = {{C::KilledFrames, S(5)}, {C::MutedFrames, S(2)}, {C::MacroMoves, 2, 2},
+                 {C::Events, 14},         {C::OffGridEvents, 14}};
+  p.ablate    = {Feature::WetKill, Feature::Macro};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// One lone change per Leaf row, and one to the effect volume (mode-compiler.md §7.2, §10.3), each
+// at its own frame in a busy state where every change is audible (presets/lone_busy.json: every
+// post stage engaged, onsets firing grains among about eight periodic voices). AmongEdits
+// renders each among edits that rebuild every other domain: R1 routes a change by its domain.
+PresetCase LoneChanges() {
+  PresetCase                           p = PackagePreset("lone_changes", "lone_busy");
+  const std::pair<ParamId, float> kTo[] = {
+      {P::DelayMs, 400.0f},      {P::Mix, 0.3f},            {P::Feedback, 0.9f},
+      {P::WetTrimDb, -9.0f},     {P::GrainSizeMs, 25.0f},   {P::Overlap, 0.8f},
+      {P::SprayMs, 150.0f},      {P::TransposeSt, 7.0f},    {P::SpreadCents, 80.0f},
+      {P::ReverseProb, 1.0f},    {P::Jitter, 1.0f},         {P::WindowSustain, 1.0f},
+      {P::WindowSkew, 0.0f},     {P::WindowSmooth, 0.0f},   {P::PanSpread, 1.0f},
+      {P::ModRateHz, 7.0f},      {P::ModDepth, 1.0f},       {P::DelayTimeMs, 400.0f},
+      {P::DelayFb, 0.9f},        {P::DelayMix, 1.0f},       {P::ReverbTime, 1.0f},
+      {P::ReverbMix, 1.0f},      {P::FilterCutoffHz, 400.0f}, {P::FilterRes, 1.0f},
+      {P::FilterMorph, 2.0f},    {P::TriggerSens, 1.0f},    {P::EffectVolumeDb, -9.0f}};
+  int64_t k = 0;
+  for (const auto& c : kTo) {
+    p.script.Param(S(1) / 2 + 20160 * k + 1 + (k * 7) % 47, c.first, c.second);
+    ++k;
+  }
+  p.require   = {{C::Events, 27, 27}, {C::OffGridEvents, 27}, {C::Onsets, 10}};
+  p.invariant = {Invariance::AmongEdits};
   return p;
 }
 
@@ -197,6 +357,11 @@ const char* CounterName(Counter c) noexcept {
     case C::SubnormalOutFrames: return "subnormalOutFrames";
     case C::LastActiveFrame: return "lastActiveFrame";
     case C::LastNonzeroFrame: return "lastNonzeroFrame";
+    case C::MacroMoves: return "macroMoves";
+    case C::ExpressionEvents: return "expressionEvents";
+    case C::ModeSwitches: return "modeSwitches";
+    case C::KilledFrames: return "killedFrames";
+    case C::MutedFrames: return "mutedFrames";
     case C::kCount: break;
   }
   return "unknown";
@@ -219,6 +384,11 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::RingLength: return "ringLength";
     case Feature::Spillover: return "spillover";
     case Feature::Restart: return "restart";
+    case Feature::Mode: return "mode";
+    case Feature::Macro: return "macro";
+    case Feature::ModeSwitch: return "modeSwitch";
+    case Feature::FastCut: return "fastCut";
+    case Feature::WetKill: return "wetKill";
   }
   return "unknown";
 }
@@ -227,6 +397,7 @@ const char* InvarianceName(Invariance i) noexcept {
   switch (i) {
     case Invariance::HostileFpEnv: return "hostileFpEnv";
     case Invariance::RestartTail: return "restartTail";
+    case Invariance::AmongEdits: return "amongEdits";
   }
   return "unknown";
 }
@@ -249,16 +420,22 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
   };
   auto neutral = [&](ParamId id, float value) {
     set(out.params, id, value);
-    for (ParamList& staged : out.script.MutableStaged()) set(staged, id, value);
+    for (StagedLoad& staged : out.script.MutableStaged()) set(staged.preset.params, id, value);
     drop([id](const Event& e) {
       return e.type == EventType::SetParam && e.id == static_cast<uint32_t>(id);
     });
   };
+  // The cutoff at the kill (40 Hz, its minimum) one hertz above it, wherever the preset sets it.
+  auto unkill = [&](ParamList& params) {
+    for (auto& kv : params) {
+      if (kv.first == P::FilterCutoffHz && kv.second == 40.0f) kv.second = 41.0f;
+    }
+  };
   switch (f) {
-    case Feature::MarkPosition: neutral(P::PositionSource, 0.0f); break;
-    case Feature::OnsetTrigger: neutral(P::OnsetTrigger, 0.0f); break;
+    case Feature::MarkPosition: out.strip |= kStripMark; break;
+    case Feature::OnsetTrigger: out.strip |= kStripOnset; break;
     case Feature::Reverse: neutral(P::ReverseProb, 0.0f); break;
-    case Feature::Pitch: neutral(P::PitchSt, 0.0f); break;
+    case Feature::Pitch: neutral(P::TransposeSt, 0.0f); break;
     case Feature::Spray: neutral(P::SprayMs, 0.0f); break;
     case Feature::Feedback: neutral(P::Feedback, 0.0f); break;
     case Feature::PostMod: neutral(P::ModDepth, 0.0f); break;
@@ -276,22 +453,59 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
       drop([](const Event& e) { return e.type == EventType::SpilloverLoad; });
       break;
     case Feature::Restart: out.script.MutableRestarts().clear(); break;
+    case Feature::Mode: out.strip |= kStripMode; break;
+    case Feature::Macro:
+      drop([](const Event& e) {
+        return e.type == EventType::MacroMove || e.type == EventType::Expression;
+      });
+      break;
+    case Feature::ModeSwitch: out.strip |= kKeepMode; break;
+    case Feature::FastCut:
+      for (StagedLoad& staged : out.script.MutableStaged()) staged.style = SwitchStyle::Trails;
+      break;
+    case Feature::WetKill:
+      unkill(out.params);
+      for (StagedLoad& staged : out.script.MutableStaged()) unkill(staged.preset.params);
+      for (Event& e : events) {
+        if (e.type == EventType::SetParam && e.id == static_cast<uint32_t>(P::FilterCutoffHz) &&
+            e.value == 40.0f) {
+          e.value = 41.0f;
+        }
+      }
+      break;
   }
   return out;
 }
 
-ParamList ParamsAt(const PresetCase& p, int64_t frame) {
-  float values[kNumParams];
-  auto  load = [&values](const ParamList& params) {
-    const std::unique_ptr<PresetState> preset = CompletePreset(params);
-    for (size_t i = 0; i < kNumParams; ++i) values[i] = preset->leaves[i].value;
+PresetSource StateAt(const PresetCase& p, int64_t frame) {
+  // The preset whose mode plays, decoded for macro and expression moves, and every leaf's value.
+  const PresetSource                 start{p.package, p.params};
+  std::unique_ptr<PresetState>       first = CompletePreset(start, p.strip);
+  std::unique_ptr<PresetState>       loaded;
+  const PresetState*                 active  = first.get();
+  const char*                        package = p.package;
+  float                              values[kNumLeafParams];
+  auto take = [&values](const PresetState& preset) {
+    for (uint32_t i = 0; i < preset.leafCount; ++i) {
+      const size_t k = LeafIndex(preset.leaves[i].id);
+      if (k < kNumLeafParams) values[k] = preset.leaves[i].value;
+    }
   };
-  load(p.params);
+  auto load = [&](const StagedLoad& staged) {
+    loaded  = CompletePreset(staged.preset, p.strip, (p.strip & kKeepMode) != 0 ? first.get() : nullptr);
+    active  = loaded.get();
+    package = staged.preset.package;
+    if (active != nullptr) take(*active);
+  };
+  if (active == nullptr) return {};
+  take(*active);
   const auto& events   = p.script.Events();
   const auto& restarts = p.script.Restarts();
   size_t      e = 0, r = 0;
+  PresetLeaf  out[kMaxExpressions * kMaxMacroTargets];
   // In time order; a restart comes before the events stamped at its frame.
   for (;;) {
+    if (active == nullptr) return {};
     const bool eventDue   = e < events.size() && events[e].frame < frame;
     const bool restartDue = r < restarts.size() && restarts[r].frame < frame;
     if (!eventDue && !restartDue) break;
@@ -301,23 +515,37 @@ ParamList ParamsAt(const PresetCase& p, int64_t frame) {
       continue;
     }
     const Event& ev = events[e++];
-    if (ev.type == EventType::SetParam) {
-      values[ev.id - 1u] = Canonicalize(static_cast<ParamId>(ev.id), ev.value);
+    size_t       n  = 0;
+    if (ev.type == EventType::SetParam && IsLeaf(ev.id)) {  // the engine stores no other kind
+      values[LeafIndex(ev.id)] = Canonicalize(static_cast<ParamId>(ev.id), ev.value);
     } else if (ev.type == EventType::SpilloverLoad) {
       load(p.script.Staged()[ev.id]);
+    } else if (ev.type == EventType::MacroMove) {
+      n = EvalMacro(active->mode, static_cast<ParamId>(ev.id), ev.value, out, kMaxMacroTargets);
+    } else if (ev.type == EventType::Expression) {
+      n = EvalExpression(active->mode, active->control, ev.value, out,
+                         kMaxExpressions * kMaxMacroTargets);
+    }
+    for (size_t i = 0; i < n; ++i) {
+      if (IsLeaf(out[i].id)) values[LeafIndex(out[i].id)] = out[i].value;
     }
   }
-  ParamList out;
-  for (size_t i = 0; i < kNumParams; ++i) out.emplace_back(kParamTable[i].id, values[i]);
-  return out;
+  PresetSource state;
+  state.package = package;
+  for (size_t i = 0; i < kNumLeafParams; ++i) state.params.emplace_back(LeafId(i), values[i]);
+  return state;
 }
 
 PresetCase TailAfterRestart(const PresetCase& p, int64_t* start) {
   const RestartPoint& last = p.script.Restarts().back();
   *start                   = last.frame;
   PresetCase tail;
-  tail.name   = p.name;
-  tail.params = last.load ? p.script.Staged()[last.staged] : ParamsAt(p, last.frame);
+  tail.name = p.name;
+  const PresetSource state =
+      last.load ? p.script.Staged()[last.staged].preset : StateAt(p, last.frame);
+  tail.package                = state.package;
+  tail.params                 = state.params;
+  tail.strip                  = p.strip;
   tail.script.MutableStaged() = p.script.Staged();
   for (const Event& e : p.script.Events()) {
     if (e.frame < last.frame) continue;
@@ -326,6 +554,56 @@ PresetCase TailAfterRestart(const PresetCase& p, int64_t* start) {
     tail.script.MutableEvents().push_back(moved);
   }
   return tail;
+}
+
+PresetCase AmongEdits(const PresetCase& p) {
+  PresetCase out = p;
+  out.require.clear();
+  out.ablate.clear();
+  out.invariant.clear();
+  // A Leaf row of exactly `domain` other than `except`, or none.
+  auto other = [](uint8_t domain, uint32_t except) -> const ParamDescriptor* {
+    for (size_t i = 0; i < kNumLeafParams; ++i) {
+      const ParamDescriptor* d = FindParam(LeafId(i));
+      if (d->domain == domain && static_cast<uint32_t>(d->id) != except) return d;
+    }
+    return nullptr;
+  };
+  std::vector<Event> events;
+  uint32_t           seq = 0;
+  for (const Event& e : p.script.Events()) {
+    Event copy = e;
+    copy.seq   = seq++;
+    events.push_back(copy);
+    if (e.type != EventType::SetParam) continue;
+    // The value each touched leaf holds after this event, so setting it back changes nothing.
+    PresetCase upTo = p;
+    upTo.script.MutableEvents().clear();
+    for (const Event& before : p.script.Events()) {
+      upTo.script.MutableEvents().push_back(before);
+      if (&before == &e) break;
+    }
+    const PresetSource now = StateAt(upTo, e.frame + 1);
+    for (const uint8_t domain : {kDomainGranular, kDomainPost, kDomainMix, kDomainFeedback,
+                                 kDomainWet, kDomainDetector}) {
+      const ParamDescriptor* d = other(domain, e.id);
+      if (d == nullptr) continue;
+      float was = d->def;
+      for (const auto& kv : now.params) {
+        if (kv.first == d->id) was = kv.second;
+      }
+      Event set = e;
+      set.id    = static_cast<uint32_t>(d->id);
+      set.value = was == d->min ? d->max : d->min;
+      set.seq   = seq++;
+      events.push_back(set);
+      set.value = was;
+      set.seq   = seq++;
+      events.push_back(set);
+    }
+  }
+  out.script.MutableEvents() = std::move(events);
+  return out;
 }
 
 // Not yet in the corpus: profile §6.1's committed guitar DI recordings, which enter
@@ -351,10 +629,9 @@ std::vector<VectorCase> BuildCorpus() {
     // Strum: onset trigger + POS_MARK + footswitch triggers off the grid. Spray >= 30 ms
     // already saturates the normalization's decorrelation term, so the markPosition
     // ablation can only differ through mark-positioned births.
-    PresetCase strum = Preset("strum_marks",
-        {{P::OnsetTrigger, 1.0f}, {P::PositionSource, 1.0f}, {P::TriggerSens, 0.6f},
-         {P::Overlap, 0.3f}, {P::GrainSizeMs, 150.0f}, {P::Jitter, 0.0f}, {P::SprayMs, 40.0f},
-         {P::Feedback, 0.2f}});
+    // presets/strum_marks.json: onset and mark, sensitivity 0.6, overlap 0.3, size 150 ms,
+    // jitter 0, spray 40 ms, feedback 0.2.
+    PresetCase strum = PackagePreset("strum_marks", "strum_marks");
     strum.script.Trigger(S(2) + 101);
     strum.script.Trigger(S(5) + 7);
     strum.script.Trigger(S(8) + 333);
@@ -364,7 +641,7 @@ std::vector<VectorCase> BuildCorpus() {
 
     PresetCase heavy = Preset("pitch_reverse_spray",
         {{P::Jitter, 1.0f}, {P::SprayMs, 400.0f}, {P::ReverseProb, 0.5f}, {P::SpreadCents, 60.0f},
-         {P::PitchSt, 7.0f}, {P::Overlap, 0.85f}, {P::PanSpread, 1.0f}, {P::GrainSizeMs, 60.0f},
+         {P::TransposeSt, 7.0f}, {P::Overlap, 0.85f}, {P::PanSpread, 1.0f}, {P::GrainSizeMs, 60.0f},
          {P::WindowSustain, 0.1f}, {P::WindowSkew, 0.2f}, {P::WindowSmooth, 1.0f}});
     heavy.ablate = {Feature::Pitch, Feature::Reverse, Feature::Spray};
     v.presets.push_back(heavy);
@@ -379,14 +656,14 @@ std::vector<VectorCase> BuildCorpus() {
 
     PresetCase farRevUp = Preset("max_delay_spray_rev_up24", kFar);
     farRevUp.params.emplace_back(P::ReverseProb, 0.5f);
-    farRevUp.params.emplace_back(P::PitchSt, 24.0f);
+    farRevUp.params.emplace_back(P::TransposeSt, 24.0f);
     farRevUp.ablate = {Feature::Spray, Feature::Reverse, Feature::Pitch};
     v.presets.push_back(farRevUp);
 
     // Spray reflected off the near guard: a 500 ms grain at +24 st needs 1.5 s behind
     // the write head, so from a 1 ms base about 7 in 8 draws fold back into the bounds.
     PresetCase nearRail = Preset("near_rail_spray",
-        {{P::DelayMs, 1.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}, {P::PitchSt, 24.0f}});
+        {{P::DelayMs, 1.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}, {P::TransposeSt, 24.0f}});
     nearRail.ablate = {Feature::Spray};
     v.presets.push_back(nearRail);
     corpus.push_back(std::move(v));
@@ -397,10 +674,10 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(FreezeMarks());
 
     PresetCase pitch = Preset("pitch_extremes",
-        {{P::PitchSt, 24.0f}, {P::SpreadCents, 100.0f}, {P::Jitter, 0.3f}, {P::Feedback, 0.4f},
+        {{P::TransposeSt, 24.0f}, {P::SpreadCents, 100.0f}, {P::Jitter, 0.3f}, {P::Feedback, 0.4f},
          {P::GrainSizeMs, 80.0f}});
     for (int64_t k = 1; k * 72000 < S(16); ++k) {
-      pitch.script.Param(k * 72000 + 13, P::PitchSt, (k & 1) ? -24.0f : 24.0f);
+      pitch.script.Param(k * 72000 + 13, P::TransposeSt, (k & 1) ? -24.0f : 24.0f);
     }
     pitch.require = {{C::Events, 9}, {C::OffGridEvents, 9}};
     pitch.ablate  = {Feature::Pitch};
@@ -411,17 +688,17 @@ std::vector<VectorCase> BuildCorpus() {
     // after it at its frame pins anew. Live positioning, so every pin reaches the output.
     PresetCase retoggle = Preset("freeze_retoggle_spill",
         {{P::DelayMs, 150.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 40.0f}, {P::Overlap, 0.8f},
-         {P::SprayMs, 10.0f}, {P::PitchSt, 5.0f}, {P::Jitter, 0.5f}, {P::Feedback, 0.3f}});
+         {P::SprayMs, 10.0f}, {P::TransposeSt, 5.0f}, {P::Jitter, 0.5f}, {P::Feedback, 0.3f}});
     retoggle.script.Freeze(S(3) + 101, true);
     retoggle.script.Freeze(S(6) + 4999, false);
     retoggle.script.Freeze(S(6) + 4999, true);
     retoggle.script.Spillover(S(9) + 23,  // while frozen
         {{P::DelayMs, 333.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 20.0f}, {P::Overlap, 1.0f},
-         {P::PitchSt, -7.0f}, {P::Feedback, 0.5f}, {P::ReverbMix, 0.4f}});
+         {P::TransposeSt, -7.0f}, {P::Feedback, 0.5f}, {P::ReverbMix, 0.4f}});
     retoggle.script.Freeze(S(10) + 77, true);
     retoggle.script.Spillover(S(12) + 5,
         {{P::DelayMs, 90.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 60.0f}, {P::SprayMs, 0.0f},
-         {P::PitchSt, 12.0f}, {P::Feedback, 0.2f}});
+         {P::TransposeSt, 12.0f}, {P::Feedback, 0.2f}});
     retoggle.script.Freeze(S(12) + 5, true);
     retoggle.script.Freeze(S(14) + 31, false);
     retoggle.require   = {{C::Events, 8},          {C::OffGridEvents, 8}, {C::FreezeEngages, 3, 3},
@@ -434,9 +711,9 @@ std::vector<VectorCase> BuildCorpus() {
 
   {  // Dense onsets driving 1 ms grains at the maximum birth rate.
     VectorCase v{"onset_bursts_6s", Vector::OnsetBursts, Frames(6), Frames(6), false, {}};
-    PresetCase dense = Preset("dense_1ms",
-        {{P::GrainSizeMs, 1.0f}, {P::Overlap, 1.0f}, {P::Jitter, 1.0f}, {P::SprayMs, 5.0f},
-         {P::ReverseProb, 0.5f}, {P::OnsetTrigger, 1.0f}, {P::PanSpread, 1.0f}});
+    // presets/dense_1ms.json: size 1 ms, overlap 1, jitter 1, spray 5 ms, reverse 0.5, onset,
+    // pan spread 1.
+    PresetCase dense = PackagePreset("dense_1ms", "dense_1ms");
     dense.require = {{C::Onsets, 20}};
     dense.ablate  = {Feature::Reverse, Feature::OnsetTrigger};
     v.presets.push_back(dense);
@@ -445,10 +722,12 @@ std::vector<VectorCase> BuildCorpus() {
 
   {  // Soft notes: every post stage at its extremes, then swept.
     VectorCase v{"soft_notes_10s", Vector::SoftNotes, Frames(10), Frames(10), false, {}};
+    // The cutoff 1 Hz above its minimum, which kills the wet since sound revision 2 (§7.6):
+    // under the kill, the other post stages' ablations could change nothing.
     PresetCase postMax = Preset("post_max",
         {{P::Feedback, 0.3f}, {P::ModDepth, 1.0f}, {P::ModRateHz, 10.0f}, {P::DelayMix, 1.0f},
          {P::DelayFb, 0.9f}, {P::DelayTimeMs, 2000.0f}, {P::ReverbMix, 1.0f}, {P::ReverbTime, 1.0f},
-         {P::FilterCutoffHz, 40.0f}, {P::FilterRes, 1.0f}, {P::FilterMorph, 2.0f}});
+         {P::FilterCutoffHz, 41.0f}, {P::FilterRes, 1.0f}, {P::FilterMorph, 2.0f}});
     postMax.ablate    = {Feature::PostMod, Feature::PostDelay, Feature::PostReverb,
                          Feature::PostFilter};
     postMax.invariant = {Invariance::HostileFpEnv};
@@ -478,7 +757,7 @@ std::vector<VectorCase> BuildCorpus() {
   {  // Full-scale saturation, into and out of the engine.
     VectorCase v{"saturation_6s", Vector::Saturation, Frames(6), Frames(6), false, {}};
     PresetCase hot =
-        Preset("hot_out", {{P::OutTrimDb, 24.0f}, {P::Mix, 1.0f}, {P::Feedback, 0.6f}});
+        Preset("hot_out", {{P::WetTrimDb, 24.0f}, {P::Mix, 1.0f}, {P::Feedback, 0.6f}});
     hot.require = {{C::InClipFrames, 1000}};
     v.presets.push_back(hot);
     corpus.push_back(std::move(v));
@@ -498,7 +777,7 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(osc);
 
     PresetCase decay =
-        Preset("fb_decay", {{P::Feedback, 1.1f}, {P::PitchSt, 5.0f}, {P::SprayMs, 30.0f}});
+        Preset("fb_decay", {{P::Feedback, 1.1f}, {P::TransposeSt, 5.0f}, {P::SprayMs, 30.0f}});
     const float kFb[] = {1.05f, 1.0f, 0.95f, 0.9f, 0.8f, 0.7f, 0.6f,
                          0.5f,  0.4f, 0.3f,  0.2f, 0.1f, 0.05f, 0.0f};
     int64_t k = 0;
@@ -528,10 +807,9 @@ std::vector<VectorCase> BuildCorpus() {
     // Mark positioning: marks newer than the pin through a long hold (mechanism D1).
     // A grain starts at the mark whatever the anchor (Granular.cpp:82, :114), so the
     // re-anchor cannot reach this output; freeze_live_long covers it.
-    PresetCase marks = Preset("freeze_long",
-        {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
-         {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
-         {P::PositionSource, 1.0f}});
+    // presets/freeze_long.json: +12 st, jitter 0.4, feedback 0.3, spread 15 c, spray 80 ms,
+    // reverse 0.3, onset and mark; freeze_live_long.json the same on the live position.
+    PresetCase marks = PackagePreset("freeze_long", "freeze_long");
     marks.script.Freeze(S(1) + 11, true);
     marks.require = {{C::FrozenOnsets, 20}, {C::FrozenFrames, S(68)}};
     marks.ablate  = {Feature::Freeze};
@@ -539,10 +817,7 @@ std::vector<VectorCase> BuildCorpus() {
 
     // Live positioning: grains sit behind the anchor, so the re-anchor (mechanism D3)
     // moves them and the ring ablation first differs at the re-anchor second, 66.
-    PresetCase live = Preset("freeze_live_long",
-        {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
-         {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
-         {P::PositionSource, 0.0f}});
+    PresetCase live = PackagePreset("freeze_live_long", "freeze_live_long");
     live.script.Freeze(S(1) + 11, true);
     live.require = {{C::FrozenOnsets, 20}, {C::FrozenFrames, S(68)}, {C::FreezeEngages, 1}};
     live.ablate  = {Feature::Freeze, Feature::RingLength};
@@ -552,9 +827,9 @@ std::vector<VectorCase> BuildCorpus() {
 
   {  // A mark aging past one ring with reverse grains on the far rail (mechanism D2).
     VectorCase v{"plucks_markage_92s", Vector::Plucks, Frames(2), Frames(92), true, {}};
-    PresetCase age = Preset("reverse_mark_aging",
-        {{P::PositionSource, 1.0f}, {P::ReverseProb, 1.0f}, {P::SprayMs, 0.0f}, {P::Jitter, 0.0f},
-         {P::GrainSizeMs, 100.0f}, {P::Overlap, 0.4f}, {P::Mix, 1.0f}});
+    // presets/reverse_mark_aging.json: mark positioning, reverse 1, spray 0, jitter 0, size
+    // 100 ms, overlap 0.4, mix 1.
+    PresetCase age = PackagePreset("reverse_mark_aging", "reverse_mark_aging");
     age.require = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}};
     age.ablate  = {Feature::MarkPosition, Feature::RingLength};
     v.presets.push_back(age);
@@ -585,12 +860,23 @@ std::vector<VectorCase> BuildCorpus() {
     dry.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(dry);
     // Subnormal input through the ring write, the onset detector and a scaled dry path,
-    // under a wet path that decays to exact zero.
+    // under a wet path that decays to exact zero. Mix 0.75: the dry at 0.5 under the Mix law
+    // (sound revision 3), as at Mix 0.5 under the linear crossfade before it.
     PresetCase wet = Preset("subnormal_wet",
-        {{P::Mix, 0.5f}, {P::OutTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
+        {{P::Mix, 0.75f}, {P::WetTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
     wet.require   = {{C::SubnormalOutFrames, S(1)}, {C::Onsets, 4}};
     wet.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(wet);
+    corpus.push_back(std::move(v));
+  }
+
+  {  // Sound revision 2's modes: macro and expression moves, mode switches, the wet kill.
+    VectorCase v{"plucks_modes_14s", Vector::Plucks, Frames(12), Frames(14), false, {}};
+    v.presets.push_back(MacroSweep());
+    v.presets.push_back(ExpressionPedal());
+    v.presets.push_back(ModeSwitchChain());
+    v.presets.push_back(WetKillCase());
+    v.presets.push_back(LoneChanges());
     corpus.push_back(std::move(v));
   }
 

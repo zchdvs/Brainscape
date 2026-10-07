@@ -12,6 +12,12 @@ name: parity
 # (brainscape_golden --mode mint) and committed with the kSoundRevision bump; the pull
 # request then needs every x86 leg and the emulated M7 to agree with it in one run
 # (§6.1), and sound-rev.yml holds the bump rule (§5.12).
+# Presets (docs/design/mode-compiler.md §8.3, §10.2): every parity-host leg and the
+# emulated M7 also fuzz the package decoder against a committed digest and check the frozen
+# fixtures; bspc-roundtrip compiles every committed preset document on the same host legs
+# and parity-summary requires their package manifests identical; blob-libfuzzer runs the
+# decoder under libFuzzer; parity-audits holds the compiler audit's source ban and the GCC
+# and Clang bspc-roundtrip legs its import check. nightly.yml runs the long legs.
 
 on:
   push:
@@ -191,6 +197,139 @@ jobs:
         run: |
           ${LEG_CXX:-c++} -O2 -ffp-contract=fast -c tools/ci/fused_selftest.cpp -o build/fused_selftest.o
           python3 tools/ci/audit_fused.py --arch aarch64 --self-test build/fused_selftest.o build/dsp/libbrainscape_dsp.a
+      # The package decoder on this leg (mode-compiler.md §10.2, §10.3): the deterministic
+      # mutation fuzzer, whose committed verdict digest every leg and the emulated M7 must
+      # reproduce (the same inputs accepted and rejected, every accepted one re-encoding to its
+      # own bytes), and the frozen fixtures' bytes and verdicts.
+      - name: Build the package tool
+        id: blob
+        if: ${{ !cancelled() }}
+        run: cmake --build build --config Release --target brainscape_blob_tool
+      - name: Fuzz the package decoder and check the frozen fixtures
+        if: ${{ !cancelled() && steps.blob.outcome == 'success' }}
+        run: |
+          TOOL=$(find build -type f \( -name brainscape_blob_tool -o -name brainscape_blob_tool.exe \) | head -n 1)
+          "$TOOL" --fuzz
+          "$TOOL" --fixtures dsp/tests/golden/presets/frozen
+
+  # bspc-roundtrip (mode-compiler.md §8.3, §10.1, §10.2; companion §3.4) on parity-host's legs:
+  # the compiler's tests (the number code's per-pull-request hashes, the JSON grammar, schema 1,
+  # the property and reader-fuzz digests and bspc's command line), then every committed
+  # document compiled to its committed package byte for byte and checked canonical, each set
+  # against its committed MANIFEST (which the package rule reads) with .gitattributes keeping
+  # its documents and MANIFEST at LF on every checkout, and the leg's sorted manifest of
+  # package hashes uploaded for parity-summary, which requires every leg's identical; those
+  # checks' self-test runs first. The GCC and Clang legs also run the compiler audit's import
+  # check (no libm, strtof or strtod; MSVC's float conversions are header-only and import
+  # nothing that names them); parity-audits runs its source ban.
+  bspc-roundtrip:
+    name: bspc-roundtrip (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux-x64-gcc
+            os: ubuntu-24.04
+            cxx: g++
+            symbols: gcc
+          - leg: linux-x64-clang
+            os: ubuntu-24.04
+            cxx: clang++
+            symbols: clang
+          - leg: linux-arm64-gcc
+            os: ubuntu-24.04-arm
+            cxx: g++
+            symbols: gcc
+          - leg: windows-x64-msvc
+            os: windows-2022
+          - leg: windows-x64-msvc-avx2
+            os: windows-2022
+            cxxflags: /arch:AVX2
+          - leg: macos-arm64-appleclang
+            os: macos-14
+            symbols: appleclang
+          - leg: macos-arm64-appleclang-latest
+            os: macos-latest
+            symbols: appleclang
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      LEG: ${{ matrix.leg }}
+      LEG_CXX: ${{ matrix.cxx }}
+      LEG_SYMBOLS: ${{ matrix.symbols }}
+      CXXFLAGS: ${{ matrix.cxxflags }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          if [ -n "$LEG_CXX" ]; then export CXX="$LEG_CXX"; fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=ON
+      - name: Build the compiler, bspc and their tests
+        id: build
+        run: >
+          cmake --build build --config Release --parallel 4
+          --target bspc bsc_tests bsc_number_tests bsc_number_check
+      - name: The compiler's tests
+        run: ctest --test-dir build -C Release -R '^compiler_' --output-on-failure
+      # Proves the document checks below can fail (MANIFEST, line endings, packages beside
+      # documents) and that the committed .gitattributes cover every set, documents or not yet.
+      - name: Self-test the document checks
+        if: ${{ !cancelled() }}
+        run: |
+          PY=python3; if [ "$RUNNER_OS" = Windows ]; then PY=python; fi
+          "$PY" tools/ci/bspc_roundtrip.py self-test
+      - name: Compile every committed document (bspc roundtrip)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          BSPC=$(find build -type f \( -name bspc -o -name bspc.exe \) | head -n 1)
+          PY=python3; if [ "$RUNNER_OS" = Windows ]; then PY=python; fi
+          mkdir -p bspc-manifest
+          "$PY" tools/ci/bspc_roundtrip.py run --bspc "$BSPC" --out "bspc-manifest/bspc-manifest-$LEG.txt"
+      - name: Upload the package manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bspc-manifest-${{ matrix.leg }}
+          path: bspc-manifest/
+          if-no-files-found: warn
+      - name: Audit the compiler's imports (no libm, strtof or strtod)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && runner.os != 'Windows' }}
+        continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
+        run: |
+          ${LEG_CXX:-c++} -O0 -c tools/ci/compiler_audit_selftest.cpp -o build/compiler_audit_selftest.o
+          python3 tools/ci/audit_compiler.py self-test --toolchain "$LEG_SYMBOLS" --object build/compiler_audit_selftest.o
+          python3 tools/ci/audit_compiler.py imports --toolchain "$LEG_SYMBOLS" build/compiler/libbrainscape_compiler.a
+
+  # The package decoder under libFuzzer with AddressSanitizer and UndefinedBehaviorSanitizer
+  # (mode-compiler.md §10.2), seeded with the frozen fixtures; nightly.yml runs it longer with
+  # a kept corpus. A crash uploads its reproducer.
+  blob-libfuzzer:
+    name: blob-libfuzzer (linux-x64-clang)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (Clang, sanitizers, asserts live)
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBRAINSCAPE_BUILD_TESTS=ON -DBRAINSCAPE_BUILD_LIBFUZZER=ON
+          -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_CXX_FLAGS=-O1 -fno-omit-frame-pointer -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all"
+      - name: Build the libFuzzer harness
+        run: cmake --build build --parallel 4 --target brainscape_blob_libfuzzer
+      - name: Fuzz the package decoder for 90 s
+        run: |
+          mkdir -p corpus crashes
+          cp dsp/tests/golden/presets/frozen/*.bsp corpus/
+          build/dsp/tests/blob/brainscape_blob_libfuzzer -max_total_time=90 -print_final_stats=1 \
+            -artifact_prefix=crashes/ corpus
+      - name: Upload the reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-libfuzzer-crashes
+          path: crashes/
+          if-no-files-found: ignore
 
   # The emulated Cortex-M7 (profile §6.2, §6.8): the pinned arm-none-eabi toolchain and
   # firmware flags build the same dsp/ archive the firmware links, and the pinned
@@ -297,6 +436,19 @@ jobs:
           path: parity-wav/
           if-no-files-found: ignore
           retention-days: 14
+      # The package decoder on the M7 (mode-compiler.md §10.2, §10.3), whose 32-bit size_t the
+      # host legs miss: the mutation fuzzer must reproduce the hosts' committed verdict digest,
+      # and the frozen fixtures their verdicts. The tool links the firmware's archive too.
+      - name: Build the package tool ELF
+        id: blob
+        if: ${{ !cancelled() }}
+        run: cmake --build build-m7 --target brainscape_blob_tool
+      - name: Fuzz the package decoder and check the frozen fixtures under qemu-arm -cpu cortex-m7
+        if: ${{ !cancelled() && steps.blob.outcome == 'success' }}
+        run: |
+          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/blob/brainscape_blob_tool.elf --fuzz
+          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/blob/brainscape_blob_tool.elf \
+            --fixtures dsp/tests/golden/presets/frozen
       - name: Audit fused instructions (Armv7-M)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
@@ -338,6 +490,15 @@ jobs:
       - name: Audit compile flags
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
         run: python3 tools/ci/audit_flags.py build/compile_commands.json
+      # mode-compiler.md §8.3: brainscape_compiler converts numbers only through its own exact
+      # code, so no <charconv>, <cmath>, <math.h>, strto*/ato*/sto*, std::to_string, printf or
+      # scanf, or stream number formatting in its sources (compiler/src; the tests cross-check
+      # against the library and are exempt). The self-test first proves the ban can fail.
+      - name: Audit the compiler's sources (no library number conversion)
+        continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}
+        run: |
+          python3 tools/ci/audit_compiler.py self-test
+          python3 tools/ci/audit_compiler.py sources compiler/src
       # Profile §6.3 and companion §3.4's boundary-grep: no source outside plugin/ includes
       # JUCE, so none under dsp/ or firmware/. git grep exits 1 when nothing matches.
       - name: Audit for JUCE includes outside plugin/
@@ -403,7 +564,7 @@ jobs:
 
   parity-summary:
     name: parity-summary
-    needs: [parity-host, parity-m7, parity-negative-control]
+    needs: [parity-host, parity-m7, parity-negative-control, bspc-roundtrip]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -418,3 +579,17 @@ jobs:
           args=(--reference linux-x64-gcc --summary "$GITHUB_STEP_SUMMARY")
           if [ "$PARITY_HASHES_GATING" = true ]; then args+=(--gate); fi
           python3 tools/ci/parity_compare.py parity-report "${args[@]}"
+      - uses: actions/download-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          pattern: bspc-manifest-*
+          path: bspc-manifest
+          merge-multiple: true
+      # mode-compiler.md §8.3: every bspc-roundtrip leg (the matrix above, reference first)
+      # wrote the same package hashes for the same documents.
+      - name: Compare the package manifests
+        if: ${{ !cancelled() }}
+        run: >
+          python3 tools/ci/bspc_roundtrip.py compare --summary "$GITHUB_STEP_SUMMARY"
+          --legs linux-x64-gcc,linux-x64-clang,linux-arm64-gcc,windows-x64-msvc,windows-x64-msvc-avx2,macos-arm64-appleclang,macos-arm64-appleclang-latest
+          bspc-manifest

@@ -14,12 +14,28 @@ add_library(brainscape_dsp STATIC
   src/EventQueue.cpp
   src/Granular.cpp
   src/InputCondition.cpp
+  src/ModeEval.cpp
   src/OnsetDetector.cpp
   src/ParamDisplay.cpp
   src/PostChain.cpp
   src/SoundRevision.cpp
   src/TestSignal.cpp
+  # The preset package (docs/design/mode-compiler.md §5, §6): decoder, validator, encoder
+  # and SHA-256, integer-only and FP-free, the part of the mode system the firmware links.
+  src/blob/Decode.cpp
+  src/blob/Encode.cpp
+  src/blob/Mode.cpp
+  src/blob/Sha256.cpp
+  src/blob/Validate.cpp
 )
+# The package code holds no floating-point instruction at all on the Cortex-M7, not even a move:
+# it compares floats as integers, and GCC would otherwise spill to and copy through the FPU's
+# registers (docs/design/mode-compiler.md §5.2; the firmware links it).
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/blob/Decode.cpp src/blob/Encode.cpp src/blob/Mode.cpp
+                              src/blob/Sha256.cpp src/blob/Validate.cpp
+                              PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+endif()
 target_include_directories(brainscape_dsp
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)  # floating-point bodies stay private (§3.5)
@@ -113,4 +129,5 @@ if(BRAINSCAPE_BUILD_M7_ORACLE)
     message(FATAL_ERROR "BRAINSCAPE_BUILD_M7_ORACLE needs BRAINSCAPE_BUILD_TESTS=OFF (the tests are host-only)")
   endif()
   add_subdirectory(tests/golden)
+  add_subdirectory(tests/blob)
 endif()

@@ -1,0 +1,2 @@
+# Package fixtures are bytes: never converted, never diffed as text.
+*.bsp binary

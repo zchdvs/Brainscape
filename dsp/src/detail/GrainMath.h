@@ -34,22 +34,83 @@ enum class Draw : uint32_t {
   DitherL  = 5,  // owned by the ring-write dither in Engine.cpp
   DitherR  = 6,
   Ceiling  = 7,  // fractional-target voice-ceiling dither
-  kCount   = 8,  // key stride (power of two)
+  kCount   = 8,  // key stride (power of two): purposes 0-7 fold into the key directly
+  // Purposes from 8 on are keyed through the extension below (mode-compiler.md §7.5), which
+  // carries purpose >> 3, whichever DrawKey overload is called. Named now, drawn by the waves
+  // that build them.
+  PitchSelect   = 8,   // W1: a pitch-set entry under `random` selection
+  Intermittency = 9,   // W1: a skipped birth or trigger
+  StepShuffle   = 10,  // W2: the step order's shuffle
+  StepProb      = 11,  // W2: a step's probability
+  MarkWalk      = 12,  // W2: the mark walk
+  RandomCutoff  = 13,  // W3: an SVF's random cutoff source
+  kMaxPurpose   = 31,  // purpose & 7 and purpose >> 3 (2 bits) cover 0-31
 };
 
-// Hash key of the draw for an absolute sample index and a purpose. The 64-bit
-// counter is folded in full — truncating it first would repeat the whole draw
-// stream every 2^29 samples (~3 h at 48 kHz; review finding). Below 2^29 the key
-// equals the truncated one.
-inline uint32_t DrawKey(int64_t absSample, Draw purpose) noexcept {
-  const auto k64 = static_cast<uint64_t>(absSample) * static_cast<uint32_t>(Draw::kCount) +
-                   static_cast<uint32_t>(purpose);
+// Sound revision 1's key: the absolute sample index times the purpose stride plus a purpose
+// below 8. The 64-bit counter is folded in full — truncating it first would repeat the whole
+// draw stream every 2^29 samples (~3 h at 48 kHz; review finding). Below 2^29 the key equals
+// the truncated one. Only DrawKey calls it, never with a purpose from 8 on: abs·8 + (8 + p) is
+// frame abs + 1's key of purpose p.
+inline uint32_t FoldedKey(int64_t absSample, uint32_t low) noexcept {
+  const auto k64 = static_cast<uint64_t>(absSample) * static_cast<uint32_t>(Draw::kCount) + low;
   return static_cast<uint32_t>(k64) ^ static_cast<uint32_t>(k64 >> 32);
+}
+
+// The key extension (mode-compiler.md §7.5, R8): a second layer, several draws of one purpose
+// at one frame (step entries sharing a slot) and purposes from 8 on. A 6-bit `ext` packs
+//
+//   bit 0      the layer (0 or 1)
+//   bits 1-3   the same-frame ordinal (0-7)
+//   bits 4-5   purpose >> 3 (0-3)
+//
+// With ext = 0 (layer 0, ordinal 0, a purpose below 8) the key is revision 1's,
+// FoldedKey(absSample, purpose), so no key of sound revision 1 changes. Otherwise the frame is
+// mixed first and the 9-bit (ext, purpose & 7) after:
+//
+//   key = Hash32(Hash32(FoldedKey(absSample, 0)) ^ ((ext << 3) | (purpose & 7)))
+//
+// The 504 extended keys of one frame are distinct: one value XOR-ed with distinct 9-bit values,
+// then the bijection Hash32. Keys of two frames meet only where the frames' mixed values
+// differ in their low 9 bits alone, by chance (2^-23 per pair of frames), never at a fixed
+// frame offset. Mixing the frame in after the extension, Hash32(FoldedKey(abs, p) ^
+// Hash32(ext)) as draft v2 of the design had it, leaves the frame linear under the XOR: every
+// draw of one ext equalled a draw of another at frame abs ^ (D >> 3), D = Hash32(ext) ^
+// Hash32(ext') (lane B review, measured). XOR-ing ext << 56 into the counter before the fold,
+// draft v1's scheme, aliased every layer-1 draw with the layer-0 draw 2^21 frames away (record
+// §2.8). The packing and this formula become part of the sound with the first wave that draws
+// an extended key; test_blob.cpp checks both failure modes.
+inline uint32_t DrawKeyExtension(uint32_t layer, uint32_t ordinal, Draw purpose) noexcept {
+  const uint32_t high = (static_cast<uint32_t>(purpose) >> 3) & 3u;
+  return (layer & 1u) | ((ordinal & 7u) << 1) | (high << 4);
+}
+
+inline uint32_t DrawKey(int64_t absSample, Draw purpose, uint32_t layer,
+                        uint32_t ordinal) noexcept {
+  const uint32_t low = static_cast<uint32_t>(purpose) & 7u;
+  const uint32_t ext = DrawKeyExtension(layer, ordinal, purpose);
+  if (ext == 0u) return FoldedKey(absSample, low);
+  return Hash32(Hash32(FoldedKey(absSample, 0u)) ^ ((ext << 3) | low));
+}
+
+// Hash key of the draw for an absolute sample index and a purpose, on layer 0 at ordinal 0:
+// revision 1's key for purposes 0-7, the extended key for purposes from 8 on.
+inline uint32_t DrawKey(int64_t absSample, Draw purpose) noexcept {
+  const auto p = static_cast<uint32_t>(purpose);
+  return p < static_cast<uint32_t>(Draw::kCount) ? FoldedKey(absSample, p)
+                                                 : DrawKey(absSample, purpose, 0u, 0u);
 }
 
 // Uniform [0, 1) from an absolute sample index and a purpose.
 inline float RandUnit(int64_t absSample, Draw purpose) noexcept {
   return static_cast<float>(Hash32(DrawKey(absSample, purpose)) >> 8) * (1.0f / 16777216.0f);
+}
+
+// Uniform [0, 1) from an extended key: RandUnit above when layer and ordinal are 0.
+inline float RandUnit(int64_t absSample, Draw purpose, uint32_t layer,
+                      uint32_t ordinal) noexcept {
+  return static_cast<float>(Hash32(DrawKey(absSample, purpose, layer, ordinal)) >> 8) *
+         (1.0f / 16777216.0f);
 }
 
 inline float SemitonesToRatio(float st) noexcept {

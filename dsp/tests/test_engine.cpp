@@ -8,6 +8,7 @@
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "catch.hpp"
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
@@ -44,9 +45,9 @@ EngineConfig SmallConfig() {
 std::vector<std::pair<ParamId, float>> DegenerateDelay(float delayMs, float extraFb = 0.f,
                                                        float mix = 1.f) {
   return {{ParamId::DelayMs, delayMs},   {ParamId::Mix, mix},
-          {ParamId::Feedback, extraFb},  {ParamId::OutTrimDb, 0.0f},
+          {ParamId::Feedback, extraFb},  {ParamId::WetTrimDb, 0.0f},
           {ParamId::GrainSizeMs, 10.0f}, {ParamId::Overlap, 0.25f},
-          {ParamId::SprayMs, 0.0f},      {ParamId::PitchSt, 0.0f},
+          {ParamId::SprayMs, 0.0f},      {ParamId::TransposeSt, 0.0f},
           {ParamId::SpreadCents, 0.0f},  {ParamId::ReverseProb, 0.0f},
           {ParamId::Jitter, 0.0f},       {ParamId::WindowSustain, 1.0f},
           {ParamId::WindowSkew, 0.5f},   {ParamId::WindowSmooth, 0.0f},
@@ -81,6 +82,7 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
   REQUIRE(arenas.ok());
   Engine engine;
   REQUIRE(engine.Init(cfg, arenas.get()));
+  REQUIRE(testing::LoadRetiredStructure(engine, params));  // the onset source, marks
   for (auto& p : params) engine.SetParam(p.first, p.second);
   if (primeParams) engine.Reset();  // drains pending + snaps smoothers
 
@@ -207,11 +209,15 @@ TEST_CASE("PlanMemory sizes all three tiers") {
               detail::PostChain::BulkFloats(cfg.sampleRate) * sizeof(float));
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
+  // The Warm tier ends with the active mode and its CTRL (mode-compiler.md §7.3), rounded up to
+  // 16 bytes.
+  const size_t activeMode = (sizeof(ModeBlob) + sizeof(ControlState) + 15u) & ~size_t{15};
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] ==
           (512u * 2u + detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
            detail::PostChain::WarmFloats(cfg.sampleRate) +
            detail::OnsetDetector::WarmFloats()) *
-              sizeof(float));
+                  sizeof(float) +
+              activeMode);
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
 }
 
@@ -278,8 +284,8 @@ TEST_CASE("parameter table and accessors") {
   REQUIRE(engine.GetParam(ParamId::Mix) == 0.75f);
   engine.SetParam(ParamId::Mix, 9.0f);  // clamped to descriptor range
   REQUIRE(engine.GetParam(ParamId::Mix) == 1.0f);
-  engine.SetParam(ParamId::PitchSt, -99.0f);
-  REQUIRE(engine.GetParam(ParamId::PitchSt) == -24.0f);
+  engine.SetParam(ParamId::TransposeSt, -99.0f);
+  REQUIRE(engine.GetParam(ParamId::TransposeSt) == -24.0f);
 }
 
 TEST_CASE("non-finite parameter values are rejected at the boundary") {
@@ -405,9 +411,9 @@ TEST_CASE("block-splitting bit-exactness (no mid-render automation)") {
 
   const std::vector<std::pair<ParamId, float>> params = {
       {ParamId::DelayMs, 100.0f},      {ParamId::Mix, 0.7f},
-      {ParamId::Feedback, 0.5f},       {ParamId::OutTrimDb, -3.0f},
+      {ParamId::Feedback, 0.5f},       {ParamId::WetTrimDb, -3.0f},
       {ParamId::GrainSizeMs, 60.f},    {ParamId::Overlap, 0.55f},
-      {ParamId::SprayMs, 50.0f},       {ParamId::PitchSt, 7.0f},
+      {ParamId::SprayMs, 50.0f},       {ParamId::TransposeSt, 7.0f},
       {ParamId::SpreadCents, 20.f},    {ParamId::ReverseProb, 0.3f},
       {ParamId::Jitter, 1.0f},         {ParamId::WindowSmooth, 0.7f},
       {ParamId::ModDepth, 0.3f},       {ParamId::ModRateHz, 2.0f},
@@ -441,7 +447,7 @@ TEST_CASE("block-splitting bit-exactness under a saturated pool") {
       {ParamId::DelayMs, 100.0f},   {ParamId::Mix, 1.0f},
       {ParamId::GrainSizeMs, 20.f}, {ParamId::Overlap, 1.0f},
       {ParamId::SprayMs, 30.0f},    {ParamId::Jitter, 0.5f},
-      {ParamId::PitchSt, 5.0f}};
+      {ParamId::TransposeSt, 5.0f}};
 
   const auto ref = Render(cfg, input, params, true, {512});
   for (uint32_t split : {48u, 64u, 127u}) {
@@ -1365,6 +1371,7 @@ struct LiveEngine {
       : arenas(PlanMemory(cfg)) {
     REQUIRE(arenas.ok());
     REQUIRE(engine.Init(cfg, arenas.get()));
+    REQUIRE(testing::LoadRetiredStructure(engine, params));  // the onset source, marks
     for (auto& p : params) engine.SetParam(p.first, p.second);
     engine.Reset();
   }
@@ -1607,7 +1614,7 @@ TEST_CASE("block-splitting bit-exactness with freeze and far-rail positions") {
     Setup s{SmallConfig(),
             {{ParamId::DelayMs, 100.0f},    {ParamId::Mix, 1.0f},
              {ParamId::GrainSizeMs, 60.f},  {ParamId::Overlap, 0.55f},
-             {ParamId::SprayMs, 50.0f},     {ParamId::PitchSt, 7.0f},
+             {ParamId::SprayMs, 50.0f},     {ParamId::TransposeSt, 7.0f},
              {ParamId::SpreadCents, 20.f},  {ParamId::ReverseProb, 0.3f},
              {ParamId::Jitter, 1.0f},       {ParamId::TriggerSens, 0.8f},
              {ParamId::OnsetTrigger, 1.0f}, {ParamId::PositionSource, 1.0f}},
@@ -1784,7 +1791,7 @@ TEST_CASE("in-place mono input is bit-identical to separate buffers") {
       {ParamId::DelayMs, 80.0f},      {ParamId::Mix, 0.5f},
       {ParamId::Feedback, 0.4f},      {ParamId::GrainSizeMs, 40.0f},
       {ParamId::Overlap, 0.6f},       {ParamId::SprayMs, 20.0f},
-      {ParamId::PitchSt, 7.0f},       {ParamId::PanSpread, 0.8f},
+      {ParamId::TransposeSt, 7.0f},       {ParamId::PanSpread, 0.8f},
       {ParamId::ReverbMix, 0.3f},     {ParamId::ReverbTime, 0.5f}};
   const uint32_t block = 441;
 

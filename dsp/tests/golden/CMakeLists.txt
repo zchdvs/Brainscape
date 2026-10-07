@@ -13,8 +13,11 @@ function(_brainscape_golden_harness name engine main)
   target_link_libraries(${name} PRIVATE ${engine})
   # The engine's private FP-environment header, for the hostile-environment renders.
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+  # The golden file, and the corpus's committed packages (docs/design/mode-compiler.md §10.3),
+  # which the host and M7 harnesses read and decode alike.
   target_compile_definitions(${name} PRIVATE
-    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json")
+    BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden.json"
+    BRAINSCAPE_GOLDEN_PRESETS="${CMAKE_CURRENT_SOURCE_DIR}/presets")
   if(BRAINSCAPE_BUILD_M7_ORACLE)
     target_sources(${name} PRIVATE m7/syscalls.c)
     target_compile_options(${name} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-Wno-psabi>")
@@ -32,6 +35,11 @@ _brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks go
 _brainscape_golden_harness(brainscape_parity_stream brainscape_dsp parity_stream_main.cpp)
 # --placement takes the parity image's arena sizes from firmware/platform/Placement.h.
 target_include_directories(brainscape_parity_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware)
+# The packages compiled in, as the firmware images carry them (EmbeddedPackages.h), not read
+# from presets/: the stream renders from the bytes the parity image renders from.
+include(GoldenPackages.cmake)
+brainscape_golden_packages(brainscape_golden_packages)
+target_link_libraries(brainscape_parity_stream PRIVATE brainscape_golden_packages)
 
 if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
   # Check mode (profile §6.1): every hash, per-second hash and counter must equal

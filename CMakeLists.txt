@@ -38,6 +38,13 @@ endif()
 
 add_subdirectory(dsp)
 
+# The desktop-only preset compiler and its tool, bspc (docs/design/mode-compiler.md §8.1):
+# hosts only, never in a cross build for the pedal.
+if(NOT CMAKE_CROSSCOMPILING)
+  add_subdirectory(compiler)
+  add_subdirectory(tools/bspc)
+endif()
+
 if(BRAINSCAPE_BUILD_FIRMWARE)
   # The Daisy Seed bring-up images (firmware/README.md). libDaisy compiles C sources; C is
   # enabled here, at the top, only in this branch, so every other configure stays C++-only.

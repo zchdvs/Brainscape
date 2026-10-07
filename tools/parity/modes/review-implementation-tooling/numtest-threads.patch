@@ -1,0 +1,11 @@
+--- a/numtest.cpp
++++ b/numtest.cpp
+@@ -42,7 +42,7 @@
+   char b[4] = {char(v), char(v >> 8), char(v >> 16), char(v >> 24)};
+   return Fnv(h, b, 4);
+ }
+-static unsigned Threads() { unsigned t = std::thread::hardware_concurrency(); return t ? t : 1; }
++static unsigned Threads() { const char* e = std::getenv("NT"); unsigned t = e ? unsigned(std::atoi(e)) : std::thread::hardware_concurrency(); return t ? t : 1; }
+ 
+ static void Info() {
+ #if defined(_MSC_VER) && !defined(__clang__)

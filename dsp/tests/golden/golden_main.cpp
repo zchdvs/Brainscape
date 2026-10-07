@@ -12,9 +12,9 @@
 //        a render cannot run, a preset's coverage is missing or an invariance check
 //        changes its output (exit 1).
 // check  also requires every hash, per-second hash and counter, each vector's input
-//        hash and ring sizes, and the header's revision, versions and engine
-//        configuration to equal the golden file for this build's kSoundRevision (exit 2
-//        on any difference).
+//        hash and ring sizes, the header's revision, versions and engine configuration, and
+//        each package preset's soundHash and controlHash (the package it loads) to equal the
+//        golden file for this build's kSoundRevision (exit 2 on any difference).
 // mint   writes the golden file from a canonical run (2^22 ring, 48-frame grid, events
 //        through the engine's transport, one restarted engine, a clean FP environment,
 //        whole corpus, ablations on). It refuses while kSoundRevision is 0: nothing is
@@ -268,6 +268,13 @@ int64_t FirstDiff(const std::vector<std::string>& a, const std::vector<std::stri
   return a.size() == b.size() ? -1 : static_cast<int64_t>(n);
 }
 
+bool HasEvent(const PresetCase& p, EventType t) {
+  for (const Event& e : p.script.Events()) {
+    if (e.type == t) return true;
+  }
+  return false;
+}
+
 // The earliest second an ablation may first differ in: before it, the feature had
 // nothing to act on, so an earlier difference means the ablation changed more than
 // the feature.
@@ -287,6 +294,38 @@ int64_t NotBeforeSecond(const PresetCase& p, Feature f, const RenderOutput& r) {
     case Feature::Spillover: return firstEvent(EventType::SpilloverLoad);
     case Feature::Restart:
       return p.script.Restarts().empty() ? 0 : p.script.Restarts().front().frame / 48000;
+    case Feature::Macro: {
+      const int64_t m = firstEvent(EventType::MacroMove), x = firstEvent(EventType::Expression);
+      const bool    hasM = HasEvent(p, EventType::MacroMove), hasX = HasEvent(p, EventType::Expression);
+      return hasM && hasX ? (m < x ? m : x) : hasM ? m : x;
+    }
+    case Feature::ModeSwitch: {  // the first load, Spillover or Exact
+      int64_t first = HasEvent(p, EventType::SpilloverLoad) ? firstEvent(EventType::SpilloverLoad)
+                                                            : INT64_MAX;
+      for (const RestartPoint& rp : p.script.Restarts()) {
+        if (rp.load && rp.frame / 48000 < first) first = rp.frame / 48000;
+      }
+      return first == INT64_MAX ? 0 : first;
+    }
+    case Feature::FastCut:
+      for (const Event& e : p.script.Events()) {
+        if (e.type == EventType::SpilloverLoad &&
+            p.script.Staged()[e.id].style == SwitchStyle::FastCut) {
+          return e.frame / 48000;
+        }
+      }
+      return 0;
+    case Feature::WetKill:
+      for (const auto& kv : p.params) {
+        if (kv.first == ParamId::FilterCutoffHz && kv.second == 40.0f) return 0;
+      }
+      for (const Event& e : p.script.Events()) {
+        if (e.type == EventType::SetParam &&
+            e.id == static_cast<uint32_t>(ParamId::FilterCutoffHz) && e.value == 40.0f) {
+          return e.frame / 48000;
+        }
+      }
+      return 0;
     default: return 0;
   }
 }
@@ -373,6 +412,11 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
                const RenderOutput& r, bool* ok) {
   Json e = Json::Obj();
   e.Set("name", Json::Str(p.name));
+  if (p.package != nullptr) {  // the package rule's tie between the render and its package
+    e.Set("package", Json::Str(p.package));
+    e.Set("soundHash", Json::Str(r.soundHash));
+    e.Set("controlHash", Json::Str(r.controlHash));
+  }
   e.Set("hash", Json::Str(r.hash));
   Json secs = Json::Arr();
   for (const std::string& h : r.secondHashes) secs.Push(Json::Str(h));
@@ -448,6 +492,10 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
              SameCounters(ri, r);
       a.Set("fpEnv", Json::Str(FpEnvName(rc.fpEnv)));
       a.Set("firstDiffSecond", Json::Int(rendered ? FirstDiff(r.secondHashes, ri.secondHashes) : -1));
+    } else if (inv == Invariance::AmongEdits) {
+      rendered = renderer.Render(v, notes, AmongEdits(p), &ri);
+      same     = rendered && ri.hash == r.hash && ri.secondHashes == r.secondHashes;
+      a.Set("firstDiffSecond", Json::Int(rendered ? FirstDiff(r.secondHashes, ri.secondHashes) : -1));
     } else if (!p.script.Restarts().empty()) {
       int64_t          from = 0;
       const PresetCase tail = TailAfterRestart(p, &from);
@@ -461,7 +509,10 @@ Json RunPreset(Renderer& renderer, const Options& o, const VectorCase& v,
       failures.push_back(name + " did not render");
     } else if (!same) {
       const std::string diff =
-          inv == Invariance::HostileFpEnv ? InvarianceDiff(r, ri) : "output from the restart";
+          inv == Invariance::HostileFpEnv ? InvarianceDiff(r, ri)
+          : inv == Invariance::AmongEdits
+              ? "output from s" + std::to_string(FirstDiff(r.secondHashes, ri.secondHashes))
+              : "output from the restart";
       failures.push_back(name + " changed " + diff);
     }
   }
@@ -623,6 +674,14 @@ std::vector<std::string> Compare(const Json& golden, const Json& run, bool whole
         diffs.push_back(pname + ": not in the golden file");
         continue;
       }
+      // The package rule (mode-compiler.md §8.3): a package preset's recorded package hashes
+      // are those of the package it loads.
+      for (const char* key : {"package", "soundHash", "controlHash"}) {
+        if (StrOf(*gp, key) != StrOf(p, key)) {
+          diffs.push_back(pname + ": " + key + " " + StrOf(p, key).substr(0, 16) + ", golden " +
+                          StrOf(*gp, key).substr(0, 16));
+        }
+      }
       const int64_t second =
           FirstDiff(Strings(gp->Find("secondHashes")), Strings(p.Find("secondHashes")));
       if (StrOf(*gp, "hash") != StrOf(p, "hash")) {
@@ -747,8 +806,15 @@ int main(int argc, char** argv) {
         }
       };
       for (const auto& kv : p.params) check(kv.first, kv.second);
+      for (const StagedLoad& st : p.script.Staged()) {
+        for (const auto& kv : st.preset.params) check(kv.first, kv.second);
+      }
       for (const Event& e : p.script.Events()) {
-        if (e.type == EventType::SetParam) check(static_cast<ParamId>(e.id), e.value);
+        if (e.type == EventType::SetParam || e.type == EventType::MacroMove) {
+          check(static_cast<ParamId>(e.id), e.value);
+        } else if (e.type == EventType::Expression) {
+          check(ParamId::PerfExpression, e.value);
+        }
       }
     }
   }

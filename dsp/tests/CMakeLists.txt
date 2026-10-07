@@ -3,17 +3,26 @@
 # the dsp/ library itself is compiled without.
 add_executable(brainscape_tests
   test_main.cpp
+  test_blob.cpp
+  blob/BlobSamples.cpp
+  blob/Fixtures.cpp
   test_engine.cpp
   test_state.cpp
   test_boundary.cpp
   test_detmath.cpp
+  test_mode_eval.cpp
+  test_modes.cpp
   test_param_display.cpp
+  test_params.cpp
   test_testsignal.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
 # The engine's private headers: the unit tests exercise its internals directly.
 target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor
                                                     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+# The frozen package fixtures (docs/design/mode-compiler.md §10.3), read by test_blob.cpp.
+target_compile_definitions(brainscape_tests PRIVATE
+  BRAINSCAPE_FROZEN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets/frozen")
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()
@@ -52,6 +61,19 @@ add_executable(firmware_arena_plan ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/te
 target_link_libraries(firmware_arena_plan PRIVATE brainscape_dsp)
 target_include_directories(firmware_arena_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware)
 add_test(NAME firmware_arena_plan COMMAND firmware_arena_plan)
+
+# The live image's presets and mode structures (firmware/live/LivePresets.h) from the packages
+# compiled in, as the image builds them at boot: each loads exactly, and so does each with
+# every structure the onset and marks commands select.
+add_executable(firmware_live_presets
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/tests/live_presets.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/live/LivePresets.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/Corpus.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/EventScript.cpp)
+target_link_libraries(firmware_live_presets PRIVATE brainscape_dsp brainscape_golden_packages)
+target_include_directories(firmware_live_presets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware
+                                                         ${CMAKE_CURRENT_SOURCE_DIR}/golden)
+add_test(NAME firmware_live_presets COMMAND firmware_live_presets)
 
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
@@ -110,3 +132,4 @@ add_test(NAME dsp_fp_profile_check
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/FpProfileCheck.cmake)
 
 add_subdirectory(golden)
+add_subdirectory(blob)

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -58,7 +59,11 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void setStateInformation(const void* data, int sizeInBytes) override;
 
   // ── Wrapper API for the editor and tests ─────────────────────────────────────────
-  BrainscapeParam& Param(ParamId id) noexcept { return *params_[static_cast<size_t>(id) - 1u]; }
+  // One parameter per Leaf row (mode-compiler.md §4.1); `id` must be one (Params.h IsLeaf).
+  BrainscapeParam& Param(ParamId id) noexcept {
+    jassert(IsLeaf(id));
+    return *params_[LeafIndex(id)];
+  }
   FreezeParam&     Freeze() noexcept { return *freeze_; }
   TestInput&       GetTestInput() noexcept { return testInput_; }
 
@@ -112,13 +117,14 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::unique_lock<std::mutex> PauseSpareWorker() { return std::unique_lock<std::mutex>(spareMutex_); }
 
  private:
-  // An engine with its arenas, and the preset values its last Exact load applied.
+  // An engine with its arenas, and the preset values its last Exact load applied. Values
+  // are every leaf by ordinal (Params.h kLeafParams), as a complete preset holds them.
   struct EngineSlot {
-    Engine                            engine;
-    std::unique_ptr<host::HeapArenas> arenas;
-    std::array<float, kNumParams>     preset{};
+    Engine                             engine;
+    std::unique_ptr<host::HeapArenas>  arenas;
+    std::array<float, kNumLeafParams>  preset{};
   };
-  using Values = std::array<float, kNumParams>;
+  using Values = std::array<float, kNumLeafParams>;
 
   void     InitEngine(double sampleRate);
   void     LoadAfterRestart() noexcept;
@@ -148,7 +154,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void FreeSpare() noexcept;
 
   EventSink                                        sink_;
-  std::array<BrainscapeParam*, kNumParams>         params_{};  // owned by AudioProcessor
+  std::array<BrainscapeParam*, kNumLeafParams>     params_{};  // by leaf ordinal; owned by
+                                                               // AudioProcessor
   FreezeParam*                                     freeze_ = nullptr;
 
   // Two slots at most: the live engine and, while the restart option is on, the spare. The
@@ -171,7 +178,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // at its next block's first frame (restore_), or folds it into an Exact load.
   std::atomic<uint32_t>                       stateSeq_{0};
   std::atomic<uint32_t>                       stateGen_{0};
-  std::array<std::atomic<float>, kNumParams>  stateSlot_{};
+  std::array<std::atomic<float>, kNumLeafParams> stateSlot_{};
   uint32_t                                    seqApplied_ = 0;  // audio thread
   std::unique_ptr<PresetState>                restore_;         // audio thread
   bool                                        loadPending_ = false;
@@ -194,7 +201,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   size_t                                             numBlockEvents_ = 0;
   uint32_t                                           seq_            = 0;
   Values                                             sent_{};
-  uint32_t                                           touched_ = 0;  // bit per ParamId - 1
+  std::bitset<kNumLeafParams>                        touched_;  // by leaf ordinal
   bool                                               resync_  = false;  // re-send the mirrors
 
   // Transport starts (§4.9 c): armed by a non-playing block, prepareToPlay or a switch

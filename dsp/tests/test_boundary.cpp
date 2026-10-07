@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "brainscape/InputCondition.h"
@@ -68,9 +69,9 @@ EngineConfig SmallConfig() {
 // Every stage and stochastic feature engaged, with feedback.
 const std::vector<std::pair<ParamId, float>> kBusyPreset = {
     {ParamId::DelayMs, 100.0f},         {ParamId::Mix, 0.7f},
-    {ParamId::Feedback, 0.6f},          {ParamId::OutTrimDb, -3.0f},
+    {ParamId::Feedback, 0.6f},          {ParamId::WetTrimDb, -3.0f},
     {ParamId::GrainSizeMs, 60.f},       {ParamId::Overlap, 0.55f},
-    {ParamId::SprayMs, 50.0f},          {ParamId::PitchSt, 7.0f},
+    {ParamId::SprayMs, 50.0f},          {ParamId::TransposeSt, 7.0f},
     {ParamId::SpreadCents, 20.f},       {ParamId::ReverseProb, 0.3f},
     {ParamId::Jitter, 1.0f},            {ParamId::WindowSmooth, 0.7f},
     {ParamId::ModDepth, 0.3f},          {ParamId::ModRateHz, 2.0f},
@@ -116,6 +117,8 @@ Stereo RenderEvents(const Stereo& input, const std::vector<std::pair<ParamId, fl
     if (detail::ReadFpControl() != host) ++wordsLost;
   };
   call([&] { ok = engine.Init(cfg, arenas.get()); });
+  REQUIRE(ok);
+  call([&] { ok = testing::LoadRetiredStructure(engine, preset); });  // the onset source, marks
   REQUIRE(ok);
   auto setParam = [&](ParamId id, float v) {
     if (canonicalizeFirst) v = Canonicalize(id, v);
@@ -243,6 +246,9 @@ TEST_CASE("SetParam canonicalizes on the bit pattern, identically in every host 
   size_t mismatches = 0, malformed = 0;
   for (size_t p = 0; p < count; ++p) {
     const ParamDescriptor& d = table[p];
+    // SetParam stores Leaf and Global rows; for the other kinds it is a no-op and GetParam
+    // gives +0 (mode-compiler.md §4.1). Canonicalize is defined for every row.
+    const bool stored = d.kind == ParamKind::Leaf || d.kind == ParamKind::Global;
     for (const uint32_t u : patterns) {
       const uint32_t expected = Bits(ReferenceCanonical(d, u));
       for (const detail::FpWord host : hosts) {
@@ -252,7 +258,9 @@ TEST_CASE("SetParam canonicalizes on the bit pattern, identically in every host 
           engine.SetParam(d.id, FromBits(u));
           exported = Canonicalize(d.id, FromBits(u));
         }
-        if (Bits(engine.GetParam(d.id)) != expected || Bits(exported) != expected) ++mismatches;
+        if (Bits(engine.GetParam(d.id)) != (stored ? expected : 0u) || Bits(exported) != expected) {
+          ++mismatches;
+        }
       }
       // Never non-finite, subnormal or -0; always inside the range.
       const uint32_t e = expected & 0x7F800000u;
@@ -418,7 +426,7 @@ TEST_CASE("a hostile host FP environment reproduces the clean render") {
   const Stereo input = GridNoise(24000, 0x0DDBA11u, 6000000);
   std::vector<Event> events;
   for (uint32_t f = 2400; f < 24000; f += 2400) {
-    events.push_back({f, 0, ParamId::PitchSt, Bits(static_cast<float>(f % 7) - 3.0f)});
+    events.push_back({f, 0, ParamId::TransposeSt, Bits(static_cast<float>(f % 7) - 3.0f)});
     events.push_back({f, 0, ParamId::Feedback, Bits(static_cast<float>(f % 11) * 0.1f)});
   }
   events.push_back({4800, 1, ParamId::Mix, 0u});
@@ -464,12 +472,12 @@ TEST_CASE("fuzz: non-finite and subnormal inputs and parameters stay out of the 
         }
       }
     }
-    size_t count = 0;
-    const ParamDescriptor* table = Descriptors(&count);
+    // The preset leaves (Leaf rows; the other kinds are no-ops for SetParam, tested in
+    // test_params.cpp).
     std::vector<Event> events;
     for (uint32_t f = 0; f < kFrames; f += 64) {
       const uint32_t roll = rng.Next() % 8u;
-      const ParamId  id   = table[rng.Next() % count].id;
+      const ParamId  id   = LeafId(rng.Next() % kNumLeafParams);
       if (roll < 3u) {
         events.push_back({f, 0, id, kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]});
       } else if (roll < 4u) {
@@ -515,7 +523,7 @@ TEST_CASE("the largest finite input saturates at the output instead of overflowi
     input.l[i]    = v;
     input.r[i]    = i % 4u < 2u ? v : -v;
   }
-  const Stereo out = RenderEvents(input, {{ParamId::Mix, 0.0f}, {ParamId::OutTrimDb, 24.0f}},
+  const Stereo out = RenderEvents(input, {{ParamId::Mix, 0.0f}, {ParamId::WetTrimDb, 24.0f}},
                                   {}, 48, detail::kFpProfileWord, false, false);
   size_t nonFinite = 0, wrong = 0;
   for (size_t i = 0; i < kFrames; ++i) {

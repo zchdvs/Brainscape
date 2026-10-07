@@ -47,7 +47,7 @@ TEST_CASE("every descriptor has display metadata in table order") {
 
 TEST_CASE("taper endpoints are exactly min and max, and the taper is monotonic") {
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     CHECK(Bits(PlainFromNormalized(d.id, 0.0f)) == Bits(Canonicalize(d.id, d.min)));
     CHECK(Bits(PlainFromNormalized(d.id, 1.0f)) == Bits(d.max));
     float prev = PlainFromNormalized(d.id, 0.0f);
@@ -64,7 +64,7 @@ TEST_CASE("taper endpoints are exactly min and max, and the taper is monotonic")
 
 TEST_CASE("normalised view inverts the taper closely and keeps defaults in range") {
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     const ParamDisplay* m = FindParamDisplay(d.id);
     const float nd        = NormalizedFromPlain(d.id, d.def);
     CHECK(nd >= 0.0f);
@@ -89,10 +89,10 @@ TEST_CASE("canonicalization uses bit tests: non-finite to min, subnormal and -0 
   CHECK(Canonicalize(ParamId::DelayMs, 9000.0f) == 5000.0f);
   CHECK(Bits(Canonicalize(ParamId::Mix, -0.0f)) == 0u);
   CHECK(Bits(Canonicalize(ParamId::Mix, tiny)) == 0u);
-  CHECK(Bits(Canonicalize(ParamId::PitchSt, -tiny)) == 0u);
+  CHECK(Bits(Canonicalize(ParamId::TransposeSt, -tiny)) == 0u);
   CHECK(Canonicalize(ParamId::DelayMs, tiny) == 1.0f);  // +0 then clamped to min
   // Authored values pass bit for bit: no grid (companion §5.5).
-  CHECK(Bits(Canonicalize(ParamId::PitchSt, 7.02f)) == Bits(7.02f));
+  CHECK(Bits(Canonicalize(ParamId::TransposeSt, 7.02f)) == Bits(7.02f));
   CHECK(Bits(Canonicalize(ParamId::FilterMorph, 0.4f)) == Bits(0.4f));
   CHECK(PlainFromNormalized(ParamId::Mix, nan) == 0.0f);
   CHECK(PlainFromNormalized(ParamId::Mix, inf) == 1.0f);
@@ -100,27 +100,71 @@ TEST_CASE("canonicalization uses bit tests: non-finite to min, subnormal and -0 
 }
 
 TEST_CASE("discrete parameters snap to their positions") {
-  CHECK(PlainFromNormalized(ParamId::OnsetTrigger, 0.49f) == 0.0f);
-  CHECK(PlainFromNormalized(ParamId::OnsetTrigger, 0.5f) == 1.0f);
-  CHECK(PlainFromNormalized(ParamId::PositionSource, 1.0f) == 1.0f);
-  CHECK(NormalizedFromPlain(ParamId::PositionSource, 0.7f) == 1.0f);
-  CHECK(NormalizedFromPlain(ParamId::PositionSource, 0.2f) == 0.0f);
+  CHECK(PlainFromNormalized(ParamId::PerfFreeze, 0.49f) == 0.0f);
+  CHECK(PlainFromNormalized(ParamId::PerfFreeze, 0.5f) == 1.0f);
+  CHECK(PlainFromNormalized(ParamId::ReverbMode, 1.0f) == 3.0f);
+  CHECK(NormalizedFromPlain(ParamId::PerfFreeze, 0.7f) == 1.0f);
+  CHECK(NormalizedFromPlain(ParamId::PerfFreeze, 0.2f) == 0.0f);
+  // The retired rows keep their display rows, never registered (§4.1).
+  CHECK((FindParamDisplay(ParamId::OnsetTrigger)->flags & kParamAutomatable) == 0u);
+  CHECK((FindParamDisplay(ParamId::PositionSource)->flags & kParamAutomatable) == 0u);
+}
+
+TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)") {
+  // Integer leaves are discrete and show the integer the engine reads (§3.7).
+  CHECK(Format(ParamId::VoiceCount, 64.0f) == "64");
+  CHECK(Format(ParamId::Repeat, 2.5f) == "3");  // RoundHalfAwayI32
+  CHECK(Format(ParamId::Repeat, 2.49f) == "2");
+  CHECK(FindParamDisplay(ParamId::VoiceCount)->steps == 64);
+  CHECK(PlainFromNormalized(ParamId::Repeat, 0.5f) == 9.0f);  // 16 positions: 7.5 rounds up
+  CHECK(Format(ParamId::DecayMs, 0.0f) == "Off");
+  CHECK(Format(ParamId::DecayMs, 1500.0f) == "1.50 s");
+  CHECK(Format(ParamId::GlideCurve, -0.5f) == "-50%");
+  CHECK(Format(ParamId::TriggerOffset, 0.0f) == "0%");
+  CHECK(Format(ParamId::ReverbMode, 2.0f) == "Large hall");
+  CHECK(Format(ParamId::DelaySync, 0.0f) == "Off");
+  CHECK(Format(ParamId::DelaySync, 3.0f) == "Div 3");
+  CHECK(Format(ParamId::EffectVolumeDb, -3.0f) == "-3.0 dB");
+  CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
+  CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
+  CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
+  // wet_trim_db trims the wet signal only since r2 (§7.1 R3).
+  CHECK(std::string(FindParamDisplay(ParamId::WetTrimDb)->title) == "Wet trim");
+  CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::L1DelayMs)->group)) == "Layer 2");
+  CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::EffectVolumeDb)->group)) == "Device");
+  CHECK(std::string(FindParamDisplay(ParamId::L1TransposeSt)->title) == "Layer 2 transpose");
+}
+
+// Host model (b), provisionally (mode-compiler.md §3.6, Q12): macros, Mix, the effect volume
+// and the performance rows are automatable; the other leaves are registered but not. Lane D
+// applies it in the plugin with the macro parameters (§12.4); until then sound revision 1's
+// leaves, IDs 1-26 (27 and 28 retired at r2), stay automatable.
+TEST_CASE("host automation follows the host model") {
+  for (const ParamDescriptor& d : kParamTable) {
+    INFO((d.name != nullptr ? d.name : "(retired)"));
+    const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
+    const auto raw         = static_cast<uint32_t>(d.id);
+    const bool want        = raw <= 26u || (raw >= 69u && raw <= 80u) ||
+                      d.id == ParamId::EffectVolumeDb;
+    CHECK(automatable == want);
+  }
 }
 
 TEST_CASE("display text carries units and the named endpoints") {
   CHECK(Format(ParamId::DelayMs, 250.0f) == "250 ms");
   CHECK(Format(ParamId::DelayMs, 1250.0f) == "1.25 s");
   CHECK(Format(ParamId::Mix, 0.5f) == "50%");
-  CHECK(Format(ParamId::OutTrimDb, -3.0f) == "-3.0 dB");
-  CHECK(Format(ParamId::PitchSt, 7.0f) == "+7.00 st");
-  CHECK(Format(ParamId::PitchSt, 0.0f) == "0.00 st");
+  CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
+  CHECK(Format(ParamId::TransposeSt, 7.0f) == "+7.00 st");
+  CHECK(Format(ParamId::TransposeSt, 0.0f) == "0.00 st");
   CHECK(Format(ParamId::FilterCutoffHz, 20000.0f) == "Off");
   CHECK(Format(ParamId::FilterCutoffHz, 2500.0f) == "2.50 kHz");
+  CHECK(Format(ParamId::FilterCutoffHz, 40.0f) == "Kill");  // the wet kill (§4.3)
+  CHECK(Format(ParamId::FilterCutoffHz, 41.0f) == "41.0 Hz");
   CHECK(Format(ParamId::FilterMorph, 1.0f) == "BP");
   CHECK(Format(ParamId::FilterMorph, 0.4f) == "LP>BP 40%");
   CHECK(Format(ParamId::FilterMorph, 3.0f) == "Notch");
-  CHECK(Format(ParamId::OnsetTrigger, 1.0f) == "On");
-  CHECK(Format(ParamId::PositionSource, 0.0f) == "Live");
+  CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
   CHECK(Format(ParamId::WindowSkew, 0.5f) == "0%");  // centred: symmetric window
   CHECK(Format(ParamId::WindowSkew, 0.25f) == "-50%");
   CHECK(Format(ParamId::WindowSkew, 1.0f) == "+100%");
@@ -166,7 +210,8 @@ std::string RefFormat(ParamId id, float plain) {
   switch (m.kind) {
     case DisplayKind::Milliseconds: return RefMs(v);
     case DisplayKind::Hertz: return RefHz(v);
-    case DisplayKind::FilterCutoff: return v >= d.max - 0.5f ? "Off" : RefHz(v);
+    case DisplayKind::FilterCutoff:
+      return v >= d.max - 0.5f ? "Off" : v <= d.min ? "Kill" : RefHz(v);  // the wet kill
     case DisplayKind::Percent: {
       const double pc = static_cast<double>(v) * 100.0;
       return RefFixed(pc < 10.0 ? "%.1f%%" : "%.0f%%", pc);
@@ -195,6 +240,22 @@ std::string RefFormat(ParamId id, float plain) {
     }
     case DisplayKind::OffOn: return v >= 0.5f ? "On" : "Off";
     case DisplayKind::LiveMark: return v >= 0.5f ? "Mark" : "Live";
+    case DisplayKind::Count: return std::to_string(std::lround(v));  // half away from zero
+    case DisplayKind::MsOrOff: return v == 0.0f ? std::string("Off") : RefMs(v);
+    case DisplayKind::Signed: {
+      const double pc  = static_cast<double>(v) * 100.0;
+      const double mag = std::fabs(pc);
+      return mag < 0.05 ? "0%" : RefFixed(mag < 10.0 ? "%+.1f%%" : "%+.0f%%", pc);
+    }
+    case DisplayKind::ReverbMode: {
+      static const char* kModes[] = {"Bright room", "Dark medium", "Large hall", "Ambient"};
+      const long n = std::lround(v);
+      return kModes[n < 0 ? 0 : (n > 3 ? 3 : n)];
+    }
+    case DisplayKind::Division: {
+      const long n = std::lround(v);
+      return n <= 0 ? std::string("Off") : "Div " + std::to_string(n);
+    }
   }
   return "";
 }
@@ -220,7 +281,7 @@ TEST_CASE("display text matches a correctly rounding printf, ties included") {
         ++compared;
         if (want != buf) {
           ++differ;
-          if (differ <= 10) UNSCOPED_INFO(d.name << " " << v << ": '" << buf << "' vs printf '" << want << "'");
+          if (differ <= 10) UNSCOPED_INFO((d.name != nullptr ? d.name : "(retired)") << " " << v << ": '" << buf << "' vs printf '" << want << "'");
         }
       }
     }
@@ -239,7 +300,7 @@ TEST_CASE("taper and display functions own the FP environment") {
     in.push_back(FromBits(u));
   }
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     std::vector<float> plainClean(in.size()), plainHostile(in.size());
     std::vector<float> normClean(in.size()), normHostile(in.size());
     for (size_t i = 0; i < in.size(); ++i) {

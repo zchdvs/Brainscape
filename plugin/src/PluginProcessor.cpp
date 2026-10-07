@@ -21,8 +21,6 @@ namespace brainscape::plugin {
 
 namespace {
 
-static_assert(kNumParams < 32, "touched_ holds one bit per parameter");
-
 enum SpareState : int { kSpareEmpty, kSparePreparing, kSpareReady, kSpareSwapping, kSpareRetired };
 
 // While the restart option is on, the worker re-checks the spare this often: after a
@@ -49,19 +47,20 @@ inline void RaisePeak(std::atomic<float>& meter, float p) noexcept {
   if (p > meter.load(std::memory_order_relaxed)) meter.store(p, std::memory_order_relaxed);
 }
 
-// A complete preset (companion §6.1): every leaf, as the wrapper holds it.
+// A complete preset (companion §6.1): every leaf, as the wrapper holds it by ordinal.
 void ToPreset(const float* values, PresetState& out) noexcept {
-  for (size_t i = 0; i < kNumParams; ++i) {
-    out.leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), values[i]};
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    out.leaves[i] = {static_cast<uint32_t>(LeafId(i)), values[i]};
   }
-  out.leafCount = static_cast<uint32_t>(kNumParams);
+  out.leafCount = static_cast<uint32_t>(kNumLeafParams);
 }
 
-bool SameBits(const std::array<float, kNumParams>& a, const std::array<float, kNumParams>& b) noexcept {
-  return std::memcmp(a.data(), b.data(), sizeof(float) * kNumParams) == 0;
+bool SameBits(const std::array<float, kNumLeafParams>& a,
+              const std::array<float, kNumLeafParams>& b) noexcept {
+  return std::memcmp(a.data(), b.data(), sizeof(float) * kNumLeafParams) == 0;
 }
 
-uint64_t ValuesHash(const std::array<float, kNumParams>& v) noexcept {  // FNV-1a over the bits
+uint64_t ValuesHash(const std::array<float, kNumLeafParams>& v) noexcept {  // FNV-1a, the bits
   uint64_t h = 0xcbf29ce484222325ull;
   for (const float x : v) {
     uint32_t u = 0;
@@ -82,8 +81,10 @@ BrainscapeProcessor::BrainscapeProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       restore_(std::make_unique<PresetState>()),
       blockEvents_(kMaxBlockEvents) {
-  for (size_t i = 0; i < kNumParams; ++i) {
-    auto p     = std::make_unique<BrainscapeParam>(kParamTable[i].id, sink_);
+  // One host parameter per Leaf row; Reserved and Retired rows are not registered, and the
+  // macro and performance rows join with the macro work (mode-compiler.md §9.2).
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    auto p     = std::make_unique<BrainscapeParam>(LeafId(i), sink_);
     params_[i] = p.get();
     sent_[i]   = p->Plain();
     addParameter(p.release());
@@ -177,7 +178,7 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
     seqApplied_      = stateSeq_.load(std::memory_order_acquire);
     loadPending_     = false;
     hostCount_ = uiCount_ = 0;
-    for (size_t i = 0; i < kNumParams; ++i) sent_[i] = params_[i]->Plain();
+    for (size_t i = 0; i < kNumLeafParams; ++i) sent_[i] = params_[i]->Plain();
     // Init resets every parameter and clears freeze (Engine.cpp Init), so the wrapper's
     // preset goes back in with an Exact load (§4.1): the start state a render begins from.
     ToPreset(sent_.data(), *restore_);
@@ -217,7 +218,7 @@ void BrainscapeProcessor::PostAt(uint64_t frame, WrapperEvent e) noexcept {
   // Events hold canonical values (profile §3.7), as every other producer's do: the value
   // sent to the engine becomes the parameter's mirror and the session state, so it must
   // be the bits the engine keeps, not the caller's -0, NaN or out-of-range value.
-  if (e.type == WrapperEvent::Type::Param && e.id >= 1u && e.id <= kNumParams) {
+  if (e.type == WrapperEvent::Type::Param && IsLeaf(e.id)) {
     e.value = Canonicalize(static_cast<ParamId>(e.id), e.value);
   }
   e.frame    = frame;
@@ -263,8 +264,8 @@ BrainscapeProcessor::Status BrainscapeProcessor::GetStatus() const noexcept {
 }
 
 bool BrainscapeProcessor::StartAudition(const juce::File& wav, juce::String& error) {
-  float preset[kNumParams];
-  for (size_t i = 0; i < kNumParams; ++i) preset[i] = params_[i]->Plain();
+  float preset[kNumLeafParams];
+  for (size_t i = 0; i < kNumLeafParams; ++i) preset[i] = params_[i]->Plain();
   double                          rate  = 0.0;
   const juce::AudioBuffer<float>* audio = testInput_.GetSource() == TestInput::Source::FileLoop
                                               ? testInput_.LoadedAudio(&rate)
@@ -285,7 +286,7 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
   WrapperState state{};
   {
     const std::lock_guard<std::mutex> lock(controlMutex_);
-    for (size_t i = 0; i < kNumParams; ++i) state.plain[i] = params_[i]->Plain();
+    for (size_t i = 0; i < kNumLeafParams; ++i) state.plain[i] = params_[i]->Plain();
     state.settings = GetSettings();
   }
   std::vector<uint8_t> bytes;
@@ -299,7 +300,7 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
   {
     const std::lock_guard<std::mutex> lock(controlMutex_);
     PostStateUnit(state.plain);
-    for (size_t i = 0; i < kNumParams; ++i) params_[i]->StoreMirror(state.plain[i]);
+    for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(state.plain[i]);
     SetSettings(state.settings);
     lastLoadInexact_.store(state.unknownIds + state.missingIds > 0u, std::memory_order_relaxed);
   }
@@ -314,7 +315,7 @@ void BrainscapeProcessor::PostStateUnit(const float* plain) noexcept {
   const uint32_t seq = stateSeq_.load(std::memory_order_relaxed);
   stateSeq_.store(seq + 1u, std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_release);
-  for (size_t i = 0; i < kNumParams; ++i) stateSlot_[i].store(plain[i], std::memory_order_relaxed);
+  for (size_t i = 0; i < kNumLeafParams; ++i) stateSlot_[i].store(plain[i], std::memory_order_relaxed);
   stateGen_.store(gen, std::memory_order_relaxed);
   stateSeq_.store(seq + 2u, std::memory_order_release);
   // Only once the slot is complete: whoever pops an event stamped with this generation
@@ -332,14 +333,14 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
   // Odd: a newer restore is being written, and every event drained this block is older
   // than it; the next block takes it.
   if (seq == seqApplied_ || (seq & 1u) != 0u) return;
-  float plain[kNumParams];
-  for (size_t i = 0; i < kNumParams; ++i) plain[i] = stateSlot_[i].load(std::memory_order_relaxed);
+  float plain[kNumLeafParams];
+  for (size_t i = 0; i < kNumLeafParams; ++i) plain[i] = stateSlot_[i].load(std::memory_order_relaxed);
   const uint32_t gen = stateGen_.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   if (stateSeq_.load(std::memory_order_relaxed) != seq) return;
-  for (size_t i = 0; i < kNumParams; ++i) sent_[i] = plain[i];
+  for (size_t i = 0; i < kNumLeafParams; ++i) sent_[i] = plain[i];
   ToPreset(plain, *restore_);
-  touched_         = (1u << kNumParams) - 1u;
+  touched_.set();
   seqApplied_      = seq;
   generationFloor_ = gen;
   if (framePos_ != 0) {
@@ -378,15 +379,14 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
                            std::make_pair(uiEvents_.data(), uiCount_)}) {
     for (size_t k = 0; k < live.second; ++k) {
       const WrapperEvent& e = live.first[k];
-      if (e.type != WrapperEvent::Type::Param || e.scripted || !Applies(e) || e.id < 1u ||
-          e.id > kNumParams) {
+      if (e.type != WrapperEvent::Type::Param || e.scripted || !Applies(e) || !IsLeaf(e.id)) {
         continue;
       }
-      start[e.id - 1u] = e.value;
+      start[LeafIndex(e.id)] = e.value;
     }
   }
   if (resync_) {  // the queue overflowed: the mirrors are the latest word
-    for (size_t i = 0; i < kNumParams; ++i) start[i] = params_[i]->Plain();
+    for (size_t i = 0; i < kNumLeafParams; ++i) start[i] = params_[i]->Plain();
   }
   bool restarted = false;
   // Offline, or with nothing played since the last Init or restart, restart in place (§4.9
@@ -450,7 +450,7 @@ void BrainscapeProcessor::PrepareSpare() {
   // One consistent snapshot is not needed: a spare that differs from what the live engine
   // plays at the transport start is never swapped in.
   Values snapshot;
-  for (size_t i = 0; i < kNumParams; ++i) snapshot[i] = params_[i]->Plain();
+  for (size_t i = 0; i < kNumLeafParams; ++i) snapshot[i] = params_[i]->Plain();
   const bool settled = SameBits(snapshot, lastSnapshot_);
   lastSnapshot_      = snapshot;
   if (!settled || (state == kSpareReady && SameBits(snapshot, spareSnapshot_))) return;
@@ -535,13 +535,15 @@ void BrainscapeProcessor::Emit(const WrapperEvent& e, uint32_t offset) noexcept 
   b.offset = offset;
   b.value  = e.value;
   switch (e.type) {
-    case WrapperEvent::Type::Param:
-      if (e.id < 1u || e.id > kNumParams) return;
-      b.type = Engine::EventType::SetParam;
-      b.id   = e.id;
-      sent_[e.id - 1u] = e.value;
-      touched_ |= 1u << (e.id - 1u);
+    case WrapperEvent::Type::Param: {
+      const size_t leaf = LeafIndex(e.id);
+      if (leaf == kNumLeafParams) return;  // only Leaf rows are registered
+      b.type      = Engine::EventType::SetParam;
+      b.id        = e.id;
+      sent_[leaf] = e.value;
+      touched_.set(leaf);
       break;
+    }
     case WrapperEvent::Type::Freeze: b.type = Engine::EventType::Freeze; break;
     case WrapperEvent::Type::Trigger:
       b.type = Engine::EventType::Trigger;
@@ -610,9 +612,9 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
     EmitLive(uiEvents_.data(), uiCount_, offset);
     if (resync_) {  // the queue overflowed: re-send every mirror
       resync_ = false;
-      for (size_t i = 0; i < kNumParams; ++i) {
-        Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui,
-              static_cast<uint32_t>(kParamTable[i].id), params_[i]->Plain()},
+      for (size_t i = 0; i < kNumLeafParams; ++i) {
+        Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, static_cast<uint32_t>(LeafId(i)),
+              params_[i]->Plain()},
              offset);
       }
       Emit({WrapperEvent::Type::Freeze, WrapperEvent::Source::Ui, 0u, freeze_->get() ? 1.0f : 0.0f}, offset);
@@ -625,10 +627,10 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
 void BrainscapeProcessor::WriteBackMirrors() noexcept {
   // The mirrors follow what the engine was sent, so two producers racing on one
   // parameter settle on the engine's value within a block.
-  for (size_t i = 0; touched_ != 0u && i < kNumParams; ++i) {
-    if ((touched_ & (1u << i)) != 0u) params_[i]->StoreMirror(sent_[i]);
+  for (size_t i = 0; touched_.any() && i < kNumLeafParams; ++i) {
+    if (touched_.test(i)) params_[i]->StoreMirror(sent_[i]);
   }
-  touched_ = 0u;
+  touched_.reset();
 }
 
 // ── Audio ──────────────────────────────────────────────────────────────────────────
