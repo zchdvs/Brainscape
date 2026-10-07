@@ -40,14 +40,19 @@ const std::vector<std::string>& Denylist();
 // `derive` (§3.5): each targeted leaf not under editor.detached becomes EvalMacro at its
 // macro's stored position, macros in ascending id (of two macros on one leaf the later wins, as
 // a later move does). With `solve`, each macro's position is first solved from the leaf of its
-// first non-detached target whose range is not a single value: the binary32 position whose
-// value lands nearest the leaf (bisection; EvalMacro is monotonic), the smaller on a tie.
-// `log` receives one line per change.
+// first non-detached target whose range is not a single value (SolvePosition). `log` receives
+// one line per changed position and per leaf whose value changed in the end (a leaf two macros
+// target is logged once, with the macro that wrote it last), naming leaves as schema 1 does
+// (`layer0.position.spray_ms`, the form editor.detached and macro targets take).
 void Derive(Document* doc, bool solve, std::vector<std::string>* log);
 
-// The canonical position (bits) whose value for target `index` of `macroId` lands nearest
-// `leafBits`, as Derive's solve does.
+// "Solve position" (§3.5): the canonical position (bits) whose value for target `index` of
+// `macroId` lands nearest `leafBits`, by bisection (EvalMacro is monotonic) and exact distance
+// comparisons. Of the positions that land equally near, `current` (the stored position, when it
+// is a canonical position in [0, 1]) wins, so a leaf derived from its position solves back to
+// that position; otherwise the smallest, also past either end of the range.
+inline constexpr uint32_t kNoPosition = 0xFFFFFFFFu;
 uint32_t SolvePosition(const brainscape::ModeBlob& mode, uint32_t macroId, uint32_t index,
-                       uint32_t leafBits);
+                       uint32_t leafBits, uint32_t current = kNoPosition);
 
 }  // namespace bsc

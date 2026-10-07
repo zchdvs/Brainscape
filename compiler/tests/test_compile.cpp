@@ -504,6 +504,14 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
   // E12: the package within 16 KiB (editor data is carried in the JSON section).
   Refused(With("editor.ratio_gen", Parse("{\"note\": \"" + std::string(16000, 'x') + "\"}")), "E12",
           "");
+  // ...and a document's text within 1 MiB, refused before it is parsed (whitespace counts).
+  std::string big = Minimal();
+  big.insert(1, kMaxDocumentBytes + 1u - big.size(), ' ');
+  REQUIRE(big.size() == kMaxDocumentBytes + 1u);
+  const std::vector<Finding> f = Refused(big, "E12", "");
+  REQUIRE(f.size() == 1u);
+  big.erase(1, 1);
+  Ok(big);
 }
 
 TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
@@ -568,7 +576,7 @@ TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   REQUIRE(positions.members[3].value.text == "0.5");
   const json::Value& editor = *v.Find("editor");
   REQUIRE(json::Serialize(*editor.Find("detached")) == "[\"global.mix\", \"layer0.size_ms\"]\n");
-  REQUIRE(editor.Find("ratio_gen")->Find("n")->text == "1.50");  // editor data kept as written
+  REQUIRE(editor.Find("ratio_gen")->Find("n")->text == "1.5");  // editor numbers are canonical
   REQUIRE(v.members.back().key == "editor");
   // A subnormal leaf compiles to +0 with finding L1.
   Document             d;
@@ -589,6 +597,42 @@ TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   REQUIRE(Ok(stale).package == r.package);
   Refused(With("sound_hash", Str("ABC"), With("sound_rev", Num("7"), ok)), "E4", "/sound_hash");
   RoundTrip(ok);
+}
+
+TEST_CASE("compile: editor.ratio_gen is validated and canonical (§2.2, §6.4)", "[compile]") {
+  // Two spellings of the same editor data: one canonical text, one package.
+  const std::string a =
+      With("editor.ratio_gen", Parse(R"({"n": 1.50, "kind": "octaves", "x": 1E2, "z": -0,)"
+                                     R"( "w": [2.50e0, {"b": 1, "a": -0.0E-0}]})"));
+  const std::string b =
+      With("editor.ratio_gen", Parse(R"({"kind": "octaves", "n": 1.5,)"
+                                     R"( "w": [2.5, {"a": 0, "b": 1}], "x": 100, "z": 0})"));
+  REQUIRE(Fmt(a) == Fmt(b));
+  REQUIRE(Ok(a).package == Ok(b).package);
+  const json::Value  v  = Parse(Fmt(a));
+  const json::Value& rg = *v.Find("editor")->Find("ratio_gen");
+  REQUIRE(rg.members.size() == 5u);  // members by key, numbers in canonical text
+  REQUIRE(rg.members[0].key == "kind");
+  REQUIRE(rg.members[1].key == "n");
+  REQUIRE(rg.members[1].value.text == "1.5");
+  REQUIRE(rg.members[2].key == "w");
+  REQUIRE(rg.members[2].value.items[0].text == "2.5");  // arrays keep their order
+  REQUIRE(rg.members[2].value.items[1].members[0].key == "a");
+  REQUIRE(rg.members[2].value.items[1].members[0].value.text == "0");
+  REQUIRE(rg.members[3].value.text == "100");
+  REQUIRE(rg.members[4].value.text == "0");
+  // Overflow is an error, as everywhere in the document; a subnormal is kept as 0, with L1.
+  Refused(With("editor.ratio_gen", Parse(R"({"n": 1e999})")), "E4", "/editor/ratio_gen/n");
+  Refused(With("editor.ratio_gen", Parse(R"({"a": {"b": [0, -1e39]}})")), "E4",
+          "/editor/ratio_gen/a/b/1");
+  Document             d;
+  std::vector<Finding> f;
+  REQUIRE(ReadDocumentText(With("editor.ratio_gen", Parse(R"({"tiny": 1e-40})")), ReadOptions{},
+                           &d, &f));
+  REQUIRE(d.notes.size() == 1u);
+  REQUIRE(d.notes[0].code == "L1");
+  REQUIRE(d.notes[0].at.pointer == "/editor/ratio_gen/tiny");
+  REQUIRE(d.ratioGen.Find("tiny")->text == "0");
 }
 
 TEST_CASE("compile: the design's Engram example", "[compile]") {
@@ -649,6 +693,18 @@ TEST_CASE("compile: decompile, verify and diff", "[compile]") {
   const CompileResult d = Ok(Minimal());
   REQUIRE(Diff(d.package.data(), d.package.size(), c.package.data(), c.package.size()) ==
           "/name: \"Test\" -> \"Other\"");
+  // A user copy of a factory preset (a new id and name, §9.1) with a leaf changed: diff shows
+  // the leaf, not the FACTORY flag the id implies, nor the name.
+  const std::string   factory = With("layers[0].size_ms", Num("120"), Minimal("factory.x"));
+  const CompileResult fa      = Ok(factory);
+  const CompileResult copy =
+      Ok(With("layers[0].size_ms", Num("150"), With("name", Str("Copy"), Minimal("user.x"))));
+  REQUIRE(Diff(fa.package.data(), fa.package.size(), copy.package.data(), copy.package.size()) ==
+          "/layers/0/size_ms: 120 -> 150");
+  // The same sound: the identity, before the flags.
+  const CompileResult same = Ok(With("layers[0].size_ms", Num("120"), Minimal("user.x")));
+  REQUIRE(Diff(fa.package.data(), fa.package.size(), same.package.data(), same.package.size()) ==
+          "/id: \"factory.x\" -> \"user.x\"");
   // A package whose JSON section is another document's: verify finds it.
   brainscape::PackageContent content;
   content.json            = reinterpret_cast<const uint8_t*>(b.json.data());

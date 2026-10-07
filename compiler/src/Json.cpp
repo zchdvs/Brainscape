@@ -1,5 +1,6 @@
 #include "Json.h"
 
+#include <set>
 #include <utility>
 
 #include "Text.h"
@@ -185,7 +186,9 @@ class Parser {
   }
 
   // Line and column (1-based; the column counts characters, a malformed byte as one).
-  void Position(size_t at, uint32_t* line, uint32_t* column) const {
+  // Counting resumes from the last position asked on the same line, since the parser asks in
+  // reading order: a document on one long line costs linear time, not quadratic.
+  void Position(size_t at, uint32_t* line, uint32_t* column) {
     size_t lo = 0, hi = lineStarts_.size();
     while (hi - lo > 1) {
       const size_t mid = (lo + hi) / 2;
@@ -195,12 +198,20 @@ class Parser {
         hi = mid;
       }
     }
-    uint32_t col = 1;
-    for (size_t k = lineStarts_[lo]; k < at && k < s_.size(); ++k) {
+    size_t   from = lineStarts_[lo];
+    uint32_t col  = 1;
+    if (cacheLine_ == lo && cacheAt_ <= at) {
+      from = cacheAt_;
+      col  = cacheColumn_;
+    }
+    for (size_t k = from; k < at && k < s_.size(); ++k) {
       if ((static_cast<uint8_t>(s_[k]) & 0xC0u) != 0x80u) ++col;
     }
-    *line   = static_cast<uint32_t>(lo + 1);
-    *column = col;
+    cacheLine_   = lo;
+    cacheAt_     = at;
+    cacheColumn_ = col;
+    *line        = static_cast<uint32_t>(lo + 1);
+    *column      = col;
   }
 
   void SkipSpace() {
@@ -413,6 +424,7 @@ class Parser {
       ++i_;
       return true;
     }
+    std::set<std::string> keys;  // duplicates in O(n log n), whatever the object's size
     for (;;) {
       SkipSpace();
       if (i_ >= s_.size()) return Fail(i_, "unterminated object");
@@ -421,11 +433,9 @@ class Parser {
       const size_t keyAt = i_;
       Position(keyAt, &m.line, &m.column);
       if (!ParseString(&m.key)) return false;
-      for (const Member& other : out->members) {
-        if (other.key == m.key) {
-          path_.push_back(m.key);
-          return Fail(keyAt, "duplicate key \"" + m.key + "\"");
-        }
+      if (!keys.insert(m.key).second) {
+        path_.push_back(m.key);
+        return Fail(keyAt, "duplicate key \"" + m.key + "\"");
       }
       SkipSpace();
       if (i_ >= s_.size() || s_[i_] != ':') return Fail(i_, "expected ':'");
@@ -457,6 +467,9 @@ class Parser {
   size_t                   i_ = 0;
   std::vector<size_t>      lineStarts_;
   std::vector<std::string> path_;
+  size_t                   cacheLine_   = static_cast<size_t>(-1);
+  size_t                   cacheAt_     = 0;
+  uint32_t                 cacheColumn_ = 1;
 };
 
 }  // namespace

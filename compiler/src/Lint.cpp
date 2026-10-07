@@ -84,7 +84,7 @@ std::string Mark(std::string_view s) {
   return std::string();
 }
 
-// sign(2t - a - b) for binary32 values, exactly: each as an integer scaled by 2^149 in 320-bit
+// Exact comparisons of binary32 distances: each value as an integer scaled by 2^149 in 320-bit
 // two's complement.
 struct Wide {
   uint64_t w[5] = {0, 0, 0, 0, 0};
@@ -138,6 +138,17 @@ int Sign(const Wide& a) {
   return 0;
 }
 
+// |t - v| for binary32 values, exactly.
+Wide Distance(uint32_t t, uint32_t v) {
+  const Wide d = Add(Scaled(t), Negate(Scaled(v)));
+  return Sign(d) < 0 ? Negate(d) : d;
+}
+
+// sign(|t - a| - |t - b|): negative when a lands nearer t, zero on a tie.
+int Nearer(uint32_t t, uint32_t a, uint32_t b) {
+  return Sign(Add(Distance(t, a), Negate(Distance(t, b))));
+}
+
 uint32_t ValueAt(const ModeBlob& mode, uint32_t macroId, uint32_t index, uint32_t positionBits) {
   PresetLeaf   out[kMaxMacroTargets];
   const size_t n =
@@ -164,7 +175,8 @@ const std::vector<std::string>& Denylist() {
   return kList;
 }
 
-uint32_t SolvePosition(const ModeBlob& mode, uint32_t macroId, uint32_t index, uint32_t leafBits) {
+uint32_t SolvePosition(const ModeBlob& mode, uint32_t macroId, uint32_t index, uint32_t leafBits,
+                       uint32_t current) {
   const MacroTable& t  = mode.macros;
   uint32_t          lo = 0, hi = 0;
   for (uint32_t k = 0; k < t.macroCount; ++k) {
@@ -173,30 +185,43 @@ uint32_t SolvePosition(const ModeBlob& mode, uint32_t macroId, uint32_t index, u
     hi = BitsOf(t.targets[t.macros[k].first + index].hi);
   }
   const bool rising = !LessBits(hi, lo);
-  // The first position whose value reaches the leaf (non-decreasing when rising).
-  const auto reaches = [&](uint32_t k) {
-    const uint32_t v = ValueAt(mode, macroId, index, PositionBits(k));
-    return rising ? !LessBits(v, leafBits) : !LessBits(leafBits, v);
+  const auto value  = [&](uint32_t k) {
+    return ValueAt(mode, macroId, index, PositionBits(k));
   };
-  uint32_t first = 0, last = kPositions;  // the answer is in [first, last]
-  while (first < last) {
-    const uint32_t mid = first + (last - first) / 2u;
-    if (reaches(mid)) {
-      last = mid;
-    } else {
-      first = mid + 1u;
+  const uint32_t top = value(kPositions - 1u);
+  // The first position whose value reaches `aim` (non-decreasing when rising), for an aim the
+  // top position reaches.
+  const auto firstReaching = [&](uint32_t aim) {
+    uint32_t first = 0, last = kPositions - 1u;  // the answer is in [first, last]
+    while (first < last) {
+      const uint32_t mid = first + (last - first) / 2u;
+      const uint32_t v   = value(mid);
+      if (rising ? !LessBits(v, aim) : !LessBits(aim, v)) {
+        last = mid;
+      } else {
+        first = mid + 1u;
+      }
     }
+    return first;
+  };
+  // Past the top, every position that gives the top value lands as near as any: aim at it.
+  const bool     past  = rising ? LessBits(top, leafBits) : LessBits(leafBits, top);
+  const uint32_t aim   = past ? top : leafBits;
+  const uint32_t first = firstReaching(aim);
+  uint32_t       best  = first;
+  if (first > 0u) {
+    // value(first - 1) misses the aim and value(first) reaches it: the nearer of the two values,
+    // the lower position's on a tie, and the first position that gives it.
+    const uint32_t a = value(first - 1u);
+    if (Nearer(aim, a, value(first)) <= 0) best = firstReaching(a);
   }
-  if (first >= kPositions) return PositionBits(kPositions - 1u);  // past the top: 1
-  if (first == 0u) return PositionBits(0);
-  // The nearer of the two neighbours around the leaf, the smaller on a tie.
-  const uint32_t a = ValueAt(mode, macroId, index, PositionBits(first - 1u));
-  const uint32_t b = ValueAt(mode, macroId, index, PositionBits(first));
-  // a < t <= b (rising) or a > t >= b: compare |t - a| with |b - t|, i.e. sign(2t - a - b).
-  const Wide tt      = Scaled(leafBits);
-  const int  s       = Sign(Add(Add(tt, tt), Negate(Add(Scaled(a), Scaled(b)))));
-  const bool aNearer = rising ? s < 0 : s > 0;
-  return PositionBits(aNearer || s == 0 ? first - 1u : first);
+  // The stored position stays when it lands as near the leaf as the answer (no churn).
+  const bool canonical = current == 0u || (current >= 0x00800000u && current <= 0x3F800000u);
+  if (canonical) {
+    const uint32_t v = ValueAt(mode, macroId, index, current);
+    if (Nearer(leafBits, v, value(best)) <= 0) return current;
+  }
+  return PositionBits(best);
 }
 
 void Derive(Document* doc, bool solve, std::vector<std::string>* log) {
@@ -217,7 +242,8 @@ void Derive(Document* doc, bool solve, std::vector<std::string>* log) {
         const MacroTarget& target = t.targets[md.first + i];
         if (Detached(*doc, target.param) || BitsOf(target.lo) == BitsOf(target.hi)) continue;
         const uint32_t before = BitsOf(*p);
-        const uint32_t solved = SolvePosition(s.mode, md.id, i, doc->LeafBits(target.param));
+        const uint32_t solved =
+            SolvePosition(s.mode, md.id, i, doc->LeafBits(target.param), before);
         *p                    = FloatOf(solved);
         if (log != nullptr && solved != before) {
           log->push_back(std::string("controls.macro_positions.") + MacroName(md.id) + ": " +
@@ -229,6 +255,11 @@ void Derive(Document* doc, bool solve, std::vector<std::string>* log) {
     }
     doc->omittedPositions.clear();
   }
+  // Each leaf's net change, logged once, naming the macro that wrote it last.
+  struct Change {
+    uint32_t leaf, before, macro, position;
+  };
+  std::vector<Change> changes;
   for (uint32_t k = 0; k < t.macroCount; ++k) {
     const MacroDef& md = t.macros[k];
     const float*    p  = position(md.id);
@@ -237,16 +268,24 @@ void Derive(Document* doc, bool solve, std::vector<std::string>* log) {
     const size_t n = EvalMacro(s.mode, static_cast<ParamId>(md.id), *p, out, kMaxMacroTargets);
     for (size_t i = 0; i < n; ++i) {
       if (Detached(*doc, out[i].id) || !ElementPresent(s.mode, out[i].id)) continue;
-      const uint32_t before = doc->LeafBits(out[i].id);
-      const uint32_t after  = BitsOf(out[i].value);
-      if (before == after) continue;
-      doc->SetLeafBits(out[i].id, after);
-      if (log != nullptr) {
-        log->push_back(LeafPath(RowName(out[i].id)) + ": " + NumberText(before) + " -> " +
-                       NumberText(after) + " (" + MacroName(md.id) + " at " +
-                       NumberText(BitsOf(*p)) + ")");
+      const auto at = std::find_if(changes.begin(), changes.end(),
+                                   [&](const Change& c) { return c.leaf == out[i].id; });
+      if (at == changes.end()) {
+        changes.push_back(Change{out[i].id, doc->LeafBits(out[i].id), md.id, BitsOf(*p)});
+      } else {
+        at->macro    = md.id;
+        at->position = BitsOf(*p);
       }
+      doc->SetLeafBits(out[i].id, BitsOf(out[i].value));
     }
+  }
+  if (log == nullptr) return;
+  for (const Change& c : changes) {
+    const uint32_t after = doc->LeafBits(c.leaf);
+    if (after == c.before) continue;
+    log->push_back(std::string(RowName(c.leaf)) + ": " + NumberText(c.before) + " -> " +
+                   NumberText(after) + " (" + MacroName(c.macro) + " at " +
+                   NumberText(c.position) + ")");
   }
 }
 
@@ -321,7 +360,7 @@ std::vector<Finding> Lint(const Document& d, const LintOptions& options) {
       const std::string a = Display(leafId, stored), b = Display(leafId, derived);
       if (a == b) continue;
       add("L4", true, At(d, "leaf:" + Dec(leafId), LeafPointer(RowName(leafId))),
-          LeafPath(RowName(leafId)) + " is " + NumberText(stored) + " (" + a + ") but " +
+          std::string(RowName(leafId)) + " is " + NumberText(stored) + " (" + a + ") but " +
               MacroName(md.id) + " at " + NumberText(position) + " gives " + NumberText(derived) +
               " (" + b + "); bspc derive rewrites it, or list it in editor.detached");
     }

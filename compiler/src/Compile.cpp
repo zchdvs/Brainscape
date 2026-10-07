@@ -448,9 +448,9 @@ std::string Diff(const uint8_t* a, size_t aLength, const uint8_t* b, size_t bLen
     const char* name;
     uint32_t    x, y;
   };
+  // The formats first: packages of different formats or revisions differ there.
   const Field header[] = {
       {"package_format", pa.info.packageFormat, pb.info.packageFormat},
-      {"flags", pa.info.flags, pb.info.flags},
       {"sound_rev", pa.info.soundRev, pb.info.soundRev},
       {"blob_format", pa.info.blobFormat, pb.info.blobFormat},
       {"schema_version", pa.info.schemaVersion, pb.info.schemaVersion},
@@ -461,9 +461,23 @@ std::string Diff(const uint8_t* a, size_t aLength, const uint8_t* b, size_t bLen
   Document             da, db;
   std::vector<Finding> ignored;
   if (DocumentFromPackage(a, pa, &da, &ignored) && DocumentFromPackage(b, pb, &db, &ignored)) {
-    // The stamp is derived (sound_hash follows the fields); the fields are what differs.
+    // The stamp is derived (sound_hash follows the fields); the fields are what differs. What
+    // the preset plays and its controls first, then its identity, META and display names, so a
+    // user copy of a factory preset (a new id and name, §9.1) shows the field that sounds
+    // different.
     da.stamped = db.stamped = false;
+    // a's sound and controls under b's identity.
+    Document sound    = da;
+    sound.id          = db.id;
+    sound.name        = db.name;
+    sound.family      = db.family;
+    sound.author      = db.author;
+    sound.description = db.description;
+    sound.tags        = db.tags;
+    for (uint32_t k = 0; k < kMaxMacros; ++k) sound.displayName[k] = db.displayName[k];
     std::string out;
+    if (FirstDifference(WriteDocument(sound, false), WriteDocument(db, false), "", &out))
+      return out;
     if (FirstDifference(WriteDocument(da, false), WriteDocument(db, false), "", &out)) return out;
   } else {
     // What schema 1 cannot say: compare the sections.
@@ -474,6 +488,9 @@ std::string Diff(const uint8_t* a, size_t aLength, const uint8_t* b, size_t bLen
       if (Span(a, sa[k]) != Span(b, sb[k])) return std::string(names[k]) + " differs";
     }
   }
+  // The flags follow from the id (FACTORY) and the JSON section (JSON_STALE).
+  if (pa.info.flags != pb.info.flags)
+    return "header flags: " + Dec(pa.info.flags) + " -> " + Dec(pb.info.flags);
   if (pa.info.soundHash.bytes[0] != pb.info.soundHash.bytes[0] ||
       !std::equal(std::begin(pa.info.soundHash.bytes), std::end(pa.info.soundHash.bytes),
                   std::begin(pb.info.soundHash.bytes))) {

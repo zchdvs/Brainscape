@@ -148,6 +148,36 @@ TEST_CASE("lint: L4 leaves against positions, and derive", "[lint]") {
   REQUIRE(d.LeafBits(static_cast<uint32_t>(ParamId::DelayTimeMs)) == Bits(377.0f));
 }
 
+TEST_CASE("lint: L4 and derive name leaves as editor.detached takes them", "[lint]") {
+  // Minimal's leaves are not derived: L4 names each as schema 1 does (layer0.position.spray_ms,
+  // not layers[0].position.spray_ms), so the name copied into editor.detached reads and clears
+  // the finding.
+  const std::string        base = Minimal();
+  std::vector<std::string> names;
+  for (const Finding& f : Lint(Read(base))) {
+    if (f.code != "L4" || f.at.pointer == "/controls/macro_positions") continue;
+    const std::string name = f.message.substr(0, f.message.find(" is "));
+    INFO(f.message);
+    REQUIRE(name.find('[') == std::string::npos);
+    REQUIRE(SchemaLeaf(name) != nullptr);
+    names.push_back(name);
+  }
+  REQUIRE(names.size() == 7u);
+  REQUIRE(std::find(names.begin(), names.end(), "layer0.position.spray_ms") != names.end());
+  json::Value detached = json::Value::Array();
+  for (const std::string& n : names) detached.Push(Str(n));
+  REQUIRE(Count(Lint(Read(With("editor.detached", std::move(detached), base))), "L4") == 6u);
+  // derive's log names them the same way.
+  Document                 d = Read(base);
+  std::vector<std::string> log;
+  Derive(&d, false, &log);
+  REQUIRE(log.size() >= 7u);
+  for (const std::string& line : log) {
+    INFO(line);
+    REQUIRE(SchemaLeaf(line.substr(0, line.find(':'))) != nullptr);
+  }
+}
+
 TEST_CASE("derive --solve: positions from leaves", "[lint]") {
   // §2.1's values: 405 ms on [40, 1500]^2 is 0.5; 0.45 on [0, 0.9] is 0.5; 0.12 on [0, 0.5] is
   // 0.24.
@@ -204,7 +234,70 @@ TEST_CASE("derive --solve: positions from leaves", "[lint]") {
     };
     REQUIRE(value(p) <= value(p + 1u));
     if (p > 0x00800000u) REQUIRE(value(p) <= value(p - 1u));
+    // ...and is the first position that gives its value.
+    if (p > 0x00800000u) REQUIRE(value(p - 1u) != value(p));
   }
+}
+
+TEST_CASE("derive --solve: a derived document stays as it is", "[lint]") {
+  // A derived document's positions already give its leaves: solving keeps every one, byte for
+  // byte, though EvalMacro is flat over runs of positions (0.49999997 gives what 0.5 does).
+  const std::string        clean = Clean();
+  Document                 d     = Read(clean);
+  std::vector<std::string> log;
+  Derive(&d, true, &log);
+  INFO(log.size());
+  REQUIRE(log.empty());
+  REQUIRE(FormatDocument(d) == clean);
+  // Shape on a falling and a rising target (review: spray_ms moved by 0.00006 ms); spray_ms is
+  // also activity's, whose value shape's overwrites: no net change, nothing logged.
+  std::string t = With("macros", Parse(R"([{"id": "shape", "targets": [
+      {"param": "layer0.window.sustain", "range": [0.9, 0.1]},
+      {"param": "layer0.position.spray_ms", "range": [0, 2000]}]}])"),
+                       clean);
+  t             = With("controls.macro_positions.shape", Num("0.5"), t);
+  d             = Read(t);
+  Derive(&d, false, nullptr);
+  const std::string derived = FormatDocument(d);
+  d                         = Read(derived);
+  Derive(&d, true, &log);
+  for (const std::string& line : log) UNSCOPED_INFO(line);
+  REQUIRE(log.empty());
+  REQUIRE(FormatDocument(d) == derived);
+  // The stored position stays only while it lands as near as any: a leaf moved off it solves.
+  d = Read(With("layers[0].window.sustain", Num("0.7"), derived));
+  Derive(&d, true, &log);
+  REQUIRE(log.size() >= 2u);  // the position, then the leaves it gives
+  REQUIRE(log[0].rfind("controls.macro_positions.shape: 0.5 -> ", 0) == 0u);
+}
+
+TEST_CASE("derive --solve: past the end of a range, the first position that reaches it",
+          "[lint]") {
+  // in_range [0, 0.5]: the value reaches the top of the range at 0.5 and stays there; a leaf
+  // beyond it solves to the first position that gives the top, not to 1.
+  const Document d = Read(With(
+      "macros",
+      Parse(
+          R"([{"id": "time", "targets": [{"param": "post.delay.time_ms", "range": [40, 1500], "in_range": [0, 0.5]}]}])"),
+      Clean()));
+  const brainscape::ModeBlob& mode  = d.state->mode;
+  const auto                  value = [&](uint32_t bits) {
+    brainscape::PresetLeaf o[8];
+    brainscape::EvalMacro(mode, ParamId::MacroTime, FromBits(bits), o, 8);
+    return Bits(o[0].value);
+  };
+  const uint32_t time = static_cast<uint32_t>(ParamId::MacroTime);
+  for (const float leaf : {1500.0f, 2000.0f, 5000.0f}) {
+    const uint32_t p = SolvePosition(mode, time, 0, Bits(leaf));
+    REQUIRE(value(p) == Bits(1500.0f));
+    REQUIRE(value(p - 1u) != Bits(1500.0f));
+    REQUIRE(p <= Bits(0.5f));
+  }
+  // Below the bottom: 0. A stored position in the top run stays.
+  REQUIRE(SolvePosition(mode, time, 0, Bits(1.0f)) == 0u);
+  REQUIRE(SolvePosition(mode, time, 0, Bits(2000.0f), Bits(0.75f)) == Bits(0.75f));
+  REQUIRE(SolvePosition(mode, time, 0, Bits(2000.0f), Bits(1.0f)) == Bits(1.0f));
+  REQUIRE(SolvePosition(mode, time, 0, Bits(40.0f), Bits(0.25f)) != Bits(0.25f));
 }
 
 TEST_CASE("lint: L6, L7, L8", "[lint]") {

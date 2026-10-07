@@ -1156,7 +1156,7 @@ class Reader {
       return;
     }
     d.hasRatioGen = true;
-    d.ratioGen    = StripPositions(m->value);
+    d.ratioGen    = EditorValue(m->value, Pointer("ratio_gen"));
   }
 
   void Detached(Document& d) {
@@ -1287,7 +1287,8 @@ class Reader {
 
   // A number read as the correctly rounded binary32 and canonicalized (§2.2): -0 and
   // subnormals become +0, the latter with finding L1; overflow is an error.
-  bool ReadFloatValue(const json::Value& v, const Location& at, uint32_t* bits) {
+  bool ReadFloatValue(const json::Value& v, const Location& at, uint32_t* bits,
+                      const char* subnormalFate = "it compiles to +0") {
     if (v.type != json::Type::Number) {
       Error("E3", at, std::string("expected a number, found ") + TypeName(v.type));
       return false;
@@ -1306,7 +1307,7 @@ class Reader {
     if ((b & 0x7F800000u) == 0u) {
       if ((b & 0x7FFFFFFFu) != 0u) {
         d_.notes.push_back(
-            Finding{"L1", false, at, v.text + " is subnormal in binary32; it compiles to +0"});
+            Finding{"L1", false, at, v.text + " is subnormal in binary32; " + subnormalFate});
       }
       b = 0u;
     }
@@ -1626,15 +1627,30 @@ class Reader {
     }
   }
 
-  // A JSON value with its positions cleared, so editor data compares by content.
-  static json::Value StripPositions(const json::Value& v) {
-    json::Value out = v;
-    out.line = out.column = 0;
-    for (json::Value& item : out.items) item = StripPositions(item);
-    for (json::Member& member : out.members) {
-      member.line = member.column = 0;
-      member.value                = StripPositions(member.value);
+  // Editor data whose shape schema 1 leaves open (editor.ratio_gen, §2.2), validated and in
+  // canonical form like the rest of the document (§6.4): numbers read as binary32 (overflow is
+  // E4; -0 and subnormals, the latter with L1, become +0) and written as their canonical text,
+  // object members sorted by key (bytewise), arrays in order, positions cleared so editor data
+  // compares by content. Two spellings of the same data format, and hash, the same.
+  json::Value EditorValue(const json::Value& v, const std::string& pointer) {
+    json::Value out;
+    out.type    = v.type;
+    out.boolean = v.boolean;
+    out.text    = v.text;
+    if (v.type == json::Type::Number) {
+      uint32_t bits = 0;
+      if (ReadFloatValue(v, At(v, pointer), &bits, "it is kept as 0")) out.text = NumberText(bits);
     }
+    for (size_t i = 0; i < v.items.size(); ++i)
+      out.items.push_back(EditorValue(v.items[i], pointer + "/" + Dec(i)));
+    for (const json::Member& m : v.members) {
+      json::Member member;
+      member.key   = m.key;
+      member.value = EditorValue(m.value, pointer + "/" + json::PointerToken(m.key));
+      out.members.push_back(std::move(member));
+    }
+    std::sort(out.members.begin(), out.members.end(),
+              [](const json::Member& x, const json::Member& y) { return x.key < y.key; });
     return out;
   }
 
@@ -2109,6 +2125,15 @@ bool ReadDocument(const json::Value& root, const ReadOptions& options, Document*
 
 bool ReadDocumentText(std::string_view text, const ReadOptions& options, Document* out,
                       std::vector<Finding>* findings) {
+  if (text.size() > kMaxDocumentBytes) {
+    if (findings != nullptr) {
+      findings->push_back(Finding{"E12", true, Location{},
+                                  "the document is " + Dec(text.size()) + " bytes; at most " +
+                                      Dec(kMaxDocumentBytes) + " are read (a package is at most " +
+                                      Dec(kMaxPackageBytes) + ")"});
+    }
+    return false;
+  }
   json::Value      root;
   json::ParseError error;
   if (!json::Parse(text, &root, &error)) {

@@ -1,6 +1,7 @@
 // The compiler's strict JSON reader and canonical layout (docs/design/mode-compiler.md §6.4,
 // §6.5, §10.2's grammar suite): RFC 8259 exactly, every escape and surrogate pair, invalid
 // UTF-8 and duplicate keys refused, depth 16, and errors with line, column and pointer.
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -137,6 +138,44 @@ TEST_CASE("json: errors carry line, column (in characters) and pointer", "[json]
   REQUIRE(v.members[0].column == 3u);
   REQUIRE(v.members[0].value.items[1].line == 3u);
   REQUIRE(v.members[0].value.items[1].column == 5u);
+  // Columns resume from the last position asked on a line, also past multi-byte characters.
+  REQUIRE(Accepts("{\"\xC3\xA9\": 1, \"\xE2\x82\xAC\": [2, \"\xF0\x9F\x8E\xB8\", 3]}", &v));
+  REQUIRE(v.members[1].column == 10u);
+  REQUIRE(v.members[1].value.items[1].column == 19u);
+  REQUIRE(v.members[1].value.items[2].column == 24u);
+  e = Refusal("{\"\xC3\xA9\": 1, \"b\": 2, \"\xC3\xA9\": 3}");
+  REQUIRE(e.column == 18u);
+}
+
+TEST_CASE("json: large objects and long lines read in linear time", "[json]") {
+  // 60,000 keys (about 650 KB), on one line and one per line: duplicate keys are found through
+  // a sorted set and columns counted from the last position asked, where a scan of the earlier
+  // keys and of the line from its start took tens of seconds (lane A review).
+  for (const char* separator : {", ", ",\n"}) {
+    const auto  start = std::chrono::steady_clock::now();
+    std::string text  = "{";
+    for (int i = 0; i < 60000; ++i) {
+      if (i != 0) text += separator;
+      text += "\"key" + std::to_string(i) + "\": " + std::to_string(i);
+    }
+    text += "}";
+    json::Value v;
+    REQUIRE(Accepts(text, &v));
+    REQUIRE(v.members.size() == 60000u);
+    const bool oneLine = separator[1] == ' ';
+    REQUIRE(v.members.back().line == (oneLine ? 1u : 60000u));
+    REQUIRE(v.members.back().column ==
+            (oneLine ? static_cast<uint32_t>(text.rfind("\"key59999\"") + 1) : 1u));
+    text.back() = ',';
+    text += " \"key31337\": 0}";
+    const json::ParseError e = Refusal(text);
+    REQUIRE(e.pointer == "/key31337");
+    REQUIRE(e.message.find("duplicate") != std::string::npos);
+    const auto seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    INFO("seconds: " << seconds);
+    REQUIRE(seconds < 10.0);  // linear: well under a second in Release
+  }
 }
 
 TEST_CASE("json: the canonical layout", "[json]") {

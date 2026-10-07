@@ -100,7 +100,10 @@ struct ReadOptions {
 // Returns false with the errors in *findings (which also receives nothing else).
 bool ReadDocument(const json::Value& root, const ReadOptions& options, Document* out,
                   std::vector<Finding>* findings);
-// Step 1 (E1) and the rest.
+// Step 1 (E1) and the rest. Text over kMaxDocumentBytes is refused unread (E12): no document
+// that large compiles (a package is at most 16 KiB), and the bound keeps a hostile file from
+// holding a worker thread (§9.1).
+inline constexpr size_t kMaxDocumentBytes = size_t{1} << 20;
 bool ReadDocumentText(std::string_view text, const ReadOptions& options, Document* out,
                       std::vector<Finding>* findings);
 

@@ -88,7 +88,10 @@ DecompileResult Decompile(const uint8_t* bytes, size_t length, bool rebuild = fa
 std::vector<Finding> Verify(const uint8_t* bytes, size_t length,
                             const CompileOptions& options = {});
 
-// `diff`: the first differing field of two packages, by name ("" when they are identical).
+// `diff`: the first differing field of two packages, by name ("" when they are identical):
+// the header's formats and revision, then the document's fields as a JSON pointer, those that
+// play or control the sound before the identity, META and display names, then the header flags
+// (which follow from the id), the sound_hash and the JSON sections.
 std::string Diff(const uint8_t* a, size_t aLength, const uint8_t* b, size_t bLength,
                  const CompileOptions& options = {});
 
