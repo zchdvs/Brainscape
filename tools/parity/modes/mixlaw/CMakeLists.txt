@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.22)
+project(mixlaw_probe LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BRAINSCAPE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# The engine tree to render with: this repository's dsp/ (sound revision 3, the Mix law).
+set(MIXLAW_PROBE_DSP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../dsp CACHE PATH "dsp/ tree to probe")
+add_subdirectory(${MIXLAW_PROBE_DSP_DIR} ${CMAKE_BINARY_DIR}/dsp)
+add_executable(mixlaw_probe mixlaw.cpp)
+target_link_libraries(mixlaw_probe PRIVATE brainscape_dsp)
