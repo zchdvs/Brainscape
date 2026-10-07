@@ -26,22 +26,33 @@ inline constexpr uint32_t kGranularMaxPitch      = 8;  // a pitch set's entries 
 inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
-// schedule-time; grains never re-read a global parameter).
+// schedule-time; grains never re-read a global parameter). A voice with repeat N (mode-compiler.md
+// §7.5, R11) reads one ring region N times, each pass windowed: its life is N passes of passLen
+// frames, and each pass restarts at startFrame with the envelope and its own decay gain.
 struct Grain {
   uint64_t pos;        // absolute ring position, 32.32 fixed point (frame << 32 | frac)
-  int64_t  inc;        // signed 32.32 increment — pitch AND direction
-  int64_t  endAbs;     // absolute engine sample where the grain finishes
-  uint32_t rendered;   // output frames rendered so far
-  uint32_t total;      // output frames in the grain; a FastCut shortens it to its fade's end
-  uint32_t fadeStart;  // the output frame at which a FastCut load began fading the grain
+  int64_t  inc;        // signed 32.32 increment — pitch AND direction; +1.0 exactly
+                       // (kUnityInc) takes the bit-exact integer read path (Tu)
+  int64_t  endAbs;     // absolute engine sample where the grain's life finishes
+  uint32_t rendered;   // output frames rendered so far, over the whole life
+  uint32_t total;      // output frames in the life, passes * passLen; a FastCut shortens it to
+                       // its fade's end
+  uint32_t fadeStart;  // the life frame at which a FastCut load began fading the grain
                        // (mode-compiler.md §7.3), or kNoFade
-  grainmath::EnvSpec env;
+  uint32_t passLen;    // L: output frames of one pass (the grain length)
+  uint32_t startFrame; // ring frame every pass starts reading at
+  uint32_t age0;       // frames the position reference had aged at birth: a mark's age, 0 live
+  float    decayRate;  // log2(1000) / decay_ms in frames, captured at birth; 0 = no decay
+  float    decayGain;  // the current pass's decay gain (grainmath::DecayGain)
+  grainmath::EnvSpec env;  // one pass's envelope
   float    smoothness;  // piecewise->LUT window morph
   float    gainL, gainR;
   uint8_t  tier;       // resolved at birth: 0 = cubic Hermite, 1 = linear
+  uint8_t  pass;       // the current pass, 0 to passes - 1
+  uint8_t  passes;     // N: layer0.position.repeat at birth, 1-16
   bool     active;
-  bool     unity;      // inc == +1.0 exactly: bit-exact integer read path (Tu)
 };
+inline constexpr int64_t kUnityInc = int64_t{1} << 32;
 static_assert(sizeof(Grain) <= 128, "grain pool must stay inside the DTCM budget (design §3)");
 
 // Block-rate parameters, resolved from the drained plain values once per block.
@@ -83,6 +94,10 @@ struct GranularParams {
   uint32_t burstCount;       // scheduler.burst.count, read as an integer (1-16): grains a
                              // trigger births
   uint32_t burstSpacing;     // frames between a burst's grains: max(1, round(spacing_ms * 48))
+  // Repeat and decay (mode-compiler.md §7.5, R11; sound revision 6):
+  uint32_t repeat;           // layer0.position.repeat, read as an integer (1-16): passes a voice
+                             // reads its region; the scheduler spaces births by the whole life
+  float    decayRate;        // log2(1000) / layer0.decay_ms in frames, 0 when decay is off
 };
 
 // What the scheduler has done (Engine::Stats): counts since Init, kept by Reset and Restart.
@@ -90,6 +105,7 @@ struct GranularStats {
   uint64_t births      = 0;  // grains born, from every source
   uint64_t burstBirths = 0;  // ... of them a burst's second and later grains
   uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
+  uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, sound revision 6)
 };
 
 // The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
@@ -215,6 +231,8 @@ class GranularCore {
   // kFade multiplies its envelope by a FastCut's linear fade (only frames past fadeStart).
   template <bool kFade>
   void RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept;
+  // A repeat voice's next pass: back to its start frame, with the decay gain of its age then.
+  void NextPass(Grain& g) noexcept;
 
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;

@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "id": "corpus.pitchset_random",
-  "name": "Pitch set random",
+  "id": "corpus.decay_marks",
+  "name": "Decay marks",
   "family": "none",
   "sound_rev": 6,
-  "sound_hash": "7b69c7056dbaa4b5ea639a9c76d800c36ba54f34a39a9c6422a53b5c5db208bf",
+  "sound_hash": "15386131279b2e4a64474365ba8820a99b9481b9960711f0b125951cd520065f",
   "meta": {
     "author": "",
-    "description": "Golden corpus: a weighted random pitch set {0: 3, -12: 1, +7: 2} from the free-running scheduler and onsets, with reverse grains (sound revision 5).",
+    "description": "Golden corpus: grains on the newest onset's mark fading 60 dB over 700 ms as the mark ages (sound revision 6).",
     "tags": []
   },
   "global": {
-    "mix": 0.7
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "onset", "footswitch", "midi_note"],
+    "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.5,
-    "jitter": 0.7,
+    "jitter": 0.5,
     "intermittency": 0,
     "burst": {
       "count": 1,
@@ -26,43 +26,35 @@
   "layers": [
     {
       "position": {
-        "source": "live",
-        "base_ms": 300,
-        "spray_ms": 60,
+        "source": "mark",
+        "base_ms": 200,
+        "spray_ms": 5,
         "repeat": 1
       },
-      "size_ms": 110,
-      "decay_ms": 0,
+      "size_ms": 120,
+      "decay_ms": 700,
       "window": {
-        "sustain": 0.2,
-        "skew": 0.5,
-        "smoothness": 1
+        "sustain": 0.4,
+        "skew": 0.4,
+        "smoothness": 0.8
       },
       "pitch": {
         "set": [
           {
             "st": 0,
-            "weight": 3
-          },
-          {
-            "st": -12,
             "weight": 1
-          },
-          {
-            "st": 7,
-            "weight": 2
           }
         ],
-        "select": "random",
+        "select": "cycle",
         "transpose_st": 0,
-        "spread_cents": 10,
-        "reverse_prob": 0.2
+        "spread_cents": 0,
+        "reverse_prob": 0
       },
       "pan_spread": 0.8
     }
   ],
   "feedback": {
-    "amount": 0.2
+    "amount": 0.1
   },
   "post": {
     "mod": {
@@ -86,7 +78,7 @@
   },
   "wet_trim_db": 0,
   "trigger": {
-    "sensitivity": 0.6
+    "sensitivity": 0.65
   },
   "macros": [
     {

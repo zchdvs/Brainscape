@@ -520,6 +520,7 @@ Engine::GrainStats Engine::Stats() const noexcept {
   out.births      = s.births;
   out.burstBirths = s.burstBirths;
   out.skips       = s.skips;
+  out.repeatPasses = s.repeatPasses;
   return out;
 }
 
@@ -829,14 +830,30 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   if (total < 1u) total = 1u;
   gp_.totalFrames = total;
 
+  // Repeat (design §7.5, R11; sound revision 6): a voice reads its region `repeat` times, so it
+  // lives repeat * total frames. Counting leaves are read as RoundHalfAwayI32 of the canonical
+  // value, in range because canonicalization clamped it (§3.7).
+  const int32_t repeat = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::Repeat)));
+  assert(repeat >= 1 && repeat <= 16);
+  gp_.repeat         = static_cast<uint32_t>(repeat);
+  const uint32_t life = total * gp_.repeat;  // <= 16 * 24,000 frames
+
   const float overlap = get(ParamId::Overlap);
   float target        = static_cast<float>(kMaxGrains) * overlap * overlap * overlap;
   if (target < 1.0f) target = 1.0f;
   if (target > static_cast<float>(kMaxGrains)) target = static_cast<float>(kMaxGrains);
-  // The 1-frame inter-arrival floor caps sustainable voices at the grain length:
-  // normalizing to an unreachable target read up to -12.9 dB low (review finding).
-  if (target > static_cast<float>(total)) target = static_cast<float>(total);
+  // The 1-frame inter-arrival floor caps sustainable voices at a voice's life, the grain
+  // length times the repeat: normalizing to an unreachable target read up to -12.9 dB low
+  // (review finding).
+  if (target > static_cast<float>(life)) target = static_cast<float>(life);
   gp_.targetVoices = target;
+  // Decay (design §7.5, R11): 60 dB over decay_ms as the position reference ages, the rate
+  // log2(1000) / decay_ms in frames; 0 is off, so no gain changes.
+  const float decayMs = get(ParamId::DecayMs);
+  gp_.decayRate =
+      decayMs > 0.0f
+          ? static_cast<float>(grainmath::kLog2Of1000 / (static_cast<double>(decayMs) * (sr / 1000.0)))
+          : 0.0f;
 
   gp_.jitter      = get(ParamId::Jitter);
   // The pitch (design §7.5, R10; sound revision 5): layer 0's pitch set, each entry plus the
@@ -914,7 +931,9 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // POS_MARK is the same geometry (all grains anchored to one ring frame, born
   // at different times) — without its term the Strum family read up to 18 dB
   // quiet across the overlap knob (review finding).
-  if (frozen_ || gp_.posFromMark) decorr = 1.0f;
+  // A repeat voice re-reads its region pass after pass, time-shifted copies again (design
+  // §7.5), so repeat > 1 counts as decorrelated too.
+  if (frozen_ || gp_.posFromMark || gp_.repeat > 1u) decorr = 1.0f;
   decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
   // N, the voices normalized for (design §7.5): the free-running target, or without a free-

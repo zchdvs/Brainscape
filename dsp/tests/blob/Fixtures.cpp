@@ -17,9 +17,10 @@ namespace brainscape::blobtest {
 // revision 2: onset and mark became supported, and the samples no longer target rows 27 and 28.
 // Re-minted at sound revision 3 for the samples' soundRev alone (kSoundRevision): built with
 // kSoundRevision 2, the same tree gives revision 2's digest. Re-minted at sound revision 4: the
-// samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read; and
-// at 5 for the same two (pitch sets).
-const char* const kFuzzDigest = "5322523ab4447f9c4bcc95bd681c1e24a0d9d5b100c0f12ea04dbd2c0da46de2";
+// samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read; at
+// 5 for the same two (pitch sets); and at 6 for the soundRev and the Leaf rows 29 and 30, which
+// CTRL's and MACR's targets may name.
+const char* const kFuzzDigest = "04221c2847c766df743a4ac4969d19907b27aabb4a77b9085bf7f6b504502de9";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
@@ -92,17 +93,19 @@ const Fixture kFixtures[] = {
     {"w1-leaf-macro-target.bsp",
      "d182b5d3056a88c4f7eec92611c5bf291484bc35e5a6b34ee29f183f16bfcfc8",
      PresetError::None, 0, 1, false, 0,
-     "macro activity targeting layer0.decay_ms (ID 30), a wave-1 leaf and a Reserved row here: "
-     "decodes (macro targets are ValidateMode's), and ValidateMode names it UnsupportedTarget, "
-     "newer content rather than a corrupt one. Its verdict changes in the W1 pull request that "
-     "makes ID 30 a Leaf row",
-     PresetError::UnsupportedTarget, 30},
+     "macro activity targeting layer0.decay_ms (ID 30), a wave-1 leaf: it decodes (macro "
+     "targets are ValidateMode's), and until sound revision 6 made ID 30 a Leaf row (mode-"
+     "compiler.md §7.5 R11) ValidateMode named it UnsupportedTarget, newer content rather than "
+     "a corrupt one; since then it validates, and loads inexact as the revision-1 package it "
+     "was built from",
+     PresetError::None, 0},
     {"w1-leaf-expression.bsp",
      "257656e5151674c2dc28b0f1b13d2b954d91a5db507fe3652c0fc405abc8dc7f",
-     PresetError::UnsupportedTarget, 30, 0, false, 0,
-     "an expression assignment on layer0.decay_ms (ID 30), a wave-1 leaf and a Reserved row "
-     "here: rejected as UnsupportedTarget, named, as an unknown chunk is UnsupportedFeature. Its "
-     "verdict changes in the W1 pull request that makes ID 30 a Leaf row",
+     PresetError::None, 0, 1, false, 0,
+     "an expression assignment on layer0.decay_ms (ID 30), a wave-1 leaf: until sound revision "
+     "6 made ID 30 a Leaf row it was rejected as UnsupportedTarget, named, as an unknown chunk "
+     "is UnsupportedFeature; since then it decodes and validates, and loads inexact as the "
+     "revision-1 package it was built from",
      PresetError::None, 0},
     {"r2-onset-marks.bsp",
      "42e1ac2002e3abf42a83531c3f8c8652075417fa7855a3da20c394df3e030d74",

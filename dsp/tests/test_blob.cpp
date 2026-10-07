@@ -950,8 +950,9 @@ TEST_CASE("CTRL rules: one position per macro, canonical values, counts", "[blob
     const size_t x            = Payload(b, kTagCtrl) + 4 + 8 * 6;
     REQUIRE(Decode(b).ok);
     // A later wave's leaf is newer content, named; an ID that is no Leaf or Macro row is wrong.
-    const uint32_t targets[][2] = {{29, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
-                                   {30, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
+    // (W3's rows: wave 1's became Leaf rows as they landed, sound revisions 4-7.)
+    const uint32_t targets[][2] = {{32, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
+                                   {33, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
                                    {77, static_cast<uint32_t>(PresetError::ExpressionTarget)},
                                    {82, static_cast<uint32_t>(PresetError::ExpressionTarget)},
                                    {999, static_cast<uint32_t>(PresetError::ExpressionTarget)}};
@@ -1122,8 +1123,11 @@ TEST_CASE("ValidateMode: macro targets (E8, E9) and the shape macro (E10)", "[bl
   ExpectValid(*target(28, 0.0f, 1.0f), PresetError::TargetNotLeaf, 28);
   ExpectValid(*target(2, 0.0f, 1.0f), PresetError::TargetMix, 2);
   // A later wave's leaf (a Reserved row) is unsupported, not wrong: a newer build's package.
-  ExpectValid(*target(29, 1.0f, 2.0f), PresetError::UnsupportedTarget, 29);
-  ExpectValid(*target(30, 0.0f, 800.0f), PresetError::UnsupportedTarget, 30);
+  ExpectValid(*target(32, -6.0f, 0.0f), PresetError::UnsupportedTarget, 32);  // W3's rows
+  ExpectValid(*target(34, 20.0f, 800.0f), PresetError::UnsupportedTarget, 34);
+  // Wave 1's leaves since they landed: repeat and decay (sound revision 6).
+  ExpectValid(*target(29, 1.0f, 2.0f), PresetError::None);
+  ExpectValid(*target(30, 0.0f, 800.0f), PresetError::None);
   ExpectValid(*target(80, 0.0f, 1.0f), PresetError::UnsupportedTarget, 80);
   ExpectValid(*target(69, 0.0f, 1.0f), PresetError::TargetNotLeaf, 69);  // a Macro row
   ExpectValid(*target(77, 0.0f, 1.0f), PresetError::TargetNotLeaf, 77);  // a Performance row
@@ -1202,8 +1206,10 @@ TEST_CASE("ValidateMode: absent elements and expression targets", "[blob][valida
   ExpectValid(*expr(5, 1.0f, 500.0f), PresetError::None);
   ExpectValid(*expr(5, 1.0f, 600.0f), PresetError::ExpressionRange, 5);
   ExpectValid(*expr(5, 600.0f, 1.0f), PresetError::ExpressionRange, 5);  // the low end too
-  ExpectValid(*expr(29, 1.0f, 2.0f), PresetError::UnsupportedTarget, 29);  // Reserved until W1
-  ExpectValid(*expr(30, 0.0f, 800.0f), PresetError::UnsupportedTarget, 30);
+  ExpectValid(*expr(32, -6.0f, 0.0f), PresetError::UnsupportedTarget, 32);  // Reserved until W3
+  ExpectValid(*expr(34, 20.0f, 800.0f), PresetError::UnsupportedTarget, 34);
+  ExpectValid(*expr(29, 1.0f, 2.0f), PresetError::None);  // Leaf rows since sound revision 6
+  ExpectValid(*expr(30, 0.0f, 800.0f), PresetError::None);
   ExpectValid(*expr(77, 0.0f, 1.0f), PresetError::ExpressionTarget, 77);  // a Performance row
   ExpectValid(*expr(82, 0.0f, 1.0f), PresetError::ExpressionTarget, 82);  // a Global row
   ExpectValid(*expr(999, 0.0f, 1.0f), PresetError::ExpressionTarget, 999);

@@ -479,12 +479,13 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
       "/scheduler/sources");
   REQUIRE(clock[0].message ==
           "`clock` needs W2 (CLOCK); this build supports periodic, onset, footswitch, midi_note");
-  Refused(With("layers[0].voice_count", Num("8")), "E6", "/layers/0/voice_count");
+  // A later wave's leaf (wave 1's became Leaf rows as they landed, sound revisions 4-7).
+  Refused(With("layers[0].level_db", Num("-3")), "E6", "/layers/0/level_db");
   Refused(
       With(
           "macros",
           Parse(
-              R"([{"id": "aux1", "targets": [{"param": "layer0.decay_ms", "range": [0, 1000]}]}])")),
+              R"([{"id": "aux1", "targets": [{"param": "layer0.level_db", "range": [-6, 0]}]}])")),
       "E6", "/macros/0/targets/0/param");
   Refused(With("post.order", Parse(R"(["mod", "reverb", "delay", "filter"])")), "E6",
           "/post/order");

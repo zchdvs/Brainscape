@@ -235,12 +235,13 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 // at sound revision 3 for the header's sound_rev alone: built with kSoundRevision 2, the same
 // tree gives revision 2's digests. Re-minted at sound revision 4: the header's sound_rev, STAT
 // with leaves 57-59 (the random documents draw them too), random source subsets. Re-minted at
-// sound revision 5: the header's sound_rev, random pitch sets (now supported).
+// sound revision 5: the header's sound_rev, random pitch sets (now supported); and at 6: the
+// header's sound_rev, STAT with leaves 29 and 30, which the random documents draw too.
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "d80729f17703f520ef904ef499a37ccf5a18b37e4e10110538891e4caa7c718d";
+    "73e644d987bbcb4d54450b2280e0d8908f1613adbe714490aa15d55fa7428ee7";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "363717bde69dacb06bf37233eab85250667e01529bd1067e0fe0ee95a0b16f49";
+const char* const  kFuzzDigest = "51d036b579477f18003e414711e4c4c2aa5867d9a4031b3edf3064a2bef763f7";
 
 }  // namespace
 

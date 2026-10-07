@@ -1,6 +1,6 @@
 // Wave 1 of the mode runtime (docs/design/mode-compiler.md §7.5, §10.3, §10.4), one feature and
 // one sound revision at a time: trigger sources, bursts and intermittency (R9, sound revision 4);
-// pitch sets (R10, 5).
+// pitch sets (R10, 5); repeat and decay (R11, 6).
 // Each feature's cases run block-split invariance (contract #1) and the level contract (#3).
 #include <algorithm>
 #include <cmath>
@@ -142,8 +142,9 @@ Ev Trig(int64_t frame, uint32_t seq, TS src) {
 Ev Set(int64_t frame, uint32_t seq, ParamId id, float value) {
   return Event(frame, seq, EvType::SetParam, static_cast<uint32_t>(id), value);
 }
-Ev Load(int64_t frame, uint32_t seq, const PresetState* preset) {
-  Ev e     = Event(frame, seq, EvType::SpilloverLoad, 0);
+Ev Load(int64_t frame, uint32_t seq, const PresetState* preset,
+        SwitchStyle style = SwitchStyle::Trails) {
+  Ev e     = Event(frame, seq, EvType::SpilloverLoad, static_cast<uint32_t>(style));
   e.preset = preset;
   return e;
 }
@@ -680,4 +681,241 @@ TEST_CASE("R10: a pitch set keeps the level across the overlap sweep (contract #
   }
   INFO("the set across the sweep: " << lo << " to " << hi << " dB");
   CHECK(hi - lo < 1.5);
+}
+
+// ── Repeat and decay (R11, sound revision 6) ─────────────────────────────────────────────────
+
+namespace {
+
+// One footswitch grain of 100 ms (4,800 frames) at frame 9,600: rectangular, unity rate, centre
+// pan, 20 ms behind the live head, mix 1, so the output is the grain alone.
+Params OneGrain(float repeat, float decayMs) {
+  return {{ParamId::Mix, 1.0f},           {ParamId::GrainSizeMs, 100.0f},
+          {ParamId::DelayMs, 20.0f},      {ParamId::SprayMs, 0.0f},
+          {ParamId::WindowSustain, 1.0f}, {ParamId::WindowSmooth, 0.0f},
+          {ParamId::PanSpread, 0.0f},     {ParamId::Repeat, repeat},
+          {ParamId::DecayMs, decayMs}};
+}
+
+bool SameSpan(const Stereo& a, size_t at, const Stereo& b, size_t bt, size_t n) {
+  return std::memcmp(a.l.data() + at, b.l.data() + bt, n * sizeof(float)) == 0 &&
+         std::memcmp(a.r.data() + at, b.r.data() + bt, n * sizeof(float)) == 0;
+}
+
+}  // namespace
+
+TEST_CASE("R11: a voice with repeat N reads its region N times, each pass windowed", "[wave1]") {
+  const Stereo in = Sine(33600);
+  for (const float repeat : {1.0f, 3.0f, 16.0f}) {
+    INFO("repeat " << repeat);
+    const auto   preset = Preset(OneGrain(repeat, 0.0f), kSourceFootswitch);
+    EngineConfig cfg    = Config();
+    cfg.historyFrames   = 1u << 18;  // holds a 16-pass life
+    Rig          rig(cfg);
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    const Stereo out = Render(rig.engine, in, {Trig(9600, 0, TS::Footswitch)});
+    const auto   passes = static_cast<size_t>(repeat);
+    const size_t heard  = std::min<size_t>(passes, 4);  // passes inside the render
+    for (size_t k = 1; k < heard; ++k) {
+      INFO("pass " << k);
+      CHECK(SameSpan(out, 9600 + 4800 * k, out, 9600, 4800));  // the same frames, bit for bit
+    }
+    if (passes < 4) {  // and nothing after the life
+      bool silent = true;
+      for (size_t i = 9600 + 4800 * passes; i < out.l.size(); ++i) silent = silent && out.l[i] == 0.0f;
+      CHECK(silent);
+    }
+    CHECK(Rms(out.l, 9600, 14400) > 0.1);
+    CHECK(rig.engine.Stats().births == 1u);
+    // Passes begun inside the render: the boundary at its last frame counts too.
+    CHECK(rig.engine.Stats().repeatPasses == std::min<size_t>(passes - 1u, 5));
+  }
+}
+
+TEST_CASE("R11: decay fades each pass by its age; age 0 is exactly unity", "[wave1]") {
+  const Stereo in    = Sine(33600);
+  const std::vector<Ev> trigger = {Trig(9600, 0, TS::Footswitch)};
+  const Stereo plain = RenderFrom(*Preset(OneGrain(4.0f, 0.0f), kSourceFootswitch), in, trigger);
+  // A live grain's reference ages from its birth: pass k begins k * 100 ms on.
+  const float  decayMs = 250.0f;
+  const Stereo decayed = RenderFrom(*Preset(OneGrain(4.0f, decayMs), kSourceFootswitch), in, trigger);
+  CHECK(SameSpan(decayed, 9600, plain, 9600, 4800));  // pass 0: age 0, gain exactly 1
+  const float rate = static_cast<float>(grainmath::kLog2Of1000 / (decayMs * 48.0));
+  for (uint32_t k = 1; k < 4; ++k) {
+    const double want = grainmath::DecayGain(4800u * k, rate);
+    const double got  = Rms(decayed.l, 9600 + 4800 * k, 14400 + 4800 * k) / Rms(plain.l, 9600, 14400);
+    INFO("pass " << k << ": " << 20.0 * std::log10(got) << " dB, want "
+                 << 20.0 * std::log10(want) << " dB (-60 dB per 250 ms)");
+    CHECK(std::fabs(got / want - 1.0) < 1e-5);
+  }
+  // 60 dB at decay_ms: 250 ms is 12,000 frames.
+  CHECK(std::fabs(20.0 * std::log10(grainmath::DecayGain(12000u, rate)) + 60.0) < 1e-3);
+  CHECK(grainmath::DecayGain(0u, rate) == 1.0f);
+  CHECK(grainmath::DecayGain(123456u, 0.0f) == 1.0f);
+  CHECK(grainmath::DecayGain(4000000u, rate) == 0.0f);  // below 2^-126: silence, not subnormal
+  // One pass on a live position never ages: decay changes nothing, bit for bit.
+  const Params base = {{ParamId::SprayMs, 20.0f}, {ParamId::Jitter, 0.4f}, {ParamId::Overlap, 0.6f}};
+  Params       withDecay = base;
+  withDecay.emplace_back(ParamId::DecayMs, 50.0f);
+  const Stereo pl = Plucks(19200);
+  CHECK(Same(RenderFrom(*Preset(withDecay), pl, {}), RenderFrom(*Preset(base), pl, {})));
+}
+
+TEST_CASE("R11: on marks, decay follows the mark's age", "[wave1]") {
+  // One noise burst; two footswitch grains read its mark 100 ms apart, rectangular and unity:
+  // the same ring frames, so the later grain is the earlier one times the gain ratio.
+  Stereo in{std::vector<float>(28800), std::vector<float>(28800)};
+  uint32_t x = 0x13579BDFu;
+  for (size_t i = 9600; i < 12000; ++i) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    const float v = 0.5f * (static_cast<float>(x & 0xFFFFFFu) / 8388608.0f - 1.0f);
+    in.l[i] = v;
+    in.r[i] = v;
+  }
+  auto render = [&](float decayMs) {
+    Params p = OneGrain(1.0f, decayMs);
+    for (auto& kv : p) {
+      if (kv.first == ParamId::GrainSizeMs) kv.second = 50.0f;
+    }
+    p.emplace_back(ParamId::TriggerSens, 0.8f);
+    auto preset = Preset(p, kSourceFootswitch);
+    preset->mode.layers[0].source = PositionSource::Mark;
+    preset->mode.features         = RequiredModeFeatures(preset->mode);
+    REQUIRE(ComputeModeHash(preset->mode, &preset->mode.modeHash));
+    PresetDiagnostic d;
+    REQUIRE(ValidateMode(*preset, &d));
+    Rig rig;
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    const Stereo out =
+        Render(rig.engine, in, {Trig(14400, 0, TS::Footswitch), Trig(19200, 0, TS::Footswitch)});
+    REQUIRE(rig.engine.ConsumeOnsetCount() >= 1u);
+    return out;
+  };
+  const Stereo flat = render(0.0f);
+  CHECK(SameSpan(flat, 19200, flat, 14400, 2400));  // no decay: the same grain twice
+  const Stereo fading = render(400.0f);
+  const float  rate   = static_cast<float>(grainmath::kLog2Of1000 / (400.0 * 48.0));
+  const double ratio  = Rms(fading.l, 19200, 21600) / Rms(fading.l, 14400, 16800);
+  // The second grain's mark is 4,800 frames older: 100 ms of a 400 ms decay, -15 dB.
+  const double want = static_cast<double>(grainmath::DecayGain(4800u, rate));
+  INFO("ratio " << 20.0 * std::log10(ratio) << " dB");
+  CHECK(std::fabs(ratio / want - 1.0) < 1e-3);
+  CHECK(Rms(fading.l, 14400, 16800) < Rms(flat.l, 14400, 16800));  // already aged at the first
+}
+
+TEST_CASE("R11: births are spaced by the life; the far rail covers it", "[wave1]") {
+  // One voice (overlap 0) of 100 ms in 3 passes: a birth every 300 ms.
+  Params p = {{ParamId::Overlap, 0.0f}, {ParamId::Jitter, 0.0f}, {ParamId::GrainSizeMs, 100.0f},
+              {ParamId::Repeat, 3.0f}};
+  CHECK(Track(*Preset(p), Sine(43200), {}).births == Frames{0, 14400, 28800});
+  // The rails: the far one moves (N - 1) * L closer, the near one not at all.
+  using grainmath::ComputeDelayRails;
+  const auto one = ComputeDelayRails(4800.0, 2.0, false, 100000u, 64.0);
+  const auto six = ComputeDelayRails(4800.0, 2.0, false, 100000u, 64.0, 5.0 * 4800.0);
+  CHECK(six.lo == one.lo);
+  CHECK(six.hi == one.hi - 24000.0);
+  const auto rev = ComputeDelayRails(4800.0, 0.5, true, 100000u, 64.0, 15.0 * 4800.0);
+  CHECK(rev.hi == 100000.0 - 4800.0 * 1.5 - 64.0 - 72000.0);
+}
+
+TEST_CASE("R11: repeat voices on an aging mark meet the far rail block-split invariantly",
+          "[wave1]") {
+  // A 2^18 ring (5.5 s) and 16 reverse passes of 200 ms: the life's far rail is 98,368 frames
+  // (2.05 s) behind the live head, so the one mark, a tone's attack at 0.5 s, ages onto it at
+  // 2.55 s and its grains read the steady tone there until the staleness guard drops it. A
+  // ring twice as long renders the same bits until then and differs after; every block
+  // pattern renders the same bits (in Debug the write-ahead assertion checks every tap).
+  Stereo in{std::vector<float>(48000 * 7), std::vector<float>(48000 * 7)};
+  for (size_t i = 24000; i < in.l.size(); ++i) {
+    const float v = 0.4f * static_cast<float>(std::sin(0.0575958 * static_cast<double>(i)));
+    in.l[i]       = v;
+    in.r[i]       = v;
+  }
+  auto preset = Preset({{ParamId::Repeat, 16.0f}, {ParamId::GrainSizeMs, 200.0f},
+                        {ParamId::ReverseProb, 1.0f}, {ParamId::Overlap, 0.4f},
+                        {ParamId::Jitter, 0.0f}, {ParamId::SprayMs, 0.0f}, {ParamId::Mix, 1.0f},
+                        {ParamId::TriggerSens, 0.8f}});
+  preset->mode.layers[0].source = PositionSource::Mark;
+  preset->mode.features         = RequiredModeFeatures(preset->mode);
+  REQUIRE(ComputeModeHash(preset->mode, &preset->mode.modeHash));
+  auto render = [&](uint32_t ringLog2, const std::vector<uint32_t>& pattern) {
+    EngineConfig cfg  = Config();
+    cfg.historyFrames = 1u << ringLog2;
+    Rig rig(cfg);
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    const Stereo out = Render(rig.engine, in, {}, pattern);
+    CHECK(rig.engine.ConsumeOnsetCount() >= 1u);
+    return out;
+  };
+  const Stereo ref  = render(18, {48});
+  const Stereo wide = render(19, {48});
+  CHECK(SameSpan(ref, 0, wide, 0, 48000 * 5 / 2));     // the mark not yet on the rail
+  CHECK_FALSE(SameSpan(ref, 48000 * 3, wide, 48000 * 3, 48000));  // on it
+  CHECK(Rms(ref.l, 48000 * 3, 48000 * 4) > 0.01);      // the clamped grains sound
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{1}, {512}, {37, 5, 300, 1}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    CHECK(Same(render(18, pattern), ref));
+  }
+}
+
+TEST_CASE("R11: repeat and decay are block-split invariant (contract #1)", "[wave1]") {
+  // Repeat and decay moved alone, loads in both styles (FastCuts fading across pass
+  // boundaries), triggers and bursts, marks and live positions.
+  const Stereo in = Plucks(28800);
+  const uint8_t sources = kDefaultSources | kSourceOnset;
+  const auto live = Preset({{ParamId::Repeat, 4.0f}, {ParamId::DecayMs, 300.0f},
+                            {ParamId::GrainSizeMs, 40.0f}, {ParamId::SprayMs, 20.0f},
+                            {ParamId::Jitter, 0.5f}, {ParamId::Overlap, 0.6f},
+                            {ParamId::TriggerSens, 0.6f}, {ParamId::BurstCount, 2.0f},
+                            {ParamId::Mix, 0.8f}},
+                           sources);
+  auto marks = Preset({{ParamId::Repeat, 6.0f}, {ParamId::DecayMs, 900.0f},
+                       {ParamId::GrainSizeMs, 25.0f}, {ParamId::ReverseProb, 0.5f},
+                       {ParamId::TriggerSens, 0.6f}, {ParamId::Mix, 0.8f}},
+                      sources);
+  marks->mode.layers[0].source = PositionSource::Mark;
+  marks->mode.features         = RequiredModeFeatures(marks->mode);
+  REQUIRE(ComputeModeHash(marks->mode, &marks->mode.modeHash));
+  const std::vector<Ev> events = {
+      Trig(777, 0, TS::Footswitch),           Set(3001, 0, ParamId::Repeat, 9.0f),
+      Set(4999, 0, ParamId::DecayMs, 0.0f),   Load(6007, 0, marks.get()),
+      Trig(6007, 1, TS::MidiNote),            Set(9999, 0, ParamId::DecayMs, 50.0f),
+      Load(14001, 0, live.get(), SwitchStyle::FastCut), Load(14063, 0, marks.get(), SwitchStyle::FastCut),
+      Set(17003, 0, ParamId::Repeat, 1.0f),   Trig(20011, 0, TS::Footswitch)};
+  const Stereo ref = RenderFrom(*live, in, events, {48});
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{1}, {512}, {37, 5, 300, 1}, {64, 3}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    CHECK(Same(RenderFrom(*live, in, events, pattern), ref));
+  }
+}
+
+TEST_CASE("R11: repeat keeps the level across its range (contract #3)", "[wave1]") {
+  // Steady noise, spray 30 ms: 2 to 16 passes play within 1 dB of one, the scheduler spacing
+  // births by the life so the same number of voices sound at once.
+  Stereo   in{std::vector<float>(96000), std::vector<float>(96000)};
+  uint32_t x = 0x9E3779B9u;
+  for (size_t i = 0; i < in.l.size(); ++i) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    in.l[i] = 0.3f * (static_cast<float>(x & 0xFFFFFFu) / 8388608.0f - 1.0f);
+    in.r[i] = in.l[i];
+  }
+  auto level = [&](float repeat) {
+    const Params p = {{ParamId::Overlap, 0.6f},     {ParamId::SprayMs, 30.0f},
+                      {ParamId::GrainSizeMs, 40.0f}, {ParamId::Mix, 1.0f},
+                      {ParamId::PanSpread, 0.0f},   {ParamId::Repeat, repeat}};
+    const Stereo out = RenderFrom(*Preset(p), in, {});
+    return 20.0 * std::log10(Rms(out.l, 24000, 96000));
+  };
+  const double one = level(1.0f);
+  for (const float repeat : {2.0f, 4.0f, 8.0f, 16.0f}) {
+    const double db = level(repeat);
+    INFO("repeat " << repeat << ": " << db << " dB, repeat 1 " << one << " dB");
+    CHECK(std::fabs(db - one) < 1.0);
+  }
 }

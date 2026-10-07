@@ -3,8 +3,8 @@
   "id": "corpus.burst_marks",
   "name": "Burst marks",
   "family": "none",
-  "sound_rev": 5,
-  "sound_hash": "fd9a6dca9c74b13a25a3aa189b6f7b4318884276cc440b8ec4cf3b471d313a07",
+  "sound_rev": 6,
+  "sound_hash": "ac2f7e4d5229cc2a96493d49e4323ffa3bc8530ff35762f34d7a28766134154e",
   "meta": {
     "author": "",
     "description": "Golden corpus: phasing copies of the newest onset (sound revision 4): onsets alone on marks, bursts of 6 on consecutive frames.",
@@ -28,9 +28,11 @@
       "position": {
         "source": "mark",
         "base_ms": 250,
-        "spray_ms": 4
+        "spray_ms": 4,
+        "repeat": 1
       },
       "size_ms": 300,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

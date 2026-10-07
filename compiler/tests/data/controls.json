@@ -3,8 +3,8 @@
   "id": "example.controls",
   "name": "Controls",
   "family": "none",
-  "sound_rev": 5,
-  "sound_hash": "e646680c18c1e6289c4e54104c37136bf7812b40370c93d4868a62fbf4ca031a",
+  "sound_rev": 6,
+  "sound_hash": "53dd1d3d3491455c5be491e81f6e5b26d6de3e09c84109c393a40e2a88ed902f",
   "meta": {
     "author": "",
     "description": "",
@@ -28,9 +28,11 @@
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

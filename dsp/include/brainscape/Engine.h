@@ -29,10 +29,11 @@ inline constexpr uint32_t kFastCutFrames = 128;
 // Opaque storage for the engine state (docs/design/determinism-profile.md §3.5): no
 // floating-point code may live in a public header, where a consumer's flags would
 // compile it, yet the Engine must not allocate and must fit DTCM on the pedal. Sized
-// per pointer width (measured 6,600 B on the M7 and 6,752 B on x86-64 at sound revision 2,
+// per pointer width (measured 6,600 B on the M7 and 6,752 B on x86-64 at sound revision 2;
+// 7,928 B and 8,080 B at 6, wave 1's repeat voices having grown the grain from 80 to 96 bytes;
 // plus headroom; each wave raises it, mode-compiler.md §7.1); Engine.cpp static_asserts the
 // fit. The active mode lives in the Warm arena, not here (§7.3).
-inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 7168 : 7424;
+inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 8192 : 8448;
 inline constexpr size_t kEngineImplAlign = 16;
 
 struct EngineConfig {
@@ -278,6 +279,7 @@ class Engine {
     uint64_t births      = 0;  // grains born, from every source
     uint64_t burstBirths = 0;  // of them, bursts' second and later grains (§7.5)
     uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
+    uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, §7.5)
   };
   // Audio thread only (plain 64-bit counts, as SampleCounter).
   GrainStats Stats() const noexcept;

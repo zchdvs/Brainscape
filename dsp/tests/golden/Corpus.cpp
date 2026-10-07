@@ -446,6 +446,34 @@ PresetCase PitchRandom() {
   return p;
 }
 
+// ── Sound revision 6: wave 1's repeat and decay (mode-compiler.md §7.5 R11). ────────────────
+
+// Micro-loops (presets/repeat_loops.json: 4 passes of 70 ms over the set {0, +12} by cycle,
+// decay 900 ms, periodic and onsets): the repeat and the decay moved alone, decay switched off,
+// then one pass.
+PresetCase RepeatLoops() {
+  PresetCase p = PackagePreset("repeat_loops", "repeat_loops");
+  Script&    s = p.script;
+  s.Param(S(3) + 333, P::Repeat, 8.0f);
+  s.Param(S(5) + 71, P::DecayMs, 0.0f);
+  s.Param(S(7) + 5, P::DecayMs, 250.0f);
+  s.Param(S(9) + 17, P::Repeat, 1.0f);
+  p.require   = {{C::Events, 4, 4}, {C::OffGridEvents, 4}, {C::RepeatPasses, 500}, {C::Onsets, 10}};
+  p.ablate    = {Feature::Repeat, Feature::Decay, Feature::PitchSet};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// The newest note, fading as it ages (presets/decay_marks.json: mark positioning, decay 700 ms,
+// the Strum A sketch): grains read the newest onset's mark, quieter the older it is.
+PresetCase DecayMarks() {
+  PresetCase p = PackagePreset("decay_marks", "decay_marks");
+  p.script.Trigger(S(10) + 777);  // two seconds after the last pluck: an old mark, faint
+  p.require = {{C::Onsets, 10}, {C::Triggers, 1, 1}, {C::OffGridEvents, 1}};
+  p.ablate  = {Feature::Decay, Feature::MarkPosition};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -476,6 +504,7 @@ const char* CounterName(Counter c) noexcept {
     case C::Births: return "births";
     case C::BurstBirths: return "burstBirths";
     case C::Skips: return "skips";
+    case C::RepeatPasses: return "repeatPasses";
     case C::kCount: break;
   }
   return "unknown";
@@ -508,6 +537,8 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::Intermittency: return "intermittency";
     case Feature::PitchSet: return "pitchSet";
     case Feature::PitchSelect: return "pitchSelect";
+    case Feature::Repeat: return "repeat";
+    case Feature::Decay: return "decay";
   }
   return "unknown";
 }
@@ -597,6 +628,8 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::Intermittency: neutral(P::Intermittency, 0.0f); break;
     case Feature::PitchSet: out.strip |= kStripPitchSet; break;
     case Feature::PitchSelect: out.strip |= kStripPitchSelect; break;
+    case Feature::Repeat: neutral(P::Repeat, 1.0f); break;
+    case Feature::Decay: neutral(P::DecayMs, 0.0f); break;
   }
   return out;
 }
@@ -957,6 +990,14 @@ std::vector<VectorCase> BuildCorpus() {
     age.require = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}};
     age.ablate  = {Feature::MarkPosition, Feature::RingLength};
     v.presets.push_back(age);
+    // presets/repeat_mark_aging.json (sound revision 6): the same, with 16 passes of 500 ms, so
+    // the far rail covers the whole life, 15 passes more: the aging mark reaches it about 79 s
+    // in, 8.5 s before the 2^22 ring's staleness guard drops the mark; the doubled ring never
+    // reaches it.
+    PresetCase loops = PackagePreset("repeat_mark_aging", "repeat_mark_aging");
+    loops.require    = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}, {C::RepeatPasses, 600}};
+    loops.ablate     = {Feature::Repeat, Feature::MarkPosition, Feature::RingLength};
+    v.presets.push_back(loops);
     corpus.push_back(std::move(v));
   }
 
@@ -1013,6 +1054,8 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(MidiGate());
     v.presets.push_back(PitchCycle());   // sound revision 5 on: pitch sets
     v.presets.push_back(PitchRandom());
+    v.presets.push_back(RepeatLoops());  // sound revision 6 on: repeat and decay
+    v.presets.push_back(DecayMarks());
     corpus.push_back(std::move(v));
   }
 

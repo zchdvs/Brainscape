@@ -3,8 +3,8 @@
   "id": "corpus.switch_onset",
   "name": "Switch onset",
   "family": "none",
-  "sound_rev": 5,
-  "sound_hash": "4e5a42f13dda990e73166c3136edb0303e3b4b7fa9d3164ff2495c42d60f19e7",
+  "sound_rev": 6,
+  "sound_hash": "c369e7793ac2e53df51ecafa2df6b08debc163201eddaa7d57b95e3a9400aa7f",
   "meta": {
     "author": "",
     "description": "Golden corpus: mode switches, onsets on the live position.",
@@ -28,9 +28,11 @@
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 30
+        "spray_ms": 30,
+        "repeat": 1
       },
       "size_ms": 200,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

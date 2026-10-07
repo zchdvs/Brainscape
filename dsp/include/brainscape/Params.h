@@ -59,6 +59,7 @@ enum class ParamId : uint32_t {
   OnsetTrigger   = 27,  // was scheduler.onset_trigger
   PositionSource = 28,  // was layer0.position.source
   // ── Layer 0 (W1: 29-31; W3: 32-37) ───────────────────────────────────────────────
+  // Leaves since sound revision 6 (mode-compiler.md §7.5, R11): 29 and 30.
   Repeat          = 29,  // layer0.position.repeat: passes over one region, integer
   DecayMs         = 30,  // layer0.decay_ms: 60 dB fall as the position ages, 0 = off
   VoiceCount      = 31,  // layer0.voice_count: voices this layer may sound, integer
@@ -209,8 +210,8 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::TriggerSens,        "trigger.sensitivity",          0.0f,    1.0f,     0.5f,     "",   ParamKind::Leaf,        kDomainDetector,               1},
     {ParamId::OnsetTrigger,       nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
     {ParamId::PositionSource,     nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
-    {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Reserved,    kDomainGranular,               0},
+    {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Leaf,        kDomainGranular,               6},
+    {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Leaf,        kDomainGranular,               6},
     {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::LevelDb,            "layer0.level_db",              -24.0f,  6.0f,     0.0f,     "dB", ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::GlideCurve,         "layer0.pitch.glide.curve",     -1.0f,   1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},

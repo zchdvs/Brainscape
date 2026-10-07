@@ -1,8 +1,8 @@
 {
   "format": "brainscape-golden/1",
-  "soundRevision": 5,
+  "soundRevision": 6,
   "generatorVersion": 1,
-  "corpusVersion": 10,
+  "corpusVersion": 11,
   "sampleRate": 48000,
   "stereoInput": true,
   "ditherRingWrite": true,
@@ -59,7 +59,8 @@
             "mutedFrames": 0,
             "births": 1394,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -105,13 +106,14 @@
             "mutedFrames": 0,
             "births": 120,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "strum_marks",
           "package": "strum_marks",
-          "soundHash": "524de90b92e0fceabc19958eb4dcc8c6b3f9fb222c699f048aaf321a68e7535e",
+          "soundHash": "75a0b72a0fe794d5913cd128b7e3171f7ca8df85f2151eb3ac1484fc5c868989",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "b3a3275638887986661ceb193e2c09283e8c438b33f949d937df9c47bf57d227",
           "secondHashes": [
@@ -154,7 +156,8 @@
             "mutedFrames": 0,
             "births": 147,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -200,7 +203,8 @@
             "mutedFrames": 0,
             "births": 7226,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -246,7 +250,8 @@
             "mutedFrames": 0,
             "births": 252,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -292,7 +297,8 @@
             "mutedFrames": 0,
             "births": 252,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -338,7 +344,8 @@
             "mutedFrames": 0,
             "births": 252,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -354,7 +361,7 @@
         {
           "name": "freeze_marks",
           "package": "freeze_marks",
-          "soundHash": "5ace50b730a79e01aed5725ea5c19b1981c1be8a3f5427ebfef6d4de9c9b1b43",
+          "soundHash": "30f9164ff8eb5568594fcdf4de0e20f89763ab775c424248cf50e33505cb016e",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "36ca09e8bf28d351f8ebd135b9f0e913c5f959c9daa2d82efb24df609abd767a",
           "secondHashes": [
@@ -401,7 +408,8 @@
             "mutedFrames": 2223,
             "births": 2458,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -451,7 +459,8 @@
             "mutedFrames": 0,
             "births": 2053,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -501,7 +510,8 @@
             "mutedFrames": 6337,
             "births": 17117,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -517,7 +527,7 @@
         {
           "name": "dense_1ms",
           "package": "dense_1ms",
-          "soundHash": "027fa4f5b619947ac173088395d931850116126a16b9ca6919b98bba3c13a3f8",
+          "soundHash": "359ec2ba4ce8612ff6e2ea53674f4b5a787b5f7a8e2cebfc19eeb4cec0fbad58",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "3c8910efb39df100418ec714568184619ed6702a6e596e8fee726f30aeefd072",
           "secondHashes": [
@@ -554,7 +564,8 @@
             "mutedFrames": 0,
             "births": 211020,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -608,7 +619,8 @@
             "mutedFrames": 0,
             "births": 1160,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -652,7 +664,8 @@
             "mutedFrames": 0,
             "births": 1160,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -696,7 +709,8 @@
             "mutedFrames": 0,
             "births": 200,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -746,7 +760,8 @@
             "mutedFrames": 11046,
             "births": 700,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -810,7 +825,8 @@
             "mutedFrames": 0,
             "births": 200,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -864,7 +880,8 @@
             "mutedFrames": 0,
             "births": 2316,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1031,7 +1048,8 @@
             "mutedFrames": 0,
             "births": 14257,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1047,7 +1065,7 @@
         {
           "name": "freeze_long",
           "package": "freeze_long",
-          "soundHash": "e909bfef06a59533db90391bb1e2798a3bfff04a9c5adf795e158cbdde63091b",
+          "soundHash": "a4bc4d61dcdede3392a5f5dbbc8ea73eadf2ce8c1db082461fd7f58a31a82790",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "a3050925be736df86386e42775573575d8e7ed4ead33be99126b4ad55aeebc5f",
           "secondHashes": [
@@ -1148,13 +1166,14 @@
             "mutedFrames": 0,
             "births": 7906,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "freeze_live_long",
           "package": "freeze_live_long",
-          "soundHash": "f8eeecc9e37d463198a725ed1b87b9ee552b854b6583c2d98ee1ae3601ae461f",
+          "soundHash": "ceec2d0981e8fd434178d8f8c1736973f392be038a77b771d3d62ac390a7e491",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "06bf72658522201646fa225c349112ccda9c7893f1b3ee5dfdf17e653094e7fa",
           "secondHashes": [
@@ -1255,7 +1274,8 @@
             "mutedFrames": 0,
             "births": 7876,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1271,7 +1291,7 @@
         {
           "name": "reverse_mark_aging",
           "package": "reverse_mark_aging",
-          "soundHash": "62d752b02cbe01c4bf00a1e7b45fddf7f58dd11abf578bd67b5debcf94137acd",
+          "soundHash": "2be748b1745c5cc10a68bcdb5e78f9527c5ddfa5b905562fb5000c499a314558",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "45af699169291a6560a6cbc465d10964e23a55b6ca9b8a597df251a77b926a02",
           "secondHashes": [
@@ -1394,7 +1414,138 @@
             "mutedFrames": 22919,
             "births": 3738,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
+          }
+        },
+        {
+          "name": "repeat_mark_aging",
+          "package": "repeat_mark_aging",
+          "soundHash": "143756f748754295c5af75b223185227e73f63a80e2b30e90d0da4057b6618f8",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "b549e561e802eedfc5fe887f34cd34e42b6a364fa2c754efbbce3a38473b734b",
+          "secondHashes": [
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "3083dcabb8b0bc66905bd412f771f73d9ce72bc48428c94ccbf2c753fee38030",
+            "64bec2db1fb151eb3c7af770e1b9ccd510558bd95c66c25e182ef91b874880b1",
+            "bcef444118515f2694a8757e9e302e360422099e9c35351b6963996db658fdfe",
+            "cb43ccd8aa0b2f5e6502fefc044297a4f1415d54c94825afbd558c049f4391c9",
+            "082b9f4c91246bcb0bcd380080391a5601adc4f6cb93dbd9dfac154dca82537f",
+            "ac5c62f369756e87c4efe82b55316cb56ba15bf170d6c3d3cf6232b900019cf0",
+            "b9bdb8d59ebdb3c72abf83fe4091a127c84962732f57994fcd5d5b6d7259ec81",
+            "0028b994f367f2b584282d2a8d1ac8e87c67ab76af3bd2e9c15a1c770118a604",
+            "677c39dc7eaa682c157e7c0cb907b62ed82e94232ab170042facff1adb336084",
+            "ce9ced259b1c7c2c790389ebe129f90e6ec6091f9bedaf7cde17b7af3fe8bbc0",
+            "d2e35c175ddbe2f428708a39e6d985adbeb91a2f528ae057a332e3ea4865ec53",
+            "30f776ab6cfd5833ba235cb1090ef520b56227ac543af4a0e1c3a9f991d8c068",
+            "2b0a0777acb136b3fec44f367f17388289cd4fb661671dd03998432c60e16c8b",
+            "76368a1b68bd42d429f1523984e505b0f43dd2f40f4ca11fca2a599b43dc69c0",
+            "d4f82eee4dfd98eb52e7406118857100e66877a00ac7bd6ab9a9a7f3d6829395",
+            "56f0eaad49931c25c238fc33a095662bfd77cc4b4033f93e49d6dcb86b9a0f20",
+            "9fb62487087ef812bcb5b0c51e1772cc556319edb76ac127526091a3d82c0218",
+            "31de32d220d322c5f3197f5f28e72ca41769ac1d386b441af45e7d28637ad81f",
+            "ed361a1aa261a95ae1009e76784f8ce9ea29cee95f588ce2e2d032ff0f8baf72",
+            "c192c220ed537ca433de90c37b3ee6d52ce2335f860e5c1491aae207335eef0e",
+            "dc89550e947855b53d9c8346e5e254584f6d5cb4d12f2ad917491ebae984b813",
+            "79b5b03995bf915ecd2ef26945993344d4a79a08d0d463db249786bf3c2526bc",
+            "2413748acd9ae2e6b75ca7363dc077aec56a97246f18e10a22fa6f728af32887",
+            "a868da8fc4dc631a86cc68c51d5a16dccfb4e8870e10ca8d7f80c216bfba370c",
+            "78c53f4588bb6327cc2f34e7ab44e0557fee87324a281370e0f85fe85ed526bb",
+            "0b380e48734596c62144d2acff9264e711a9f523d6dded1f05a07a2c9c520cb5",
+            "56c0fb4153d4de8f148f83f89e5632c2c5814c6485cb610264df78618c2668f5",
+            "2f88791a29cdf0ad3332f1277f525c23e72e55ac706fc58837fba63a86491ef6",
+            "9d6af47bcabd25a6ef13b8c5cb124b918117d05566b3ca6fa1332dca1871f098",
+            "62bb5a2d6081230a948a27979a2a37d9224895badf38b2399ca71e56da944b11",
+            "cbfb85dd5c7d77dd8ed6814b55418761ef427987e9bd882ca9e054c1326253b5",
+            "985615620fee3db1da715b172131f9a8c35854d527550960034decaa95aa2104",
+            "b98b208a2da59efbb9e8fc8a5e4cd104742163c2e1bd9e0157102971b9fe5ef8",
+            "95570844cf30aa3c76d42d729215315f328250426999f90b5bbdbf5d6c1e8d65",
+            "cbc6de4f3d40a81bf34cc47a8e5d11013c55cdc8e4af5ee420b4a115541602aa",
+            "9bd83a5b1467185475a7c74e609dc9569b785fec9620341d460af15a2b31bf24",
+            "ae67734177a5a42e24621025c746708bdbee8fc7c29f51564176edb1d13a1a74",
+            "f4489fedaf345bb341e8602596c03da322a49aada074f354352f6203843cf340",
+            "5f18d06ac798b1ccadee8e498851f886f25de29849467b2ccb99c93f2cb40c71",
+            "192d2e41e909006ca7c8711b5b30db6349aead2ecd358a7c8fa55e541fb7e023",
+            "6e78187b87351174ae8382586d3efa67f72c9dcca9a37be49aa9e5c2e5710624",
+            "d58bb77d614aa0f3b35389063c3d9ff07bc95958cac79030acb906349d2280e7",
+            "3a7c104fcc2a28d67a918f4f430e7abb61a49835cad7d8fd3d6f26df8ef7f654",
+            "88f75b3d5ce0be4234b41fad3d3ad77b1b8ff13b5dc3abacbea2841826c27b83",
+            "2de978ee68e7bf4689dc12c0473bed02806667e8d71469ae2f23d8060b55cbe0",
+            "19a53f2fbfce629e408f693385222b6253738868bfe8d1568a5d3b84bb883b9c",
+            "fa2227a3297152ced103670c39888ed2ca0acd567228c2eb3a9124c3cfda9459",
+            "1a0a5bc80511b7f831f1550899112c07e5cd16003e4ace5440fbc1b7e3a0b786",
+            "7d56c36c163feacd6c29b612fb2b2833115088454c0dcee38cd6c7347e5433c4",
+            "71d496cecf35004ed659b4d997ac1372b97c8155a43f12139c2622f272339962",
+            "14b9c19697f54f9c832cd8cc8550fcb5a7650edc587c7cc8c64fe723c324d74b",
+            "40bd864b2c8666a8b1d407393a8b03e3b86d4a1e1876ac5cc020c3a0a7687e02",
+            "516334d51fc9024ce96db07f0e962c89b85235d66f24a88ce945dd14c61fa57d",
+            "fa80fdf337204bb92ef918e7bf683db5d5b5049e91c1297258202b06e62b8457",
+            "02c9d02828c7bf730504c2e8f2c24af151fea725ff61a90cbadc51d0dcfd6524",
+            "40f039a1de02ad722097d268e77f75724da781c2b4264fcb9dae7cb3ec5d031b",
+            "f038751ad6322748ac3a62b758748a7e9ec06317152159ceb2c79650d080f8f9",
+            "9402657fa2d22fc5679c6f74e4191968c25176c0ee7d1e18f5e411e78def8199",
+            "309e0898ef23a5da3282750fe39497e73b2dfca21e62bec21dc66941ccbffa69",
+            "e400949199abb19c64782b2cedd91f23c844dfd82284716d7e3262f8c8429092",
+            "9fd7d65d66aa659528d044711da4de6d5f4826a9d0599ae82a5ca3194675b32c",
+            "9176067c804629a38d96ebc3d34a9059e9dad765250c8052836e7ff5c33500c8",
+            "24872a12498508ed4f9054063b56a156ef57656bab98c1478baf8dd2b2111fc5",
+            "b7ef3f9c46544b05045cec8e256dfab142b4e74c178f5f896129743a3ad1d293",
+            "e3a20fac1d9eb63fdbb514463aa0fadd35c108d5bc71c5a45f1f5791cfef8fcd",
+            "a33319e90a6915abdb5162ecec95a749ff93d6f7f21e3f38a5532f45afa987a4",
+            "e131d408bd90249889ac9228ca3f2bfca4bcabfdb1e6fadbcf3e5f90a203cbce",
+            "12fb5dfe45deebf72ae591f717931f77c2aba8f7d558b6c8abb52a3336a33cb1",
+            "8e1c06d58a7c11477c3cab33b3c797bb55c9df6e0e4da8e1828e6afe9fc8854d",
+            "aaf3b76d03d5f60cca5b31fcb9867a608a9449bad5be7bc9c7139f4c525272bf",
+            "69f3c97249b4fc141598c37a5687b3afbc370157b28be27c2bea705e89d753a7",
+            "1e24361c22a198e4b3d5ab726df23dc95d35c2c16140380f641d3b56d05b0651",
+            "921c54ee4ae2d0c58448ca1888ca206bf8cc139044880639920bf7a8ba39533b",
+            "1796c13bfa0fb98b84d1acffe062ba5d0cff3c30aac067b6da80debfdb29dc58",
+            "2567d58c95fa4fdf4806d42b44cf2a7760dc9558412ab6c2c6072e9d22183976",
+            "a306dbe947fed2fc6b3cd37ef191199b9a013f4a43e74f2f015915028d642bd1",
+            "9d66c3b5a1b9cde43dd6abe0df5d9a962f4750d661b1895d1a2a6e1cbd6a52e1",
+            "0e3f0b38774602fdf6dc779f16ad777fd2afa0811f4e8862d4d5df758f68ac23",
+            "38e0b966f545c37cd0efb0ac8343e21fa9b26c8ab0a6061ba359d35b6ed3c72a",
+            "70e8661365cad2d7fdffa84cc46e27dceaa4f83fd5d64d43a606bc8413b2d2a7",
+            "bb728b469d74f22f76f869aa34e2878629546e6bca5eb2b4bf463a634861e18c",
+            "7c0dcc5ed41dc5905b7f1f95aefc6e7bda8a9c235fb821790daeafba71a4a0eb",
+            "52465975fc50318c7a641da514813db5a2679084d51fd02476c6a87fa93ad6ec",
+            "4e1ff5712f66ae1763b52e6c594f64b82db56e74bc9a5173d198d8e60545acfa",
+            "c64010e43d50e594cc236d24de083041e88f7149705305266fa7294810836ac2",
+            "2e62ba293f9902ba0f8699b69c40beefddd1cd7a766cb09c9548a5a16bbfda27",
+            "de7d8a25f246974226fd28859be42edf1801d9d7def90d86a44255a48274189b",
+            "86078e11846a664d14afd02f0a63552033baeacd052bcf08e8cd1553d5ad026d",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 4416000,
+            "events": 0,
+            "offGridEvents": 0,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 4,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 4329600,
+            "outActiveFrames": 4112669,
+            "tailActiveFrames": 4111662,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 4228071,
+            "lastNonzeroFrame": 4228084,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 85351,
+            "births": 48,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 684
           }
         }
       ]
@@ -1450,7 +1601,8 @@
             "mutedFrames": 0,
             "births": 3449,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1466,7 +1618,7 @@
         {
           "name": "spillover_chain",
           "package": "strum_chain",
-          "soundHash": "bdc73053330c744a52c5b722d42bb906c62d7c5b339b04509166cc01deef6c38",
+          "soundHash": "4dcd029ac6b82b3b0b5324d97ede3e219e7c7ce2d0a696b776ae40d3c33fac77",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "9ea1b82ea4cb151f7f0b13fee02773c12dd3e618e55de829637ece19a78b9436",
           "secondHashes": [
@@ -1511,13 +1663,14 @@
             "mutedFrames": 0,
             "births": 36222,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "restart_kept_params",
           "package": "restart_kept",
-          "soundHash": "068ff2d53ad80b682099f801522965135175793fc54d595f8062c6dc28649fed",
+          "soundHash": "6471fbdee481e4076a97ada1abe004a5d579030d22219a09773fdbda7eeabbda",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "894cd87fe4df61f2510cece8729caa10c112a85d8a492412d905a1f1c8ee87ed",
           "secondHashes": [
@@ -1562,7 +1715,8 @@
             "mutedFrames": 0,
             "births": 6406,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -1610,7 +1764,8 @@
             "mutedFrames": 0,
             "births": 9670,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1660,7 +1815,8 @@
             "mutedFrames": 0,
             "births": 700,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -1700,7 +1856,8 @@
             "mutedFrames": 0,
             "births": 700,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1716,7 +1873,7 @@
         {
           "name": "macro_sweep",
           "package": "macro_sweep",
-          "soundHash": "ddc5f869a774ca30cde424b19141b98546cecc61fd1d9181a021a01f7db21656",
+          "soundHash": "9f8aadc85a52edb243aa4d1fd1c268b3dc49b3e6bcb9f8b1f8d49cac67710411",
           "controlHash": "6b24eac57e000ac2f6e72ea0bfb1d53b8c4a0b9d7840327f62cba8c23b874371",
           "hash": "0c631daa0979b5353f998e6fc8d40d850be0d6c14732456faab5c45c17d7fa82",
           "secondHashes": [
@@ -1761,13 +1918,14 @@
             "mutedFrames": 0,
             "births": 2082,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "expression",
           "package": "expression",
-          "soundHash": "f0686283ff727145eaa175e54f1340eead7704578a7bcb8dcff9f7961105e787",
+          "soundHash": "88c596165a7997cd4614b25a05f5b6e519b907ff37ba74096b42648bda8a7bd0",
           "controlHash": "4ea6b076ed6996eab5ca874155e28818ef3143c518057bfa6470f5d1b2fb09f5",
           "hash": "5a0c92d410fc4442053d4a246f9bde514d2c5125d983758fba2f8abe4dadcaaa",
           "secondHashes": [
@@ -1812,13 +1970,14 @@
             "mutedFrames": 0,
             "births": 1431,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "mode_switch",
           "package": "switch_marks",
-          "soundHash": "8cabbe790452e8ebbd1f6c63bdfbcf20277a744503db2f866e00e00080b102d4",
+          "soundHash": "ffae1c9e2e90c5b664ec4b725c18b7c97839c442a7c4a363033d274b2c084516",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "8d0fb295d67ce8c5701a6b8f7054da6e6435205fddf016f4ebd03ef04a5f8e63",
           "secondHashes": [
@@ -1863,7 +2022,8 @@
             "mutedFrames": 0,
             "births": 2190,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
@@ -1911,13 +2071,14 @@
             "mutedFrames": 131781,
             "births": 1595,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "lone_changes",
           "package": "lone_busy",
-          "soundHash": "7cc9565ce8ce919edaba8a18f8ed642ee9e5d6be860185487a3641bbc67925f8",
+          "soundHash": "ad9167a1ceee9c2c831b584a1d95eed6798e75537f8d65d05b59de221ecf80e9",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "727e38afd2ab8f89f3ca1c4db262a2206d2290d07f6b201d50f97f99c918b3fb",
           "secondHashes": [
@@ -1962,7 +2123,8 @@
             "mutedFrames": 0,
             "births": 13956,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -1978,7 +2140,7 @@
         {
           "name": "onset_only",
           "package": "sources_onset",
-          "soundHash": "b46a5611b31fa512ba0c4faf9c329f68eb1c501d2b98b20ef242a15cabb5b1f4",
+          "soundHash": "e7a7f5745ee909e8c0e4b7f022454a9b968c6014c03b2d67cf48aa85255ec7ef",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "764155f7a636b3b7fdf5303a2ce913581a13cd014a7af42507e768c063ed3e5a",
           "secondHashes": [
@@ -2021,13 +2183,14 @@
             "mutedFrames": 0,
             "births": 20,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "onset_burst",
           "package": "burst_marks",
-          "soundHash": "fd9a6dca9c74b13a25a3aa189b6f7b4318884276cc440b8ec4cf3b471d313a07",
+          "soundHash": "ac2f7e4d5229cc2a96493d49e4323ffa3bc8530ff35762f34d7a28766134154e",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "ed825f7cceaf924540dd9a8dbe578f67b62edaed12c227f7512a4f0a00d31db2",
           "secondHashes": [
@@ -2070,13 +2233,14 @@
             "mutedFrames": 0,
             "births": 120,
             "burstBirths": 100,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "burst_spaced",
           "package": "burst_spaced",
-          "soundHash": "0029f6e3d8b273eb7158022daf00405e8d2e36507fcb1d13c4cfc4131e2f4434",
+          "soundHash": "5dde032d6dcdbafe6ef5ec999f940bbe62a8e894d527196878fa7c4c6c579a56",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "fb3cb732ffff2e428996fdb9b4cc9e127cbcf83b32988866b4ffa23208e8bde2",
           "secondHashes": [
@@ -2119,7 +2283,8 @@
             "mutedFrames": 0,
             "births": 66,
             "burstBirths": 48,
-            "skips": 6
+            "skips": 6,
+            "repeatPasses": 0
           }
         },
         {
@@ -2165,13 +2330,14 @@
             "mutedFrames": 0,
             "births": 2401,
             "burstBirths": 0,
-            "skips": 2299
+            "skips": 2299,
+            "repeatPasses": 0
           }
         },
         {
           "name": "midi_gate",
           "package": "sources_midi",
-          "soundHash": "7cdca424e4557f9ceb06e5c5b936f95fd7254f2653699b0da069cae328412ca8",
+          "soundHash": "b8d0027ccafd326732bf5f2e4eef6821dfd9026190c65766e7575c6c629c7d0f",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "fbd646744e7bb16e2aa83c7cd940901d472412078823f91fa48c115b2e34f852",
           "secondHashes": [
@@ -2214,13 +2380,14 @@
             "mutedFrames": 0,
             "births": 191,
             "burstBirths": 14,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "pitch_cycle",
           "package": "pitchset_cycle",
-          "soundHash": "9b4668a74c24c73abc6884af5dfa52237cc17e88586326d164306cc6a0c63344",
+          "soundHash": "1fefe9fe64d444498d665c93707f2d2b631e54f8fdc429b94072623c4ef868c2",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "cdc42a2405382300e7b5a7ed942e2b7f929fa57ccf108b9493f280cda5146a36",
           "secondHashes": [
@@ -2263,13 +2430,14 @@
             "mutedFrames": 0,
             "births": 1121,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         },
         {
           "name": "pitch_random",
           "package": "pitchset_random",
-          "soundHash": "b3608127fb79f63c5a70b76004e46d5e67e1e94858608c93610cb8f99b4a2912",
+          "soundHash": "7b69c7056dbaa4b5ea639a9c76d800c36ba54f34a39a9c6422a53b5c5db208bf",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "1b1ccd7bf56150e7e087692455e174acb73454bfb22708e4c6a427630d615008",
           "secondHashes": [
@@ -2312,7 +2480,108 @@
             "mutedFrames": 0,
             "births": 874,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
+          }
+        },
+        {
+          "name": "repeat_loops",
+          "package": "repeat_loops",
+          "soundHash": "39b4e8deea8bf9c96ff6d2e1f4a9d1260cc050e728165cdb57a2715237d27580",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "b406e7d84d3ef886cd9271327349c962566b08dc793b877faffb0cdecf59e52d",
+          "secondHashes": [
+            "65dc9ecad2f44ef3dc4db884fc3bb16055cab0d3c703a6575d8c9678ae61ee45",
+            "836f2239cbcccdbadea41cb13386176f88b414efd36f389a51c29047ad54e75f",
+            "bf4cf43ff863343677d5c1528e4673ed1883f4991b8e1675d83efc63058e2958",
+            "0d60278bad6ea3afdbdb88ab9f7d8c4b19230a48aa5759ea9f192ffc57259d19",
+            "de19d6b3a28951d4abbb84ebfce86c175ef330931a129ec75c2cf15fe22153e6",
+            "0c2cb7a1ad7872ac7f4b5d2950b0b505b9440a6ca09ff0135565bc5171ccbfeb",
+            "f7e7c9a81d3478405d995c6770090e4c5874fee4241ab98bf8d51822dccb7708",
+            "2cd388f08cc498d216adbc7f647361bc95789e9bb797969b0fb92b4e88758a99",
+            "775752f3527fb6e321372dc41cc44bbb4dfa69aacbdd1fc3c230d3708932fd62",
+            "2a191db7a107476ce729ad3931b112fe906df704ce80003116063a95bd4f3e82",
+            "c6744dc69ca25042032e3672587906d92f2f8b60fe704a6f675921c8ad766c3d",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 4,
+            "offGridEvents": 4,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 503116,
+            "tailActiveFrames": 71118,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 510438,
+            "lastNonzeroFrame": 512683,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 350,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 637
+          }
+        },
+        {
+          "name": "decay_marks",
+          "package": "decay_marks",
+          "soundHash": "15386131279b2e4a64474365ba8820a99b9481b9960711f0b125951cd520065f",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "d40a8f82ae24645d0c4aff020b3317ce21d836bb02dbe787848860c46e191951",
+          "secondHashes": [
+            "d52a40ba114ff9144abf347e8ea924b5159889ee9f6da9e9f49f3ac5ca4c451a",
+            "091f8208751caf979de96001c96a6b64fb60acaf6258554f69e903f2154c4641",
+            "c6a6900d317ad9f43d74e3503086c051d4366e3e2eb38ecb1fef05e3ddffebae",
+            "1eedc3fe2e9038e9bf7a0bd8ff2d409800814579034a2b06962cb0eba02bdbb1",
+            "a6c934f781a0b18ff8c2263524289a834258123a8aa1b131a2da31382fda63c0",
+            "ad5fede1ef6d31a909c66a1314c4f37e087ae76c4bae3a824958f8846d322453",
+            "330bc85eca11bd4ef84ee1c859fce61c073b60e3228210fe2e8d7f3d32078684",
+            "18674447088ed2fab0a7941840718342a6ed532fcb125864520700a932a7f15c",
+            "32c6ade541538774e340b12f25a65334b9a2854a7fcf60418f69edc1627d0089",
+            "ee64892d57e6adedd58438447213816609672f6551057a65cc56ef5b693e77ce",
+            "57104fee806f56ff96d968955e0773da835b8b454454b0187264c4c4b46902c1",
+            "57ef8c055d4c95e4fa1e16d812f5950b7c4976a27e3221ec54b915366ca462b4"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 1,
+            "offGridEvents": 1,
+            "triggers": 1,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 498842,
+            "tailActiveFrames": 66846,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 507750,
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 730,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]
@@ -2360,7 +2629,8 @@
             "mutedFrames": 0,
             "births": 466,
             "burstBirths": 0,
-            "skips": 0
+            "skips": 0,
+            "repeatPasses": 0
           }
         }
       ]

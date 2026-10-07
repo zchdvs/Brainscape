@@ -217,6 +217,8 @@ constexpr Settable kSettable[] = {
     {ParamId::FilterRes, "FilterRes"},
     {ParamId::FilterMorph, "FilterMorph"},
     {ParamId::TriggerSens, "TriggerSens"},
+    {ParamId::Repeat, "Repeat"},
+    {ParamId::DecayMs, "DecayMs"},
     {ParamId::Intermittency, "Intermittency"},
     {ParamId::BurstCount, "BurstCount"},
     {ParamId::BurstSpacingMs, "BurstSpacingMs"},
@@ -258,7 +260,8 @@ constexpr Alias kAliases[] = {
     {"delaymix", ParamId::DelayMix},      {"reverbtime", ParamId::ReverbTime},
     {"reverbmix", ParamId::ReverbMix},    {"cutoff", ParamId::FilterCutoffHz},
     {"res", ParamId::FilterRes},          {"morph", ParamId::FilterMorph},
-    {"sens", ParamId::TriggerSens},       {"skip", ParamId::Intermittency},
+    {"sens", ParamId::TriggerSens},       {"repeat", ParamId::Repeat},
+    {"decay", ParamId::DecayMs},          {"skip", ParamId::Intermittency},
     {"burst", ParamId::BurstCount},       {"spacing", ParamId::BurstSpacingMs},
     {"volume", ParamId::EffectVolumeDb},
 };

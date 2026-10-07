@@ -83,9 +83,10 @@ bool TapsClearOfWriteAhead(uint32_t firstTap, uint32_t numTaps, uint32_t liveFra
 bool GrainFitsRing(const Grain& g, uint32_t bufLen) noexcept {
   const int64_t mag  = g.inc < 0 ? -g.inc : g.inc;
   const auto    rail = grainmath::ComputeDelayRails(
-      static_cast<double>(g.total), static_cast<double>(mag) * 0x1p-32, g.inc < 0,
+      static_cast<double>(g.passLen), static_cast<double>(mag) * 0x1p-32, g.inc < 0,
       bufLen > kBlockWriteAheadFrames ? bufLen - kBlockWriteAheadFrames : 0u,
-      kGuardMarginFrames);
+      kGuardMarginFrames,
+      static_cast<double>(g.passes - 1u) * static_cast<double>(g.passLen));
   return !(rail.hi < rail.lo);
 }
 #endif
@@ -94,8 +95,11 @@ bool GrainFitsRing(const Grain& g, uint32_t bufLen) noexcept {
 
 void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                                  uint32_t anchorFrame, uint32_t liveFrame) noexcept {
-  uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
-  const int64_t drawKey = birthAbs - drawEpoch_;
+  // One pass's length L (the grain length); a voice reads its region `passes` times
+  // (mode-compiler.md §7.5, R11), so its life is passes * L.
+  uint32_t       total   = p.totalFrames >= 1u ? p.totalFrames : 1u;
+  const uint32_t passes  = p.repeat >= 1u ? p.repeat : 1u;
+  const int64_t  drawKey = birthAbs - drawEpoch_;
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment. The pitch is the
   // set's entry plus the transpose leaf, then detune, then the clamp (mode-compiler.md §7.5).
@@ -112,8 +116,9 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
 
   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
   // recent eligible onset mark — the Strum family's mechanism, design §4).
-  double d          = p.baseDelayFrames;
-  bool   markActive = false;
+  double  d          = p.baseDelayFrames;
+  bool    markActive = false;
+  int64_t markAbs    = 0;  // the frame the mark was recorded at, for its age
   for (uint32_t k = 0; p.posFromMark && k < markCount_; ++k) {
     const Mark& m = marks_[(markHead_ + kMaxMarks - 1u - k) % kMaxMarks];
     // Staleness guard: once the write head has lapped the ring, the modular
@@ -128,6 +133,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     if (dPin > ((liveFrame - m.frame) & mask_)) continue;
     d          = static_cast<double>(dPin);
     markActive = true;
+    markAbs    = m.abs;
     break;
   }
   if (markActive) {
@@ -152,11 +158,13 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   // live head this block (up to kBlockWriteAheadFrames - 1): the 64-frame margin
   // alone left far-rail reads block-size dependent. A shared build constant,
   // never cfg.maxBlockSize, so pedal and plugin clamp identically.
+  // The far rail covers the whole life: the write head moves (passes - 1) * L further on while
+  // the later passes re-read the region (mode-compiler.md §7.5).
   const uint32_t bufLen = mask_ + 1u;
   auto bounds = grainmath::ComputeDelayBounds(
       static_cast<double>(total), static_cast<double>(ratio), reverse,
       bufLen > kBlockWriteAheadFrames ? bufLen - kBlockWriteAheadFrames : 0u,
-      kGuardMarginFrames);
+      kGuardMarginFrames, static_cast<double>(passes - 1u) * static_cast<double>(total));
   // The guards protect against the LIVE write head, but d is measured from the
   // anchor. While frozen the live head keeps recording `age` frames past the pin,
   // so the far rail moves age frames closer; guards measured from the pin let
@@ -191,12 +199,21 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   auto inc = detmath::RoundHalfAwayI64(static_cast<double>(ratio) * kFix);
   if (reverse) inc = -inc;
   g.inc        = inc;
-  g.unity      = (inc == static_cast<int64_t>(1) << 32);
-  g.total      = total;
+  g.passLen    = total;
+  g.passes     = static_cast<uint8_t>(passes);
+  g.pass       = 0;
+  g.startFrame = startFrame;
+  g.total      = passes * total;  // at most 16 * 24,000 frames
   g.rendered   = 0;
   g.fadeStart  = kNoFade;
-  g.endAbs     = birthAbs + total;
+  g.endAbs     = birthAbs + g.total;
   g.env        = grainmath::MakeEnv(static_cast<float>(total), p.sustain, p.skew);
+  // Decay (mode-compiler.md §7.5): the position reference's age at birth, a mark's (a live
+  // position is the present, age 0), then at each pass's start.
+  assert(!markActive || (birthAbs >= markAbs && birthAbs - markAbs < static_cast<int64_t>(mask_)));
+  g.age0      = markActive ? static_cast<uint32_t>(birthAbs - markAbs) : 0u;
+  g.decayRate = p.decayRate;
+  g.decayGain = grainmath::DecayGain(g.age0, g.decayRate);
   g.smoothness = p.smoothness;
   g.tier       = slot < kHiFiGrains ? 0 : 1;
 
@@ -226,9 +243,11 @@ uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey) noexc
 
 template <bool kFade>
 void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept {
-  uint64_t pos   = g.pos;
-  float    env_i = static_cast<float>(g.rendered);
-  const float gl = g.gainL, gr = g.gainR, sm = g.smoothness;
+  uint64_t pos = g.pos;
+  // The envelope runs over one pass: its index restarts with each.
+  float env_i = static_cast<float>(g.rendered - static_cast<uint32_t>(g.pass) * g.passLen);
+  // The pass's decay gain on the pan gains: exactly them when it is 1, as without decay.
+  const float gl = g.gainL * g.decayGain, gr = g.gainR * g.decayGain, sm = g.smoothness;
   // A FastCut's fade (mode-compiler.md §7.3): 1 at fadeStart, then down by 1/128 a frame;
   // the grain ends where it would reach 0. Exact multiples of 2^-7, so no rounding.
   uint32_t       idx     = g.rendered;
@@ -241,7 +260,7 @@ void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, floa
   // Tier / unity / envelope morph resolved per grain, hoisted out of the
   // per-sample loop as three inner-loop variants (design §3). Without a fade each
   // computes exactly what it did before FastCut existed.
-  if (g.unity) {
+  if (g.inc == kUnityInc) {
     for (uint32_t n = s; n < e; ++n) {
       const auto  f   = static_cast<uint32_t>(pos >> 32) & mask_;
       assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n, mask_));
@@ -301,22 +320,41 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
     const uint32_t endN =
         s + remaining < to ? s + remaining : to;
 
-    if (s < endN) {
+    // Split at the life's pass boundaries (a repeat voice, mode-compiler.md §7.5) and at a
+    // FastCut's fade start: both are absolute frames, so the splits are block-invariant.
+    for (uint32_t n = s; n < endN;) {
+      const uint32_t passEnd  = (static_cast<uint32_t>(g.pass) + 1u) * g.passLen;
+      const int64_t  passEndN = birthAbs + passEnd - absSample;  // > n: rendered < passEnd
+      const uint32_t segEnd =
+          passEndN < static_cast<int64_t>(endN) ? static_cast<uint32_t>(passEndN) : endN;
       // A grain a FastCut load cut renders its frames before fadeStart as any other, then
-      // the rest with the fade; the split is at an absolute frame, so it is block-invariant.
-      uint32_t fadeN = endN;
+      // the rest with the fade.
+      uint32_t fadeN = segEnd;
       if (g.fadeStart != kNoFade) {
         const int64_t at = birthAbs + g.fadeStart - absSample;
-        fadeN = at <= static_cast<int64_t>(s) ? s : (at < endN ? static_cast<uint32_t>(at) : endN);
+        fadeN = at <= static_cast<int64_t>(n)
+                    ? n
+                    : (at < static_cast<int64_t>(segEnd) ? static_cast<uint32_t>(at) : segEnd);
       }
-      if (s < fadeN) RenderRun<false>(g, s, fadeN, wetL, wetR);
-      if (fadeN < endN) RenderRun<true>(g, fadeN, endN, wetL, wetR);
-      if (g.rendered >= g.total) g.active = false;
+      if (n < fadeN) RenderRun<false>(g, n, fadeN, wetL, wetR);
+      if (fadeN < segEnd) RenderRun<true>(g, fadeN, segEnd, wetL, wetR);
+      n = segEnd;
+      if (g.rendered == passEnd && g.rendered < g.total) NextPass(g);
     }
+    if (s < endN && g.rendered >= g.total) g.active = false;
 
     if (g.active) order_[w++] = slot;  // compact retired grains out of the list
   }
   orderCount_ = w;
+}
+
+void GranularCore::NextPass(Grain& g) noexcept {
+  ++g.pass;
+  g.pos       = static_cast<uint64_t>(g.startFrame) << 32;
+  // age0 < the ring <= 2^26, plus at most 15 passes of at most 24,000 frames: below 2^27.
+  g.decayGain = grainmath::DecayGain(g.age0 + static_cast<uint32_t>(g.pass) * g.passLen,
+                                     g.decayRate);
+  ++stats_.repeatPasses;
 }
 
 void GranularCore::FastCut(int64_t abs) noexcept {
@@ -424,8 +462,11 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     wetR[n] = 0.f;
   }
 
-  const float target  = p.targetVoices >= 1.0f ? p.targetVoices : 1.0f;
-  const float spacing = static_cast<float>(p.totalFrames) / target;
+  // Births are spaced by a voice's whole life, repeat passes of the grain length (sound
+  // revision 6), so target voices sound at once whatever the repeat.
+  const float target = p.targetVoices >= 1.0f ? p.targetVoices : 1.0f;
+  const float spacing =
+      static_cast<float>(p.totalFrames * (p.repeat >= 1u ? p.repeat : 1u)) / target;
   assert(target <= static_cast<float>(kGranularMaxGrains));
   const auto  targetFloor = static_cast<uint32_t>(target);
   const float targetFrac  = target - static_cast<float>(targetFloor);

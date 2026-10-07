@@ -3,8 +3,8 @@
   "id": "example.editor",
   "name": "Editor data",
   "family": "recall",
-  "sound_rev": 5,
-  "sound_hash": "bf4c44dcbda8b7830d045aed2c3a0ef4418e2523f01a5c7ab81b463b24f1792e",
+  "sound_rev": 6,
+  "sound_hash": "0f6ed60f462cd849d95e9defa9d7c2b550238b8b697ffc211b127ebca5c53915",
   "meta": {
     "author": "",
     "description": "",
@@ -28,9 +28,11 @@
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

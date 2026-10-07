@@ -15,15 +15,17 @@ namespace brainscape::fw {
 // maxBlockSize 512, the golden harness's, which covers the pedal's 48. PlanMemory gave, with
 // the pinned arm-none-eabi 10.3 at kSoundRevision 2 (the Warm tier holds the active mode,
 // 1,616 B more than revision 1's 129,680; sizeof(Engine) is kEngineImplBytes, 7,168 B on the
-// M7 and 7,424 B on x86-64, where brainscape_parity_stream --placement uses the same slot):
-//   maxBlockSize  48: Hot 16,768 B   Warm 131,296 B   Bulk 17,545,216 B   Engine 7,168 B
+// M7 and 7,424 B on x86-64 then, 8,192 B and 8,448 B since sound revision 6, where
+// brainscape_parity_stream --placement uses the same slot):
+//   maxBlockSize  48: Hot 16,768 B   Warm 131,296 B   Bulk 17,545,216 B   Engine 7,168 B (8,192 B at r6)
 //   maxBlockSize 512: Hot 20,480 B   Warm 131,296 B   Bulk 17,545,216 B
 // Every image checks PlanMemory against these at boot (CheckPlacement) and refuses to run
 // on a shortfall; the host test firmware_arena_plan does the same on every ctest run.
 inline constexpr size_t kHotArenaBytes    = 24u * 1024u;           // DTCM
 inline constexpr size_t kWarmArenaBytes   = 136u * 1024u;          // AXI SRAM
 inline constexpr size_t kBulkArenaBytes   = 17u * 1024u * 1024u;   // SDRAM
-inline constexpr size_t kEngineSlotBytes  = 8u * 1024u;            // DTCM, one Engine
+inline constexpr size_t kEngineSlotBytes  = 9u * 1024u;            // DTCM, one Engine (and the
+                                                                    // x86-64 one, 8,448 B)
 inline constexpr size_t kEngineSlotAlign  = 16u;
 
 // DTCM is 128 KiB and holds the main stack at its top (32 KiB reserved, linker-checked).

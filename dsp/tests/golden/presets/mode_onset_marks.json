@@ -3,8 +3,8 @@
   "id": "corpus.mode_onset_marks",
   "name": "Mode onset marks",
   "family": "none",
-  "sound_rev": 5,
-  "sound_hash": "64873bd151e7747ff8e66ba988e37d440364b78fa159c4d20a0d5d160d96cbd6",
+  "sound_rev": 6,
+  "sound_hash": "d8866588b80ea74b70fccfd845bb26e62e76ac4b7ed28816cd63869b342ad770",
   "meta": {
     "author": "",
     "description": "Golden corpus: the automation preset’s second mode, onsets on marks.",
@@ -28,9 +28,11 @@
       "position": {
         "source": "mark",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

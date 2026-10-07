@@ -508,6 +508,8 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   At(out, Counter::Births)      = static_cast<int64_t>(stats.births - statsBefore.births);
   At(out, Counter::BurstBirths) = static_cast<int64_t>(stats.burstBirths - statsBefore.burstBirths);
   At(out, Counter::Skips)       = static_cast<int64_t>(stats.skips - statsBefore.skips);
+  At(out, Counter::RepeatPasses) =
+      static_cast<int64_t>(stats.repeatPasses - statsBefore.repeatPasses);
   out->ringReachFrame            = reach;
   hasher.Finish(out);
   return true;

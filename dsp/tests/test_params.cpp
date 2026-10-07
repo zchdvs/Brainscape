@@ -175,6 +175,7 @@ TEST_CASE("the ID table runs 1-82 with the design's kinds for this build") {
     if (id <= 26) want = ParamKind::Leaf, since = 1;
     if (id == 27 || id == 28) want = ParamKind::Retired;  // into structure at r2 (§7.6 item 4)
     if (id >= 57 && id <= 59) want = ParamKind::Leaf, since = 4;  // W1's R9 (§7.5)
+    if (id == 29 || id == 30) want = ParamKind::Leaf, since = 6;  // W1's R11
     if (id >= 69 && id <= 76) want = ParamKind::Macro;
     if (id == 77 || id == 78) want = ParamKind::Performance;
     if (id == 82) want = ParamKind::Global;
@@ -276,8 +277,8 @@ TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
 
 TEST_CASE("the Leaf rows are the presets' leaves, in ascending id order") {
   // Sound revision 1's rows but the retired 27 and 28, and wave 1's leaves as they land: 57-59
-  // (sound revision 4).
-  REQUIRE(kNumLeafParams == 29u);
+  // (sound revision 4), 29 and 30 (6).
+  REQUIRE(kNumLeafParams == 31u);
   uint32_t prev = 0;
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const auto id = static_cast<uint32_t>(LeafId(i));
@@ -421,7 +422,7 @@ namespace {
 
 // A busy start state in which a change to any Leaf row is audible within the render: every
 // post stage engaged, onsets triggering bursts of two grains (the mode's onset source) among
-// about eight periodic voices.
+// about eight periodic voices, each reading its region twice (so the decay is heard).
 const Params kBusy = {
     {ParamId::DelayMs, 120.0f},     {ParamId::Mix, 0.9f},          {ParamId::Feedback, 0.4f},
     {ParamId::GrainSizeMs, 60.0f},  {ParamId::Overlap, 0.5f},      {ParamId::SprayMs, 10.0f},
@@ -430,7 +431,7 @@ const Params kBusy = {
     {ParamId::DelayTimeMs, 90.0f},  {ParamId::DelayFb, 0.4f},      {ParamId::DelayMix, 0.3f},
     {ParamId::ReverbTime, 0.6f},    {ParamId::ReverbMix, 0.3f},    {ParamId::FilterCutoffHz, 3000.0f},
     {ParamId::FilterRes, 0.3f},     {ParamId::FilterMorph, 0.5f},  {ParamId::TriggerSens, 0.6f},
-    {ParamId::BurstCount, 2.0f}};
+    {ParamId::BurstCount, 2.0f},    {ParamId::Repeat, 2.0f}};
 
 // `preset` with the onset source on, and with mark positioning when `mark` (unit tests set the
 // structure directly; the golden corpus takes it only from compiled packages, §10.3).
@@ -454,7 +455,8 @@ const std::map<ParamId, float> kChangeTo = {
     {ParamId::DelayFb, 0.9f},         {ParamId::DelayMix, 1.0f},      {ParamId::ReverbTime, 1.0f},
     {ParamId::ReverbMix, 1.0f},       {ParamId::FilterCutoffHz, 400.0f}, {ParamId::FilterRes, 1.0f},
     {ParamId::FilterMorph, 2.0f},     {ParamId::TriggerSens, 1.0f},   {ParamId::EffectVolumeDb, -9.0f},
-    {ParamId::Intermittency, 0.5f},   {ParamId::BurstCount, 5.0f},    {ParamId::BurstSpacingMs, 40.0f}};
+    {ParamId::Intermittency, 0.5f},   {ParamId::BurstCount, 5.0f},    {ParamId::BurstSpacingMs, 40.0f},
+    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f}};
 
 constexpr int64_t kChangeFrame = 2401;  // off the 48-frame grid, before the second pluck
 

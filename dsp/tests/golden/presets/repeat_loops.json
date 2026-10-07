@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "id": "corpus.pitchset_random",
-  "name": "Pitch set random",
+  "id": "corpus.repeat_loops",
+  "name": "Repeat loops",
   "family": "none",
   "sound_rev": 6,
-  "sound_hash": "7b69c7056dbaa4b5ea639a9c76d800c36ba54f34a39a9c6422a53b5c5db208bf",
+  "sound_hash": "39b4e8deea8bf9c96ff6d2e1f4a9d1260cc050e728165cdb57a2715237d27580",
   "meta": {
     "author": "",
-    "description": "Golden corpus: a weighted random pitch set {0: 3, -12: 1, +7: 2} from the free-running scheduler and onsets, with reverse grains (sound revision 5).",
+    "description": "Golden corpus: micro-loops of four 70 ms passes with a 900 ms decay over the cycled set {0, +12}, from the free-running scheduler and onsets (sound revision 6).",
     "tags": []
   },
   "global": {
@@ -15,8 +15,8 @@
   },
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.5,
-    "jitter": 0.7,
+    "overlap": 0.45,
+    "jitter": 0.3,
     "intermittency": 0,
     "burst": {
       "count": 1,
@@ -27,38 +27,34 @@
     {
       "position": {
         "source": "live",
-        "base_ms": 300,
-        "spray_ms": 60,
-        "repeat": 1
+        "base_ms": 120,
+        "spray_ms": 15,
+        "repeat": 4
       },
-      "size_ms": 110,
-      "decay_ms": 0,
+      "size_ms": 70,
+      "decay_ms": 900,
       "window": {
-        "sustain": 0.2,
-        "skew": 0.5,
-        "smoothness": 1
+        "sustain": 0.5,
+        "skew": 0.3,
+        "smoothness": 0.6
       },
       "pitch": {
         "set": [
           {
             "st": 0,
-            "weight": 3
-          },
-          {
-            "st": -12,
             "weight": 1
           },
           {
-            "st": 7,
-            "weight": 2
+            "st": 12,
+            "weight": 1
           }
         ],
-        "select": "random",
+        "select": "cycle",
         "transpose_st": 0,
-        "spread_cents": 10,
-        "reverse_prob": 0.2
+        "spread_cents": 0,
+        "reverse_prob": 0
       },
-      "pan_spread": 0.8
+      "pan_spread": 0.6
     }
   ],
   "feedback": {

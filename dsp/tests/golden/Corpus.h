@@ -42,7 +42,12 @@ namespace brainscape::golden {
 // 10 (sound revision 5, wave 1's pitch sets, R10): pitch_cycle (a cycled set under transpose
 // moves) and pitch_random (a weighted random set, mode switches to and from a cycled one) in
 // plucks_wave1_12s; the pitchSet and pitchSelect ablations.
-inline constexpr uint32_t kCorpusVersion = 10;
+// 11 (sound revision 6, wave 1's repeat and decay, R11): repeat_loops (micro-loops of 4 passes
+// with decay over a cycled set, repeat and decay moved alone) and decay_marks (mark positioning
+// fading as its mark ages) in plucks_wave1_12s, and repeat_mark_aging in plucks_markage_92s (16
+// reverse passes of 500 ms on an aging mark, on the life's far rail from about 79 s); the
+// repeatPasses counter; the repeat and decay ablations.
+inline constexpr uint32_t kCorpusVersion = 11;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -81,6 +86,9 @@ enum class Counter : uint8_t {
   Births,
   BurstBirths,
   Skips,
+  // Passes begun after a voice's first: repeat voices re-reading their region (Engine::Stats,
+  // from sound revision 6, mode-compiler.md §7.5 R11).
+  RepeatPasses,
   kCount
 };
 const char* CounterName(Counter) noexcept;
@@ -100,12 +108,13 @@ const char* CounterName(Counter) noexcept;
 // sources back (periodic, footswitch and midi_note, beside its own), Burst sets
 // scheduler.burst.count to 1 and Intermittency scheduler.intermittency to 0. Sound revision 5:
 // PitchSet gives every loaded mode the default set {0: 1} by `cycle`, PitchSelect makes its
-// `random` selection `cycle`.
+// `random` selection `cycle`. Sound revision 6: Repeat sets layer0.position.repeat to 1 and
+// Decay layer0.decay_ms to 0.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
-  Sources, Burst, Intermittency, PitchSet, PitchSelect,
+  Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay,
 };
 const char* FeatureName(Feature) noexcept;
 

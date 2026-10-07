@@ -170,8 +170,14 @@ struct DelayBounds {
 };
 
 // The two rails as the table states them; hi < lo means the ring cannot hold the grain.
+// laterFrames: output frames the grain's life runs past this pass, (N - 1) * L for a voice that
+// reads its region N times (mode-compiler.md §7.5, R11). The write head advances through them
+// while the region stays, so the far rail moves that much closer; the near rail is the first
+// pass's, the closest any pass comes to the write head. 0 for a single pass, which leaves the
+// rails as they were.
 inline DelayBounds ComputeDelayRails(double outFrames, double ratio, bool reverse,
-                                     uint32_t bufFrames, double marginFrames) noexcept {
+                                     uint32_t bufFrames, double marginFrames,
+                                     double laterFrames = 0.0) noexcept {
   DelayBounds b;
   if (reverse) {
     b.lo = marginFrames;
@@ -181,14 +187,35 @@ inline DelayBounds ComputeDelayRails(double outFrames, double ratio, bool revers
     b.hi = static_cast<double>(bufFrames) - outFrames * (ratio < 1.0 ? 1.0 - ratio : 0.0) -
            marginFrames;
   }
+  if (laterFrames > 0.0) b.hi -= laterFrames;
   return b;
 }
 
 inline DelayBounds ComputeDelayBounds(double outFrames, double ratio, bool reverse,
-                                      uint32_t bufFrames, double marginFrames) noexcept {
-  DelayBounds b = ComputeDelayRails(outFrames, ratio, reverse, bufFrames, marginFrames);
+                                      uint32_t bufFrames, double marginFrames,
+                                      double laterFrames = 0.0) noexcept {
+  DelayBounds b =
+      ComputeDelayRails(outFrames, ratio, reverse, bufFrames, marginFrames, laterFrames);
   if (b.hi < b.lo) b.hi = b.lo;  // degenerate config: near guard wins
   return b;
+}
+
+// ── Decay (mode-compiler.md §7.5, R11) ───────────────────────────────────────────────────
+// log2(1000): decay_ms is the time to fall 60 dB.
+inline constexpr double kLog2Of1000 = 9.965784284662087;
+
+// The gain of a pass whose position reference has aged `ageFrames`: 2^(-age * rate), rate being
+// log2(1000) / decay_ms in frames, by DetMath's Exp2F. A rate of 0 (decay off) and an age of 0
+// give exactly 1, so a preset without decay keeps its bits; below 2^-126 the gain is 0, never a
+// subnormal. The age is 32 bits wide: a mark's age is below the ring (at most 2^26 frames) and
+// at most 15 passes of at most 24,000 frames follow it, so it stays below 2^27; and the M7's FPU
+// converts 32-bit integers only, so a 64-bit age would call libgcc's soft-float __aeabi_ul2f,
+// which the arm symbol audit rejects (determinism profile §6.3).
+inline float DecayGain(uint32_t ageFrames, float rate) noexcept {
+  if (rate == 0.0f || ageFrames == 0u) return 1.0f;
+  const float e = -static_cast<float>(ageFrames) * rate;
+  if (!(e > -126.0f)) return 0.0f;
+  return detmath::Exp2F(e);
 }
 
 inline double ClampDelayFrames(double d, double outFrames, double ratio, bool reverse,

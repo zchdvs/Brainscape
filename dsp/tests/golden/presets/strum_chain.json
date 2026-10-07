@@ -3,8 +3,8 @@
   "id": "corpus.strum_chain",
   "name": "Strum chain",
   "family": "none",
-  "sound_rev": 5,
-  "sound_hash": "bdc73053330c744a52c5b722d42bb906c62d7c5b339b04509166cc01deef6c38",
+  "sound_rev": 6,
+  "sound_hash": "4dcd029ac6b82b3b0b5324d97ede3e219e7c7ce2d0a696b776ae40d3c33fac77",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Spillover chain’s marks and onsets.",
@@ -28,9 +28,11 @@
       "position": {
         "source": "mark",
         "base_ms": 250,
-        "spray_ms": 30
+        "spray_ms": 30,
+        "repeat": 1
       },
       "size_ms": 80,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,
