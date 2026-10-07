@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "Curation.h"
 #include "PluginEditor.h"
 #include "brainscape/InputCondition.h"
 #include "brainscape/ModeEval.h"
@@ -135,6 +136,7 @@ BrainscapeProcessor::BrainscapeProcessor()
   sentEffectVolume_ = v->Plain();
   addParameter(v.release());
   activeModeHash_ = ModeHash(activeMode_);
+  curation_       = std::make_unique<CurationSession>(*this);
   setLatencySamples(0);  // dry is never delayed (§4.5); the resampled mode will report its own
   // The Standalone expects a guitar on input 1 (§2.2); a plugin on a stereo track must pass
   // both channels, dry exact at Mix = 0 (§4.5). A saved session's mode wins over either.
@@ -292,6 +294,10 @@ void BrainscapeProcessor::SetSettings(const WrapperSettings& s) noexcept {
   spareWake_.notify_all();  // the worker prepares or releases the spare
 }
 
+void BrainscapeProcessor::SetMonitorTrimDb(float db) noexcept {
+  monitorTrimDb_.store(CanonicalGainDb(db), std::memory_order_relaxed);
+}
+
 WrapperSettings BrainscapeProcessor::GetSettings() const noexcept {
   WrapperSettings s;
   s.inputMode      = static_cast<InputMode>(inputMode_.load(std::memory_order_relaxed));
@@ -394,6 +400,7 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(plain[i]);
     SetMacroMirrors(mode.control);
     lastLoadInexact_.store(!r.exact, std::memory_order_relaxed);
+    loadSerial_.fetch_add(1u, std::memory_order_relaxed);
   }
   NotifyHostOfMirrors();
   freeze_->setValueNotifyingHost(0.0f);  // the load turned it off
@@ -453,6 +460,7 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
     SetMacroMirrors(mode.control);
     SetSettings(state.settings);
     lastLoadInexact_.store(state.unknownIds + state.missingIds > 0u, std::memory_order_relaxed);
+    loadSerial_.fetch_add(1u, std::memory_order_relaxed);
   }
   // Outside the lock, since a host may call back in. Each inner setValue sees its own
   // normalised view and returns at once (companion §5.3). Freeze never loads engaged.
@@ -926,7 +934,7 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     inGainDb_ = inDb;
     inGain_   = GainFromDb(inDb);
   }
-  const float outDb = outputGainDb_.load(std::memory_order_relaxed);
+  const float outDb = outputGainDb_.load(std::memory_order_relaxed) + monitorTrimDb_.load(std::memory_order_relaxed);
   if (outDb != outGainDb_) {
     outGainDb_ = outDb;
     outGain_   = GainFromDb(outDb);

@@ -30,6 +30,7 @@ juce_add_plugin(Brainscape
 set(BRAINSCAPE_PLUGIN_SOURCES
   src/Audition.cpp
   src/BrainscapeParam.cpp
+  src/Curation.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
   src/PluginProcessor.cpp

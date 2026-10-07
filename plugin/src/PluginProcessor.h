@@ -21,6 +21,8 @@
 
 namespace brainscape::plugin {
 
+class CurationSession;  // Curation.h
+
 // The structure a preset plays besides its leaves (mode-compiler.md §5.1): the mode, CTRL
 // (macro positions and expression assignments) and the stored performance state, as a decoded
 // package holds them. Default-constructed it is the default mode, which a leaf-only preset
@@ -108,6 +110,17 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // the macro mirrors as its positions. Not on the audio thread.
   std::unique_ptr<PresetState> CurrentPreset() const;
   ModeState                    CurrentMode() const;
+  // Message thread: counts the loads that replaced the preset (LoadPresetState and session
+  // restores), so an editor can lock its knobs for pickup after each (mode-compiler.md §3.5).
+  uint32_t LoadSerial() const noexcept { return loadSerial_.load(std::memory_order_relaxed); }
+
+  // The curation slice's document (mode-compiler.md §9.1): message thread only.
+  CurationSession& Curation() noexcept { return *curation_; }
+
+  // A monitoring trim on the output, after the output level: the curation slice's level-matched
+  // A/B (§9.1). Never saved, never part of a preset or a render. Any thread.
+  void  SetMonitorTrimDb(float db) noexcept;
+  float MonitorTrimDb() const noexcept { return monitorTrimDb_.load(std::memory_order_relaxed); }
 
   // A momentary footswitch-style trigger (companion §5.7), applied at the next block.
   void TriggerFromUi() noexcept;
@@ -308,6 +321,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   std::atomic<int>   inputMode_{static_cast<int>(InputMode::Stereo)};
   std::atomic<float> inputGainDb_{0.f}, outputGainDb_{0.f};
+  std::atomic<float> monitorTrimDb_{0.f};
+  std::atomic<uint32_t> loadSerial_{0};
 
   std::atomic<double>   hostRate_{0.0};
   std::atomic<double>   statusEngineRate_{0.0};
@@ -320,6 +335,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   TestInput   testInput_;
   AuditionJob audition_;
+  // Last, so it is destroyed first: it refers to the processor.
+  std::unique_ptr<CurationSession> curation_;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrainscapeProcessor)
 };

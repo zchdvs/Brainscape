@@ -27,6 +27,7 @@
 
 #include "Audition.h"
 #include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
+#include "Curation.h"
 #include "PlainAttachment.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
@@ -1845,6 +1846,306 @@ TEST_CASE("restart on transport start restarts with the document's mode") {
   proc->setNonRealtime(true);
   RequireSame(play(take, {512}), ref, "offline: restarted in place with the mode");
   proc->setPlayHead(nullptr);
+}
+
+// ── The curation slice's document (mode-compiler.md §9.1) ─────────────────────────────────
+
+namespace {
+
+// A scratch directory of the test's own, removed afterwards.
+struct ScratchDir {
+  juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                       .getNonexistentChildFile("brainscape-curation", "", false);
+  ScratchDir() { REQUIRE(dir.createDirectory()); }
+  ~ScratchDir() { dir.deleteRecursively(); }
+  juce::File Copy(const char* name) const {
+    const juce::File to = dir.getChildFile(name);
+    REQUIRE(juce::File(BRAINSCAPE_TEST_DATA).getChildFile(name).copyFileTo(to));
+    return to;
+  }
+};
+
+// Runs the processor (silence in) so the mirrors follow what it applied.
+void Pump(BrainscapeProcessor& p, int frames = 4800) {
+  juce::AudioBuffer<float> buffer(2, 480);
+  juce::MidiBuffer         midi;
+  for (int done = 0; done < frames; done += 480) {
+    buffer.clear();
+    p.processBlock(buffer, midi);
+  }
+}
+
+std::string Text(const juce::File& f) { return f.loadFileAsString().toStdString(); }
+
+std::unique_ptr<bsc::Document> ReadBack(const juce::File& f) {
+  auto                      d = std::make_unique<bsc::Document>();
+  std::vector<bsc::Finding> found;
+  REQUIRE(bsc::ReadDocumentText(Text(f), {}, d.get(), &found));
+  return d;
+}
+
+float StoredPositionOf(const bsc::Document& d, ParamId macro) {
+  for (uint32_t k = 0; k < d.state->control.macroCount; ++k) {
+    if (d.state->control.positions[k].macroId == static_cast<uint32_t>(macro)) return d.state->control.positions[k].position;
+  }
+  return -1.f;
+}
+
+float LeafOf(const bsc::Document& d, ParamId id) { return bsc::FloatOf(d.LeafBits(static_cast<uint32_t>(id))); }
+
+float Eval1(const PresetState& s, ParamId macro, float position, ParamId leaf) {
+  PresetLeaf   out[kMaxMacroTargets];
+  const size_t n = EvalMacro(s.mode, macro, position, out, kMaxMacroTargets);
+  for (size_t k = 0; k < n; ++k) {
+    if (out[k].id == static_cast<uint32_t>(leaf)) return out[k].value;
+  }
+  return -1.f;
+}
+
+}  // namespace
+
+TEST_CASE("the curation session opens a document, plays it and saves it back canonical") {
+  ScratchDir         scratch;
+  const juce::File   json = scratch.Copy("engram.json");
+  const std::string  original = Text(json);
+  auto               proc = MakeProcessor({}, {});
+  CurationSession&   s    = proc->Curation();
+  juce::String       error;
+  REQUIRE(s.Open(json, &error));
+  INFO(error);
+  REQUIRE(s.HasDocument());
+  REQUIRE(s.DocumentFile() == json);
+  REQUIRE_FALSE(s.WritesPackage());
+  REQUIRE(s.StampCurrent());
+  REQUIRE_FALSE(s.Dirty());
+  REQUIRE(s.PendingDerives().empty());
+  REQUIRE(s.MacroName(ParamId::MacroActivity) == "Smear");  // the document's display name
+  REQUIRE(s.MacroName(ParamId::MacroTime) == "Time");
+  REQUIRE(s.MacroDefined(ParamId::MacroSpace));
+  REQUIRE_FALSE(s.MacroDefined(ParamId::MacroAux1));
+  REQUIRE(s.TargetsOf(ParamId::DelayTimeMs).size() == 1u);
+  REQUIRE(s.TargetsOf(ParamId::DelayTimeMs)[0].macro == ParamId::MacroTime);
+  const auto state = CompiledState("engram.json");
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));
+
+  SECTION("an unchanged document saves back byte for byte") {
+    const auto r = s.Save();
+    INFO(r.message);
+    REQUIRE(r.written);
+    REQUIRE(r.compiled);
+    REQUIRE(r.derived.empty());
+    REQUIRE(Text(json) == original);
+  }
+  SECTION("a macro move saves its position, and the leaves derived from it") {
+    proc->Macro(ParamId::MacroTime).setValue(0.8f);  // a host move: a MacroMove
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.Dirty());
+    REQUIRE(s.PendingDerives().empty());  // the mirrors already hold the fan-out
+    const auto r = s.Save();
+    REQUIRE(r.compiled);
+    REQUIRE(r.derived.empty());
+    const auto back = ReadBack(json);
+    REQUIRE(Bits(StoredPositionOf(*back, ParamId::MacroTime)) == Bits(0.8f));
+    REQUIRE(Bits(LeafOf(*back, ParamId::DelayTimeMs)) == Bits(Eval1(*state, ParamId::MacroTime, 0.8f, ParamId::DelayTimeMs)));
+    REQUIRE(back->stamped);
+    REQUIRE(back->soundRev == kSoundRevision);
+    REQUIRE_FALSE(s.Dirty());
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.8f));
+    // Canonical: formatting the written text changes nothing.
+    std::string               formatted;
+    std::vector<bsc::Finding> found;
+    REQUIRE(bsc::FormatText(Text(json), &formatted, &found));
+    REQUIRE(formatted == Text(json));
+  }
+  SECTION("a hand-edited targeted leaf is derived back on save, unless detached") {
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.3f);  // Repeats at 0.5 gives 0.45
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.Dirty());
+    REQUIRE(s.PendingDerives().size() == 1u);
+    REQUIRE(s.PendingDerives()[0].find("post.delay.fb") != std::string::npos);
+    auto r = s.Save();
+    REQUIRE(r.derived.size() == 1u);
+    REQUIRE(Bits(proc->Param(ParamId::DelayFb).Plain()) == Bits(0.45f));  // what plays is what saved
+    REQUIRE(Bits(LeafOf(*ReadBack(json), ParamId::DelayFb)) == Bits(0.45f));
+
+    s.SetDetached(ParamId::DelayFb, true);
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.3f);
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.PendingDerives().empty());
+    r = s.Save();
+    REQUIRE(r.derived.empty());
+    const auto back = ReadBack(json);
+    REQUIRE(Bits(LeafOf(*back, ParamId::DelayFb)) == Bits(0.3f));
+    REQUIRE(back->detached == std::vector<uint32_t>{static_cast<uint32_t>(ParamId::DelayFb)});
+    REQUIRE(Text(json).find("\"detached\"") != std::string::npos);
+    REQUIRE(s.IsDetached(ParamId::DelayFb));
+  }
+  SECTION("solve position moves a macro to the leaf it should reach") {
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.72f);  // Repeats 0.8
+    Pump(*proc);
+    const auto log = s.SolvePositions(ParamId::MacroRepeats);
+    REQUIRE_FALSE(log.empty());
+    const float position = proc->Macro(ParamId::MacroRepeats).Plain();
+    REQUIRE(std::fabs(position - 0.8f) < 1e-6f);
+    // The leaf is now exactly the macro's value at the solved position: nothing left to derive.
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Param(ParamId::DelayFb).Plain()) == Bits(Eval1(*state, ParamId::MacroRepeats, position, ParamId::DelayFb)));
+    REQUIRE(s.PendingDerives().empty());
+    // A derived document solves back to itself.
+    REQUIRE(s.SolvePositions().empty());
+  }
+  SECTION("A/B switches between the stored version and the working state") {
+    proc->Macro(ParamId::MacroTime).setValue(0.8f);
+    proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.6f);
+    Pump(*proc);
+    s.Refresh();
+    const float time = proc->Param(ParamId::DelayTimeMs).Plain();
+    REQUIRE(s.SetSide(CurationSession::Side::Stored));
+    Pump(*proc);
+    REQUIRE(s.GetSide() == CurationSession::Side::Stored);
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+    REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(0.35f));
+    REQUIRE(s.Dirty());  // the working document waits while A plays
+    REQUIRE(s.SetSide(CurationSession::Side::Working));
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.8f));
+    REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(time));
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(0.6f));
+    // Save while A plays saves B.
+    REQUIRE(s.SetSide(CurationSession::Side::Stored));
+    REQUIRE(s.Save().compiled);
+    REQUIRE(s.GetSide() == CurationSession::Side::Working);
+    REQUIRE(Bits(LeafOf(*ReadBack(json), ParamId::Mix)) == Bits(0.6f));
+  }
+  SECTION("a session recall that loads another mode closes the document") {
+    BrainscapeProcessor other;
+    juce::MemoryBlock   blob;
+    other.getStateInformation(blob);
+    proc->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(s.Refresh());
+    REQUIRE_FALSE(s.HasDocument());
+  }
+}
+
+TEST_CASE("the curation session refuses what does not read or compile, and keeps what it has") {
+  ScratchDir       scratch;
+  const juce::File good = scratch.Copy("engram.json");
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(good, &error));
+  const juce::File bad = scratch.dir.getChildFile("bad.json");
+  REQUIRE(bad.replaceWithText(juce::String(Text(good)).replace("\"size_ms\": 100", "\"size_ms\": 900")));
+  REQUIRE_FALSE(s.Open(bad, &error));
+  REQUIRE(error.contains("E4"));
+  REQUIRE_FALSE(s.Findings().empty());
+  REQUIRE(s.Findings().front().code == "E4");
+  REQUIRE(s.HasDocument());
+  REQUIRE(s.SourceFile() == good);
+  const juce::File broken = scratch.dir.getChildFile("broken.json");
+  REQUIRE(broken.replaceWithText("{\"schema_version\": 1,"));
+  REQUIRE_FALSE(s.Open(broken, &error));
+  REQUIRE(error.contains("E1"));
+  REQUIRE_FALSE(s.Open(scratch.dir.getChildFile("missing.json"), &error));
+  REQUIRE(s.SourceFile() == good);
+}
+
+TEST_CASE("the curation session opens a package and saves the pair") {
+  ScratchDir               scratch;
+  const bsc::CompileResult r = bsc::Compile(Text(juce::File(BRAINSCAPE_TEST_DATA).getChildFile("engram.json")));
+  REQUIRE(r.ok);
+  const juce::File bsp = scratch.dir.getChildFile("engram.bsp");
+  REQUIRE(bsp.replaceWithData(r.package.data(), r.package.size()));
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(bsp, &error));
+  REQUIRE(s.WritesPackage());
+  REQUIRE(s.DocumentFile() == scratch.dir.getChildFile("engram.json"));
+  const auto saved = s.Save();
+  REQUIRE(saved.compiled);
+  juce::MemoryBlock written;
+  REQUIRE(bsp.loadFileAsData(written));
+  REQUIRE(written.getSize() == r.package.size());
+  REQUIRE(std::memcmp(written.getData(), r.package.data(), r.package.size()) == 0);
+  REQUIRE(Text(scratch.dir.getChildFile("engram.json")) == r.json);
+}
+
+TEST_CASE("level matching measures both versions and trims the louder on the monitor output") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(scratch.Copy("engram.json"), &error));
+  const auto wait = [&] {
+    for (int i = 0; i < 4000; ++i) {
+      s.Refresh();
+      const auto m = s.GetLevelMatch();
+      if (m.state == CurationSession::LevelMatch::State::Ready || m.state == CurationSession::LevelMatch::State::Failed) {
+        return m;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return s.GetLevelMatch();
+  };
+  s.SetMatchLevel(true);
+  auto m = wait();
+  REQUIRE(m.state == CurationSession::LevelMatch::State::Ready);
+  REQUIRE(m.storedLufs == m.workingLufs);  // one preset, one input: the same bits
+  REQUIRE(m.trimStored == 0.f);
+  REQUIRE(m.trimWorking == 0.f);
+  proc->Param(ParamId::WetTrimDb).SetPlainNotifyingHost(6.0f);  // B louder
+  Pump(*proc);
+  s.Refresh();
+  std::this_thread::sleep_for(std::chrono::milliseconds(450));
+  for (int i = 0; i < 4000 && s.GetLevelMatch().workingLufs == m.workingLufs; ++i) {
+    s.Refresh();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  m = wait();
+  REQUIRE(m.state == CurationSession::LevelMatch::State::Ready);
+  REQUIRE(m.workingLufs > m.storedLufs + 1.0);
+  REQUIRE(m.trimWorking < -1.f);
+  REQUIRE(m.trimStored == 0.f);
+  s.Refresh();
+  REQUIRE(Bits(proc->MonitorTrimDb()) == Bits(CanonicalGainDb(m.trimWorking)));
+  REQUIRE(s.SetSide(CurationSession::Side::Stored));
+  REQUIRE(proc->MonitorTrimDb() == 0.f);
+  REQUIRE(s.SetSide(CurationSession::Side::Working));
+  s.SetMatchLevel(false);
+  REQUIRE(proc->MonitorTrimDb() == 0.f);
+}
+
+TEST_CASE("one click renders the document through the audition scripts with the pre-screen") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(scratch.Copy("engram.json"), &error));
+  CurationSession::RenderRequest rq;
+  rq.outDir = scratch.dir.getChildFile("renders");
+  REQUIRE(s.StartRender(rq, &error));
+  REQUIRE_FALSE(s.StartRender(rq, &error));  // one at a time
+  CurationSession::RenderStatus st;
+  for (int i = 0; i < 6000; ++i) {
+    s.Refresh();
+    st = s.GetRender();
+    if (st.state != CurationSession::RenderStatus::State::Running) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  INFO(st.message << "\n" << st.summary);
+  REQUIRE(st.state == CurationSession::RenderStatus::State::Done);
+  REQUIRE(st.renders > 0);
+  REQUIRE(st.dir == rq.outDir.getChildFile("factory.engram"));
+  REQUIRE(st.dir.getChildFile("audition.json").existsAsFile());
+  REQUIRE(st.dir.findChildFiles(juce::File::findFiles, false, "*.wav").size() >= 1);
+  REQUIRE(st.summary.contains("factory.engram"));
 }
 
 TEST_CASE("latency, tail and supported layouts") {
