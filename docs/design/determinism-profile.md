@@ -772,6 +772,12 @@ renders diverged permanently (**measured** [preset]). `SaveState` stores it (con
 
 ### 5.10 A single `LoadPreset` entry point with a fixed order
 
+> **Update (2026-10-06, mode-compiler lane 0).** Built with [mode-compiler.md](mode-compiler.md)
+> §4.1's per-kind rules, which amend this section when that design is accepted (its §12.5):
+> step 1 applies the defaults of the `Leaf` rows only, step 2 counts an id that is not a `Leaf`
+> row as unknown, and `Global` rows (device settings) keep their values across every load and
+> `Restart`.
+
 Add `bool Engine::LoadPreset(const PresetState&, LoadMode)`, with `LoadMode` `Exact` or
 `Spillover` and `PresetState` the decoded package (companion §6.3). The firmware and every
 desktop path call only this, because order matters (gliding and snapped smoothers differ by

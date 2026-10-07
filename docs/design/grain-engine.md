@@ -495,6 +495,12 @@ filter concurrency vs. tier capacity); `d_min_fb` when feedback > 0; grain-lengt
 
 ## 6. Parameter and macro model
 
+> **Update (2026-10-06, mode-compiler lane 0).** The permanent ID table is
+> [mode-compiler.md](mode-compiler.md) §4.2, built in `Params.h`: `out_trim_db` here and in
+> §3 and §5 is now `wet_trim_db` (wet only from sound revision 2), and the pitch leaf is
+> `layer0.pitch.transpose_st`, an offset over the pitch set. That design amends this section
+> when it is accepted (its §12.5).
+
 Two tiers over **one** parameter system (microcosm.md §13.1; preset doc recs #6–#7).
 
 **The leaf/structure split** (review finding — a `constexpr` table cannot enumerate leaves of

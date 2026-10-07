@@ -609,6 +609,8 @@ One `BrainscapeParam : juce::RangedAudioParameter` per descriptor row (`Params.h
   `juce_audio_plugin_client_LV2.cpp:164-190`) returns a range whose three lambdas call `dsp/`'s
   `PlainFromNormalized`, `NormalizedFromPlain` and `Canonicalize`.
 - **Retired parameters** stay registered as non-automatable tombstones (`Params.h:50-53`).
+  *Superseded by [mode-compiler.md](mode-compiler.md) §4.1 and §9.2 (amended here when that
+  design is accepted, its §12.5): neither Retired nor Reserved rows are registered.*
 
 **The GUI cannot use `juce::SliderParameterAttachment`:** it routes typed text and slider values
 through the normalised float, drops edits within `approximatelyEqual` and displays a
@@ -666,6 +668,12 @@ only canonical values, and the UI always shows the canonical value.
   pedal's expression jack, arriving with the macro work.
 
 ### 5.7 Identities to freeze before the first public release
+
+> **Update (2026-10-06, mode-compiler lane 0).** The ID table is now
+> [mode-compiler.md](mode-compiler.md) §4.2, built in `Params.h`: 82 rows with kinds, the
+> macro IDs 69–76, and IDs 4 and 8 renamed `wet_trim_db` and `layer0.pitch.transpose_st`.
+> That design's §4.5 restates the gate below; this section is amended when it is accepted
+> (its §12.5).
 
 VST3 and AU write parameter identities, and VST3 normalised automation, into users' projects, so
 the first public plugin release freezes IDs, names and tapers for good. The 28 current IDs

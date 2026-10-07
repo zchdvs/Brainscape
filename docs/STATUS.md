@@ -197,16 +197,20 @@ implementing:
   under their final names until wave 1 or wave 3 builds them; 69–76 are the eight macros, 77
   and 78 the freeze and expression performance controls, 79–81 Reserved, and 82 the effect
   volume, a Global device setting that the engine stores and every load and `Restart` keeps
-  (nothing reads it before sound revision 2). `SetParam` stores only Leaf and Global rows,
-  `LoadPreset` reads only Leaf rows (any other id is unknown and makes the load inexact), and
-  a change reaches the rebuilds its domain names, except IDs 27 and 28, which keep revision 1's
-  routing (Known gaps). Tapers, step counts, display text, groups and host flags for every
+  (nothing reads it before sound revision 2). `SetParam` stores only Leaf and Global rows, and
+  `LoadPreset` reads only Leaf rows (any other id is unknown and makes the load inexact). The
+  domain column is data until sound revision 2 routes changes by it (design §7.1 R1): the
+  engine keeps revision 1's routing by ID, unchanged for IDs 1–28, which loses a lone change to
+  27 or 28 (Known gaps). Tapers, step counts, display text, groups and host flags for every
   row, Reserved ones included, live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a
-  pedal pot and a plugin knob at the same position give the same plain bits. The recommended
-  host model is applied provisionally (owner question Q12): only Mix, the macros, the effect
-  volume and the performance rows are host-automatable. Every consumer, the golden harness and
-  the plugin included, iterates the Leaf rows, and the plugin's 32-bit touched mask is a
-  per-leaf set.
+  pedal pot and a plugin knob at the same position give the same plain bits. The host flags
+  follow the recommended host model (owner question Q12, provisionally: only Mix, the macros,
+  the effect volume and the performance rows automatable), except that revision 1's leaves stay
+  automatable until the plugin registers the macro parameters (lane D). In the plugin today
+  every registered parameter, the 28 leaves and Freeze, is automatable; the macro, expression
+  and effect-volume parameters arrive with lane D (design §9.2). Every consumer, the golden
+  harness and the plugin included, iterates the Leaf rows, and the plugin's 32-bit touched mask
+  is a per-leaf set.
 - **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
   - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
     `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
@@ -293,7 +297,7 @@ two are `[!shouldfail]` cases that hold the routing of IDs 27 and 28 until sound
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test, `golden_check` (every golden hash of sound revision 1),
 `golden_check_edits` (check mode fails on edited copies of the golden file) and the corpus's
-forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (30
+forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (31
 test cases), the editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in
 Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14 (GCC 14, and Clang
 14 in Debug, were last run before the ID table); the plugin tests with MSVC, Release and
@@ -362,11 +366,26 @@ records live in [docs/design/reviews/](design/reviews/).
 - **A lone change to ID 27 or 28 is lost** (mode-compiler.md §7.2, record §2.1): revision 1
   routes both to the post rebuild, which does not read them, so turning the onset trigger or
   the mark position source on or off alone, by an event, a Spillover load or a plugin knob,
-  takes effect only at the next granular change. Routing them by their domain changes output
-  for such a change, so the fix lands with sound revision 2, which retires both rows into mode
-  structure (design §7.6); the routing-fixed build reproduces every golden hash of revision 1,
-  since no golden preset changes either alone. Two `[!shouldfail]` tests hold the bug until
-  then.
+  takes effect only at the next granular change. Routing them by their domain (R1) changes
+  output for such a change, so the fix lands with sound revision 2, which retires both rows into
+  mode structure (design §7.6); the routing-fixed build reproduces every golden hash of
+  revision 1, since no golden preset changes either alone. Two `[!shouldfail]` tests hold the
+  bug until then.
+- **Merging the Rev7 bring-up branch needs an integration fix that git does not flag.**
+  `kNumParams` now counts all 82 table rows, and `firmware/live/main.cpp` on
+  `claude/rev7-bringup` assumes one row per leaf: it asserts that its 28 `kIdNames` cover
+  `kNumParams` and indexes them while looping over `kParamTable`. The two branches merge without
+  a textual conflict, and the live image then fails to compile (`static assertion failed: one
+  name per parameter`, *measured*); raising the assert alone would read past `kIdNames` for
+  rows 29–82 and list macro and reserved rows. Whichever branch lands second makes four edits
+  there: the assert compares with `kNumLeafParams`; `FindByName` and the `params`/`get` command
+  loop `i < kNumLeafParams` over `*FindParam(LeafId(i))`; and `ParamJson` indexes
+  `kIdNames[LeafIndex(d.id)]`. With them the merged tree's live, parity and bench images compile
+  (arm-none-eabi-g++ 10.3, syntax only, stub board headers, 0 warnings with `-Wall -Wextra`).
+  The `OutTrimDb` and `PitchSt` aliases keep rev7's other spellings (bench, probes) compiling.
+  The table also grows the engine archive's code and constants, which the Rev7 images copy into
+  the 64 KiB ITCM, from 47,001 to 53,134 bytes of `.text` and `.rodata` on the M7
+  (`Engine.cpp` +3,079, `ParamDisplay.cpp` +3,054; *measured*), for that branch's size table.
 - **Engine API still to come:** `PresetState` holds the STAT leaves only (the mode blob,
   macros and the stored performance state arrive with the mode system, and the `.bsp`
   decoder with the package format); tap/tempo, mode-switch, macro and expression events (the
