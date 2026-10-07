@@ -14,5 +14,6 @@
 | [grain-engine.md](design/grain-engine.md) | The core engine: signal path, scheduler, modes-as-data model, memory/CPU budgets, behavioral contracts |
 | [determinism-profile.md](design/determinism-profile.md) | Sample-identical output across pedal and desktop: the parity contract, numerics and floating-point rules, required engine changes, CI verification |
 | [companion-app.md](design/companion-app.md) | The JUCE plugin and companion app: product shape, build and licensing, plugin hosting, parameter layer, preset format, upload to the pedal, delivery plan |
+| [mode-compiler.md](design/mode-compiler.md) | Modes as data in practice: the preset schema, macro layer, permanent parameter IDs, compiled preset and `.bsp` package, engine runtime changes, the `bspc` compiler, and the step-4 factory-mode plan |
 
 Hardware documentation and build guides will land here as the project matures.
