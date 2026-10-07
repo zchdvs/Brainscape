@@ -74,7 +74,9 @@ inline Stereo MakeInput(int frames) {
 }
 
 // Exercises every stage but stays outside the block-split bug's reach (Live positioning,
-// no freeze; determinism profile §5.7), so any host block size must reproduce it.
+// no freeze; determinism profile §5.7), so any host block size must reproduce it. The default
+// mode: the onset trigger, a parameter until sound revision 2, is mode structure since, which the
+// plugin does not load yet (mode-compiler.md §9, lane D).
 inline Preset Busy() {
   return {{ParamId::DelayMs, 180.0f},     {ParamId::Mix, 0.7f},           {ParamId::Feedback, 0.6f},
           {ParamId::GrainSizeMs, 60.0f},  {ParamId::Overlap, 0.7f},       {ParamId::SprayMs, 50.0f},
@@ -83,7 +85,7 @@ inline Preset Busy() {
           {ParamId::ModDepth, 0.3f},      {ParamId::DelayTimeMs, 230.0f}, {ParamId::DelayFb, 0.5f},
           {ParamId::DelayMix, 0.3f},      {ParamId::ReverbTime, 0.6f},    {ParamId::ReverbMix, 0.25f},
           {ParamId::FilterCutoffHz, 4000.0f}, {ParamId::FilterRes, 0.3f}, {ParamId::FilterMorph, 0.6f},
-          {ParamId::TriggerSens, 0.6f},   {ParamId::OnsetTrigger, 1.0f}};
+          {ParamId::TriggerSens, 0.6f}};
 }
 
 // The rows the plugin registers: every Leaf row, ascending by id (mode-compiler.md §4.1).

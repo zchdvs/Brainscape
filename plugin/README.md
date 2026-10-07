@@ -59,19 +59,22 @@ The build never copies plugins into system folders.
    **Input: Mono** copies the left input to the right, for a guitar on input 1 (the Standalone's
    default); **Stereo** keeps both (the plugins' default, so a stereo track passes unchanged at
    Mix 0). **In level** and **Out level** are global settings, never part of a preset.
-4. Every engine parameter is a knob, except the two-position ones (**Onset**, **Position**),
-   which are switches. Drag a knob to turn it, double-click it for the default, double-click the
-   value to type one in its units (`250`, `1.2 s`, `2.5k`, `40%`, `-3 dB`, `Off`, `Mark`,
-   `LP`…). Typed values are stored exactly as typed, read by the preset compiler's exact
+4. Every engine parameter is a knob. Drag a knob to turn it, double-click it for the default,
+   double-click the value to type one in its units (`250`, `1.2 s`, `2.5k`, `40%`, `-3 dB`,
+   `Off`, `LP`…). Typed values are stored exactly as typed, read by the preset compiler's exact
    number reader, so a typed value has the bits a preset document with the same text compiles
    to. **Window → Skew** is centred: −100 % is percussive, 0 % symmetric, +100 % a reverse
-   swell. **Reverb → Time** is a 0–100 scale.
+   swell. **Reverb → Time** is a 0–100 scale. **Grain delay → Trim** scales the wet signal only
+   (the mode's level match), and **Filter → Cutoff** at its minimum, shown as `Kill`, mutes the
+   wet signal, as at its maximum (`Off`) it bypasses the filter.
    Changing **Post delay → Time** glides the delay to the new time, bending the repeats' pitch
    like tape (at most 0.5–1.5× speed) instead of clicking; **Grain delay → Time** still jumps.
 5. **FREEZE** pins the grain position (host-automatable); **TRIGGER** fires one grain, as does
    any MIDI note-on (enable a MIDI input in the settings). The **ONSET** light flashes for every
-   onset the detector hears; **Trigger → Sense** sets its threshold, **Trigger → Onset** makes
-   onsets fire grains. An orange **control events lost** in the status line counts triggers and
+   onset the detector hears; **Trigger → Sense** sets its threshold. Onsets firing grains and
+   grains on onset marks are a mode's structure since sound revision 2, which the plugin does
+   not load yet (`.bsp` presets come with the app's preset work, mode-compiler.md §9): it plays
+   the default mode. An orange **control events lost** in the status line counts triggers and
    frame-stamped events that a full event queue dropped; ordinary knob edits are never lost,
    because the wrapper re-sends every parameter after an overflow.
 6. **Render audition…** (the Test input panel's last row) renders the test input through the
@@ -176,7 +179,9 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   (`dsp/src/ParamDisplay.cpp`). The parameters are the Leaf rows of the permanent ID table
   (`dsp/include/brainscape/Params.h`, docs/design/mode-compiler.md §4), keyed on their names:
   `wet_trim_db` and `layer0.pitch.transpose_st` replaced `out_trim_db` and `layer0.pitch.st`,
-  so automation lanes saved on the old names are lost (§4.4). Every registered parameter and
+  and `scheduler.onset_trigger` and `layer0.position.source` were retired into mode structure at
+  sound revision 2, so automation lanes saved on the old names are lost, and a session saved
+  before then loads without its onset and mark switches (§4.4). Every registered parameter and
   **Freeze** are host-automatable for now. The recommended host model (§3.6, owner question
   Q12), under which only the macros, Mix, the effect volume and the performance controls are
   automatable, applies with the macro parameters (lane D of §12.4); the shared display table

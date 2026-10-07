@@ -454,8 +454,10 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
   }
   REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 1);  // + freeze
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
-  REQUIRE(proc.Param(ParamId::OnsetTrigger).isDiscrete());
-  REQUIRE(proc.Param(ParamId::OnsetTrigger).getNumSteps() == 2);
+  // Sound revision 2 retired rows 27 and 28 into mode structure: no longer registered.
+  REQUIRE_FALSE(IsLeaf(ParamId::OnsetTrigger));
+  REQUIRE_FALSE(IsLeaf(ParamId::PositionSource));
+  REQUIRE(proc.Param(ParamId::FilterMorph).getParameterID() == "post.filter.morph");
 }
 
 // The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
@@ -519,13 +521,12 @@ TEST_CASE("edits after prepare reach the engine as exact bits at the next block"
 
 TEST_CASE("the plain slider attachment edits and shows exact values") {
   BrainscapeProcessor proc;
-  juce::Slider        pitchKnob, morphKnob, mixKnob, delayKnob, cutoffKnob, posKnob;
+  juce::Slider        pitchKnob, morphKnob, mixKnob, delayKnob, cutoffKnob;
   BrainscapePlainAttachment pitch(proc.Param(ParamId::TransposeSt), pitchKnob);
   BrainscapePlainAttachment morph(proc.Param(ParamId::FilterMorph), morphKnob);
   BrainscapePlainAttachment mix(proc.Param(ParamId::Mix), mixKnob);
   BrainscapePlainAttachment delay(proc.Param(ParamId::DelayMs), delayKnob);
   BrainscapePlainAttachment cutoff(proc.Param(ParamId::FilterCutoffHz), cutoffKnob);
-  BrainscapePlainAttachment pos(proc.Param(ParamId::PositionSource), posKnob);
 
   pitchKnob.setValue(0.6, juce::sendNotificationSync);  // a knob turn: the pot path
   REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(PlainFromNormalized(ParamId::TransposeSt, 0.6f)));
@@ -548,8 +549,6 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 2500.0f);
   REQUIRE(cutoff.CommitText("Off"));
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 20000.0f);
-  REQUIRE(pos.CommitText("Mark"));
-  REQUIRE(proc.Param(ParamId::PositionSource).Plain() == 1.0f);
   REQUIRE_FALSE(delay.CommitText("fast"));
   REQUIRE_FALSE(delay.CommitText("12 st"));
   REQUIRE(proc.Param(ParamId::DelayMs).Plain() == 250.0f);
@@ -711,43 +710,52 @@ TEST_CASE("session state round-trips bit for bit") {
     REQUIRE(Bits(partial.plain[0]) == Bits(st.plain[0]));
     REQUIRE(partial.plain[1] == FindParam(LeafId(1))->def);
   }
-  // Sessions saved before the ID table hold IDs 1-28, every one still a Leaf row in this
-  // build, in the same order: the bytes this build writes, and they decode unchanged. Rows
-  // of other kinds in a session (a macro, the effect volume, a Reserved row) are unknown.
-  SECTION("v1 sessions from before the ID table decode unchanged; other kinds are unknown") {
+  // This build writes IDs 1-26 in order, its Leaf rows. Sessions saved at sound revision 1 hold
+  // IDs 1-28: 27 and 28 retired into mode structure at sound revision 2, which the plugin does
+  // not load yet (session v2 migrates them, mode-compiler.md §4.4, lane D), so they are unknown
+  // and every other value decodes unchanged. Rows of other kinds in a session (a macro, the
+  // effect volume, a Reserved row) are unknown too.
+  SECTION("v1 sessions of sound revision 1 decode; 27, 28 and other kinds are unknown") {
     WrapperState st{};
     REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
-    std::vector<uint8_t> v1 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 28, 0, 0, 0};
-    const auto put = [&v1](uint32_t u) {
-      for (int k = 0; k < 4; ++k) v1.push_back(static_cast<uint8_t>(u >> (8 * k)));
+    REQUIRE(kNumLeafParams == 26u);
+    const auto put = [](std::vector<uint8_t>* out, uint32_t u) {
+      for (int k = 0; k < 4; ++k) out->push_back(static_cast<uint8_t>(u >> (8 * k)));
     };
-    for (uint32_t id = 1; id <= 28; ++id) {
-      put(id);
-      put(Bits(st.plain[id - 1u]));
+    std::vector<uint8_t> v2 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 26, 0, 0, 0};
+    for (uint32_t id = 1; id <= 26; ++id) {
+      put(&v2, id);
+      put(&v2, Bits(st.plain[id - 1u]));
     }
     std::vector<uint8_t> now;
     EncodeState(st, now);
-    REQUIRE(std::equal(v1.begin(), v1.end(), now.begin()));
-    v1.insert(v1.end(), now.begin() + static_cast<long>(v1.size()), now.end());
+    REQUIRE(std::equal(v2.begin(), v2.end(), now.begin()));
+    const std::vector<uint8_t> settings(now.begin() + static_cast<long>(v2.size()), now.end());
+
+    std::vector<uint8_t> v1 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 28, 0, 0, 0};
+    for (uint32_t id = 1; id <= 28; ++id) {
+      put(&v1, id);
+      put(&v1, id <= 26u ? Bits(st.plain[id - 1u]) : Bits(1.0f));  // onset and marks on
+    }
+    v1.insert(v1.end(), settings.begin(), settings.end());
     WrapperState old{};
     REQUIRE(DecodeState(v1.data(), v1.size(), old));
-    REQUIRE(old.unknownIds + old.missingIds == 0u);
+    REQUIRE(old.unknownIds == 2u);
+    REQUIRE(old.missingIds == 0u);
     for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(old.plain[i]) == Bits(st.plain[i]));
 
     std::vector<uint8_t> extra(v1.begin(), v1.begin() + 12 + 8 * 28);
     extra[8] = 31;  // three more leaves, of other kinds
-    const auto add = [&extra](uint32_t id, float v) {
-      for (const uint32_t u : {id, Bits(v)}) {
-        for (int k = 0; k < 4; ++k) extra.push_back(static_cast<uint8_t>(u >> (8 * k)));
-      }
-    };
-    add(static_cast<uint32_t>(ParamId::VoiceCount), 8.0f);       // Reserved
-    add(static_cast<uint32_t>(ParamId::MacroTime), 0.25f);       // Macro
-    add(static_cast<uint32_t>(ParamId::EffectVolumeDb), -6.0f);  // Global
-    extra.insert(extra.end(), v1.begin() + 12 + 8 * 28, v1.end());
+    put(&extra, static_cast<uint32_t>(ParamId::VoiceCount));  // Reserved
+    put(&extra, Bits(8.0f));
+    put(&extra, static_cast<uint32_t>(ParamId::MacroTime));  // Macro
+    put(&extra, Bits(0.25f));
+    put(&extra, static_cast<uint32_t>(ParamId::EffectVolumeDb));  // Global
+    put(&extra, Bits(-6.0f));
+    extra.insert(extra.end(), settings.begin(), settings.end());
     WrapperState mixed{};
     REQUIRE(DecodeState(extra.data(), extra.size(), mixed));
-    REQUIRE(mixed.unknownIds == 3u);
+    REQUIRE(mixed.unknownIds == 5u);
     REQUIRE(mixed.missingIds == 0u);
     for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(mixed.plain[i]) == Bits(st.plain[i]));
   }
@@ -795,8 +803,7 @@ TEST_CASE("a restore before anything has played is an Exact load") {
 }
 
 TEST_CASE("MIDI note-on fires a grain at its sample offset, at every host block pattern") {
-  Preset preset = Busy();
-  preset.push_back({ParamId::OnsetTrigger, 0.0f});
+  Preset preset = Busy();  // the default mode: no onset source
   const Stereo in = MakeInput(72000);
   // Chunk and block edges, odd offsets and same-frame pairs.
   const std::vector<int> notes = {0, 1, 511, 512, 513, 4095, 4096, 30037, 30038, 40192, 51200, 51200, 51201};
@@ -1380,8 +1387,7 @@ TEST_CASE("restart on transport start: an automated passage bounces the same eve
 }
 
 TEST_CASE("restart on transport start: bounces with MIDI match the reference") {
-  Preset preset = Busy();
-  preset.push_back({ParamId::OnsetTrigger, 0.0f});
+  Preset preset = Busy();  // the default mode: no onset source
   const Stereo           source = MakeInput(4 * 48000);
   const Stereo           pre    = Slice(source, 0, 24000);
   const Stereo           take   = Slice(source, 48000, 120000);

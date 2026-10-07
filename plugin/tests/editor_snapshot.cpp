@@ -66,7 +66,6 @@ int main(int argc, char* argv[]) {
   proc.Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.0f);
   proc.Param(ParamId::Feedback).SetPlainNotifyingHost(0.45f);
   proc.Param(ParamId::ReverbMix).SetPlainNotifyingHost(0.3f);
-  proc.Param(ParamId::OnsetTrigger).SetPlainNotifyingHost(1.0f);
   proc.Param(ParamId::FilterCutoffHz).SetPlainNotifyingHost(3200.0f);
   proc.Param(ParamId::FilterMorph).SetPlainNotifyingHost(0.4f);
 
