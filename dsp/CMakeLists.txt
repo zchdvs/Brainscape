@@ -88,8 +88,9 @@ option(BRAINSCAPE_BUILD_M7_ORACLE "Build the golden harness as a Cortex-M7 ELF f
 # The engine built again with the FP guard's test hooks (determinism profile §6.4):
 # flushing forced on inside the guard, and the exception flags each call raised. A
 # separate library, so no shipping build carries the hooks' global state; the host tests
-# and the forced-flush harness, the M7's included, link it.
-if(BRAINSCAPE_BUILD_TESTS OR BRAINSCAPE_BUILD_M7_ORACLE)
+# and the forced-flush harness, the M7's included, link it, and so does the firmware's
+# bring-up bench image for its flushing A/B (firmware/README.md).
+if(BRAINSCAPE_BUILD_TESTS OR BRAINSCAPE_BUILD_M7_ORACLE OR BRAINSCAPE_BUILD_FIRMWARE)
   get_target_property(_bs_dsp_sources brainscape_dsp SOURCES)
   add_library(brainscape_dsp_fpenv_hooks STATIC ${_bs_dsp_sources})
   target_include_directories(brainscape_dsp_fpenv_hooks

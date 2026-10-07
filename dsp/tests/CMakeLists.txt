@@ -46,6 +46,13 @@ if(MSVC)
 endif()
 add_test(NAME dsp_fpenv_forced_flush COMMAND brainscape_fpenv_tests)
 
+# The firmware's engine arenas against PlanMemory (firmware/platform/Placement.h), on every
+# host build: the images check the same at boot, on hardware.
+add_executable(firmware_arena_plan ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/tests/arena_plan.cpp)
+target_link_libraries(firmware_arena_plan PRIVATE brainscape_dsp)
+target_include_directories(firmware_arena_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware)
+add_test(NAME firmware_arena_plan COMMAND firmware_arena_plan)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)
