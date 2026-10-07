@@ -7,19 +7,22 @@ first parent and the merge commit), and fails (exit 1) when:
   * hard trigger: a golden hash changed (dsp/tests/golden/golden.json: a preset's hash or
     per-second hashes differ, or a preset was dropped) and kSoundRevision was not bumped.
     No label overrides it. A package preset's changed hash counts only when its package's
-    hashes are unchanged (the package rule, below);
+    hashes are unchanged (the package rule, below) or the diff also touches a sound-relevant
+    path (the path trigger's) without a bump: then the gate cannot tell whether the engine
+    or the package moved the render, so the render is the engine's, whatever the labels;
   * path trigger: the diff touches dsp/src/, dsp/include/, the CMake files that build the
     engine (dsp/CMakeLists.txt, the root CMakeLists.txt, cmake/BrainscapeFpProfile.cmake),
     cmake/fp-forbidden-flags.txt or the arm toolchain file, and kSoundRevision was not
     bumped, unless the pull request carries the "sound-neutral" label (refactors, comments,
     tests; restricting who may apply it is the repository's job, not this script's);
   * the package rule (mode-compiler.md §8.3): a committed package's soundHash or
-    controlHash changed (a golden preset's, or a factory package's in
-    firmware/factory/MANIFEST), or a package was dropped, and the pull request does not
-    carry the "package-change" label with its cause named on a "Package-change: <cause>"
-    line of its description. A compiler or document change alters what a document means,
-    not what the engine plays for a package, so it needs visibility, not a bump; a bump
-    does not waive it, and "sound-neutral" does not either;
+    controlHash changed (a golden preset's, or a corpus or factory package's in
+    dsp/tests/golden/presets/MANIFEST or firmware/factory/MANIFEST, which bspc_roundtrip.py
+    requires and checks against the committed packages), or a package was dropped, and the
+    pull request does not carry the "package-change" label with its cause named on a
+    "Package-change: <cause>" line of its description. A compiler or document change alters
+    what a document means, not what the engine plays for a package, so it needs visibility,
+    not a bump; a bump does not waive it, and "sound-neutral" does not either;
   * kSoundRevision went down or skipped a number: a bump is exactly one;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
@@ -44,9 +47,12 @@ TRIGGER_FILES = ("CMakeLists.txt", "dsp/CMakeLists.txt", "cmake/BrainscapeFpProf
 NEUTRAL_LABEL = "sound-neutral"
 REVISION = re.compile(r"\bkSoundRevision\s*=\s*(\d+)\s*;")
 # The package rule (mode-compiler.md §8.3). bspc's manifest format: package hash, sound_hash,
-# control_hash and path per line (`bspc roundtrip --write-manifest`).
+# control_hash and path per line (`bspc roundtrip --write-manifest`). bspc_roundtrip.py
+# requires each set's MANIFEST and that it matches the set's committed packages, so a package
+# cannot change without its line here changing; golden.json's soundHash and controlHash, which
+# the harness's mint writes, tie a golden preset's render to its package.
 PACKAGE_LABEL = "package-change"
-PACKAGE_MANIFESTS = ("firmware/factory/MANIFEST",)
+PACKAGE_MANIFESTS = ("dsp/tests/golden/presets/MANIFEST", "firmware/factory/MANIFEST")
 PACKAGE_CAUSE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?package-change:[ \t]*(\S.*?)[ \t]*$",
                            re.IGNORECASE | re.MULTILINE)
 MANIFEST_LINE = re.compile(r"^([0-9a-f]{64}) ([0-9a-f]{64}) ([0-9a-f]{64}) (\S.*)$")
@@ -219,7 +225,11 @@ def main():
     packages, packaged = package_changes(
         base_golden, head_golden, {p: manifest(args.base, p) for p in PACKAGE_MANIFESTS},
         {p: manifest(args.head, p) for p in PACKAGE_MANIFESTS})
-    changed, attributed = golden_changes(base_golden, head_golden, packaged)
+    # A changed render is its package's only when the engine did not change unbumped beside it:
+    # with both changed, nothing tells which one moved it, so it is the hard trigger's.
+    engine_unbumped = bool(touched) and not bumped
+    changed, attributed = golden_changes(base_golden, head_golden, frozenset() if engine_unbumped else packaged)
+    withheld = golden_changes(base_golden, head_golden, packaged)[1] if engine_unbumped else []
 
     failures, notes = [], []
     if head_rev < base_rev:
@@ -228,7 +238,10 @@ def main():
         failures.append(f"kSoundRevision skipped a number, {base_rev} -> {head_rev}: a bump is exactly one.")
     if changed and not bumped:
         failures.append(f"{len(changed)} golden hash(es) changed without a kSoundRevision bump (hard "
-                        f"trigger, profile §5.12; no label overrides it).")
+                        f"trigger, profile §5.12; no label overrides it)."
+                        + (f" Sound-relevant paths changed too, so {len(withheld)} package preset render(s) "
+                           f"whose package also changed count as the engine's: bump, or land the engine "
+                           f"change and the package change in separate pull requests." if withheld else ""))
     if touched and not bumped:
         if NEUTRAL_LABEL in labels:
             notes.append(f'Sound-relevant paths changed without a bump; the pull request carries the '

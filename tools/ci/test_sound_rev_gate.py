@@ -6,8 +6,8 @@ Builds a scratch repository holding a revision header, a golden file and a few o
 files, writes a base tree and one head tree per case (trees, not commits: the gate only
 diffs and reads them), and requires the gate's verdict for each. The package rule's cases
 run against a second base whose golden file has a preset that plays a committed package
-and which has a factory manifest. A case that passes when it should fail means the gate
-lost a trigger. Exit 1 on any wrong verdict.
+and which has a corpus and a factory manifest. A case that passes when it should fail means
+the gate lost a trigger. Exit 1 on any wrong verdict.
 
   test_sound_rev_gate.py
 """
@@ -106,14 +106,18 @@ CASES = [
     ("golden keyed to another revision", {GOLDEN: golden(2, BASE_PRESETS)}, "", STALE),
 ]
 
-# The package rule (mode-compiler.md §8.3). "engram" plays a committed package; the factory
-# manifest lists two packages. A case may give the pull request's description as a fifth item.
+# The package rule (mode-compiler.md §8.3). "engram" plays a committed package, which the
+# corpus manifest lists; the factory manifest lists two packages. A case may give the pull
+# request's description as a fifth item.
 FACTORY = "firmware/factory/MANIFEST"
+CORPUS = "dsp/tests/golden/presets/MANIFEST"
 PKG = ("engram", "ee" * 32, ["e0", "e1"], "51" * 32, "c1" * 32)
 FACTORY_DOCS = [("engram.json", "a1", "51", "c1"), ("haze.json", "a2", "52", "c2")]
+CORPUS_DOCS = [("engram.json", "a1", "51", "c1"), ("sweep.json", "a5", "55", "c5")]
 PACKAGE_BASE = dict(BASE, **{
     GOLDEN: golden(1, BASE_PRESETS + [PKG]),
     FACTORY: manifest(FACTORY_DOCS),
+    CORPUS: manifest(CORPUS_DOCS),
     "compiler/src/Compile.cpp": "// compile\n",
     "dsp/tests/golden/presets/engram.json": "{}\n",
 })
@@ -129,12 +133,17 @@ def pkg_golden(rev=1, render="ee", sound="51", control="c1", others=BASE_PRESETS
     return golden(rev, others + [p + ((sound * 32, control * 32) if package else ())])
 
 
-def factory(*changes, drop=None):
+def factory(*changes, drop=None, base=FACTORY_DOCS):
     """The factory manifest with (path, package, sound, control) entries replaced or added."""
-    docs = {d[0]: d for d in FACTORY_DOCS}
+    docs = {d[0]: d for d in base}
     docs.update({d[0]: d for d in changes})
     docs.pop(drop, None)
     return manifest(docs.values())
+
+
+def corpus(*changes, drop=None):
+    """The corpus manifest with (path, package, sound, control) entries replaced or added."""
+    return factory(*changes, drop=drop, base=CORPUS_DOCS)
 
 
 PACKAGE_CASES = [
@@ -183,6 +192,30 @@ PACKAGE_CASES = [
     ("factory package dropped", {FACTORY: factory(drop="haze.json")}, "", NEEDS_LABEL),
     ("factory manifest deleted", {FACTORY: None}, "", NEEDS_LABEL),
     ("factory manifest malformed", {FACTORY: "not a manifest line\n"}, PKG_LABEL, "is not a manifest line", CAUSE),
+    # A corpus package changed and golden.json not re-minted (a CTRL-only change, or a STAT
+    # change the render does not hear): the corpus manifest still shows it.
+    ("corpus package's sound_hash changed, golden.json not re-minted, no label",
+     {CORPUS: corpus(("engram.json", "a3", "5f", "c1"))}, "", NEEDS_LABEL),
+    ("corpus package's control_hash changed, golden.json not re-minted, label and cause",
+     {CORPUS: corpus(("engram.json", "a3", "51", "cf"))}, PKG_LABEL, 0, CAUSE),
+    ("corpus package re-stamped (package hash only)", {CORPUS: corpus(("sweep.json", "a6", "55", "c5"))}, "", 0),
+    ("corpus package added", {CORPUS: corpus(("warp.json", "a4", "54", "c4"))}, "", 0),
+    ("corpus package dropped", {CORPUS: corpus(drop="sweep.json")}, "", NEEDS_LABEL),
+    # An unbumped engine change beside a package change: the render is the engine's, whatever
+    # the labels (the hard trigger), since nothing tells which of the two moved it.
+    ("sound-neutral engine change beside a CTRL-only package change, render changed",
+     {"dsp/src/PostChain.cpp": SOUND, GOLDEN: pkg_golden(render="ff", control="cf")},
+     '["sound-neutral","package-change"]', HARD, CAUSE),
+    ("sound-neutral engine change beside a STAT package change, render changed",
+     {"dsp/src/PostChain.cpp": SOUND, GOLDEN: pkg_golden(render="ff", sound="5f")},
+     '["sound-neutral","package-change"]', HARD, CAUSE),
+    ("sound-neutral engine CMake change beside corpus and factory package changes, render changed",
+     {"dsp/CMakeLists.txt": "# a definition\n", GOLDEN: pkg_golden(render="ff", sound="5f"),
+      CORPUS: corpus(("engram.json", "a3", "5f", "c1")), FACTORY: factory(("haze.json", "a3", "5f", "c2"))},
+     '["sound-neutral","package-change"]', HARD, CAUSE),
+    ("sound-neutral engine change beside a CTRL-only package change, render unchanged",
+     {"dsp/src/PostChain.cpp": SOUND, GOLDEN: pkg_golden(control="cf")},
+     '["sound-neutral","package-change"]', 0, CAUSE),
 ]
 
 
