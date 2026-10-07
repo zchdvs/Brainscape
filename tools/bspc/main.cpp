@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -97,29 +98,98 @@ struct Args {
   }
 };
 
-bool Parse(int argc, char** argv, Args* a) {
-  for (int i = 2; i < argc; ++i) {
-    const std::string s     = argv[i];
-    const auto        value = [&](std::string* out) {
-      if (i + 1 >= argc) return false;
-      *out = argv[++i];
-      return true;
-    };
-    if (s == "-o") {
-      if (!value(&a->output)) return false;
-    } else if (s == "--expect") {
-      if (!value(&a->expect)) return false;
-    } else if (s == "--write-manifest") {
-      if (!value(&a->manifestOut)) return false;
-    } else if (s == "--id") {
-      if (!value(&a->id)) return false;
-    } else if (s == "--name") {
-      if (!value(&a->name)) return false;
-    } else if (s.size() > 2 && s.compare(0, 2, "--") == 0) {
-      a->flags.push_back(s);
-    } else {
-      a->files.push_back(s);
+// Each command's options; anything else is refused (exit 2), so a misspelled --check or
+// --factory never turns a gate into a pass or a check into a rewrite.
+struct CommandSpec {
+  const char* name;
+  const char* options;  // space-separated; those that take a value end in '='
+};
+const CommandSpec kCommands[] = {
+    {"compile", "-o="},
+    {"decompile", "--rebuild -o="},
+    {"fmt", "--check"},
+    {"verify", ""},
+    {"stamp", "--check"},
+    {"lint", "--factory"},
+    {"diff", ""},
+    {"derive", "--solve"},
+    {"roundtrip", "--expect= --write-manifest="},
+    {"migrate-session", "--id= --name= -o="},
+    {"version", ""},
+};
+
+const CommandSpec* FindCommand(const std::string& name) {
+  for (const CommandSpec& c : kCommands) {
+    if (name == c.name) return &c;
+  }
+  return nullptr;
+}
+
+// The command's options as words: "-o=" and "--check".
+std::vector<std::string> OptionsOf(const CommandSpec& c) {
+  std::vector<std::string> out;
+  std::string              word;
+  for (const char ch : std::string_view(c.options)) {
+    if (ch != ' ') {
+      word.push_back(ch);
+    } else if (!word.empty()) {
+      out.push_back(word);
+      word.clear();
     }
+  }
+  if (!word.empty()) out.push_back(word);
+  return out;
+}
+
+std::string Takes(const CommandSpec& c) {
+  std::string out;
+  for (std::string o : OptionsOf(c)) {
+    const bool value = o.back() == '=';
+    if (value) o.pop_back();
+    out += (out.empty() ? "" : ", ") + o + (value ? " VALUE" : "");
+  }
+  return std::string(c.name) + (out.empty() ? " takes no options" : " takes " + out);
+}
+
+bool Parse(const CommandSpec& c, int argc, char** argv, Args* a) {
+  const std::vector<std::string> options = OptionsOf(c);
+  std::vector<std::string>       seen;
+  bool                           filesOnly = false;  // after "--"
+  for (int i = 2; i < argc; ++i) {
+    const std::string s = argv[i];
+    if (filesOnly || s.size() < 2 || s[0] != '-') {
+      a->files.push_back(s);
+      continue;
+    }
+    if (s == "--") {
+      filesOnly = true;
+      continue;
+    }
+    const bool flag  = std::find(options.begin(), options.end(), s) != options.end();
+    const bool value = std::find(options.begin(), options.end(), s + "=") != options.end();
+    if (!flag && !value) {
+      ErrLine("bspc " + std::string(c.name) + ": unknown option `" + s + "` (" + Takes(c) + ")");
+      return false;
+    }
+    if (std::find(seen.begin(), seen.end(), s) != seen.end()) {
+      ErrLine("bspc " + std::string(c.name) + ": " + s + " is given twice");
+      return false;
+    }
+    seen.push_back(s);
+    if (flag) {
+      a->flags.push_back(s);
+      continue;
+    }
+    if (i + 1 >= argc) {
+      ErrLine("bspc " + std::string(c.name) + ": " + s + " needs a value");
+      return false;
+    }
+    const std::string v = argv[++i];
+    if (s == "-o") a->output = v;
+    if (s == "--expect") a->expect = v;
+    if (s == "--write-manifest") a->manifestOut = v;
+    if (s == "--id") a->id = v;
+    if (s == "--name") a->name = v;
   }
   return true;
 }
@@ -146,7 +216,9 @@ int Usage() {
       "                                     manifest of package, sound and control hashes\n"
       "  migrate-session SESSION [--id ID] [--name NAME] [-o OUT.json]\n"
       "                                     a BSWS v1 plugin session as a preset document\n"
-      "  version                            this build's sound revision and formats\n");
+      "  version                            this build's sound revision and formats\n"
+      "Each command takes only the options shown (-- ends them). Exit codes: 0 success (lint\n"
+      "warnings included), 1 errors or differences, 2 usage or I/O.\n");
   return kUsage;
 }
 
@@ -349,9 +421,19 @@ int CmdDerive(const Args& a) {
     bsc::Derive(&doc, a.Has("--solve"), &log);
     for (const std::string& line : log) ErrLine(file + ": " + line);
     const std::string out = bsc::FormatDocument(doc);
-    if (out != text && !WriteFile(file, out.data(), out.size())) {
+    if (out == text) continue;
+    if (!WriteFile(file, out.data(), out.size())) {
       ErrLine("bspc: cannot write " + file);
       return kUsage;
+    }
+    // A derived leaf changes the sound, so the stamp no longer matches (roundtrip and
+    // stamp --check would fail).
+    const bsc::CompileResult r = bsc::CompileDocument(doc);
+    if (r.ok && !doc.stamped) {
+      ErrLine(file + ": it has no stamp (run bspc stamp)");
+    } else if (r.ok && (doc.soundRev != brainscape::kSoundRevision ||
+                        std::memcmp(doc.soundHash.bytes, r.soundHash.bytes, 32) != 0)) {
+      ErrLine(file + ": its stamp is stale (run bspc stamp)");
     }
   }
   return rc;
@@ -388,11 +470,22 @@ std::string RoundTrip(const std::string& file, bool* ok) {
     if (fmt2 != fmt) fail("formatting is not idempotent");
   }
   // Decompile(Compile(J)) = Fmt(J): the JSON section, and a stamp that is current.
+  const bool stale = !r.doc.stamped || r.doc.soundRev != brainscape::kSoundRevision ||
+                     std::memcmp(r.doc.soundHash.bytes, r.soundHash.bytes, 32) != 0;
   const bsc::DecompileResult d = bsc::Decompile(r.package.data(), r.package.size());
-  if (!d.ok || d.json != fmt) fail("Decompile(Compile(J)) differs from Fmt(J): bspc stamp?");
-  // Without the JSON section: Fmt(J) minus editor data.
+  if (stale) {
+    fail("its stamp is missing or stale (run bspc stamp after any change to the sound)");
+  } else if (!d.ok || d.json != fmt) {
+    fail("Decompile(Compile(J)) differs from Fmt(J)");
+  }
+  // Without the JSON section: Fmt(J) minus editor data, with the stamp the compile computed (a
+  // stale stamp is the failure above, reported once).
+  bsc::Document stamped = r.doc;
+  stamped.stamped       = true;
+  stamped.soundRev      = brainscape::kSoundRevision;
+  stamped.soundHash     = r.soundHash;
   const bsc::DecompileResult rb = bsc::Decompile(r.package.data(), r.package.size(), true);
-  if (!rb.ok || rb.json != bsc::FormatDocument(r.doc, false)) {
+  if (!rb.ok || rb.json != bsc::FormatDocument(stamped, false)) {
     fail("the package rebuilt without its JSON section differs from Fmt(J) minus editor data");
   }
   // The JSON section compiles to the same bytes.
@@ -401,6 +494,61 @@ std::string RoundTrip(const std::string& file, bool* ok) {
     fail("the JSON section does not recompile to the same bytes");
   return bsc::Hex(r.packageHash.bytes, 32) + " " + bsc::Hex(r.soundHash.bytes, 32) + " " +
          bsc::Hex(r.controlHash.bytes, 32) + " " + Normalize(file) + "\n";
+}
+
+// Manifest lines by path: the three hashes (195 characters with their spaces), then the path.
+constexpr size_t kManifestHashes = 195;
+
+std::vector<std::pair<std::string, std::string>> ManifestLines(const std::string& text,
+                                                               bool* wellFormed) {
+  std::vector<std::pair<std::string, std::string>> out;
+  size_t                                           start = 0;
+  while (start < text.size()) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    const std::string line = text.substr(start, end - start);
+    start                  = end + 1;
+    if (line.size() <= kManifestHashes) {
+      *wellFormed = false;
+      continue;
+    }
+    out.emplace_back(line.substr(kManifestHashes), line.substr(0, kManifestHashes - 1));
+  }
+  return out;
+}
+
+// Which documents differ between the expected manifest and this run's, and in which hashes.
+void ReportManifestDifferences(const std::string& expected, const std::string& got,
+                               const std::string& name) {
+  bool       wellFormed = true;
+  const auto want       = ManifestLines(expected, &wellFormed);
+  const auto have       = ManifestLines(got, &wellFormed);
+  if (!wellFormed) ErrLine("  " + name + " has lines that are not manifest lines");
+  const auto find = [](const std::vector<std::pair<std::string, std::string>>& lines,
+                       const std::string& path) -> const std::string* {
+    for (const auto& line : lines) {
+      if (line.first == path) return &line.second;
+    }
+    return nullptr;
+  };
+  for (const auto& w : want) {
+    const std::string* h = find(have, w.first);
+    if (h == nullptr) {
+      ErrLine("  " + w.first + ": in " + name + ", not in this run");
+      continue;
+    }
+    if (*h == w.second) continue;
+    static const char* const kHashes[] = {"package hash", "sound_hash", "control_hash"};
+    std::string              which;
+    for (size_t k = 0; k < 3; ++k) {
+      if (h->compare(k * 65u, 64u, w.second, k * 65u, 64u) == 0) continue;
+      which += (which.empty() ? "" : ", ") + std::string(kHashes[k]);
+    }
+    ErrLine("  " + w.first + ": " + which + " changed");
+  }
+  for (const auto& h : have) {
+    if (find(want, h.first) == nullptr) ErrLine("  " + h.first + ": not in " + name);
+  }
 }
 
 int CmdRoundTrip(const Args& a) {
@@ -413,7 +561,7 @@ int CmdRoundTrip(const Args& a) {
     if (!line.empty()) lines.push_back(line);
   }
   std::sort(lines.begin(), lines.end(), [](const std::string& x, const std::string& y) {
-    return x.substr(195) < y.substr(195);  // by path, after three hashes and spaces
+    return x.substr(kManifestHashes) < y.substr(kManifestHashes);  // by path
   });
   std::string manifest;
   for (const std::string& line : lines) manifest += line;
@@ -429,7 +577,8 @@ int CmdRoundTrip(const Args& a) {
       return kUsage;
     }
     if (expected != manifest) {
-      ErrLine("bspc: the manifest differs from " + a.expect);
+      ErrLine("bspc: the manifest differs from " + a.expect + ":");
+      ReportManifestDifferences(expected, manifest, a.expect);
       ok = false;
     }
   }
@@ -476,9 +625,14 @@ int main(int argc, char** argv) {
   _setmode(_fileno(stdout), _O_BINARY);
 #endif
   if (argc < 2) return Usage();
-  const std::string cmd = argv[1];
-  Args              a;
-  if (!Parse(argc, argv, &a)) return Usage();
+  const std::string  cmd  = argv[1];
+  const CommandSpec* spec = FindCommand(cmd);
+  if (spec == nullptr) {
+    ErrLine("bspc: unknown command `" + cmd + "`");
+    return Usage();
+  }
+  Args a;
+  if (!Parse(*spec, argc, argv, &a)) return kUsage;
   if (cmd == "compile") return CmdCompile(a);
   if (cmd == "decompile") return CmdDecompile(a);
   if (cmd == "fmt") return CmdFmt(a);
@@ -489,6 +643,6 @@ int main(int argc, char** argv) {
   if (cmd == "derive") return CmdDerive(a);
   if (cmd == "roundtrip") return CmdRoundTrip(a);
   if (cmd == "migrate-session") return CmdMigrateSession(a);
-  if (cmd == "version") return CmdVersion();
+  if (cmd == "version") return a.files.empty() ? CmdVersion() : Usage();
   return Usage();
 }

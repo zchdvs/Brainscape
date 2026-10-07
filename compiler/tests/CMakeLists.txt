@@ -48,3 +48,10 @@ list(SORT _bsc_examples)
 add_test(NAME compiler_roundtrip
          COMMAND bspc roundtrip --expect MANIFEST ${_bsc_examples}
          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/data)
+
+# bspc's command line (§8.2): unknown options refused without touching a file, the authoring
+# sequence's messages, manifest differences by document, and non-ANSI file names on Windows.
+add_test(NAME compiler_bspc_cli
+         COMMAND ${CMAKE_COMMAND} -DBSPC=$<TARGET_FILE:bspc> -DDATA=${CMAKE_CURRENT_SOURCE_DIR}/data
+                 -DWORK=${CMAKE_CURRENT_BINARY_DIR}/bspc_cli
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/bspc_cli.cmake)

@@ -7,8 +7,10 @@ only. Compiling is a pure function of the document and the build's constants (§
 user, locale or floating-point arithmetic, so every host writes the same bytes.
 
 ```bash
-cmake -B build -DBRAINSCAPE_BUILD_TESTS=ON && cmake --build build --config Release --target bspc
-build/tools/bspc/bspc compile engram.json        # writes engram.bsp
+cmake -B build && cmake --build build --config Release --target bspc
+# Visual Studio and Xcode (multi-config) put it in build/tools/bspc/Release/; Ninja and
+# Makefiles in build/tools/bspc/.
+build/tools/bspc/Release/bspc compile compiler/tests/data/engram.json   # writes engram.bsp
 ```
 
 | Command | Does |
@@ -17,16 +19,33 @@ build/tools/bspc/bspc compile engram.json        # writes engram.bsp
 | `decompile PKG.bsp [--rebuild] [-o OUT.json]` | Prints the package's JSON section, or the document rebuilt from STAT, MODE, CTRL and META when it has none, its `JSON_STALE` flag is set, or `--rebuild` asks (editor data is then lost). |
 | `fmt [--check] DOC.json...` | Rewrites documents in canonical form (§6.4); `--check` lists the files that differ and exits 1. The stamp is kept as written. |
 | `verify PKG.bsp...` | The package decodes and validates, and its JSON section (unless stale) compiles to the same STAT and MODE. |
-| `stamp [--check] FILE...` | Documents: rewrites `sound_rev` and `sound_hash` for this build (after a sound-revision bump). Packages: recompiles them from their JSON section. `--check` lists what is stale. |
-| `lint [--factory] DOC.json...` | Lint findings L1–L9 (§2.7); `--factory` makes L4 and L7–L9 errors. |
-| `diff A.bsp B.bsp` | The first differing field, by its JSON pointer (`/layers/0/size_ms: 120 -> 150`). |
-| `derive [--solve] DOC.json...` | Rewrites each targeted leaf as its macro's value at the stored position (§3.5); `--solve` first sets each position from its first target's leaf. In place. |
-| `roundtrip [--expect M] [--write-manifest M] DOC.json...` | The `bspc-roundtrip` checks (§8.3, §10.1): each document compiles (to its committed `.bsp`, when there is one), is canonical and stamped, decompiles to itself, rebuilds from its package without the JSON section, and its JSON section recompiles to the same bytes. Prints the sorted manifest: package hash, `sound_hash`, `control_hash` and path per line. |
+| `stamp [--check] FILE...` | Documents: rewrites `sound_rev` and `sound_hash` for this build. Needed after any change to what the preset plays (a leaf, `derive`, the structure) and after a sound-revision bump. Packages: recompiles them from their JSON section. `--check` lists what is stale. |
+| `lint [--factory] DOC.json...` | Lint findings L1–L9 (§2.7), as warnings; `--factory` makes L4 and L7–L9 errors. |
+| `diff A.bsp B.bsp` | The first differing field: a header format or revision, else the document's fields by JSON pointer (`/layers/0/size_ms: 120 -> 150`), those that play or control the sound before the id, name, META and display names; then the header flags, which follow from the id. |
+| `derive [--solve] DOC.json...` | Rewrites each targeted leaf as its macro's value at the stored position (§3.5); `--solve` first sets each position from its first target's leaf, keeping the stored position when it already lands as near as any. In place; says when the stamp has gone stale. |
+| `roundtrip [--expect M] [--write-manifest M] DOC.json...` | The `bspc-roundtrip` checks (§8.3, §10.1): each document compiles (to its committed `.bsp`, when there is one), is canonical and stamped, decompiles to itself, rebuilds from its package without the JSON section, and its JSON section recompiles to the same bytes. Prints the sorted manifest: package hash, `sound_hash`, `control_hash` and path per line; with `--expect`, names each document whose hashes differ. |
 | `migrate-session SESSION [--id ID] [--name NAME] [-o OUT.json]` | A BSWS v1 plugin session as a preset document (§4.4). |
 | `version` | This build's sound revision, formats and supported mode features. |
 
+Each command takes only the options listed; any other option (`fmt --chek`, `fmt -o`) is
+refused with exit 2 before a file is read or written, so a misspelled gate never passes or
+rewrites what it checks. `--` ends the options.
+
 Findings print as `file:line:column: error E4 at /layers/0/size_ms: message`, with the JSON
-pointer of the value. Exit codes: 0 success, 1 findings or differences, 2 usage or I/O.
+pointer of the value; leaves are named as schema 1 names them (`layer0.size_ms`), the form
+macro targets and `editor.detached` take. Exit codes: 0 success (lint warnings included), 1
+errors or differences, 2 usage or I/O.
+
+## Writing a preset
+
+1. Write the JSON (§2; [`compiler/tests/data/`](../../compiler/tests/data) has examples).
+2. `bspc fmt DOC.json`: canonical form.
+3. `bspc derive DOC.json`, after setting macro positions; or `bspc derive --solve DOC.json`,
+   after setting leaves.
+4. `bspc stamp DOC.json`: needed after any change to the sound; `fmt --check` passes with a
+   stale stamp, `stamp --check` and `roundtrip` do not.
+5. `bspc lint --factory DOC.json`: what CI requires of factory presets.
+6. `bspc compile DOC.json`, or `bspc roundtrip DOC.json` for every check at once.
 
 `render` (§8.2) arrives with the audition tooling in `tools/audition/` (lane E).
 
@@ -38,6 +57,8 @@ defaults. Macros, macro positions and expression assignments compile.
 
 **Tests.** `ctest` runs `compiler_unit` (the JSON grammar suite, every rule E1–E12, the
 canonical form, packages, lint and derive, and two committed digests: 400 random documents'
-packages and a 20,000-mutant reader fuzz) and `compiler_roundtrip`, which runs
-`bspc roundtrip --expect MANIFEST` over `compiler/tests/data/*.json`. The manifest holds the
-packages' hashes, not the packages: none is committed before sound revision 2.
+packages and a 20,000-mutant reader fuzz), `compiler_roundtrip`, which runs
+`bspc roundtrip --expect MANIFEST` over `compiler/tests/data/*.json`, and `compiler_bspc_cli`
+(`compiler/tests/bspc_cli.cmake`: refused options, the authoring sequence's messages and
+non-ASCII file names). The manifest holds the packages' hashes, not the packages: none is
+committed before sound revision 2.
