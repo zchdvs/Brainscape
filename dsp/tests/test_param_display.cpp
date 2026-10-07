@@ -107,6 +107,42 @@ TEST_CASE("discrete parameters snap to their positions") {
   CHECK(NormalizedFromPlain(ParamId::PositionSource, 0.2f) == 0.0f);
 }
 
+TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)") {
+  // Integer leaves are discrete and show the integer the engine reads (§3.7).
+  CHECK(Format(ParamId::VoiceCount, 64.0f) == "64");
+  CHECK(Format(ParamId::Repeat, 2.5f) == "3");  // RoundHalfAwayI32
+  CHECK(Format(ParamId::Repeat, 2.49f) == "2");
+  CHECK(FindParamDisplay(ParamId::VoiceCount)->steps == 64);
+  CHECK(PlainFromNormalized(ParamId::Repeat, 0.5f) == 9.0f);  // 16 positions: 7.5 rounds up
+  CHECK(Format(ParamId::DecayMs, 0.0f) == "Off");
+  CHECK(Format(ParamId::DecayMs, 1500.0f) == "1.50 s");
+  CHECK(Format(ParamId::GlideCurve, -0.5f) == "-50%");
+  CHECK(Format(ParamId::TriggerOffset, 0.0f) == "0%");
+  CHECK(Format(ParamId::ReverbMode, 2.0f) == "Large hall");
+  CHECK(Format(ParamId::DelaySync, 0.0f) == "Off");
+  CHECK(Format(ParamId::DelaySync, 3.0f) == "Div 3");
+  CHECK(Format(ParamId::EffectVolumeDb, -3.0f) == "-3.0 dB");
+  CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
+  CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
+  CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
+  CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::L1DelayMs)->group)) == "Layer 2");
+  CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::EffectVolumeDb)->group)) == "Device");
+  CHECK(std::string(FindParamDisplay(ParamId::L1TransposeSt)->title) == "Layer 2 transpose");
+}
+
+// Host model (b), provisionally (mode-compiler.md §3.6, Q12): macros, Mix, the effect volume
+// and the performance rows are automatable; the other leaves are registered but not.
+TEST_CASE("host automation follows the host model") {
+  for (const ParamDescriptor& d : kParamTable) {
+    INFO(d.name);
+    const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
+    const auto raw         = static_cast<uint32_t>(d.id);
+    const bool want        = d.id == ParamId::Mix || (raw >= 69u && raw <= 80u) ||
+                      d.id == ParamId::EffectVolumeDb;
+    CHECK(automatable == want);
+  }
+}
+
 TEST_CASE("display text carries units and the named endpoints") {
   CHECK(Format(ParamId::DelayMs, 250.0f) == "250 ms");
   CHECK(Format(ParamId::DelayMs, 1250.0f) == "1.25 s");
@@ -195,6 +231,22 @@ std::string RefFormat(ParamId id, float plain) {
     }
     case DisplayKind::OffOn: return v >= 0.5f ? "On" : "Off";
     case DisplayKind::LiveMark: return v >= 0.5f ? "Mark" : "Live";
+    case DisplayKind::Count: return std::to_string(std::lround(v));  // half away from zero
+    case DisplayKind::MsOrOff: return v == 0.0f ? std::string("Off") : RefMs(v);
+    case DisplayKind::Signed: {
+      const double pc  = static_cast<double>(v) * 100.0;
+      const double mag = std::fabs(pc);
+      return mag < 0.05 ? "0%" : RefFixed(mag < 10.0 ? "%+.1f%%" : "%+.0f%%", pc);
+    }
+    case DisplayKind::ReverbMode: {
+      static const char* kModes[] = {"Bright room", "Dark medium", "Large hall", "Ambient"};
+      const long n = std::lround(v);
+      return kModes[n < 0 ? 0 : (n > 3 ? 3 : n)];
+    }
+    case DisplayKind::Division: {
+      const long n = std::lround(v);
+      return n <= 0 ? std::string("Off") : "Div " + std::to_string(n);
+    }
   }
   return "";
 }

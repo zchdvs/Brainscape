@@ -243,6 +243,9 @@ TEST_CASE("SetParam canonicalizes on the bit pattern, identically in every host 
   size_t mismatches = 0, malformed = 0;
   for (size_t p = 0; p < count; ++p) {
     const ParamDescriptor& d = table[p];
+    // SetParam stores Leaf and Global rows; for the other kinds it is a no-op and GetParam
+    // gives +0 (mode-compiler.md §4.1). Canonicalize is defined for every row.
+    const bool stored = d.kind == ParamKind::Leaf || d.kind == ParamKind::Global;
     for (const uint32_t u : patterns) {
       const uint32_t expected = Bits(ReferenceCanonical(d, u));
       for (const detail::FpWord host : hosts) {
@@ -252,7 +255,9 @@ TEST_CASE("SetParam canonicalizes on the bit pattern, identically in every host 
           engine.SetParam(d.id, FromBits(u));
           exported = Canonicalize(d.id, FromBits(u));
         }
-        if (Bits(engine.GetParam(d.id)) != expected || Bits(exported) != expected) ++mismatches;
+        if (Bits(engine.GetParam(d.id)) != (stored ? expected : 0u) || Bits(exported) != expected) {
+          ++mismatches;
+        }
       }
       // Never non-finite, subnormal or -0; always inside the range.
       const uint32_t e = expected & 0x7F800000u;
@@ -464,12 +469,12 @@ TEST_CASE("fuzz: non-finite and subnormal inputs and parameters stay out of the 
         }
       }
     }
-    size_t count = 0;
-    const ParamDescriptor* table = Descriptors(&count);
+    // The preset leaves (Leaf rows; the other kinds are no-ops for SetParam, tested in
+    // test_params.cpp).
     std::vector<Event> events;
     for (uint32_t f = 0; f < kFrames; f += 64) {
       const uint32_t roll = rng.Next() % 8u;
-      const ParamId  id   = table[rng.Next() % count].id;
+      const ParamId  id   = LeafId(rng.Next() % kNumLeafParams);
       if (roll < 3u) {
         events.push_back({f, 0, id, kSpecialBits[rng.Next() % (sizeof kSpecialBits / sizeof kSpecialBits[0])]});
       } else if (roll < 4u) {

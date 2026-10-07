@@ -8,6 +8,7 @@ add_executable(brainscape_tests
   test_boundary.cpp
   test_detmath.cpp
   test_param_display.cpp
+  test_params.cpp
   test_testsignal.cpp
 )
 target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)

@@ -13,6 +13,14 @@ juce::Colour palette::GroupAccent(ParamGroup group) {
     case ParamGroup::Reverb:     return juce::Colour(0xFF76E4F7);
     case ParamGroup::Filter:     return juce::Colour(0xFFF6AD55);
     case ParamGroup::Triggers:   return juce::Colour(0xFFF6E05E);
+    // The mode system's groups (mode-compiler.md §4.3), not on the test bench yet.
+    case ParamGroup::Scheduler:   return juce::Colour(0xFF9F7AEA);
+    case ParamGroup::Layer2:      return juce::Colour(0xFF4299E1);
+    case ParamGroup::Modifiers:   return juce::Colour(0xFFED8936);
+    case ParamGroup::Modulation:  return juce::Colour(0xFFED64A6);
+    case ParamGroup::Macros:      return juce::Colour(0xFF38B2AC);
+    case ParamGroup::Performance: return juce::Colour(0xFFECC94B);
+    case ParamGroup::Device:      return juce::Colour(0xFFA0AEC0);
   }
   return kText;
 }

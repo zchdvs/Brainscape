@@ -26,12 +26,18 @@ void Script::AddRestart(const RestartPoint& r) {
 
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
   auto preset = std::make_unique<PresetState>();
-  for (uint32_t i = 0; i < kNumParams; ++i) {
-    preset->leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
+  for (uint32_t i = 0; i < kNumLeafParams; ++i) {
+    preset->leaves[i] = {static_cast<uint32_t>(LeafId(i)), FindParam(LeafId(i))->def};
   }
-  preset->leafCount = static_cast<uint32_t>(kNumParams);
+  preset->leafCount = static_cast<uint32_t>(kNumLeafParams);
   for (const auto& kv : params) {
-    preset->leaves[static_cast<uint32_t>(kv.first) - 1u].value = kv.second;
+    const size_t i = LeafIndex(kv.first);
+    if (i < kNumLeafParams) {
+      preset->leaves[i].value = kv.second;
+    } else if (preset->leafCount < PresetState::kMaxLeaves) {
+      // Not a Leaf row: kept, so the load reports it unknown and the harness refuses it.
+      preset->leaves[preset->leafCount++] = {static_cast<uint32_t>(kv.first), kv.second};
+    }
   }
   return preset;
 }

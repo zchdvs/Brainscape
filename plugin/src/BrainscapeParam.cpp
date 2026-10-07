@@ -78,6 +78,7 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
   shift = 0;
   switch (kind) {
     case DisplayKind::Milliseconds:
+    case DisplayKind::MsOrOff:
       if (unit == "s" || unit == "sec") shift = 3;
       return unit.empty() || unit == "ms" || shift != 0;
     case DisplayKind::Hertz:
@@ -86,6 +87,7 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
       return unit.empty() || unit == "hz" || shift != 0;
     case DisplayKind::Percent:  // the display is in percent, so bare numbers are too
     case DisplayKind::Amount:   // 0-100, so a bare number is a hundredth of the plain range
+    case DisplayKind::Signed:   // -100..+100 % of a -1..1 value
       shift = -2;
       return unit.empty() || unit == "%";
     case DisplayKind::Balance:  // not a shift: BalanceDecimal maps it
@@ -99,6 +101,9 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
     case DisplayKind::FilterMorph:
     case DisplayKind::OffOn:
     case DisplayKind::LiveMark:
+    case DisplayKind::Count:
+    case DisplayKind::ReverbMode:
+    case DisplayKind::Division:
       return unit.empty();
   }
   return false;
@@ -193,6 +198,7 @@ bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::stri
       {DisplayKind::LiveMark, "live", 0.0f}, {DisplayKind::LiveMark, "mark", 1.0f},
       {DisplayKind::FilterMorph, "lp", 0.0f}, {DisplayKind::FilterMorph, "bp", 1.0f},
       {DisplayKind::FilterMorph, "hp", 2.0f}, {DisplayKind::FilterMorph, "notch", 3.0f},
+      {DisplayKind::MsOrOff, "off", 0.0f},    {DisplayKind::Division, "off", 0.0f},
   };
   if (m.kind == DisplayKind::FilterCutoff && t == "off") {
     out = d.max;
@@ -308,7 +314,8 @@ bool BrainscapeParam::isDiscrete() const { return (display_.flags & kParamDiscre
 bool BrainscapeParam::isBoolean() const { return display_.kind == DisplayKind::OffOn; }
 
 FreezeParam::FreezeParam(EventSink& sink)
-    : juce::AudioParameterBool(juce::ParameterID{"perf.freeze", 1}, "Freeze", false),
+    : juce::AudioParameterBool(juce::ParameterID{FindParam(ParamId::PerfFreeze)->name, 1},
+                               FindParamDisplay(ParamId::PerfFreeze)->title, false),
       sink_(sink) {}
 
 void FreezeParam::valueChanged(bool on) {

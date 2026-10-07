@@ -8,6 +8,7 @@
 #include <new>
 #include <type_traits>
 
+#include "brainscape/SoundRevision.h"
 #include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
@@ -28,6 +29,91 @@ constexpr bool TableIsContiguous() {
   return true;
 }
 static_assert(TableIsContiguous(), "kParamTable must be ordered by contiguous ids from 1");
+
+// ── The parameter table's per-kind invariants (docs/design/mode-compiler.md §4.1) ────────
+
+constexpr bool SameName(const char* a, const char* b) {
+  for (; *a != '\0' && *a == *b; ++a, ++b) {
+  }
+  return *a == *b;
+}
+
+constexpr bool RowIsWellFormed(const ParamDescriptor& d) {
+  if (d.kind == ParamKind::Retired) return d.name == nullptr;  // a tombstone keeps only its id
+  if (d.name == nullptr || d.name[0] == '\0' || d.unit == nullptr) return false;
+  if (!(d.min < d.max) || !(d.def >= d.min) || !(d.def <= d.max)) return false;
+  if ((d.domain & ~kAllParamDomains) != 0u) return false;
+  // A Leaf row names the revision that made it one, and this build plays it; no other kind
+  // has a revision. Rows that hold a value (Leaf, Global) rebuild something; Macro and
+  // Performance rows act through their own events.
+  switch (d.kind) {
+    case ParamKind::Leaf:
+      return d.sinceRev >= 1u && d.sinceRev <= kSoundRevision && d.domain != kDomainNone;
+    case ParamKind::Global: return d.sinceRev == 0u && d.domain != kDomainNone;
+    case ParamKind::Macro:
+    case ParamKind::Performance: return d.sinceRev == 0u && d.domain == kDomainNone;
+    case ParamKind::Reserved: return d.sinceRev == 0u;
+    case ParamKind::Retired: break;
+  }
+  return false;
+}
+
+constexpr bool TableIsWellFormed() {
+  for (size_t i = 0; i < kNumParams; ++i) {
+    if (!RowIsWellFormed(kParamTable[i])) return false;
+    for (size_t j = 0; j < i; ++j) {
+      if (kParamTable[i].name != nullptr && kParamTable[j].name != nullptr &&
+          SameName(kParamTable[i].name, kParamTable[j].name)) {
+        return false;  // names are the hosts' and the schema's keys
+      }
+    }
+  }
+  return true;
+}
+static_assert(TableIsWellFormed(),
+              "kParamTable: a row breaks its kind's rules (range, default, domain, sinceRev) or "
+              "repeats a name");
+
+// The rows the engine stores (pending_ and active_): Leaf and Global (design §4.1). Every
+// other kind is a no-op for SetParam and LoadPreset.
+constexpr bool IsStored(ParamKind k) { return k == ParamKind::Leaf || k == ParamKind::Global; }
+
+constexpr size_t CountStored() {
+  size_t n = 0;
+  for (const ParamDescriptor& d : kParamTable) n += IsStored(d.kind) ? 1u : 0u;
+  return n;
+}
+constexpr size_t kNumStored = CountStored();
+
+struct StoredRows {
+  uint16_t row[kNumStored];      // slot -> row index (id - 1)
+  uint16_t slot[kNumParams];     // row index -> slot, or kNumStored for rows not stored
+};
+constexpr StoredRows MakeStoredRows() {
+  StoredRows s{};
+  uint16_t   k = 0;
+  for (size_t i = 0; i < kNumParams; ++i) {
+    if (IsStored(kParamTable[i].kind)) {
+      s.row[k]  = static_cast<uint16_t>(i);
+      s.slot[i] = k++;
+    } else {
+      s.slot[i] = static_cast<uint16_t>(kNumStored);
+    }
+  }
+  return s;
+}
+constexpr StoredRows kStored = MakeStoredRows();
+
+// The slot of a stored row's id, or kNumStored.
+constexpr size_t SlotOf(ParamId id) {
+  const auto raw = static_cast<uint32_t>(id);
+  return raw >= 1u && raw <= kNumParams ? kStored.slot[raw - 1u] : kNumStored;
+}
+constexpr const ParamDescriptor& RowOfSlot(size_t slot) { return kParamTable[kStored.row[slot]]; }
+
+// Leaf ordinals are slots too (Leaf rows are stored), so a complete preset's values map to
+// slots through the leaf's id.
+static_assert(kNumLeafParams <= kNumStored, "every Leaf row is stored");
 
 // SetParam/GetParam are documented lock-free from any thread (design §9 threading
 // table); make the assumption a compile error on the day it stops being true.
@@ -138,24 +224,37 @@ BRAINSCAPE_FP_BODY float CanonicalizeBody(ParamId id, float plainValue) noexcept
   return d != nullptr ? CanonicalValue(*d, plainValue) : 0.0f;
 }
 
-// Determinism profile §5.10 steps 1 and 2: every descriptor default, then every stored
-// leaf, canonicalized, by ascending id (values[] is indexed by id - 1, and is applied in
-// that order). The report counts what makes the load inexact.
+// A stored leaf this build plays (design §7.3 step 2): its row is a Leaf that became one at
+// or before this build's revision. Any other id in a preset is unknown and ignored: an id
+// this build lacks, and a Macro, Performance, Global, Reserved or Retired row, none of which
+// a preset stores (§4.1).
+const ParamDescriptor* PlayableLeaf(uint32_t id) noexcept {
+  const ParamDescriptor* d = FindParam(static_cast<ParamId>(id));
+  return d != nullptr && d->kind == ParamKind::Leaf && d->sinceRev <= kSoundRevision ? d
+                                                                                      : nullptr;
+}
+
+// Determinism profile §5.10 steps 1 and 2 with design §7.3's per-kind rules: every Leaf
+// row's default, then every stored leaf, canonicalized, by ascending id (values[] is
+// indexed by leaf ordinal, ascending by id, and is applied in that order). Global rows are
+// not part of a preset and keep their values. The report counts what makes the load
+// inexact; a Leaf row the preset lacks is missing (every Leaf row's sinceRev is at most
+// this build's revision, and presets carry no revision of their own yet).
 void ResolvePreset(const PresetState& preset, float* values, LoadReport* report) noexcept {
   *report = LoadReport{};
-  bool seen[kNumParams] = {};
-  for (size_t i = 0; i < kNumParams; ++i) values[i] = kParamTable[i].def;
+  bool seen[kNumLeafParams] = {};
+  for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = FindParam(LeafId(i))->def;
   const uint32_t count =
       preset.leafCount < PresetState::kMaxLeaves ? preset.leafCount : PresetState::kMaxLeaves;
   report->unknownIds = preset.leafCount - count;
   for (uint32_t k = 0; k < count; ++k) {
     const PresetLeaf&      leaf = preset.leaves[k];
-    const ParamDescriptor* d    = FindParam(static_cast<ParamId>(leaf.id));
+    const ParamDescriptor* d    = PlayableLeaf(leaf.id);
     if (d == nullptr) {
       ++report->unknownIds;
       continue;
     }
-    const size_t i = leaf.id - 1u;
+    const size_t i = LeafIndex(leaf.id);
     if (seen[i]) {
       ++report->duplicateIds;
       continue;
@@ -176,7 +275,7 @@ void ResolvePreset(const PresetState& preset, float* values, LoadReport* report)
 }
 
 BRAINSCAPE_FP_BODY bool CheckPresetBody(const PresetState& preset, LoadReport* report) noexcept {
-  float values[kNumParams];
+  float values[kNumLeafParams];
   ResolvePreset(preset, values, report);
   return report->exact;
 }
@@ -197,7 +296,7 @@ struct Engine::Impl {
 
   using Smoother = detail::Smoother;
 
-  void ApplyParam(size_t index, float value) noexcept;
+  void ApplyParam(size_t slot) noexcept;
   void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
                                           // param actually changed (keeps exp2/pow
                                           // off the steady-state audio path)
@@ -214,7 +313,7 @@ struct Engine::Impl {
 
   // A canonical value from now on: the pending value too, so the next block start does
   // not re-apply an older SetParam.
-  void SetValue(size_t index, float value) noexcept;
+  void SetValue(size_t slot, float value) noexcept;
   void SetFrozen(bool on) noexcept;
   void ApplySpillover(const float* values) noexcept;
 
@@ -248,11 +347,13 @@ struct Engine::Impl {
   detail::FeedbackTamer  tamer_;
   detail::OnsetDetector  detector_;
 
-  std::atomic<float>    pending_[kNumParams]{};
+  // Leaf and Global rows only, by slot (kStored): what SetParam stored and what the
+  // engine applies.
+  std::atomic<float>    pending_[kNumStored]{};
   std::atomic<bool>     freezePending_{false};
   std::atomic<uint32_t> onsetCount_{0};
   std::atomic<uint32_t> manualTriggers_{0};
-  float                 active_[kNumParams]{};
+  float                 active_[kNumStored]{};
 };
 
 Engine::Engine() noexcept {
@@ -425,10 +526,13 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   feedback_.SetTau(10.0f, cfg.sampleRate);
   norm_.SetTau(100.0f, cfg.sampleRate);  // design §3: τ ≈ 100 ms
 
-  for (size_t i = 0; i < kNumParams; ++i) {
-    pending_[i].store(kParamTable[i].def, std::memory_order_relaxed);
-    active_[i] = kParamTable[i].def;
-    ApplyParam(i, kParamTable[i].def);
+  // Every stored row's default, Global rows included: Init is the one place that resets a
+  // device setting (design §4.1).
+  for (size_t i = 0; i < kNumStored; ++i) {
+    const float def = RowOfSlot(i).def;
+    pending_[i].store(def, std::memory_order_relaxed);
+    active_[i] = def;
+    ApplyParam(i);
   }
   RebuildGranularParams();
   RebuildPostParams();
@@ -454,10 +558,10 @@ void Engine::Impl::Reset() noexcept {
   manualTriggers_.store(0u, std::memory_order_relaxed);
   pendingTriggers_ = 0;
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
-  for (size_t i = 0; i < kNumParams; ++i) {
+  for (size_t i = 0; i < kNumStored; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     active_[i]    = p;
-    ApplyParam(i, p);
+    ApplyParam(i);
   }
   RebuildGranularParams();
   RebuildPostParams();
@@ -498,15 +602,15 @@ void Engine::Impl::ClearHistory() noexcept {
 bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
                               LoadReport* report) noexcept {
   LoadReport r;
-  float      values[kNumParams];
+  float      values[kNumLeafParams];
   ResolvePreset(preset, values, &r);
   if (ready_) {
     r.applied = true;
     if (mode == LoadMode::Exact) {
-      // The values become pending; Restart turns freeze off and drains them, snapping
-      // every smoother.
-      for (size_t i = 0; i < kNumParams; ++i) {
-        pending_[i].store(values[i], std::memory_order_relaxed);
+      // The leaves become pending; Restart turns freeze off and drains them, snapping
+      // every smoother. Global rows keep their pending values (design §4.1).
+      for (size_t i = 0; i < kNumLeafParams; ++i) {
+        pending_[SlotOf(LeafId(i))].store(values[i], std::memory_order_relaxed);
       }
       Restart();
     } else {
@@ -521,19 +625,19 @@ bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
 // as one change, freeze off, and the random-number epoch restarted here. Grains, marks,
 // the scheduler phase, smoothers and every buffer carry over, so the output never
 // reconverges with an Exact load's (§2.4), but it stays a deterministic function of the
-// event stream.
+// event stream. `values` holds every leaf by ordinal; Global rows are untouched.
 void Engine::Impl::ApplySpillover(const float* values) noexcept {
-  for (size_t i = 0; i < kNumParams; ++i) SetValue(i, values[i]);
+  for (size_t i = 0; i < kNumLeafParams; ++i) SetValue(SlotOf(LeafId(i)), values[i]);
   freezePending_.store(false, std::memory_order_relaxed);
   SetFrozen(false);
   epochStart_ = sampleCounter_;
 }
 
-void Engine::Impl::SetValue(size_t index, float value) noexcept {
-  pending_[index].store(value, std::memory_order_relaxed);
-  if (value != active_[index]) {
-    active_[index] = value;
-    ApplyParam(index, value);
+void Engine::Impl::SetValue(size_t slot, float value) noexcept {
+  pending_[slot].store(value, std::memory_order_relaxed);
+  if (value != active_[slot]) {
+    active_[slot] = value;
+    ApplyParam(slot);
   }
 }
 
@@ -549,40 +653,55 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
-void Engine::Impl::ApplyParam(size_t index, float value) noexcept {
-  switch (kParamTable[index].id) {
-    case ParamId::Mix:
-      mix_.target = value;
-      break;
-    case ParamId::Feedback:
-      feedback_.target = value;
-      tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
-      break;
-    case ParamId::WetTrimDb:
-      // exp2, not pow: one kernel instead of two (schedule-time transcendentals are
-      // charged in design §8).
-      outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
-      break;
-    case ParamId::TriggerSens:
-      detector_.SetSensitivity(value);
-      break;
-    default:
-      // Scheduler/voice params vs post-chain params rebuild their own blocks,
-      // once, at control rate.
-      if (static_cast<uint32_t>(kParamTable[index].id) >=
-          static_cast<uint32_t>(ParamId::ModRateHz)) {
-        postDirty_ = true;
-      } else {
+// A stored row changed (its slot's active_ value): mark or apply each rebuild its domain
+// names (design §4.1, §7.2). A rebuild reads only rows of its own domain, so after any
+// sequence of changes the last one each domain sees has every value it reads.
+void Engine::Impl::ApplyParam(size_t slot) noexcept {
+  const ParamDescriptor& d      = RowOfSlot(slot);
+  uint8_t                domain = d.domain;
+  // Sound revision 1 routes 27 and 28 to the post rebuild, which does not read them: a
+  // change to either alone is lost until another granular change rebuilds the granular
+  // block (design §7.2, record §2.1). Their Granular domain applies with R1, in the r2
+  // pull request that also retires both rows into structure (design §7.6 item 4); until
+  // then r1's routing stays, because the fix changes output for such a change.
+  if (d.id == ParamId::OnsetTrigger || d.id == ParamId::PositionSource) domain = kDomainPost;
+  const auto active = [this](ParamId id) { return active_[SlotOf(id)]; };
+  while (domain != 0u) {
+    const auto bit = static_cast<ParamDomain>(domain & (0u - domain));  // lowest set bit
+    domain         = static_cast<uint8_t>(domain & (domain - 1u));
+    switch (bit) {
+      case kDomainNone:
+        break;
+      case kDomainGranular:  // scheduler and voice parameters: rebuilt once, at control rate
         granularDirty_ = true;
+        break;
+      case kDomainPost:
+        postDirty_ = true;
+        break;
+      case kDomainMix:
+        mix_.target = active(ParamId::Mix);
+        break;
+      case kDomainFeedback: {
+        const float fb   = active(ParamId::Feedback);
+        feedback_.target = fb;
+        tamer_.SetFeedback(fb, cfg_.sampleRate);  // LP corner rides regeneration
+        break;
       }
-      break;
+      case kDomainWet:
+        // The trim, over the whole output until r2 (design §7.1 R3: WetGainTarget then
+        // scales the wet only, with the effect volume and the cutoff kill). exp2, not pow:
+        // one kernel instead of two (schedule-time transcendentals are charged in design §8).
+        outGain_.target = detmath::Exp2F(active(ParamId::WetTrimDb) * 0.16609640474436813f);
+        break;
+      case kDomainDetector:
+        detector_.SetSensitivity(active(ParamId::TriggerSens));
+        break;
+    }
   }
 }
 
 void Engine::Impl::RebuildPostParams() noexcept {
-  const auto get = [&](ParamId id) {
-    return active_[static_cast<uint32_t>(id) - 1u];
-  };
+  const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   pp_.modRateHz    = get(ParamId::ModRateHz);
   pp_.modDepth     = get(ParamId::ModDepth);
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
@@ -602,9 +721,7 @@ void Engine::Impl::RebuildPostParams() noexcept {
 }
 
 void Engine::Impl::RebuildGranularParams() noexcept {
-  const auto get = [&](ParamId id) {
-    return active_[static_cast<uint32_t>(id) - 1u];
-  };
+  const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   const double sr = cfg_.sampleRate;
 
   gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
@@ -668,19 +785,20 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   norm_.target  = detmath::PowF(gp_.targetVoices, -p);
 }
 
+// Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro
+// moves through MacroMove, a Performance row through its own events.
 void Engine::Impl::SetParam(ParamId id, float value) noexcept {
-  const ParamDescriptor* d = FindParam(id);
-  if (d == nullptr) return;
+  const size_t slot = SlotOf(id);
+  if (slot == kNumStored) return;
   // NaN must never reach the smoothers, where it is an absorbing state recoverable
   // only by Reset()/Init() (review finding, verified), nor any other engine state.
-  pending_[static_cast<uint32_t>(id) - 1u].store(CanonicalValue(*d, value),
-                                                 std::memory_order_relaxed);
+  pending_[slot].store(CanonicalValue(RowOfSlot(slot), value), std::memory_order_relaxed);
 }
 
 float Engine::Impl::GetParam(ParamId id) const noexcept {
-  const ParamDescriptor* d = FindParam(id);
-  if (d == nullptr) return 0.f;
-  return pending_[static_cast<uint32_t>(id) - 1u].load(std::memory_order_relaxed);
+  const size_t slot = SlotOf(id);
+  if (slot == kNumStored) return 0.f;
+  return pending_[slot].load(std::memory_order_relaxed);
 }
 
 void Engine::Impl::Process(const ProcessContext& ctx) noexcept {
@@ -750,11 +868,11 @@ void Engine::Impl::DrainPending() noexcept {
   // grains are decorrelated). Re-anchor-on-wrap (design §2.4) runs per sample inside
   // granular_.Process: decided here at block start, the splice moved with the block grid.
   SetFrozen(freezePending_.load(std::memory_order_relaxed));
-  for (size_t i = 0; i < kNumParams; ++i) {
+  for (size_t i = 0; i < kNumStored; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
       active_[i] = p;
-      ApplyParam(i, p);
+      ApplyParam(i);
     }
   }
   pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
@@ -762,9 +880,9 @@ void Engine::Impl::DrainPending() noexcept {
 
 void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
   switch (e.type) {
-    case EventType::SetParam: {
-      const ParamDescriptor* d = FindParam(static_cast<ParamId>(e.id));
-      if (d != nullptr) SetValue(e.id - 1u, CanonicalValue(*d, e.value));
+    case EventType::SetParam: {  // Leaf and Global rows only, as SetParam
+      const size_t slot = SlotOf(static_cast<ParamId>(e.id));
+      if (slot != kNumStored) SetValue(slot, CanonicalValue(RowOfSlot(slot), e.value));
       break;
     }
     case EventType::Freeze:
@@ -778,7 +896,7 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       // The producer learns whether the preset is exact from CheckPreset, when it stages
       // the preset; here only the values count.
       if (e.preset != nullptr) {
-        float      values[kNumParams];
+        float      values[kNumLeafParams];
         LoadReport report;
         ResolvePreset(*e.preset, values, &report);
         ApplySpillover(values);

@@ -104,9 +104,11 @@ class Engine {
   // before its first block).
   void Restart() noexcept;
 
-  // Applies a decoded preset in the fixed order of determinism profile §5.10: every
-  // descriptor default; every stored leaf, canonicalized, in ascending id order; freeze
-  // off; then for Exact a Restart (Process stopped, the event queue cleared; non-RT unless
+  // Applies a decoded preset in the fixed order of determinism profile §5.10, with the
+  // per-kind rules of docs/design/mode-compiler.md §4.1 and §7.3: every Leaf row's
+  // default; every stored leaf, canonicalized, in ascending id order (an id that is not a
+  // Leaf row is unknown and ignored); freeze off; Global rows (device settings) keep their
+  // values; then for Exact a Restart (Process stopped, the event queue cleared; non-RT unless
   // the engine has rendered nothing since its buffers were cleared, see Restart), for
   // Spillover the random-number epoch restarted at the load frame, keeping history,
   // grains, scheduler phase and smoothers. A direct Spillover call applies at the next
@@ -129,7 +131,8 @@ class Engine {
   // one frame keep the pin, as SetFreeze between split blocks does. The numbering is
   // permanent (events are logged and replayed).
   enum class EventType : uint8_t {
-    SetParam      = 0,  // id: ParamId; value: the exact binary32 plain value (canonicalized)
+    SetParam      = 0,  // id: ParamId; value: the exact binary32 plain value (canonicalized).
+                        // Leaf and Global rows only, as SetParam
     Freeze        = 1,  // value: nonzero engages, zero releases
     Trigger       = 2,  // id: TriggerSource; value: velocity (not yet read)
     SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies. Its
@@ -183,14 +186,16 @@ class Engine {
   // frame of the next Process call, before that block's events, and are kept for
   // callers that split blocks themselves. Sample-accurate changes are events.
   //
-  // Any thread; lock-free. Stores Canonicalize(id, plainValue) (Params.h): NaN and
-  // ±inf become the descriptor minimum, ±0 and subnormals +0, then the clamp.
-  // sampleOffset is ignored (a SetParam event carries the offset). Mix / Feedback /
-  // OutTrim / normalization are smoothed per-sample; scheduler and per-grain values
-  // apply to grains born after the change (resolve-at-birth — design §6 automation
-  // semantics).
+  // Any thread; lock-free. Stores Canonicalize(id, plainValue) (Params.h) for a Leaf or
+  // Global row: NaN and ±inf become the descriptor minimum, ±0 and subnormals +0, then the
+  // clamp. Any other row (Macro, Performance, Reserved, Retired) or unknown id is a no-op
+  // (mode-compiler.md §4.1). sampleOffset is ignored (a SetParam event carries the offset).
+  // Mix / Feedback / trim / normalization are smoothed per-sample; scheduler and per-grain
+  // values apply to grains born after the change (resolve-at-birth — design §6 automation
+  // semantics). Restart keeps every stored value; a preset load keeps Global rows.
   void  SetParam(ParamId id, float plainValue, uint32_t sampleOffset = 0) noexcept;
-  float GetParam(ParamId id) const noexcept;  // returns the pending (target) plain value
+  // The pending (target) plain value of a Leaf or Global row; 0 for any other id.
+  float GetParam(ParamId id) const noexcept;
 
   // Any thread; applied at the next Process() start. Freeze pins the grain
   // position anchor (design §2.4) — the ring keeps recording, so a freeze held

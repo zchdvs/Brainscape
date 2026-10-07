@@ -281,10 +281,10 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
 }
 
 ParamList ParamsAt(const PresetCase& p, int64_t frame) {
-  float values[kNumParams];
+  float values[kNumLeafParams];
   auto  load = [&values](const ParamList& params) {
     const std::unique_ptr<PresetState> preset = CompletePreset(params);
-    for (size_t i = 0; i < kNumParams; ++i) values[i] = preset->leaves[i].value;
+    for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = preset->leaves[i].value;
   };
   load(p.params);
   const auto& events   = p.script.Events();
@@ -301,14 +301,14 @@ ParamList ParamsAt(const PresetCase& p, int64_t frame) {
       continue;
     }
     const Event& ev = events[e++];
-    if (ev.type == EventType::SetParam) {
-      values[ev.id - 1u] = Canonicalize(static_cast<ParamId>(ev.id), ev.value);
+    if (ev.type == EventType::SetParam && IsLeaf(ev.id)) {  // the engine stores no other kind
+      values[LeafIndex(ev.id)] = Canonicalize(static_cast<ParamId>(ev.id), ev.value);
     } else if (ev.type == EventType::SpilloverLoad) {
       load(p.script.Staged()[ev.id]);
     }
   }
   ParamList out;
-  for (size_t i = 0; i < kNumParams; ++i) out.emplace_back(kParamTable[i].id, values[i]);
+  for (size_t i = 0; i < kNumLeafParams; ++i) out.emplace_back(LeafId(i), values[i]);
   return out;
 }
 

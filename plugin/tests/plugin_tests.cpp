@@ -5,6 +5,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -431,7 +432,7 @@ TEST_CASE("a rate change re-initialises; a same-rate re-prepare keeps the runnin
 
 TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
   BrainscapeProcessor proc;
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     INFO(d.name);
     BrainscapeParam& p = proc.Param(d.id);
     for (float v : SampleValues(d.id, static_cast<uint32_t>(d.id) * 7919u, 2000)) {
@@ -451,10 +452,44 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
     p.setValue(0.3f);  // a lossy host set maps through the shared taper
     REQUIRE(Bits(p.Plain()) == Bits(PlainFromNormalized(d.id, 0.3f)));
   }
-  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumParams) + 1);  // + freeze
+  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 1);  // + freeze
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
   REQUIRE(proc.Param(ParamId::OnsetTrigger).isDiscrete());
   REQUIRE(proc.Param(ParamId::OnsetTrigger).getNumSteps() == 2);
+}
+
+// The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
+// name; Reserved rows are not registered, and macro and performance rows join with the macro
+// work (§9.2). Host model (b), provisionally (§3.6, Q12): of the leaves only Mix is
+// automatable; freeze is.
+TEST_CASE("the plugin registers the Leaf rows under the host model") {
+  BrainscapeProcessor proc;
+  const auto&         params = proc.getParameters();
+  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 1);
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    const ParamDescriptor& d = *FindParam(LeafId(i));
+    INFO(d.name);
+    auto* p = dynamic_cast<BrainscapeParam*>(params[static_cast<int>(i)]);
+    REQUIRE(p != nullptr);
+    REQUIRE(p->Id() == d.id);
+    REQUIRE(&proc.Param(d.id) == p);
+    REQUIRE(p->getParameterID() == juce::String(d.name));
+    REQUIRE(p->isAutomatable() == (d.id == ParamId::Mix));
+  }
+  REQUIRE(proc.Param(ParamId::WetTrimDb).getParameterID() == "wet_trim_db");
+  REQUIRE(proc.Param(ParamId::TransposeSt).getParameterID() == "layer0.pitch.transpose_st");
+  REQUIRE(proc.Freeze().isAutomatable());
+  REQUIRE(proc.Freeze().getParameterID() == FindParam(ParamId::PerfFreeze)->name);
+  for (const auto* p : params) {
+    const auto* w = dynamic_cast<const juce::AudioProcessorParameterWithID*>(p);
+    REQUIRE(w != nullptr);
+    INFO(w->getParameterID());
+    for (const ParamDescriptor& d : kParamTable) {
+      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Macro) {
+        REQUIRE(w->getParameterID() != juce::String(d.name));
+      }
+    }
+  }
 }
 
 TEST_CASE("edits after prepare reach the engine as exact bits at the next block") {
@@ -558,7 +593,7 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   }
 
   // Every value typed as text lands on exactly that binary32, in every parameter's units.
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     if (FindParamDisplay(d.id)->steps >= 2) continue;
     INFO(d.name);
     juce::Slider              knob;
@@ -586,7 +621,7 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
 TEST_CASE("session state round-trips bit for bit") {
   BrainscapeProcessor a;
   uint32_t            seed = 42u;
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     const auto values = SampleValues(d.id, seed += 977u, 1);
     a.Param(d.id).SetPlainNotifyingHost(values.back());
   }
@@ -604,7 +639,7 @@ TEST_CASE("session state round-trips bit for bit") {
   BrainscapeProcessor b;
   b.Freeze().setValueNotifyingHost(1.0f);
   b.setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
-  for (const ParamDescriptor& d : kParamTable) {
+  for (const ParamDescriptor& d : LeafRows()) {
     INFO(d.name);
     REQUIRE(Bits(b.Param(d.id).Plain()) == Bits(a.Param(d.id).Plain()));
   }
@@ -637,13 +672,53 @@ TEST_CASE("session state round-trips bit for bit") {
     const uint32_t odd[2] = {999u, Bits(1.0f)};
     std::memcpy(bytes.data() + 12 + 8, odd, sizeof odd);  // ...the second one unknown
     std::vector<uint8_t> cut(bytes.begin(), bytes.begin() + 12 + 16);
-    cut.insert(cut.end(), bytes.begin() + 12 + 8 * static_cast<long>(kNumParams), bytes.end());
+    cut.insert(cut.end(), bytes.begin() + 12 + 8 * static_cast<long>(kNumLeafParams), bytes.end());
     WrapperState partial{};
     REQUIRE(DecodeState(cut.data(), cut.size(), partial));
     REQUIRE(partial.unknownIds == 1u);
-    REQUIRE(partial.missingIds == kNumParams - 1u);
+    REQUIRE(partial.missingIds == kNumLeafParams - 1u);
     REQUIRE(Bits(partial.plain[0]) == Bits(st.plain[0]));
-    REQUIRE(partial.plain[1] == kParamTable[1].def);
+    REQUIRE(partial.plain[1] == FindParam(LeafId(1))->def);
+  }
+  // Sessions saved before the ID table hold IDs 1-28, every one still a Leaf row in this
+  // build, in the same order: the bytes this build writes, and they decode unchanged. Rows
+  // of other kinds in a session (a macro, the effect volume, a Reserved row) are unknown.
+  SECTION("v1 sessions from before the ID table decode unchanged; other kinds are unknown") {
+    WrapperState st{};
+    REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
+    std::vector<uint8_t> v1 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 28, 0, 0, 0};
+    const auto put = [&v1](uint32_t u) {
+      for (int k = 0; k < 4; ++k) v1.push_back(static_cast<uint8_t>(u >> (8 * k)));
+    };
+    for (uint32_t id = 1; id <= 28; ++id) {
+      put(id);
+      put(Bits(st.plain[id - 1u]));
+    }
+    std::vector<uint8_t> now;
+    EncodeState(st, now);
+    REQUIRE(std::equal(v1.begin(), v1.end(), now.begin()));
+    v1.insert(v1.end(), now.begin() + static_cast<long>(v1.size()), now.end());
+    WrapperState old{};
+    REQUIRE(DecodeState(v1.data(), v1.size(), old));
+    REQUIRE(old.unknownIds + old.missingIds == 0u);
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(old.plain[i]) == Bits(st.plain[i]));
+
+    std::vector<uint8_t> extra(v1.begin(), v1.begin() + 12 + 8 * 28);
+    extra[8] = 31;  // three more leaves, of other kinds
+    const auto add = [&extra](uint32_t id, float v) {
+      for (const uint32_t u : {id, Bits(v)}) {
+        for (int k = 0; k < 4; ++k) extra.push_back(static_cast<uint8_t>(u >> (8 * k)));
+      }
+    };
+    add(static_cast<uint32_t>(ParamId::VoiceCount), 8.0f);       // Reserved
+    add(static_cast<uint32_t>(ParamId::MacroTime), 0.25f);       // Macro
+    add(static_cast<uint32_t>(ParamId::EffectVolumeDb), -6.0f);  // Global
+    extra.insert(extra.end(), v1.begin() + 12 + 8 * 28, v1.end());
+    WrapperState mixed{};
+    REQUIRE(DecodeState(extra.data(), extra.size(), mixed));
+    REQUIRE(mixed.unknownIds == 3u);
+    REQUIRE(mixed.missingIds == 0u);
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(mixed.plain[i]) == Bits(st.plain[i]));
   }
 }
 
@@ -1325,8 +1400,8 @@ TEST_CASE("reset() is Engine::Reset: the ring and the counter run on") {
 TEST_CASE("the offline audition renders the input from the exact-restart state") {
   const Preset preset = Busy();
   const Preset all    = Complete(preset);
-  float        values[kNumParams];
-  for (size_t i = 0; i < kNumParams; ++i) values[i] = all[i].second;
+  float        values[kNumLeafParams];
+  for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = all[i].second;
 
   SECTION("the test signal, in both input modes") {
     for (const InputMode mode : {InputMode::Stereo, InputMode::Mono}) {
@@ -1410,7 +1485,7 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
       INFO("segment " << k);
       REQUIRE(recipe["outputSegmentSha256"][static_cast<int>(k)].toString().toStdString() == segments[k]);
     }
-    REQUIRE(recipe["preset"].size() == static_cast<int>(kNumParams));
+    REQUIRE(recipe["preset"].size() == static_cast<int>(kNumLeafParams));
     REQUIRE(recipe["preset"][1]["bits"].toString() == juce::String::toHexString(static_cast<juce::int64>(Bits(values[1]))).paddedLeft('0', 8));
     REQUIRE(static_cast<int>(recipe["soundRevision"]) == static_cast<int>(kSoundRevision));
     reader.reset();

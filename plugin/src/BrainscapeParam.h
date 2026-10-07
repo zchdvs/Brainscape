@@ -8,10 +8,10 @@
 
 namespace brainscape::plugin {
 
-// One host parameter per descriptor row (companion §5.3). The exact binary32 plain value
-// is the source of truth; the normalised value JUCE and the host see is only a view
-// computed by dsp/'s taper. The atomic is a mirror for host and GUI: the engine receives
-// values only as events through the wrapper queue (companion §4.7).
+// One host parameter per Leaf row (companion §5.3, mode-compiler.md §4.1). The exact
+// binary32 plain value is the source of truth; the normalised value JUCE and the host see
+// is only a view computed by dsp/'s taper. The atomic is a mirror for host and GUI: the
+// engine receives values only as events through the wrapper queue (companion §4.7).
 class BrainscapeParam final : public juce::RangedAudioParameter {
  public:
   BrainscapeParam(ParamId id, EventSink& sink);
@@ -50,7 +50,8 @@ class BrainscapeParam final : public juce::RangedAudioParameter {
 };
 
 // The performance freeze toggle (companion §5.7): host-automatable, shared by GUI, MIDI
-// and DAW, never stored engaged. The ID is provisional until the §5.7 reconciliation.
+// and DAW, never stored engaged. Row 77 of the ID table, perf.freeze, a Performance row
+// (mode-compiler.md §4.2): the Freeze event's host face, never a SetParam.
 class FreezeParam final : public juce::AudioParameterBool {
  public:
   explicit FreezeParam(EventSink& sink);

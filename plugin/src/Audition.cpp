@@ -62,10 +62,10 @@ class InterleavedStream final : public juce::InputStream {
 
 juce::var PresetJson(const std::vector<float>& preset) {
   juce::Array<juce::var> leaves;
-  for (size_t i = 0; i < kNumParams; ++i) {
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
     juce::DynamicObject::Ptr leaf = new juce::DynamicObject();
-    leaf->setProperty("id", static_cast<int>(kParamTable[i].id));
-    leaf->setProperty("name", juce::String(kParamTable[i].name));
+    leaf->setProperty("id", static_cast<int>(LeafId(i)));
+    leaf->setProperty("name", juce::String(FindParam(LeafId(i))->name));
     leaf->setProperty("value", static_cast<double>(preset[i]));
     const auto bits = static_cast<juce::int64>(Bits(preset[i]));
     leaf->setProperty("bits", juce::String::toHexString(bits).paddedLeft('0', 8));
@@ -146,10 +146,10 @@ bool RenderAudition(const float* preset, InputMode mode, AuditionInput& input,
   auto             engine = std::make_unique<Engine>();
   if (!arenas.ok() || !engine->Init(cfg, arenas.get())) return false;
   auto state = std::make_unique<PresetState>();
-  for (size_t i = 0; i < kNumParams; ++i) {
-    state->leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), preset[i]};
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    state->leaves[i] = {static_cast<uint32_t>(LeafId(i)), preset[i]};
   }
-  state->leafCount = static_cast<uint32_t>(kNumParams);
+  state->leafCount = static_cast<uint32_t>(kNumLeafParams);
   engine->LoadPreset(*state, LoadMode::Exact);
 
   const size_t frames = input.l.size();
@@ -199,7 +199,7 @@ bool AuditionJob::Start(const juce::File& wav, const float* preset, InputMode mo
     result_.message = "Rendering " + wav.getFileName() + "...";
   }
   if (thread_.joinable()) thread_.join();  // the previous render has finished
-  thread_ = std::thread(&AuditionJob::Run, this, wav, std::vector<float>(preset, preset + kNumParams),
+  thread_ = std::thread(&AuditionJob::Run, this, wav, std::vector<float>(preset, preset + kNumLeafParams),
                         mode, std::move(input));
   return true;
 }

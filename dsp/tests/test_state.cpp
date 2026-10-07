@@ -111,16 +111,23 @@ struct Rig {
   }
 };
 
-// A complete preset (companion §6.1): every leaf, `params` over the defaults.
+// A complete preset (companion §6.1): every Leaf row by ordinal, `params` over the
+// defaults.
 PresetState Complete(const Params& params) {
   PresetState s;
-  for (size_t i = 0; i < kNumParams; ++i) {
-    s.leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    s.leaves[i] = {static_cast<uint32_t>(LeafId(i)), FindParam(LeafId(i))->def};
   }
-  s.leafCount = static_cast<uint32_t>(kNumParams);
-  for (const auto& p : params) s.leaves[static_cast<uint32_t>(p.first) - 1u].value = p.second;
+  s.leafCount = static_cast<uint32_t>(kNumLeafParams);
+  for (const auto& p : params) {
+    REQUIRE(IsLeaf(p.first));
+    s.leaves[LeafIndex(p.first)].value = p.second;
+  }
   return s;
 }
+
+// The stored leaf of `id` in a preset made by Complete.
+PresetLeaf& LeafOf(PresetState& s, ParamId id) { return s.leaves[LeafIndex(id)]; }
 
 // The start state the golden harness used before LoadPreset: Init, then every value
 // set, then Reset drains them and snaps the smoothers.
@@ -667,7 +674,7 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
     for (const LoadMode mode : {LoadMode::Exact, LoadMode::Spillover}) {
       rig.engine.SetParam(ParamId::DelayMs, 1000.0f);
       PresetState p = Complete({});
-      p.leaves[0]   = p.leaves[--p.leafCount];  // drop DelayMs; leaves now unsorted
+      LeafOf(p, ParamId::DelayMs) = p.leaves[--p.leafCount];  // drop DelayMs; now unsorted
       LoadReport report;
       REQUIRE_FALSE(rig.engine.LoadPreset(p, mode, &report));
       REQUIRE(report.applied);
@@ -683,10 +690,10 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
     std::memcpy(&nan, &bits[0], sizeof nan);
     std::memcpy(&subnormal, &bits[1], sizeof subnormal);
     std::memcpy(&negZero, &bits[2], sizeof negZero);
-    p.leaves[static_cast<uint32_t>(ParamId::Mix) - 1u].value      = nan;
-    p.leaves[static_cast<uint32_t>(ParamId::SprayMs) - 1u].value  = subnormal;
-    p.leaves[static_cast<uint32_t>(ParamId::Feedback) - 1u].value = negZero;
-    p.leaves[static_cast<uint32_t>(ParamId::DelayMs) - 1u].value  = 9000.0f;
+    LeafOf(p, ParamId::Mix).value      = nan;
+    LeafOf(p, ParamId::SprayMs).value  = subnormal;
+    LeafOf(p, ParamId::Feedback).value = negZero;
+    LeafOf(p, ParamId::DelayMs).value  = 9000.0f;
     p.leaves[p.leafCount++] = {999u, 1.0f};
     p.leaves[p.leafCount++] = {0u, 1.0f};
     p.leaves[p.leafCount++] = {static_cast<uint32_t>(ParamId::TransposeSt), 12.0f};  // a repeat
@@ -716,12 +723,12 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
   SECTION("leaves past kMaxLeaves cannot be read") {
     PresetState p = Complete({});
     p.leafCount   = PresetState::kMaxLeaves + 5u;
-    for (uint32_t i = static_cast<uint32_t>(kNumParams); i < PresetState::kMaxLeaves; ++i) {
+    for (uint32_t i = static_cast<uint32_t>(kNumLeafParams); i < PresetState::kMaxLeaves; ++i) {
       p.leaves[i] = {1000u + i, 0.0f};
     }
     LoadReport report;
     REQUIRE_FALSE(CheckPreset(p, &report));
-    REQUIRE(report.unknownIds == PresetState::kMaxLeaves - kNumParams + 5u);
+    REQUIRE(report.unknownIds == PresetState::kMaxLeaves - kNumLeafParams + 5u);
   }
   SECTION("an engine that is not initialized applies nothing") {
     Engine     idle;

@@ -86,11 +86,18 @@ inline Preset Busy() {
           {ParamId::TriggerSens, 0.6f},   {ParamId::OnsetTrigger, 1.0f}};
 }
 
-// Every leaf, defaults included: what a complete-state load applies.
+// The rows the plugin registers: every Leaf row, ascending by id (mode-compiler.md §4.1).
+inline std::vector<ParamDescriptor> LeafRows() {
+  std::vector<ParamDescriptor> rows;
+  for (size_t i = 0; i < kNumLeafParams; ++i) rows.push_back(*FindParam(LeafId(i)));
+  return rows;
+}
+
+// Every leaf by ordinal, defaults included: what a complete-state load applies.
 inline Preset Complete(const Preset& p) {
   Preset all;
-  for (const ParamDescriptor& d : kParamTable) all.push_back({d.id, d.def});
-  for (const auto& v : p) all[static_cast<size_t>(v.first) - 1u].second = v.second;
+  for (const ParamDescriptor& d : LeafRows()) all.push_back({d.id, d.def});
+  for (const auto& v : p) all[LeafIndex(v.first)].second = v.second;
   return all;
 }
 

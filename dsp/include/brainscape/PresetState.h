@@ -22,7 +22,7 @@ struct PresetLeaf {
 // engine counterpart yet. Freeze is performance state that is never stored: every load
 // turns it off.
 struct PresetState {
-  // Today's 28 leaves, with room for the design's full leaf list.
+  // The Leaf rows (Params.h kLeafParams), with room for the design's full leaf list.
   static constexpr uint32_t kMaxLeaves = 128;
 
   uint32_t   leafCount = 0;
@@ -41,8 +41,10 @@ enum class LoadMode : uint8_t { Exact = 0, Spillover = 1 };
 struct LoadReport {
   bool     applied       = false;  // false when the engine was not initialized
   bool     exact         = false;  // every count below is 0
-  uint32_t unknownIds    = 0;      // leaves naming an id this build lacks, or past kMaxLeaves
-  uint32_t missingIds    = 0;      // this build's ids without a leaf: they load their default
+  uint32_t unknownIds    = 0;      // leaves naming an id that is not a Leaf row of this build
+                                   // (mode-compiler.md §4.1), or past kMaxLeaves
+  uint32_t missingIds    = 0;      // this build's Leaf rows without a leaf: they load their
+                                   // default
   uint32_t duplicateIds  = 0;      // repeated ids: the first leaf counts
   uint32_t changedValues = 0;      // values canonicalization changed (NaN, ±inf, -0,
                                    // subnormals, out of range): packages hold canonical values
