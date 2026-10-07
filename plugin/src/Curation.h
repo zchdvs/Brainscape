@@ -169,6 +169,7 @@ class CurationSession {
   SaveResult WriteTo(const juce::File& json, bool withPackage);
   void ApplyLeaves(const bsc::Document& d);
   void StartLevelMatch();
+  void ResetMatch();
   void ApplyMonitorTrim();
   void JoinWorkers();
 
@@ -197,6 +198,8 @@ class CurationSession {
   LevelMatch                         applied_;  // what ApplyMonitorTrim last applied
   mutable std::mutex                 mutex_;  // guards match_, render_ and the workers' results
   LevelMatch                         match_;
+  uint64_t                           matchGen_ = 0;  // a measurement's result counts only if
+                                                     // nothing reset match_ since it started
   RenderStatus                       render_;
   std::vector<std::unique_ptr<Worker>> workers_;
 };

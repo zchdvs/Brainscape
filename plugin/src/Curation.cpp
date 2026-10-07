@@ -165,11 +165,14 @@ void CurationSession::Close() {
   findings_.clear();
   seenBits_.clear();
   dirty_ = false;
-  {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    match_ = LevelMatch{};
-  }
+  ResetMatch();
   ApplyMonitorTrim();
+}
+
+void CurationSession::ResetMatch() {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  match_ = LevelMatch{};
+  ++matchGen_;
 }
 
 bool CurationSession::LoadText(const std::string& text, const juce::File& source, bool fromPackage,
@@ -212,10 +215,7 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
   side_          = Side::Working;
   workingSnapshot_.reset();
   seenBits_.clear();
-  {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    match_ = LevelMatch{};
-  }
+  ResetMatch();
   matchStale_ = matchLevel_;
   message_    = "Opened " + source.getFileName() +
              (report.exact ? juce::String() : juce::String(": the load is not exact (leaves this build lacks)"));
@@ -526,10 +526,7 @@ CurationSession::SaveResult CurationSession::WriteTo(const juce::File& json, boo
   storedState_   = std::move(p.state);
   detached_      = stored_->detached;
   seenBits_.clear();
-  {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    match_ = LevelMatch{};
-  }
+  ResetMatch();
   matchStale_ = matchLevel_;
   Refresh();
   Relint();
@@ -567,10 +564,7 @@ bool CurationSession::SetSide(Side side) {
 void CurationSession::SetMatchLevel(bool on) {
   matchLevel_ = on;
   matchStale_ = on;
-  if (!on) {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    if (match_.state != LevelMatch::State::Measuring) match_ = LevelMatch{};
-  }
+  if (!on) ResetMatch();
   lastChangeMs_ = NowMs() - kMatchSettleMs;  // measure at once
   ApplyMonitorTrim();
 }
@@ -610,13 +604,15 @@ void CurationSession::StartLevelMatch() {
       side_ == Side::Working ? std::shared_ptr<const PresetState>(processor_.CurrentPreset())
                              : std::make_shared<PresetState>(*workingSnapshot_);
   const bsa::Vector vector = bsa::ClassVector(inputClass_);
+  uint64_t          gen    = 0;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     match_.state = LevelMatch::State::Measuring;
+    gen          = ++matchGen_;
   }
   auto worker    = std::make_unique<Worker>();
   Worker* w      = worker.get();
-  worker->thread = std::thread([this, w, stored, working, vector] {
+  worker->thread = std::thread([this, w, stored, working, vector, gen] {
     LevelMatch      m;
     bsa::Renderer   renderer;
     const bsa::Input in = bsa::VectorInput(vector);
@@ -643,7 +639,7 @@ void CurationSession::StartLevelMatch() {
     }
     {
       const std::lock_guard<std::mutex> lock(mutex_);
-      match_ = m;
+      if (gen == matchGen_) match_ = m;  // else a load, a save or the switch voided it
     }
     w->done.store(true, std::memory_order_release);
   });
