@@ -37,7 +37,7 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built and verified off-hardware ([firmware/README.md](../firmware/README.md)): silicon parity check, DWT measurement pass, live audio, on pinned libDaisy v9.0.0; awaiting the owner's bench session |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built and verified off-hardware ([firmware/README.md](../firmware/README.md)): silicon parity check, DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset; awaiting the owner's bench session |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -312,7 +312,7 @@ records live in [docs/design/reviews/](design/reviews/).
 - **Parity is proven on emulation, not yet on silicon.** The owner prototypes on a Daisy Seed Rev7
   (STM32H750, PCM3060), with a custom H750 board later; the Rev7 parity, DWT bench and live-audio
   images are built, fit their memory and pass every off-hardware check (the parity stream's code
-  matches the golden file under `qemu-arm -cpu cortex-m7`), and wait for the bench
+  matches the golden file under `qemu-arm -cpu cortex-m7` in the parity image's own memory placement), and wait for the bench
   ([firmware/README.md](../firmware/README.md)). They use libDaisy's ST USB code and must not be
   distributed. The first GitHub runs (2026-10-06) rendered the golden corpus bit-identically
   on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on

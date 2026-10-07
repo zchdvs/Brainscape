@@ -9,32 +9,48 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 | Image | `.bin` | What it does | Host tool |
 | --- | --- | --- | --- |
 | **A, parity** | `brainscape_parity.bin` | Renders the golden corpus on the Seed exactly as the golden harness does and streams every hash | [`tools/hil/parity_check.py`](../tools/hil/parity_check.py) |
-| **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block, per stage, per birth, `Restart`, subnormal latency, the flush idiom, silent tails | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
-| B, code-placement A/B | `brainscape_bench_xip.bin` | Image B with the engine's code executing in place from QSPI instead of ITCM (profile §7.1) | `bench_report.py` |
+| **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block (with and without a stream of events), per stage, an upper bound per birth, `Restart` against the SDRAM's own floor, subnormal latency, the flush idiom, silent tails | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
+| B, code-placement A/B | `brainscape_bench_xip.bin` | Image B with the engine's code (and the firmware's `memcpy`/`memmove`/`memset`) executing in place from QSPI instead of ITCM (profile §7.1) | `bench_report.py` |
 | B, flush A/B | `brainscape_bench_hooks.bin` | Image B on the engine built with the FP guard's test hooks: the FZ = 0/1 silent-tail test and flag census of profile §4.2 | `bench_report.py` |
 | **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets and parameters over USB | [`tools/hil/console.py`](../tools/hil/console.py) |
 
 Every image links the engine archive `libbrainscape_dsp.a` exactly as CI's `parity-m7` job builds,
 audits and renders it under QEMU (same toolchain, flags and deterministic archive: SHA-256
-`4f4ddaa3583e46f2…` at sound revision 1), and reports that hash in its hello line.
+`4f4ddaa3583e46f2…` at sound revision 1; `firmware.yml` checks the two are byte-identical), reports
+that hash in its hello line, and the firmware build writes it to
+`build/fw/firmware/engine-archives.sha256` for the host tools' `--expect-archive`.
 
 ## 1. What to flash, in order
 
 Everything goes through Electrosmith's web programmer, **<https://flash.daisy.audio>** (WebUSB:
 Chrome or Edge; Firefox and Safari have no WebUSB). No `dfu-util` is needed.
 
-**App type: `BOOT_QSPI`.** Every image is 192–200 KiB, past the 128 KiB internal flash, so the images
+**App type: `BOOT_QSPI`.** Every image is 210–220 KiB, past the 128 KiB internal flash, so the images
 run from the 8 MB QSPI flash and are loaded by the **Daisy bootloader**, which lives in the internal
-flash. `grain-engine.md` §7 plans the pedal this way. The engine's code and constants (and the
-64-bit division helpers it calls) are copied into the 64 KiB ITCM at boot, as profile §7.1 asks for
-the inner loops; everything else executes in place from QSPI behind the 16 KiB I-cache.
+flash. `grain-engine.md` §7 plans the pedal this way. The engine's code and constants, the 64-bit
+division helpers it calls and the firmware's `memcpy`/`memmove`/`memset` are copied into the 64 KiB
+ITCM at boot, as profile §7.1 asks for the inner loops; everything else executes in place from QSPI
+behind the 16 KiB I-cache.
+
+**Two DFU devices.** In DFU mode the Seed shows up as one of two USB devices with the same ID
+(`0483:DF11`), and the web page's device picker tells them apart by name:
+
+| Device name | What it is | How you get there | Writes to |
+| --- | --- | --- | --- |
+| **DFU in FS Mode** | the STM32's built-in ROM bootloader | **hold BOOT, press and release RESET, release BOOT** (LED dark) | internal flash, `0x08000000`: where the Daisy bootloader lives |
+| **Daisy Bootloader** | the Daisy bootloader v6.4 you install once | **press RESET, then press BOOT while the LED breathes** | QSPI flash: the image at `0x90040000` |
+
+Pick "DFU in FS Mode" only to install the bootloader, and "Daisy Bootloader" for every image. An
+image uploaded to "DFU in FS Mode" overwrites the Daisy bootloader (and does not fit the 128 KiB):
+after that nothing boots and the LED never breathes. **Recovery:** do the "Once" steps below again;
+the images already in QSPI are untouched.
 
 ### Once: install the Daisy bootloader v6.4
 
 1. Connect the Seed's micro-USB port to the computer with a **data** cable.
-2. Put the STM32 into its built-in DFU mode: **hold BOOT, press and release RESET, release BOOT**.
+2. Put the STM32 into its ROM DFU mode: **hold BOOT, press and release RESET, release BOOT**.
    The user LED stays dark.
-3. On flash.daisy.audio click **Connect** and pick the DFU device ("DFU in FS Mode").
+3. On flash.daisy.audio click **Connect** and pick **"DFU in FS Mode"**.
 4. Open the **Bootloader** tab and set **Bootloader version** to **v6.4**: the plain one, with
    **DFU USB Port: Built-in** and **Timeout: 2000ms**. The page's default is v5.4: do not use it.
    Under a bootloader older than v6.0, libDaisy's `DaisySeed::Init` skips its own clock, LED and
@@ -50,18 +66,23 @@ without the web page.
 
 ### Each image
 
-1. Put the Seed in the bootloader's DFU mode: press **RESET**, then press **BOOT while the LED is
-   breathing** (a few rapid blinks acknowledge: the bootloader now waits indefinitely). If one of
-   these images is already running you can skip the buttons: send it `dfu`
+1. Put the Seed in the Daisy bootloader's DFU mode: press **RESET**, then press **BOOT while the LED
+   is breathing** (a few rapid blinks acknowledge: the bootloader now waits indefinitely). Do not
+   hold BOOT while pressing RESET: that is the ROM's gesture. If one of these images is already
+   running you can skip the buttons: send it `dfu`
    (`python tools/hil/console.py --port auto dfu`) and it reboots into the waiting bootloader.
-2. On flash.daisy.audio click **Connect** and pick the DFU device again.
-3. Open the **File Upload** tab, **Choose or drag a file**: the image's `.bin`, then **Flash**. The
-   programmer writes bootloader apps to QSPI at `0x90040000` by itself (it sees the bootloader's
-   QSPI memory map); there is no address to type.
-4. The bootloader checks the image and starts it. A running image blinks the LED **once a second**
-   (idle), fast while it renders or measures, steadily when a parity run has finished, and three
-   quick flashes with a pause on a fatal error. (A single **SOS** comes from the bootloader: it
-   refused the image, usually a `BOOT_NONE` binary.)
+2. On flash.daisy.audio click **Connect** and pick **"Daisy Bootloader"** (never "DFU in FS Mode").
+3. Open the **File Upload** tab, **Choose or drag a file**: the image's `.bin`, then **Flash**.
+   There is no address to type: with the Daisy bootloader connected, the page starts the write at
+   `0x90040000`. Its source (`dfu-util.js` in electro-smith/Programmer, read while writing this)
+   moves the start of the first writable segment of the bootloader's memory map,
+   `@Flash /0x90000000/64*4Kg/0x90040000/…`, from `0x90000000` to `0x90040000`; the page shows that
+   memory map but not the start address. The command-line equivalent, address explicit (libDaisy's
+   own `make program-dfu`): `dfu-util -a 0 -s 0x90040000:leave -D brainscape_parity.bin`.
+4. The bootloader checks the image and starts it. **After the first image, confirm where it
+   landed:** `python tools/hil/console.py --port auto info` must show boot region **"QSPI
+   flash"** and bootloader **"Daisy bootloader >= v6.1"** (an image written elsewhere does not
+   start at all).
 
 Flash order for the bench session: `brainscape_parity.bin` → run the parity check →
 `brainscape_bench.bin` → `brainscape_bench_xip.bin` → `brainscape_bench_hooks.bin` (each with
@@ -70,6 +91,26 @@ Flash order for the bench session: `brainscape_parity.bin` → run the parity ch
 **Troubleshooting.** Windows: if Connect lists nothing in DFU mode, the STM32 DFU device has no
 WinUSB driver bound; Electrosmith's documentation covers binding one (Zadig). Linux: WebUSB needs
 a udev rule granting access to `0483:df11`. A charge-only cable shows no device at all.
+
+### What the LED says
+
+| Pattern | Meaning |
+| --- | --- |
+| Breathes for about 2 s after a reset | The Daisy bootloader's grace period (press BOOT now to stay in it) |
+| **SOS** | The Daisy bootloader refused the image (usually a `BOOT_NONE` binary) |
+| A short blink once a second | An image is idle, waiting for a command |
+| Fast blink (5 Hz) | Rendering or measuring |
+| On | A parity run finished |
+| A flash on each detected onset | The live image is running |
+| **Three quick flashes, a pause**, forever | `Fatal()` in the main loop: the image sent `{"type":"error"}` and still answers on USB |
+| **Two long flashes, a pause**, for about 10 s, then a reset | A **hardware fault** (HardFault, MemManage, BusFault, UsageFault, NMI or an unhandled interrupt) or `Fatal()` inside an interrupt handler: the fault record is saved and the next boot's hello line reports it as `lastFault` |
+| Frozen | A hang, or a fault inside libDaisy's `DaisySeed::Init` (its own handlers are in force there): reset, then `info` |
+
+After a two-long-flash reset the USB port disappears and comes back; the host tools stop with "the
+serial port went away". Reconnect and run `python tools/hil/console.py --port auto info`: the
+`lastFault` line gives the kind, the image, the time since boot, the faulting `pc` and `lr`, and the
+fault status registers (`CFSR`, `HFSR`, `MMFAR`, `BFAR`), once; a hello with `"lastFault":null`
+means the previous run ended without a fault.
 
 ## 2. Finding the serial port
 
@@ -89,15 +130,15 @@ does not matter.
 ## 3. Image A: the silicon parity check
 
 ```text
-python tools/hil/parity_check.py --port auto --save parity-rev7.log
+python tools/hil/parity_check.py --port auto --save parity-rev7.log --expect-archive build/fw/firmware/engine-archives.sha256
 ```
 
-The tool asks the device for its hello line (board, clock, FP registers, archive hash), sends
-`run`, and prints each preset as it arrives. The device renders all 13 vectors and 28 presets
-(639 s of audio) offline in its main loop, never in the audio callback: one engine in the pedal's
-memory placement (Hot arena and Engine object in DTCM, Warm in AXI SRAM, Bulk in SDRAM), restarted
-with `LoadPreset(…, Exact)` for every render, 48-frame blocks, the integer test signal as input,
-events through the engine's `EventQueue` — the golden harness's own code
+The tool asks the device for its hello line (board, clock, FP registers, caches, archive hash,
+last fault), sends `run`, and prints each preset as it arrives. The device renders all 13 vectors
+and 28 presets (639 s of audio) offline in its main loop, never in the audio callback: one engine in
+the pedal's memory placement (Hot arena and Engine object in DTCM, Warm in AXI SRAM, Bulk in SDRAM),
+restarted with `LoadPreset(…, Exact)` for every render, 48-frame blocks, the integer test signal as
+input, events through the engine's `EventQueue` — the golden harness's own code
 ([`dsp/tests/golden/ParityStream.h`](../dsp/tests/golden/ParityStream.h)), not a copy. It takes
 roughly 4–8 minutes (the profile estimates 1.3–3.1× realtime); the stream carries DWT cycles per
 preset, so the tool prints the measured realtime factor too. It ends with
@@ -106,8 +147,16 @@ preset, so the tool prints the measured realtime factor too. It ends with
 VERDICT: PASS - 28 preset(s) match golden.json bit for bit (sound revision 1, whole corpus)
 ```
 
-or `FAIL` with the first differing second of every preset that differs. Then repeat in the other
-two configurations worth having on silicon:
+or `FAIL` with the first differing second of every preset that differs (exit 1). The tool checks
+the stream as strictly as the hashes: every line is numbered (format
+`brainscape-parity-stream/2`), and a gap, a line that is not a JSON object or lacks a key, a
+preset or vector count that disagrees with `parity-end`, a `resync` notice from the device's USB
+serial, or a missing or nonzero `droppedBytes` on the device's final `idle` line gives
+`VERDICT: FAIL (TRANSPORT)` (exit 2): the stream was damaged on the way, which says nothing about
+parity; run it again. It also fails a run whose header is not the configuration the command asked
+for, and, with `--expect-archive`, a device whose engine archive is not the one the build hashed.
+
+Then repeat in the other two configurations worth having on silicon:
 
 ```text
 python tools/hil/parity_check.py --port auto --run "run pedal"   --save parity-rev7-pedal.log
@@ -118,7 +167,7 @@ python tools/hil/parity_check.py --port auto --run "run hostile" --save parity-r
 `hostile` sets FZ|DN and round-toward-zero in the caller's FPSCR around every engine call, which
 the guard must neutralize (profile §6.4), and checks the guard hands the word back. `quick` skips
 the three long vectors, `only=VECTOR[/PRESET],…` selects. A saved log can be checked again any
-time: `parity_check.py --log parity-rev7.log`.
+time: `parity_check.py --log parity-rev7.log --run "run"`.
 
 ## 4. Image B: the DWT measurement pass
 
@@ -127,33 +176,66 @@ python tools/hil/bench_report.py --port auto --save bench.log --markdown bench.m
 ```
 
 `run` takes about 10–15 minutes (`--run "run quick"` skips the two-minute silent tails). Every
-number is DWT cycles of the 480 MHz core with **interrupts off around the measured call**; the
-budget is 10,000 cycles per sample, 480,000 per 48-frame block. The suites (each also a command):
+number is DWT cycles of the 480 MHz core with **interrupts off around the measured call** (and, for
+cold-cache blocks, around the cache maintenance before it); the budget is 10,000 cycles per sample,
+480,000 per 48-frame block. Every `bench-begin` line records the state the numbers were taken
+under: `SCB->CCR` (I- and D-cache), every MPU region (libDaisy's SDRAM region: write-back, no write
+allocate), the QSPI controller's `CR`/`DCR`/`CCR` (prescaler and mode, which decide the XIP figures)
+and where `memset` runs. The suites (each also a command):
 
 | Suite | What | Decides |
 | --- | --- | --- |
 | `memory` | `PlanMemory` against the arenas, and the linker map | — |
-| `micro` | Dependent `vmul`/`vadd`/`vdiv`/`vsqrt` chains with normal and subnormal operands and results, at FZ = 0 and 1; the engine's flush idiom (`FlushTiny`) against no flush and the two-compare form | profile §4.2 test a, §8.3 Q1, Q5 |
-| `restart` | `Restart` after rendering (the 16 MiB ring, post delay and reverb clear), on a clean engine, `LoadPreset(Exact)`, `Reset`, `ClearHistory`, `Init` | §8.3 Q9: the pedal's default load mode |
-| `blocks` | Cycles per block, mean/p50/p90/p99/p99.9/max, **warm and cold caches** (cold: D-cache cleaned and invalidated and I-cache invalidated before every block), for engine defaults, the design's nominal row, the pessimistic configuration (64 voices at +24 st with full cents spread, reverse, spray, jitter, feedback 1.05, every post stage, onset grains at marks) with 20 ms and 1 ms grains, and four corpus presets | grain-engine.md §8, profile §7.2 |
-| `stages` | The pessimistic configuration with one stage switched off at a time: each stage's cost by difference (the engine has no per-stage counters, and none were added: that would be instrumentation in `dsp/`) | §8.3 Q2 |
-| `births` | 48 and 16 voices with 1 ms vs 20 ms grains: equal voices rendered per block, 48 vs 2.4 births per block, so the difference is the birth cost at the maximum birth rate (one per sample) | §8.3 Q2 |
-| `tail` | 123 s of the golden tail vector (`strums_tail_123s/tail_post_fb`) and 2 s of noise then 120 s of silence through the pessimistic configuration: worst block, p99, output hash | §4.2 test b |
+| `micro` | Dependent `vmul`/`vadd`/`vsub`/`vdiv`/`vsqrt` chains with normal and subnormal operands and results at FZ = 0, including a `vadd`/`vsub` pair whose addend is a nonzero subnormal (the `+0` case may take a zero-operand shortcut); the same programs at FZ = 1, which flushes the operands to zero (so that column times zero arithmetic, not subnormals under FZ); the engine's flush idiom (`FlushTiny`) against no flush and the two-compare form, on 8 independent one-poles (instruction-level parallelism hides the flush: a lower bound) and on 1 recursive one-pole (the flush on the critical path every sample: an upper bound) | profile §4.2 test a, §8.3 Q1, Q5 |
+| `restart` | `Restart` after rendering (the 16 MiB ring, post delay and reverb clear) and on a clean engine, `LoadPreset(Exact)`, `Reset`, `ClearHistory`, `Init`, and a raw 16 MiB SDRAM clear through the firmware's `memset` and through an 8-register `STM` loop (the core's floor without DMA) | §8.3 Q9, the `Restart` half: the watermark (§5.8) does not exist yet |
+| `blocks` | Cycles per block, mean/p50/p90/p99/p99.9/max, **warm and cold caches** (cold: D-cache cleaned and invalidated and I-cache invalidated before every block, interrupts off), for engine defaults, the design's nominal row, the pessimistic configuration (64 voices at +24 st with full cents spread, reverse, spray, jitter, feedback 1.05, every post stage, onset grains at marks) with 20 ms and 1 ms grains, **`pess_events`** (the pessimistic configuration under parameter sweeps every block — cutoff, pitch, grain size — four footswitch triggers every 250 ms, a freeze toggle every 1.5 s and a Spillover load every second, all through the `EventQueue`), and four corpus presets | grain-engine.md §8, profile §7.2; §7.3's explicit-FMA rule (below) |
+| `stages` | The pessimistic configuration with one stage switched off at a time: each stage's mean cost by difference (the engine has no per-stage counters, and none were added: that would be instrumentation in `dsp/`) | where the cycles go |
+| `births` | 48 and 16 voices with 1 ms vs 20 ms grains: equal voices rendered per block, 48 vs 2.4 births per block. The difference is the birth cost at the maximum rate plus the short grains' ring-read locality, so it bounds `ScheduleGrain` from above | an upper bound for grain-engine §8's `ScheduleGrain` row |
+| `tail` | 123 s of the golden tail vector (`strums_tail_123s/tail_post_fb`) and 2 s of noise then 120 s of silence through the pessimistic configuration: statistics for the active part and for the **silent tail** separately, and the output hash | §4.2 test b |
 
 Then flash the two variants and run the same command, saving `bench_xip.log` and
 `bench_hooks.log`, and compare all three:
 
 ```text
-python tools/hil/bench_report.py --log bench.log --log bench_xip.log --log bench_hooks.log --markdown bench-all.md
+python tools/hil/bench_report.py --log bench.log --log bench_xip.log --log bench_hooks.log --markdown bench-all.md --expect-archive build/fw/firmware/engine-archives.sha256
 ```
 
-`brainscape_bench_hooks` links the engine built with the guard's test hooks, which can force FZ on
-inside the guard and collect each block's FPSCR exception flags. Its `tail` suite renders both
-tails at FZ = 0 and FZ = 1 and counts the blocks raising IDC (input denormal) or UFC (underflow);
-the report then applies profile §4.2's decision rule: keep gradual underflow if the worst block at
-FZ = 0 is within 1.2× of FZ = 1, at most 0.5 % of blocks raise a subnormal flag, and the forced-FZ
-render equals the golden hash (the tool checks the tail's hash against `golden.json`). The
-shipping-archive images report FZ = 0 only.
+The report labels every row with the log it came from, adds an XIP/ITCM ratio table (mean,
+p99.9, max, warm and cold) for profile §7.1, and marks a run **INCOMPLETE** (exit 1) when its
+stream lacks `bench-begin`, `bench-end` or an expected suite line, holds a damaged line, carries a
+`resync` notice or a nonzero drop count, reports another engine archive than `--expect-archive`,
+or ran with a cache off (its budget figures are then withheld).
+
+**`memcpy`, `memmove` and `memset`.** newlib-nano's move one byte per loop iteration; the engine calls
+`memset` in every `Process` and clears 16 MiB of SDRAM with it in `Restart`, so those loops would be
+what the pass measured. The images link the firmware's own word-wise versions
+([`platform/MemFunctions.c`](platform/MemFunctions.c), 32 bytes per iteration, integer registers
+only) and place them with the engine's code: in ITCM in `brainscape_bench`, `_hooks`, `parity` and
+`live`, in QSPI in `brainscape_bench_xip`, so the §7.1 comparison covers them as well. The hello
+line says where they run.
+
+**The denormal decision (profile §4.2).** `brainscape_bench_hooks` links the engine built with the
+guard's test hooks, which can force FZ on inside the guard and collect each block's FPSCR
+exception flags. Its `tail` suite renders both tails at FZ = 0 and FZ = 1, and the report applies
+the decision rule to the **silent tail** only (the active part's onsets and transients would set the
+maximum at both settings and hide the slow blocks): keep gradual underflow if the silent tail's
+worst block at FZ = 0 is within 1.2× of FZ = 1, at most 0.5 % of its blocks raise a subnormal flag
+**in the FZ = 1 render**, and the forced-FZ render equals the golden hash (the golden tail: both
+renders must equal `golden.json`; the noise tail: FZ = 1 must equal FZ = 0). The flag census comes
+from the FZ = 1 render because Armv7-M cannot report subnormals at FZ = 0: IDC is set only when FZ
+flushes an input, and UFC only for a tiny result that is also inexact, so exact subnormal
+arithmetic (a decaying `x * 0.5`) raises nothing. At FZ = 1 every subnormal operand raises IDC and
+every subnormal result UFC; the FZ = 0 count is shown for reference only. The shipping-archive
+images report FZ = 0 only.
+
+**What this pass does not decide.** Profile §8.3 Q2 asks for DWT "with contraction on, off and
+explicit FMA" and for polynomial kernels against Init-built tables. Every build here has contraction
+off (the profile's flags forbid it outside the test-only negative control, which the firmware
+refuses), no explicit-FMA variant exists, and the births suite only bounds the per-birth cost. So
+the report applies §7.3's rule instead: adopt explicit FMA only if contraction-off threatens the
+budget. It prints the worst pessimistic block (warm and cold, `pess_events` included) against the
+480,000-cycle deadline and a verdict; a polyphony above 64 voices would need its own row. Kernels
+against tables, and the watermark half of Q9, stay open.
 
 ## 5. Image C: live audio
 
@@ -206,24 +288,33 @@ pedal's control loop will deliver them (profile §5.11). The engine runs the ped
 ## 6. Hardware checklist
 
 - [ ] `info` (any image): `"rev7": true`, board "Daisy Seed 1.2 / rev7 (PCM3060; PD5 strap)",
-      `sysclkHz` 480000000, boot region "QSPI flash", bootloader ">= v6.1".
+      `sysclkHz` 480000000, boot region "QSPI flash", bootloader "Daisy bootloader >= v6.1",
+      `"lastFault": null`, `cpu.icache` and `cpu.dcache` true, `cpu.memFunctions.in` "ITCM" (all
+      but `bench_xip`).
 - [ ] `fp`: FPSCR `0x00000000` and **FPDSCR `0x00000000`** (written before any constructor runs,
       so every interrupt handler's FP context starts from the profile word).
 - [ ] `audio`: sample rate 48000, block 48, bit depth 24, codec "PCM3060 (hardware mode…)".
-- [ ] `build.engineArchiveSha256` equals the `parity-m7` CI job's archive hash for the same commit.
-- [ ] Parity: `run`, `run pedal`, `run hostile` all PASS; the final `idle` line shows
-      `"droppedBytes":0`.
-- [ ] Bench: `run` on all three bench builds; keep the logs (`--save`) for the decisions of profile
-      §8.3 (Q1 subnormals, Q2 FMA/kernels/birth cost, Q5 flush form, Q9 load mode) and §7.1 (ITCM).
+- [ ] `build.engineArchiveSha256` equals the `parity-m7` CI job's archive hash for the same commit,
+      and `build.dirty` is false (`--expect-archive build/fw/firmware/engine-archives.sha256`
+      checks the hash).
+- [ ] Parity: `run`, `run pedal`, `run hostile` all `VERDICT: PASS` (never `FAIL (TRANSPORT)`); the
+      final `idle` line shows `"droppedBytes":0`.
+- [ ] Bench: `run` on all three bench builds, none INCOMPLETE; keep the logs (`--save`) for the
+      decisions of profile §8.3 (Q1 subnormals and the §4.2 rule, Q5 flush form, the `Restart`
+      half of Q9, §7.3's explicit-FMA rule) and §7.1 (ITCM against XIP).
 - [ ] Live: clean pass-through at `set mix 0`; presets switch without clicks (Spillover) and with
       a mute (exact); `stats` mean and peak under 100 % for every preset; the LED follows plucks.
-- [ ] Look for USB dropouts during a long render and for audio clicks while typing commands (the
-      USB interrupts run below the audio DMA's priority).
+- [ ] Look for USB dropouts during a long render (a `resync` line, a nonzero `droppedBytes`) and
+      for audio clicks while typing commands (the USB interrupts run below the audio DMA's
+      priority).
+- [ ] If the LED ever shows two long flashes: reconnect, `info`, and keep the `lastFault` line.
 
 ## 7. Building
 
 The images build with the pinned **GNU Arm Embedded Toolchain 10.3-2021.10** (profile §6.8), CMake
-3.24 or later (libDaisy v9's own CMake needs it) and make. On the owner's Windows machine:
+3.24 or later (libDaisy v9's own CMake needs it) and make. The configure step refuses another
+compiler version or a build type other than Release (the engine archive would no longer be the
+audited one). On the owner's Windows machine:
 
 ```bash
 export PATH="/c/Program Files/CMake/bin:/c/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin:$PATH"
@@ -235,21 +326,41 @@ cmake --build build/fw -j 8
 ```
 
 The `.bin`, `.elf`, `.map` and a memory report (`*.size.txt`) of every image land in
-`build/fw/firmware/`. The configure step downloads the pinned libDaisy (below) into the build tree;
+`build/fw/firmware/`, with `engine-archives.sha256`. Every image is checked as it links: its memory
+regions (the linker script), and its boot path ([`cmake/BootCheck.cmake`](cmake/BootCheck.cmake)):
+nothing that runs before the preinit hook has filled ITCM — libDaisy's `Reset_Handler`,
+`__libc_init_array`, the hook itself and the SysTick path the Daisy bootloader leaves running — may
+call into ITCM. libDaisy's startup file is compiled with `-fno-tree-loop-distribute-patterns` for
+that ([`cmake/LibDaisy.cmake`](cmake/LibDaisy.cmake)): otherwise GCC turns its `.data` and `.bss`
+loops into calls to `memcpy` and `memset`, which an ITCM image keeps in ITCM.
+
+The configure step downloads the pinned libDaisy (below) into the build tree;
 `-DFETCHCONTENT_SOURCE_DIR_LIBDAISY=<checkout>` builds offline from a libDaisy checkout at that
 commit with its submodules. `BRAINSCAPE_FIRMWARE_APP_TYPE=BOOT_NONE` targets the internal flash
 for images that fit it (none of these do). CI builds all five images on every relevant pull request
-(`.github/workflows/firmware.yml`, compile only) and runs the static audits on the firmware build.
+(`.github/workflows/firmware.yml`, compile only), checks their engine archives against the M7
+oracle build's byte for byte, and runs the static audits on the firmware build.
+
+### Sizes (`.bin`, all flashed to QSPI at `0x90040000`)
+
+| Image | Bytes | ITCM used (of 64 KiB) |
+| --- | --- | --- |
+| `brainscape_parity.bin` | 223,312 | 42.9 KiB |
+| `brainscape_bench.bin` | 220,692 | 42.8 KiB |
+| `brainscape_bench_xip.bin` | 220,552 | 0 |
+| `brainscape_bench_hooks.bin` | 221,068 | 43.1 KiB |
+| `brainscape_live.bin` | 214,616 | 38.9 KiB |
 
 ### Memory map
 
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
-| QSPI flash `0x90040000` | the image: vector table, code, constants, initial data | 200 KiB |
-| ITCM | the engine's code and constants and libgcc's helpers, copied at boot | 41 KiB of 64 |
-| DTCM | Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (7 KiB), the main stack (32 KiB reserved at the top, linker-checked) | 31 KiB + stack |
+| QSPI flash `0x90040000` | the image: vector table, code, constants, initial data | 218 KiB |
+| ITCM | the engine's code and constants, libgcc's helpers and the firmware's `mem*` functions, copied at boot | 43 KiB of 64 |
+| DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (7 KiB), the main stack (32 KiB reserved at the top, linker-checked) | 33 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 126.6 KiB asked), USB serial rings (33 KiB), `.data` and `.bss` | 193 KiB of 512 |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
+| Backup SRAM | libDaisy's `boot_info` (the Daisy bootloader's handshake, kept first: linker-checked), then the fault record | 148 B |
 | SDRAM | Bulk arena (17 MiB; 16.73 MiB asked: the 2²² ring and the post delay), the bench's per-block results, the heap (the harness's containers only, never engine state) | 17 MiB + heap |
 
 The arenas live in sections named `.bss.brainscape_{dtcm,axi,sdram}_*`
@@ -270,43 +381,78 @@ lock masks interrupts because libDaisy's USB stack allocates inside the USB inte
   hardware mode, so libDaisy configures it like rev4: SAI1 block A transmits on PE6, block B
   receives on PE3, MCLK PE2, FS PE4, SCK PE5, the codec reset on PB11; 48 kHz, 24-bit, 48-frame
   blocks, `postgain` 1, so input samples are exactly `i × 2⁻²³` (profile §8.3 Q8).
-- **FP boot word**: a `.preinit_array` hook writes FPSCR = 0 and FPDSCR = 0 before any constructor
-  (profile §4.1, §8.4 step 13), and copies the engine's code into ITCM.
+- **Preinit hook** (`.preinit_array`, before any constructor): stops the SysTick the Daisy
+  bootloader leaves running (`HAL_Init` restarts it), writes FPSCR = 0 and FPDSCR = 0 (profile §4.1,
+  §8.4 step 13), copies ITCM's contents in, and installs the fault vectors.
+- **Faults** ([`platform/Fault.cpp`](platform/Fault.cpp)): libDaisy's `HardFault_Handler` ends in
+  `BKPT`, which locks the core up without a debugger, and its `Default_Handler` (MemManage, BusFault,
+  UsageFault, NMI, every unhandled interrupt) loops forever at the exception's priority, freezing the
+  LED and SysTick. The platform copies the vector table to DTCM, points those vectors at its own
+  handler and enables the bus, usage and memory-management fault vectors. The handler runs on its
+  own stack, saves a record (kind, `CFSR`, `HFSR`, `MMFAR`, `BFAR`, the stacked `pc`, `lr`, `xPSR`,
+  `EXC_RETURN`, `sp`, time since boot, image, message) to the backup SRAM, blinks two long flashes by
+  writing the LED's GPIO with a DWT busy-wait, and resets after about 10 s. `Fatal()` called from an
+  interrupt (the audio callback, USB) takes the same path, because neither SysTick nor the USB
+  interrupt could preempt it. libDaisy decides where the program runs from `SCB->VTOR`, so the
+  image's own table is installed while `DaisySeed::Init` runs.
 - **DWT**: CYCCNT enabled (the M7's DWT lock unlocked), extended to 64 bits by the 1 kHz SysTick.
 - **USB serial**: libDaisy's CDC device with a 32 KiB transmit ring handed to the CDC class one
   chunk at a time from the main loop, a receive ring filled in the USB interrupt, and the OTG_FS
-  interrupts moved below the audio DMA's priority (companion §7.2's bring-up rule).
-- **LED**: driven from SysTick by mode (idle, busy, done, fault, onset pulse).
+  interrupts moved below the audio DMA's priority (companion §7.2's bring-up rule). Lines go out
+  whole or not at all. Completion comes from the CDC class's `TransmitCplt` hook and every
+  (re)configuration is counted through its `Init`/`DeInit`, so a suspended bus keeps its transfer
+  while a USB reset or unplug drops it (and the rest of the line it cut) instead of sending it twice;
+  any loss is announced by a `{"type":"resync","droppedBytes":…,"droppedLines":…}` line.
+- **LED**: driven from SysTick by mode (idle, busy, done, fault, onset pulse), by writing PC7's GPIO
+  directly once `BoardInit` has armed it: until then the SysTick hook does nothing, because it can
+  run before the startup code has initialized the variables it reads.
+- **`memcpy`, `memmove`, `memset`** ([`platform/MemFunctions.c`](platform/MemFunctions.c)): word-wise
+  replacements for newlib-nano's byte loops (section 4).
 
 ## 8. Protocol
 
 One text command per line to the device; one JSON object per line back, integers and strings only
 (`brainscape-hil/1`). Every image answers `info` with `{"type":"hello"}`: image, build (commit,
-app type, libDaisy, toolchain, engine archive SHA-256s, the engine's `BuildToolchain()`), board
-(revision, clocks, boot region, bootloader, audio configuration), FP registers and the memory map.
-The parity image streams `parity-begin`, `vector`, `preset` and `parity-end` lines
-(`brainscape-parity-stream/1`, documented in `ParityStream.h`) and then `idle`; the bench streams
-`bench-begin`, `memory`, `micro`, `flush-micro`, `restart`, `blocks`, `stage`, `births`, `tail` and
-`bench-end`; errors are `{"type":"error","message":...}`.
+dirty, app type, libDaisy, toolchain, engine archive SHA-256s, the engine's `BuildToolchain()`),
+board (revision, clocks, boot region, bootloader, audio configuration), FP registers, `cpu` (cache
+bits, MPU regions, QSPI registers, where `memset` runs), `lastFault` (or null), `uptimeMs` and the
+memory map. The parity image streams `parity-begin`, `vector`, `preset` and `parity-end` lines
+(`brainscape-parity-stream/2`: every line numbered by `seq`; documented in `ParityStream.h`) and then
+`idle` (with `droppedBytes`, `droppedLines`); the bench streams `bench-begin`, `memory`, `micro`,
+`flush-micro`, `restart`, `blocks`, `stage`, `births`, `tail` and `bench-end` (with the drop counts).
+Any image may emit `{"type":"resync",…}` after its USB serial lost lines; errors are
+`{"type":"error","message":...}`.
 
 ## 9. Verified without hardware
 
-- All five images build with `-Werror` on Windows, and on Linux with the same pinned toolchain
-  (in Docker, whose CMake 3.22 needed libDaisy's CMP0135 line removed for that test only), and fit
-  their regions; the engine archive in the firmware build is byte-identical to the
-  `BRAINSCAPE_BUILD_M7_ORACLE` archive (`4f4ddaa3583e46f2…`), and so is the hooks archive.
+- All five images build with `-Werror` and fit their regions, and pass the boot-path check
+  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control). The engine
+  archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
+  (`4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`). (On Linux the same pinned toolchain gave the
+  same archive earlier, in Docker, whose CMake 3.22 needed libDaisy's CMP0135 line removed for that
+  test only.)
 - The static audits pass on the firmware build: no import outside the allowlist (no libm), no
-  fused instruction in either engine archive, no forbidden flag in any of the 240 translation
+  fused instruction in either engine archive, no forbidden flag in any of the 242 translation
   units (libDaisy's included), no GOT relocation. The only fused instructions in the images are in
   the prebuilt libgcc's float-to-`uint64` helpers and newlib's `strtod` (the live image's `set`
   parsing), outside the engine.
+- `platform/MemFunctions.c`, built with the firmware's flags, matches a byte-loop reference in
+  119,748 cases under `qemu-arm -cpu cortex-m7` (every size to 300 bytes at every source and
+  destination alignment, `memmove` overlaps from −70 to +70 bytes, `memset` with sign-bit and
+  out-of-range values, 60 KB copies); its disassembly uses no floating-point register.
 - The parity stream's code, built for the Cortex-M7 with the oracle's syscall shim and run under
-  `qemu-arm -cpu cortex-m7`, matches `golden.json` on all 28 presets in the harness's configuration
-  and with `maxBlockSize` 48, checked by `parity_check.py` (CI's `parity-m7` job runs the latter on
-  every pull request). On the host the same check is the ctests `golden_parity_stream_mb512` and
-  `_mb48`.
-- Not verifiable without the board: anything electrical, the bootloader handoff, USB enumeration
-  and throughput, the SAI/codec path, and every cycle count.
+  `qemu-arm -cpu cortex-m7` **in the parity image's own placement** (`--placement`: the firmware's
+  arena sizes and alignments, `Renderer(cfg, Placement)`, a second renderer over the same storage),
+  matches `golden.json` on all 28 presets with `maxBlockSize` 48 and 512, and the hostile FP run on
+  the quick set, checked by `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull
+  request). On the host the same check is the ctests `golden_parity_stream_mb512` and `_mb48`.
+- `parity_check.py` was run on 17 damaged streams (lost, spliced, truncated and renamed lines, a
+  missing `parity-end`, a `resync` notice, device captures without or with a lossy `idle` line, a
+  wrong configuration, a wrong hash, a wrong archive, the old format) with the intended verdict and
+  exit status each time; `bench_report.py` and `console.py` on synthetic logs only.
+- Not verifiable without the board: anything electrical, the bootloader handoff, the fault
+  handler's LED and reset, USB enumeration and throughput, the SAI/codec path, and every cycle
+  count.
 
 ## 10. Dependencies and licensing
 
