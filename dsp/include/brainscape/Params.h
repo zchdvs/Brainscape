@@ -141,7 +141,9 @@ enum class ParamKind : uint8_t { Leaf, Macro, Performance, Global, Reserved, Ret
 
 // What a change to a row rebuilds (design §4.1, §7.2): a bitmask, since one value can feed
 // more than one rebuild (the filter cutoff is Post | Wet). A Reserved row carries the domain
-// it will have. Macro and Performance rows act through events and have none.
+// it will have. Macro and Performance rows act through events and have none. Data until
+// sound revision 2: the engine dispatches on it with R1 (§7.1) and keeps revision 1's routing
+// by ID until then.
 enum ParamDomain : uint8_t {
   kDomainNone     = 0,
   kDomainGranular = 1u << 0,  // the scheduler and voice parameters

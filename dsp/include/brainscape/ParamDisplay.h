@@ -64,6 +64,8 @@ inline constexpr size_t kNumParamGroups = 16;
 // recommended one, provisionally until the owner decides: macros, global.mix, the effect
 // volume and the performance rows are automatable; every other leaf is registered but not
 // automatable, so a host records the knobs a player turns, not the leaves they fan out to.
+// The plugin switches to it in lane D (§12.4), when it registers the macro parameters; until
+// then sound revision 1's leaves keep the automation they had.
 enum ParamFlag : uint16_t {
   kParamAutomatable = 1u << 0,
   kParamDiscrete    = 1u << 1,

@@ -1,6 +1,7 @@
 // The permanent parameter-ID table (docs/design/mode-compiler.md §4): its rows, their kinds
 // and per-kind rules (§4.1), the Leaf-row helpers every consumer iterates, and the domain
-// bitmask that routes a change to its rebuild (§7.2), with the lone-change regression test.
+// bitmask that will route a change to its rebuild (§7.2; data until R1 at r2, while the engine
+// keeps revision 1's routing by ID), with the lone-change regression test.
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -434,8 +435,9 @@ std::pair<ParamId, float> Other(uint8_t domain, ParamId except) {
 
 // The renders of the busy state with `id` changed alone at kChangeFrame, and with the same
 // change among edits that rebuild every domain without changing any other value: a granular
-// and a post leaf each set to another value and back at the same frame. A row whose domain
-// routes it right renders the same both ways; its change must also be audible.
+// and a post leaf each set to another value and back at the same frame. A row the engine
+// routes to the rebuild that reads it renders the same both ways (revision 1's routing by ID
+// until R1, then its domain); its change must also be audible.
 struct LoneChange {
   Stereo lone, among;
 };

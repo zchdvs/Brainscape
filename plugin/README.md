@@ -174,10 +174,11 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   (`dsp/src/ParamDisplay.cpp`). The parameters are the Leaf rows of the permanent ID table
   (`dsp/include/brainscape/Params.h`, docs/design/mode-compiler.md §4), keyed on their names:
   `wet_trim_db` and `layer0.pitch.transpose_st` replaced `out_trim_db` and `layer0.pitch.st`,
-  so automation lanes saved on the old names are lost (§4.4). Following the recommended host
-  model (§3.6, owner question Q12), provisionally, only **Mix** and **Freeze** are
-  host-automatable: the other engine parameters are registered but not automatable, because the
-  macro knobs that will drive them arrive with the macro work.
+  so automation lanes saved on the old names are lost (§4.4). Every registered parameter and
+  **Freeze** are host-automatable for now. The recommended host model (§3.6, owner question
+  Q12), under which only the macros, Mix, the effect volume and the performance controls are
+  automatable, applies with the macro parameters (lane D of §12.4); the shared display table
+  already carries its flags for the rows that do not exist here yet.
 - **Session state is a provisional binary v1** (exact plain values plus the input mode, levels
   and the restart option); `.bsp` packages, the preset library and the device link are not
   built, and the audition renders no event script yet.

@@ -460,8 +460,9 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
 
 // The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
 // name; Reserved rows are not registered, and macro and performance rows join with the macro
-// work (§9.2). Host model (b), provisionally (§3.6, Q12): of the leaves only Mix is
-// automatable; freeze is.
+// work (§9.2). Automation follows the shared flags: host model (b) (§3.6, Q12) applies with
+// those macro parameters in lane D (§12.4), so until then sound revision 1's leaves stay
+// automatable, as freeze is.
 TEST_CASE("the plugin registers the Leaf rows under the host model") {
   BrainscapeProcessor proc;
   const auto&         params = proc.getParameters();
@@ -474,7 +475,8 @@ TEST_CASE("the plugin registers the Leaf rows under the host model") {
     REQUIRE(p->Id() == d.id);
     REQUIRE(&proc.Param(d.id) == p);
     REQUIRE(p->getParameterID() == juce::String(d.name));
-    REQUIRE(p->isAutomatable() == (d.id == ParamId::Mix));
+    REQUIRE(p->isAutomatable() == ((FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u));
+    REQUIRE(p->isAutomatable() == (d.sinceRev == 1u));
   }
   REQUIRE(proc.Param(ParamId::WetTrimDb).getParameterID() == "wet_trim_db");
   REQUIRE(proc.Param(ParamId::TransposeSt).getParameterID() == "layer0.pitch.transpose_st");
@@ -791,6 +793,8 @@ TEST_CASE("MIDI note-on fires a grain at its sample offset, at every host block 
 
 TEST_CASE("host automation applies at the first frame of its block, at every host block pattern") {
   const Stereo in = MakeInput(48000);
+  // Mix: automatable under every host model (mode-compiler.md §3.6).
+  REQUIRE(BrainscapeProcessor().Param(ParamId::Mix).isAutomatable());
   for (const auto& pattern : std::vector<std::vector<int>>{
            {1}, {7}, {256}, {512}, {513}, {4096}, {0, 480}, {0, 0, 1, 0, 7, 512, 513, 0, 4096, 37, 0, 441}}) {
     auto       proc      = MakeProcessor(Busy(), {});
@@ -799,13 +803,13 @@ TEST_CASE("host automation applies at the first frame of its block, at every hos
     r.pattern     = pattern;
     r.beforeBlock = [&](int pos) {  // a VST3 parameter change, as the wrapper delivers it
       if (appliedAt >= 0 || pos < 20011) return;
-      proc->Param(ParamId::TransposeSt).setValue(0.73f);
+      proc->Param(ParamId::Mix).setValue(0.73f);
       appliedAt = pos;
     };
     const Stereo got  = RenderProcessor(*proc, in, {}, r);
-    const float  sent = PlainFromNormalized(ParamId::TransposeSt, 0.73f);
-    REQUIRE(Bits(proc->Param(ParamId::TransposeSt).Plain()) == Bits(sent));
-    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::TransposeSt, sent)}),
+    const float  sent = PlainFromNormalized(ParamId::Mix, 0.73f);
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(sent));
+    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::Mix, sent)}),
                 PatternName(pattern).c_str());
   }
 }
@@ -1001,6 +1005,40 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
     RequireSame(RenderProcessor(*proc, short48, {}, {{480}}),
                 RenderReference(Busy(), short48, kRate, {RefParam(4801, ParamId::Mix, 0.25f)}), "stamp after a re-Init");
   }
+}
+
+// The per-leaf touched set that replaced the 32-bit mask (mode-compiler.md §10.4): an event on
+// any Leaf row, the last ordinal included, writes that leaf's mirror back once applied, and
+// events on rows of other kinds (Reserved, Macro, Global) reach no mirror and no engine state.
+TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds change nothing") {
+  using E           = WrapperEvent;
+  const Stereo in   = MakeInput(4800);
+  auto         proc = MakeProcessor({}, {});
+  std::vector<float>    sent(kNumLeafParams);
+  std::vector<RefEvent> ref;
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    const ParamDescriptor& d = *FindParam(LeafId(i));
+    float v = Canonicalize(d.id, d.min + 0.25f * (d.max - d.min));
+    if (Bits(v) == Bits(d.def)) v = Canonicalize(d.id, d.min + 0.75f * (d.max - d.min));
+    INFO(d.name);
+    REQUIRE(Bits(v) != Bits(proc->Param(d.id).Plain()));
+    sent[i] = v;
+    proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(d.id), v});
+    ref.push_back(RefParam(0, d.id, v));
+  }
+  for (const ParamId other : {ParamId::VoiceCount, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
+    REQUIRE_FALSE(IsLeaf(other));
+    proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(other), FindParam(other)->min});
+  }
+  HostRender r;
+  r.pattern        = {480};
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    INFO(FindParam(LeafId(i))->name);
+    REQUIRE(Bits(proc->Param(LeafId(i)).Plain()) == Bits(sent[i]));
+  }
+  REQUIRE(proc->getParameters().size() == static_cast<int>(kNumLeafParams) + 1);
+  RequireSame(got, RenderReference({}, in, kRate, ref), "the leaf events alone");
 }
 
 TEST_CASE("scripted parameter values are canonicalized like every other producer's") {

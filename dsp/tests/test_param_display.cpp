@@ -125,19 +125,23 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
   CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
   CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
   CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
+  // wet_trim_db trims the whole output until r2 makes it wet only (§7.1 R3).
+  CHECK(std::string(FindParamDisplay(ParamId::WetTrimDb)->title) == "Output trim");
   CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::L1DelayMs)->group)) == "Layer 2");
   CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::EffectVolumeDb)->group)) == "Device");
   CHECK(std::string(FindParamDisplay(ParamId::L1TransposeSt)->title) == "Layer 2 transpose");
 }
 
 // Host model (b), provisionally (mode-compiler.md §3.6, Q12): macros, Mix, the effect volume
-// and the performance rows are automatable; the other leaves are registered but not.
+// and the performance rows are automatable; the other leaves are registered but not. Lane D
+// applies it in the plugin with the macro parameters (§12.4); until then sound revision 1's
+// leaves, IDs 1-28, stay automatable.
 TEST_CASE("host automation follows the host model") {
   for (const ParamDescriptor& d : kParamTable) {
     INFO(d.name);
     const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
     const auto raw         = static_cast<uint32_t>(d.id);
-    const bool want        = d.id == ParamId::Mix || (raw >= 69u && raw <= 80u) ||
+    const bool want        = raw <= 28u || (raw >= 69u && raw <= 80u) ||
                       d.id == ParamId::EffectVolumeDb;
     CHECK(automatable == want);
   }

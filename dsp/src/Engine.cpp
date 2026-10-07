@@ -115,6 +115,18 @@ constexpr const ParamDescriptor& RowOfSlot(size_t slot) { return kParamTable[kSt
 // slots through the leaf's id.
 static_assert(kNumLeafParams <= kNumStored, "every Leaf row is stored");
 
+// ApplyParam keeps sound revision 1's routing by ID until R1 (design §7.6 item 1), and that
+// routing knows IDs 1-28 and the effect volume only: a row stored before R1 would be
+// misrouted, so it must wait for R1 (lane C).
+constexpr bool StoredRowsAreRoutedByR1() {
+  for (size_t i = 0; i < kNumStored; ++i) {
+    const ParamId id = RowOfSlot(i).id;
+    if (static_cast<uint32_t>(id) > 28u && id != ParamId::EffectVolumeDb) return false;
+  }
+  return true;
+}
+static_assert(StoredRowsAreRoutedByR1(), "a stored row needs R1's domain routing (lane C)");
+
 // SetParam/GetParam are documented lock-free from any thread (design §9 threading
 // table); make the assumption a compile error on the day it stops being true.
 static_assert(std::atomic<float>::is_always_lock_free,
@@ -296,7 +308,7 @@ struct Engine::Impl {
 
   using Smoother = detail::Smoother;
 
-  void ApplyParam(size_t slot) noexcept;
+  void ApplyParam(size_t slot, float value) noexcept;
   void RebuildGranularParams() noexcept;  // control-rate; runs only when a granular
                                           // param actually changed (keeps exp2/pow
                                           // off the steady-state audio path)
@@ -532,7 +544,7 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
     const float def = RowOfSlot(i).def;
     pending_[i].store(def, std::memory_order_relaxed);
     active_[i] = def;
-    ApplyParam(i);
+    ApplyParam(i, def);
   }
   RebuildGranularParams();
   RebuildPostParams();
@@ -561,7 +573,7 @@ void Engine::Impl::Reset() noexcept {
   for (size_t i = 0; i < kNumStored; ++i) {
     const float p = pending_[i].load(std::memory_order_relaxed);
     active_[i]    = p;
-    ApplyParam(i);
+    ApplyParam(i, p);
   }
   RebuildGranularParams();
   RebuildPostParams();
@@ -637,7 +649,7 @@ void Engine::Impl::SetValue(size_t slot, float value) noexcept {
   pending_[slot].store(value, std::memory_order_relaxed);
   if (value != active_[slot]) {
     active_[slot] = value;
-    ApplyParam(slot);
+    ApplyParam(slot, value);
   }
 }
 
@@ -653,50 +665,41 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
-// A stored row changed (its slot's active_ value): mark or apply each rebuild its domain
-// names (design §4.1, §7.2). A rebuild reads only rows of its own domain, so after any
-// sequence of changes the last one each domain sees has every value it reads.
-void Engine::Impl::ApplyParam(size_t slot) noexcept {
-  const ParamDescriptor& d      = RowOfSlot(slot);
-  uint8_t                domain = d.domain;
-  // Sound revision 1 routes 27 and 28 to the post rebuild, which does not read them: a
-  // change to either alone is lost until another granular change rebuilds the granular
-  // block (design §7.2, record §2.1). Their Granular domain applies with R1, in the r2
-  // pull request that also retires both rows into structure (design §7.6 item 4); until
-  // then r1's routing stays, because the fix changes output for such a change.
-  if (d.id == ParamId::OnsetTrigger || d.id == ParamId::PositionSource) domain = kDomainPost;
-  const auto active = [this](ParamId id) { return active_[SlotOf(id)]; };
-  while (domain != 0u) {
-    const auto bit = static_cast<ParamDomain>(domain & (0u - domain));  // lowest set bit
-    domain         = static_cast<uint8_t>(domain & (domain - 1u));
-    switch (bit) {
-      case kDomainNone:
-        break;
-      case kDomainGranular:  // scheduler and voice parameters: rebuilt once, at control rate
-        granularDirty_ = true;
-        break;
-      case kDomainPost:
+// Sound revision 1's routing, by ID, unchanged for IDs 1-28 (design §7.6 item 1): the
+// domain column is data until R1 dispatches on it with the r2 bump (§7.1, §7.2). This
+// routing loses a lone change to 27 or 28: both are at or above ModRateHz, so they go to the
+// post rebuild, which does not read them (record §2.1).
+void Engine::Impl::ApplyParam(size_t slot, float value) noexcept {
+  switch (RowOfSlot(slot).id) {
+    case ParamId::Mix:
+      mix_.target = value;
+      break;
+    case ParamId::Feedback:
+      feedback_.target = value;
+      tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
+      break;
+    case ParamId::WetTrimDb:
+      // exp2, not pow: one kernel instead of two (schedule-time transcendentals are
+      // charged in design §8). It still trims the whole output; r2 makes it wet only.
+      outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
+      break;
+    case ParamId::TriggerSens:
+      detector_.SetSensitivity(value);
+      break;
+    case ParamId::EffectVolumeDb:
+      // A device setting: stored and kept by every load, read by nothing until r2's wet
+      // gain (design §7.1 R3).
+      break;
+    default:
+      // Scheduler/voice params vs post-chain params rebuild their own blocks,
+      // once, at control rate.
+      if (static_cast<uint32_t>(RowOfSlot(slot).id) >=
+          static_cast<uint32_t>(ParamId::ModRateHz)) {
         postDirty_ = true;
-        break;
-      case kDomainMix:
-        mix_.target = active(ParamId::Mix);
-        break;
-      case kDomainFeedback: {
-        const float fb   = active(ParamId::Feedback);
-        feedback_.target = fb;
-        tamer_.SetFeedback(fb, cfg_.sampleRate);  // LP corner rides regeneration
-        break;
+      } else {
+        granularDirty_ = true;
       }
-      case kDomainWet:
-        // The trim, over the whole output until r2 (design §7.1 R3: WetGainTarget then
-        // scales the wet only, with the effect volume and the cutoff kill). exp2, not pow:
-        // one kernel instead of two (schedule-time transcendentals are charged in design §8).
-        outGain_.target = detmath::Exp2F(active(ParamId::WetTrimDb) * 0.16609640474436813f);
-        break;
-      case kDomainDetector:
-        detector_.SetSensitivity(active(ParamId::TriggerSens));
-        break;
-    }
+      break;
   }
 }
 
@@ -872,7 +875,7 @@ void Engine::Impl::DrainPending() noexcept {
     const float p = pending_[i].load(std::memory_order_relaxed);
     if (p != active_[i]) {
       active_[i] = p;
-      ApplyParam(i);
+      ApplyParam(i, p);
     }
   }
   pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
