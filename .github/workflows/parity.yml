@@ -215,11 +215,13 @@ jobs:
   # bspc-roundtrip (mode-compiler.md §8.3, §10.1, §10.2; companion §3.4) on parity-host's legs:
   # the compiler's tests (the number code's per-pull-request hashes, the JSON grammar, schema 1,
   # the property and reader-fuzz digests and bspc's command line), then every committed
-  # document compiled to its committed package byte for byte and checked canonical, and the
-  # leg's sorted manifest of package hashes uploaded for parity-summary, which requires every
-  # leg's identical. The GCC and Clang legs also run the compiler audit's import check (no
-  # libm, strtof or strtod; MSVC's float conversions are header-only and import nothing that
-  # names them); parity-audits runs its source ban.
+  # document compiled to its committed package byte for byte and checked canonical, each set
+  # against its committed MANIFEST (which the package rule reads) with .gitattributes keeping
+  # its documents and MANIFEST at LF on every checkout, and the leg's sorted manifest of
+  # package hashes uploaded for parity-summary, which requires every leg's identical; those
+  # checks' self-test runs first. The GCC and Clang legs also run the compiler audit's import
+  # check (no libm, strtof or strtod; MSVC's float conversions are header-only and import
+  # nothing that names them); parity-audits runs its source ban.
   bspc-roundtrip:
     name: bspc-roundtrip (${{ matrix.leg }})
     strategy:
@@ -271,6 +273,13 @@ jobs:
           --target bspc bsc_tests bsc_number_tests bsc_number_check
       - name: The compiler's tests
         run: ctest --test-dir build -C Release -R '^compiler_' --output-on-failure
+      # Proves the document checks below can fail (MANIFEST, line endings, packages beside
+      # documents) and that the committed .gitattributes cover every set, documents or not yet.
+      - name: Self-test the document checks
+        if: ${{ !cancelled() }}
+        run: |
+          PY=python3; if [ "$RUNNER_OS" = Windows ]; then PY=python; fi
+          "$PY" tools/ci/bspc_roundtrip.py self-test
       - name: Compile every committed document (bspc roundtrip)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
