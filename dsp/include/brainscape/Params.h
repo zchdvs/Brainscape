@@ -14,11 +14,15 @@ enum class ParamId : uint32_t {
   DelayMs        = 1,   // layer0.position.base_ms — grain position behind the write head
   Mix            = 2,   // global wet/dry, linear crossfade (grain-delay-theory.md §3.11)
   Feedback       = 3,   // feedback.amount (the taming chain lands with the post chain)
-  OutTrimDb      = 4,   // out_trim_db
+  WetTrimDb      = 4,   // wet_trim_db (was out_trim_db): the mode's level match. It still
+                        // trims the whole output; r2 makes it wet only (mode-compiler.md
+                        // §7.1 R3)
   GrainSizeMs    = 5,   // layer0.size_ms
   Overlap        = 6,   // scheduler.overlap — target voices = kMaxGrains * overlap^3
   SprayMs        = 7,   // layer0.position.spray_ms
-  PitchSt        = 8,   // layer0.pitch.st (±24 st = the design's r_max = 4 ratio ceiling)
+  TransposeSt    = 8,   // layer0.pitch.transpose_st (was layer0.pitch.st; ±24 st = the
+                        // design's r_max = 4 ratio ceiling): from W1 an offset over the pitch
+                        // set, which with the default set {0} is today's pitch bit for bit
   SpreadCents    = 9,   // layer0.pitch.spread_cents
   ReverseProb    = 10,  // layer0.pitch.reverse_prob
   Jitter         = 11,  // scheduler.jitter — synchronous <-> asynchronous morph
@@ -40,6 +44,11 @@ enum class ParamId : uint32_t {
   TriggerSens    = 26,  // trigger.sensitivity — onset-detector threshold (1 = hair trigger)
   OnsetTrigger   = 27,  // scheduler.onset_trigger — >=0.5 fires a grain per onset (OR'd)
   PositionSource = 28,  // layer0.position.source — >=0.5 = POS_MARK (most recent onset)
+
+  // The C++ spellings of IDs 4 and 8 before their renames, kept so code written against them
+  // (the firmware bring-up branch) still builds; new code uses WetTrimDb and TransposeSt.
+  OutTrimDb = WetTrimDb,
+  PitchSt   = TransposeSt,
 };
 
 struct ParamDescriptor {
@@ -64,11 +73,11 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::DelayMs,        "layer0.position.base_ms",   1.0f,   5000.0f,  250.0f,   "ms"},
     {ParamId::Mix,            "global.mix",                0.0f,   1.0f,     0.5f,     ""},
     {ParamId::Feedback,       "feedback.amount",           0.0f,   1.1f,     0.0f,     ""},
-    {ParamId::OutTrimDb,      "out_trim_db",               -24.0f, 24.0f,    0.0f,     "dB"},
+    {ParamId::WetTrimDb,      "wet_trim_db",               -24.0f, 24.0f,    0.0f,     "dB"},
     {ParamId::GrainSizeMs,    "layer0.size_ms",            1.0f,   500.0f,   90.0f,    "ms"},
     {ParamId::Overlap,        "scheduler.overlap",         0.0f,   1.0f,     0.55f,    ""},
     {ParamId::SprayMs,        "layer0.position.spray_ms",  0.0f,   2000.0f,  20.0f,    "ms"},
-    {ParamId::PitchSt,        "layer0.pitch.st",           -24.0f, 24.0f,    0.0f,     "st"},
+    {ParamId::TransposeSt,    "layer0.pitch.transpose_st", -24.0f, 24.0f,    0.0f,     "st"},
     {ParamId::SpreadCents,    "layer0.pitch.spread_cents", 0.0f,   100.0f,   0.0f,     "c"},
     {ParamId::ReverseProb,    "layer0.pitch.reverse_prob", 0.0f,   1.0f,     0.0f,     ""},
     {ParamId::Jitter,         "scheduler.jitter",          0.0f,   1.0f,     0.2f,     ""},

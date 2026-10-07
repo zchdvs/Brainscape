@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
     // A session state with exact values: the record's two awkward ones (companion-app
     // record §2.5) on top of the busy preset.
     Preset preset = Busy();
-    preset.push_back({ParamId::PitchSt, 7.02f});
+    preset.push_back({ParamId::TransposeSt, 7.02f});
     preset.push_back({ParamId::FilterMorph, 0.4f});
     const Preset all = Complete(preset);
     WrapperState state{};

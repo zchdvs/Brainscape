@@ -35,11 +35,11 @@ int main(int argc, char** argv) {
   engine.SetParam(ParamId::DelayMs, 375.0f);
   engine.SetParam(ParamId::Mix, 0.5f);
   engine.SetParam(ParamId::Feedback, 0.55f);
-  engine.SetParam(ParamId::OutTrimDb, 0.0f);
+  engine.SetParam(ParamId::WetTrimDb, 0.0f);
   engine.SetParam(ParamId::GrainSizeMs, 120.0f);
   engine.SetParam(ParamId::Overlap, 0.5f);
   engine.SetParam(ParamId::SprayMs, 40.0f);
-  engine.SetParam(ParamId::PitchSt, 12.0f);  // octave-up shimmer
+  engine.SetParam(ParamId::TransposeSt, 12.0f);  // octave-up shimmer
   engine.SetParam(ParamId::SpreadCents, 8.0f);
   engine.SetParam(ParamId::Jitter, 0.3f);
   engine.SetParam(ParamId::WindowSustain, 0.4f);

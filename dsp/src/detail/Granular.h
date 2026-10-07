@@ -47,7 +47,7 @@ struct GranularParams {
   float    targetVoices;     // effective target: min(kMaxGrains*overlap^3, totalFrames),
                              // since the 1-frame interval floor caps sustainable voices
   float    jitter;           // 0 = periodic, 1 = Poisson inter-arrival
-  float    ratioBase;        // from layer0.pitch.st (semitones)
+  float    ratioBase;        // from layer0.pitch.transpose_st (semitones)
   float    spreadCents;
   float    reverseProb;
   float    sustain, skew, smoothness;

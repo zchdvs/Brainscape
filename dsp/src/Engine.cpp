@@ -558,7 +558,7 @@ void Engine::Impl::ApplyParam(size_t index, float value) noexcept {
       feedback_.target = value;
       tamer_.SetFeedback(value, cfg_.sampleRate);  // LP corner rides regeneration
       break;
-    case ParamId::OutTrimDb:
+    case ParamId::WetTrimDb:
       // exp2, not pow: one kernel instead of two (schedule-time transcendentals are
       // charged in design §8).
       outGain_.target = detmath::Exp2F(value * 0.16609640474436813f);  // dB -> linear
@@ -628,7 +628,7 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   gp_.targetVoices = target;
 
   gp_.jitter      = get(ParamId::Jitter);
-  gp_.ratioBase   = get(ParamId::PitchSt);
+  gp_.ratioBase   = get(ParamId::TransposeSt);
   gp_.spreadCents = get(ParamId::SpreadCents);
   gp_.reverseProb = get(ParamId::ReverseProb);
   gp_.sustain      = get(ParamId::WindowSustain);

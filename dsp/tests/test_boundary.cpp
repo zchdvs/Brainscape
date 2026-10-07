@@ -68,9 +68,9 @@ EngineConfig SmallConfig() {
 // Every stage and stochastic feature engaged, with feedback.
 const std::vector<std::pair<ParamId, float>> kBusyPreset = {
     {ParamId::DelayMs, 100.0f},         {ParamId::Mix, 0.7f},
-    {ParamId::Feedback, 0.6f},          {ParamId::OutTrimDb, -3.0f},
+    {ParamId::Feedback, 0.6f},          {ParamId::WetTrimDb, -3.0f},
     {ParamId::GrainSizeMs, 60.f},       {ParamId::Overlap, 0.55f},
-    {ParamId::SprayMs, 50.0f},          {ParamId::PitchSt, 7.0f},
+    {ParamId::SprayMs, 50.0f},          {ParamId::TransposeSt, 7.0f},
     {ParamId::SpreadCents, 20.f},       {ParamId::ReverseProb, 0.3f},
     {ParamId::Jitter, 1.0f},            {ParamId::WindowSmooth, 0.7f},
     {ParamId::ModDepth, 0.3f},          {ParamId::ModRateHz, 2.0f},
@@ -418,7 +418,7 @@ TEST_CASE("a hostile host FP environment reproduces the clean render") {
   const Stereo input = GridNoise(24000, 0x0DDBA11u, 6000000);
   std::vector<Event> events;
   for (uint32_t f = 2400; f < 24000; f += 2400) {
-    events.push_back({f, 0, ParamId::PitchSt, Bits(static_cast<float>(f % 7) - 3.0f)});
+    events.push_back({f, 0, ParamId::TransposeSt, Bits(static_cast<float>(f % 7) - 3.0f)});
     events.push_back({f, 0, ParamId::Feedback, Bits(static_cast<float>(f % 11) * 0.1f)});
   }
   events.push_back({4800, 1, ParamId::Mix, 0u});
@@ -515,7 +515,7 @@ TEST_CASE("the largest finite input saturates at the output instead of overflowi
     input.l[i]    = v;
     input.r[i]    = i % 4u < 2u ? v : -v;
   }
-  const Stereo out = RenderEvents(input, {{ParamId::Mix, 0.0f}, {ParamId::OutTrimDb, 24.0f}},
+  const Stereo out = RenderEvents(input, {{ParamId::Mix, 0.0f}, {ParamId::WetTrimDb, 24.0f}},
                                   {}, 48, detail::kFpProfileWord, false, false);
   size_t nonFinite = 0, wrong = 0;
   for (size_t i = 0; i < kFrames; ++i) {

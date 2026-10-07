@@ -89,10 +89,10 @@ TEST_CASE("canonicalization uses bit tests: non-finite to min, subnormal and -0 
   CHECK(Canonicalize(ParamId::DelayMs, 9000.0f) == 5000.0f);
   CHECK(Bits(Canonicalize(ParamId::Mix, -0.0f)) == 0u);
   CHECK(Bits(Canonicalize(ParamId::Mix, tiny)) == 0u);
-  CHECK(Bits(Canonicalize(ParamId::PitchSt, -tiny)) == 0u);
+  CHECK(Bits(Canonicalize(ParamId::TransposeSt, -tiny)) == 0u);
   CHECK(Canonicalize(ParamId::DelayMs, tiny) == 1.0f);  // +0 then clamped to min
   // Authored values pass bit for bit: no grid (companion §5.5).
-  CHECK(Bits(Canonicalize(ParamId::PitchSt, 7.02f)) == Bits(7.02f));
+  CHECK(Bits(Canonicalize(ParamId::TransposeSt, 7.02f)) == Bits(7.02f));
   CHECK(Bits(Canonicalize(ParamId::FilterMorph, 0.4f)) == Bits(0.4f));
   CHECK(PlainFromNormalized(ParamId::Mix, nan) == 0.0f);
   CHECK(PlainFromNormalized(ParamId::Mix, inf) == 1.0f);
@@ -111,9 +111,9 @@ TEST_CASE("display text carries units and the named endpoints") {
   CHECK(Format(ParamId::DelayMs, 250.0f) == "250 ms");
   CHECK(Format(ParamId::DelayMs, 1250.0f) == "1.25 s");
   CHECK(Format(ParamId::Mix, 0.5f) == "50%");
-  CHECK(Format(ParamId::OutTrimDb, -3.0f) == "-3.0 dB");
-  CHECK(Format(ParamId::PitchSt, 7.0f) == "+7.00 st");
-  CHECK(Format(ParamId::PitchSt, 0.0f) == "0.00 st");
+  CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
+  CHECK(Format(ParamId::TransposeSt, 7.0f) == "+7.00 st");
+  CHECK(Format(ParamId::TransposeSt, 0.0f) == "0.00 st");
   CHECK(Format(ParamId::FilterCutoffHz, 20000.0f) == "Off");
   CHECK(Format(ParamId::FilterCutoffHz, 2500.0f) == "2.50 kHz");
   CHECK(Format(ParamId::FilterMorph, 1.0f) == "BP");

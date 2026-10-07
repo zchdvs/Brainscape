@@ -78,7 +78,7 @@ inline Stereo MakeInput(int frames) {
 inline Preset Busy() {
   return {{ParamId::DelayMs, 180.0f},     {ParamId::Mix, 0.7f},           {ParamId::Feedback, 0.6f},
           {ParamId::GrainSizeMs, 60.0f},  {ParamId::Overlap, 0.7f},       {ParamId::SprayMs, 50.0f},
-          {ParamId::PitchSt, 7.0f},       {ParamId::SpreadCents, 12.0f},  {ParamId::ReverseProb, 0.3f},
+          {ParamId::TransposeSt, 7.0f},       {ParamId::SpreadCents, 12.0f},  {ParamId::ReverseProb, 0.3f},
           {ParamId::Jitter, 0.5f},        {ParamId::PanSpread, 0.8f},     {ParamId::ModRateHz, 1.3f},
           {ParamId::ModDepth, 0.3f},      {ParamId::DelayTimeMs, 230.0f}, {ParamId::DelayFb, 0.5f},
           {ParamId::DelayMix, 0.3f},      {ParamId::ReverbTime, 0.6f},    {ParamId::ReverbMix, 0.25f},

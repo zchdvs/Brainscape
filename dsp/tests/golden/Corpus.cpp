@@ -30,7 +30,7 @@ PresetCase Preset(const char* name, std::vector<std::pair<ParamId, float>> param
 PresetCase FreezeMarks() {
   PresetCase p = Preset("freeze_marks",
       {{P::DelayMs, 100.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 60.0f}, {P::Overlap, 0.55f},
-       {P::SprayMs, 50.0f}, {P::PitchSt, 7.0f}, {P::SpreadCents, 20.0f}, {P::ReverseProb, 0.3f},
+       {P::SprayMs, 50.0f}, {P::TransposeSt, 7.0f}, {P::SpreadCents, 20.0f}, {P::ReverseProb, 0.3f},
        {P::Jitter, 1.0f}, {P::TriggerSens, 0.8f}, {P::OnsetTrigger, 1.0f},
        {P::PositionSource, 1.0f}});
   p.script.Freeze(S(4) + 1, true);
@@ -49,14 +49,14 @@ PresetCase AutomationOffGrid(int64_t frames) {
   int64_t    k = 0;
   for (int64_t base = 0; base < frames; base += S(1) / 4, ++k) {
     const int64_t f = base + 1 + (k * 37) % 47;  // never a multiple of 48
-    s.Param(f, P::OutTrimDb, I2F((k * 7) % 49 - 24));
+    s.Param(f, P::WetTrimDb, I2F((k * 7) % 49 - 24));
     s.Param(f, P::Feedback, I2F(k % 12) * 0.1f);
     s.Param(f, P::FilterCutoffHz, I2F(100 + 397 * (k % 51)));
     s.Param(f, P::FilterRes, I2F(k % 11) * 0.1f);
     s.Param(f, P::FilterMorph, I2F(k % 13) * 0.25f);
     s.Param(f, P::Overlap, I2F(k % 7) / 7.0f);
     s.Param(f, P::GrainSizeMs, I2F(5 + 37 * (k % 13)));
-    s.Param(f, P::PitchSt, I2F((k * 5) % 49 - 24));
+    s.Param(f, P::TransposeSt, I2F((k * 5) % 49 - 24));
     s.Param(f, P::SpreadCents, I2F((k * 3) % 101));
     s.Param(f, P::Jitter, I2F(k % 5) * 0.25f);
     s.Param(f, P::SprayMs, I2F(25 * (k % 9)));
@@ -105,12 +105,12 @@ PresetCase SpilloverChain() {
   // Into a reverse loop above unity feedback, so the trails are loud when the next load lands.
   s.Spillover(S(2) + 4321,
       {{P::DelayMs, 700.0f}, {P::Feedback, 1.05f}, {P::GrainSizeMs, 120.0f}, {P::Overlap, 0.3f},
-       {P::Jitter, 0.0f}, {P::SprayMs, 0.0f}, {P::PitchSt, -12.0f}, {P::ReverseProb, 0.5f},
+       {P::Jitter, 0.0f}, {P::SprayMs, 0.0f}, {P::TransposeSt, -12.0f}, {P::ReverseProb, 0.5f},
        {P::DelayMix, 0.4f}, {P::DelayTimeMs, 333.0f}, {P::DelayFb, 0.5f}});
   s.Trigger(S(5) + 1);
   s.Spillover(S(5) + 1,
       {{P::GrainSizeMs, 5.0f}, {P::Overlap, 1.0f}, {P::Jitter, 1.0f}, {P::SprayMs, 200.0f},
-       {P::PitchSt, 7.0f}, {P::PanSpread, 1.0f}, {P::ReverbMix, 0.5f}, {P::ReverbTime, 0.8f},
+       {P::TransposeSt, 7.0f}, {P::PanSpread, 1.0f}, {P::ReverbMix, 0.5f}, {P::ReverbTime, 0.8f},
        {P::Feedback, 0.3f}});
   s.Param(S(5) + 1, P::Mix, 0.8f);
   s.Param(S(5) + 1, P::FilterCutoffHz, 1500.0f);
@@ -129,12 +129,12 @@ PresetCase SpilloverChain() {
 PresetCase RestartKeptParams() {
   const ParamList base = {
       {P::DelayMs, 180.0f},     {P::Feedback, 0.8f},       {P::GrainSizeMs, 70.0f},
-      {P::Overlap, 0.7f},       {P::SprayMs, 40.0f},       {P::PitchSt, 5.0f},
+      {P::Overlap, 0.7f},       {P::SprayMs, 40.0f},       {P::TransposeSt, 5.0f},
       {P::ReverseProb, 0.3f},   {P::Jitter, 0.6f},         {P::OnsetTrigger, 1.0f},
       {P::PositionSource, 1.0f}, {P::DelayMix, 0.3f},      {P::DelayTimeMs, 420.0f},
       {P::DelayFb, 0.6f},       {P::ReverbMix, 0.3f},      {P::ReverbTime, 0.7f}};
   ParamList loaded = base;
-  loaded.emplace_back(P::PitchSt, -7.0f);
+  loaded.emplace_back(P::TransposeSt, -7.0f);
   loaded.emplace_back(P::GrainSizeMs, 40.0f);
   loaded.emplace_back(P::Feedback, 0.9f);
   PresetCase p = Preset("restart_kept_params", base);
@@ -146,7 +146,7 @@ PresetCase RestartKeptParams() {
   s.Freeze(S(4) + 7, true);
   for (int i = 0; i < 3; ++i) s.Trigger(S(6) + 9);  // one per frame from S(6) + 9
   s.Restart(S(6) + 10);
-  s.Param(S(6) + 10, P::PitchSt, 12.0f);  // frame 0 of the restarted timeline
+  s.Param(S(6) + 10, P::TransposeSt, 12.0f);  // frame 0 of the restarted timeline
   s.Freeze(S(9) + 3, true);
   s.Trigger(S(10) + 5);
   p.require   = {{C::Restarts, 1, 1},     {C::Loads, 1, 1},  {C::Triggers, 4, 4},
@@ -165,7 +165,7 @@ PresetCase ExactLoadMid() {
        {P::WindowSmooth, 0.0f}, {P::PanSpread, 0.0f}});
   p.script.ExactLoad(S(7) + 12345,
       {{P::GrainSizeMs, 30.0f}, {P::Overlap, 0.9f}, {P::Jitter, 1.0f}, {P::SprayMs, 60.0f},
-       {P::PitchSt, 12.0f}, {P::SpreadCents, 30.0f}, {P::OnsetTrigger, 1.0f},
+       {P::TransposeSt, 12.0f}, {P::SpreadCents, 30.0f}, {P::OnsetTrigger, 1.0f},
        {P::PositionSource, 1.0f}, {P::ModDepth, 0.5f}, {P::FilterCutoffHz, 2500.0f},
        {P::FilterMorph, 1.0f}});
   p.script.Param(S(7) + 12345, P::Feedback, 0.6f);
@@ -258,7 +258,7 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::MarkPosition: neutral(P::PositionSource, 0.0f); break;
     case Feature::OnsetTrigger: neutral(P::OnsetTrigger, 0.0f); break;
     case Feature::Reverse: neutral(P::ReverseProb, 0.0f); break;
-    case Feature::Pitch: neutral(P::PitchSt, 0.0f); break;
+    case Feature::Pitch: neutral(P::TransposeSt, 0.0f); break;
     case Feature::Spray: neutral(P::SprayMs, 0.0f); break;
     case Feature::Feedback: neutral(P::Feedback, 0.0f); break;
     case Feature::PostMod: neutral(P::ModDepth, 0.0f); break;
@@ -364,7 +364,7 @@ std::vector<VectorCase> BuildCorpus() {
 
     PresetCase heavy = Preset("pitch_reverse_spray",
         {{P::Jitter, 1.0f}, {P::SprayMs, 400.0f}, {P::ReverseProb, 0.5f}, {P::SpreadCents, 60.0f},
-         {P::PitchSt, 7.0f}, {P::Overlap, 0.85f}, {P::PanSpread, 1.0f}, {P::GrainSizeMs, 60.0f},
+         {P::TransposeSt, 7.0f}, {P::Overlap, 0.85f}, {P::PanSpread, 1.0f}, {P::GrainSizeMs, 60.0f},
          {P::WindowSustain, 0.1f}, {P::WindowSkew, 0.2f}, {P::WindowSmooth, 1.0f}});
     heavy.ablate = {Feature::Pitch, Feature::Reverse, Feature::Spray};
     v.presets.push_back(heavy);
@@ -379,14 +379,14 @@ std::vector<VectorCase> BuildCorpus() {
 
     PresetCase farRevUp = Preset("max_delay_spray_rev_up24", kFar);
     farRevUp.params.emplace_back(P::ReverseProb, 0.5f);
-    farRevUp.params.emplace_back(P::PitchSt, 24.0f);
+    farRevUp.params.emplace_back(P::TransposeSt, 24.0f);
     farRevUp.ablate = {Feature::Spray, Feature::Reverse, Feature::Pitch};
     v.presets.push_back(farRevUp);
 
     // Spray reflected off the near guard: a 500 ms grain at +24 st needs 1.5 s behind
     // the write head, so from a 1 ms base about 7 in 8 draws fold back into the bounds.
     PresetCase nearRail = Preset("near_rail_spray",
-        {{P::DelayMs, 1.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}, {P::PitchSt, 24.0f}});
+        {{P::DelayMs, 1.0f}, {P::SprayMs, 2000.0f}, {P::GrainSizeMs, 500.0f}, {P::TransposeSt, 24.0f}});
     nearRail.ablate = {Feature::Spray};
     v.presets.push_back(nearRail);
     corpus.push_back(std::move(v));
@@ -397,10 +397,10 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(FreezeMarks());
 
     PresetCase pitch = Preset("pitch_extremes",
-        {{P::PitchSt, 24.0f}, {P::SpreadCents, 100.0f}, {P::Jitter, 0.3f}, {P::Feedback, 0.4f},
+        {{P::TransposeSt, 24.0f}, {P::SpreadCents, 100.0f}, {P::Jitter, 0.3f}, {P::Feedback, 0.4f},
          {P::GrainSizeMs, 80.0f}});
     for (int64_t k = 1; k * 72000 < S(16); ++k) {
-      pitch.script.Param(k * 72000 + 13, P::PitchSt, (k & 1) ? -24.0f : 24.0f);
+      pitch.script.Param(k * 72000 + 13, P::TransposeSt, (k & 1) ? -24.0f : 24.0f);
     }
     pitch.require = {{C::Events, 9}, {C::OffGridEvents, 9}};
     pitch.ablate  = {Feature::Pitch};
@@ -411,17 +411,17 @@ std::vector<VectorCase> BuildCorpus() {
     // after it at its frame pins anew. Live positioning, so every pin reaches the output.
     PresetCase retoggle = Preset("freeze_retoggle_spill",
         {{P::DelayMs, 150.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 40.0f}, {P::Overlap, 0.8f},
-         {P::SprayMs, 10.0f}, {P::PitchSt, 5.0f}, {P::Jitter, 0.5f}, {P::Feedback, 0.3f}});
+         {P::SprayMs, 10.0f}, {P::TransposeSt, 5.0f}, {P::Jitter, 0.5f}, {P::Feedback, 0.3f}});
     retoggle.script.Freeze(S(3) + 101, true);
     retoggle.script.Freeze(S(6) + 4999, false);
     retoggle.script.Freeze(S(6) + 4999, true);
     retoggle.script.Spillover(S(9) + 23,  // while frozen
         {{P::DelayMs, 333.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 20.0f}, {P::Overlap, 1.0f},
-         {P::PitchSt, -7.0f}, {P::Feedback, 0.5f}, {P::ReverbMix, 0.4f}});
+         {P::TransposeSt, -7.0f}, {P::Feedback, 0.5f}, {P::ReverbMix, 0.4f}});
     retoggle.script.Freeze(S(10) + 77, true);
     retoggle.script.Spillover(S(12) + 5,
         {{P::DelayMs, 90.0f}, {P::Mix, 1.0f}, {P::GrainSizeMs, 60.0f}, {P::SprayMs, 0.0f},
-         {P::PitchSt, 12.0f}, {P::Feedback, 0.2f}});
+         {P::TransposeSt, 12.0f}, {P::Feedback, 0.2f}});
     retoggle.script.Freeze(S(12) + 5, true);
     retoggle.script.Freeze(S(14) + 31, false);
     retoggle.require   = {{C::Events, 8},          {C::OffGridEvents, 8}, {C::FreezeEngages, 3, 3},
@@ -478,7 +478,7 @@ std::vector<VectorCase> BuildCorpus() {
   {  // Full-scale saturation, into and out of the engine.
     VectorCase v{"saturation_6s", Vector::Saturation, Frames(6), Frames(6), false, {}};
     PresetCase hot =
-        Preset("hot_out", {{P::OutTrimDb, 24.0f}, {P::Mix, 1.0f}, {P::Feedback, 0.6f}});
+        Preset("hot_out", {{P::WetTrimDb, 24.0f}, {P::Mix, 1.0f}, {P::Feedback, 0.6f}});
     hot.require = {{C::InClipFrames, 1000}};
     v.presets.push_back(hot);
     corpus.push_back(std::move(v));
@@ -498,7 +498,7 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(osc);
 
     PresetCase decay =
-        Preset("fb_decay", {{P::Feedback, 1.1f}, {P::PitchSt, 5.0f}, {P::SprayMs, 30.0f}});
+        Preset("fb_decay", {{P::Feedback, 1.1f}, {P::TransposeSt, 5.0f}, {P::SprayMs, 30.0f}});
     const float kFb[] = {1.05f, 1.0f, 0.95f, 0.9f, 0.8f, 0.7f, 0.6f,
                          0.5f,  0.4f, 0.3f,  0.2f, 0.1f, 0.05f, 0.0f};
     int64_t k = 0;
@@ -529,7 +529,7 @@ std::vector<VectorCase> BuildCorpus() {
     // A grain starts at the mark whatever the anchor (Granular.cpp:82, :114), so the
     // re-anchor cannot reach this output; freeze_live_long covers it.
     PresetCase marks = Preset("freeze_long",
-        {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
+        {{P::TransposeSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
          {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
          {P::PositionSource, 1.0f}});
     marks.script.Freeze(S(1) + 11, true);
@@ -540,7 +540,7 @@ std::vector<VectorCase> BuildCorpus() {
     // Live positioning: grains sit behind the anchor, so the re-anchor (mechanism D3)
     // moves them and the ring ablation first differs at the re-anchor second, 66.
     PresetCase live = Preset("freeze_live_long",
-        {{P::PitchSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
+        {{P::TransposeSt, 12.0f}, {P::Jitter, 0.4f}, {P::Feedback, 0.3f}, {P::SpreadCents, 15.0f},
          {P::SprayMs, 80.0f}, {P::ReverseProb, 0.3f}, {P::OnsetTrigger, 1.0f},
          {P::PositionSource, 0.0f}});
     live.script.Freeze(S(1) + 11, true);
@@ -587,7 +587,7 @@ std::vector<VectorCase> BuildCorpus() {
     // Subnormal input through the ring write, the onset detector and a scaled dry path,
     // under a wet path that decays to exact zero.
     PresetCase wet = Preset("subnormal_wet",
-        {{P::Mix, 0.5f}, {P::OutTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
+        {{P::Mix, 0.5f}, {P::WetTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
     wet.require   = {{C::SubnormalOutFrames, S(1)}, {C::Onsets, 4}};
     wet.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(wet);

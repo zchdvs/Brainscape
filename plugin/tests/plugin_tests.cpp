@@ -466,12 +466,12 @@ TEST_CASE("edits after prepare reach the engine as exact bits at the next block"
   r.pattern     = {480};
   r.beforeBlock = [&](int pos) {
     if (pos != change) return;
-    proc->Param(ParamId::PitchSt).SetPlainNotifyingHost(7.02f);
+    proc->Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.02f);
     proc->Param(ParamId::FilterMorph).SetPlainNotifyingHost(0.4f);
   };
   const Stereo got = RenderProcessor(*proc, in, {}, r);
   const auto   at  = [&](float pitch, float morph) {
-    return std::vector<RefEvent>{RefParam(change, ParamId::PitchSt, pitch),
+    return std::vector<RefEvent>{RefParam(change, ParamId::TransposeSt, pitch),
                                  RefParam(change, ParamId::FilterMorph, morph)};
   };
   RequireSame(got, RenderReference(Busy(), in, kRate, at(7.02f, 0.4f)), "UI edits");
@@ -483,7 +483,7 @@ TEST_CASE("edits after prepare reach the engine as exact bits at the next block"
 TEST_CASE("the plain slider attachment edits and shows exact values") {
   BrainscapeProcessor proc;
   juce::Slider        pitchKnob, morphKnob, mixKnob, delayKnob, cutoffKnob, posKnob;
-  BrainscapePlainAttachment pitch(proc.Param(ParamId::PitchSt), pitchKnob);
+  BrainscapePlainAttachment pitch(proc.Param(ParamId::TransposeSt), pitchKnob);
   BrainscapePlainAttachment morph(proc.Param(ParamId::FilterMorph), morphKnob);
   BrainscapePlainAttachment mix(proc.Param(ParamId::Mix), mixKnob);
   BrainscapePlainAttachment delay(proc.Param(ParamId::DelayMs), delayKnob);
@@ -491,12 +491,12 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   BrainscapePlainAttachment pos(proc.Param(ParamId::PositionSource), posKnob);
 
   pitchKnob.setValue(0.6, juce::sendNotificationSync);  // a knob turn: the pot path
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(PlainFromNormalized(ParamId::PitchSt, 0.6f)));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(PlainFromNormalized(ParamId::TransposeSt, 0.6f)));
 
   REQUIRE(pitch.CommitText("7.02"));
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(7.02f));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(7.02f));
   REQUIRE(pitch.CommitText("-0.37 st"));
-  REQUIRE(Bits(proc.Param(ParamId::PitchSt).Plain()) == Bits(-0.37f));
+  REQUIRE(Bits(proc.Param(ParamId::TransposeSt).Plain()) == Bits(-0.37f));
   REQUIRE(morph.CommitText("0.4"));
   REQUIRE(Bits(proc.Param(ParamId::FilterMorph).Plain()) == Bits(0.4f));
   REQUIRE(morph.CommitText("hp"));
@@ -590,7 +590,7 @@ TEST_CASE("session state round-trips bit for bit") {
     const auto values = SampleValues(d.id, seed += 977u, 1);
     a.Param(d.id).SetPlainNotifyingHost(values.back());
   }
-  a.Param(ParamId::PitchSt).SetPlainNotifyingHost(7.02f);
+  a.Param(ParamId::TransposeSt).SetPlainNotifyingHost(7.02f);
   WrapperSettings s;
   s.inputMode      = InputMode::Stereo;
   s.inputGainDb    = -3.5f;
@@ -724,13 +724,13 @@ TEST_CASE("host automation applies at the first frame of its block, at every hos
     r.pattern     = pattern;
     r.beforeBlock = [&](int pos) {  // a VST3 parameter change, as the wrapper delivers it
       if (appliedAt >= 0 || pos < 20011) return;
-      proc->Param(ParamId::PitchSt).setValue(0.73f);
+      proc->Param(ParamId::TransposeSt).setValue(0.73f);
       appliedAt = pos;
     };
     const Stereo got  = RenderProcessor(*proc, in, {}, r);
-    const float  sent = PlainFromNormalized(ParamId::PitchSt, 0.73f);
-    REQUIRE(Bits(proc->Param(ParamId::PitchSt).Plain()) == Bits(sent));
-    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::PitchSt, sent)}),
+    const float  sent = PlainFromNormalized(ParamId::TransposeSt, 0.73f);
+    REQUIRE(Bits(proc->Param(ParamId::TransposeSt).Plain()) == Bits(sent));
+    RequireSame(got, RenderReference(Busy(), in, kRate, {RefParam(appliedAt, ParamId::TransposeSt, sent)}),
                 PatternName(pattern).c_str());
   }
 }
@@ -888,7 +888,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
   const auto   id = [](ParamId p) { return static_cast<uint32_t>(p); };
   const auto   script = [&](BrainscapeProcessor& p) {
     p.PostAt(0, {E::Type::Param, E::Source::Ui, id(ParamId::Feedback), 0.5f});  // the first block
-    p.PostAt(10007, {E::Type::Param, E::Source::Ui, id(ParamId::PitchSt), 5.0f});
+    p.PostAt(10007, {E::Type::Param, E::Source::Ui, id(ParamId::TransposeSt), 5.0f});
     p.PostAt(20011, {E::Type::Trigger, E::Source::Ui, 0u, 1.0f});
     p.PostAt(30000, {E::Type::Param, E::Source::Ui, id(ParamId::Mix), 0.45f});  // after the host's
     p.PostAt(30000, {E::Type::Param, E::Source::Host, id(ParamId::Mix), 0.4f});
@@ -896,7 +896,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
   };
   const auto ref = [&](int triggerAt) {
     return RenderReference(Busy(), in, kRate,
-                           {RefParam(0, ParamId::Feedback, 0.5f), RefParam(10007, ParamId::PitchSt, 5.0f),
+                           {RefParam(0, ParamId::Feedback, 0.5f), RefParam(10007, ParamId::TransposeSt, 5.0f),
                             RefTrigger(triggerAt), RefParam(30000, ParamId::Mix, 0.4f),
                             RefParam(30000, ParamId::Mix, 0.45f), RefFreeze(40013, true)});
   };
@@ -907,7 +907,7 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
     HostRender r;
     r.pattern = pattern;
     RequireSame(RenderProcessor(*proc, in, {}, r), want, PatternName(pattern).c_str());
-    REQUIRE(proc->Param(ParamId::PitchSt).Plain() == 5.0f);  // mirrors follow once applied
+    REQUIRE(proc->Param(ParamId::TransposeSt).Plain() == 5.0f);  // mirrors follow once applied
     REQUIRE(proc->Param(ParamId::Mix).Plain() == 0.45f);
     // The engine splits at the stamps: one Process call per chunk, as with no events.
     REQUIRE(proc->GetStatus().engineCalls == ChunkCalls(pattern, 48000));
