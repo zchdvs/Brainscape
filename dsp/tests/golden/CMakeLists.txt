@@ -8,8 +8,8 @@ if(BRAINSCAPE_BUILD_M7_ORACLE)
   enable_language(C)
 endif()
 
-function(_brainscape_golden_harness name engine)
-  add_executable(${name} golden_main.cpp Corpus.cpp EventScript.cpp Render.cpp)
+function(_brainscape_golden_harness name engine main)
+  add_executable(${name} ${main} Corpus.cpp EventScript.cpp Render.cpp ParityStream.cpp)
   target_link_libraries(${name} PRIVATE ${engine})
   # The engine's private FP-environment header, for the hostile-environment renders.
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
@@ -25,8 +25,11 @@ function(_brainscape_golden_harness name engine)
   endif()
 endfunction()
 
-_brainscape_golden_harness(brainscape_golden brainscape_dsp)
-_brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks)
+_brainscape_golden_harness(brainscape_golden brainscape_dsp golden_main.cpp)
+_brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks golden_main.cpp)
+# The firmware parity image's stream (ParityStream.h) from the same harness, printed on the
+# host and under qemu-arm for tools/hil/parity_check.py (firmware/README.md).
+_brainscape_golden_harness(brainscape_parity_stream brainscape_dsp parity_stream_main.cpp)
 
 if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
   # Check mode (profile §6.1): every hash, per-second hash and counter must equal
@@ -62,4 +65,21 @@ if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
             --tag ctest-flush-$<CONFIG>
             --report ${CMAKE_CURRENT_BINARY_DIR}/golden-flush-$<CONFIG>.json
             $<IF:$<CONFIG:Debug>,--quick,--no-ablate>)
+
+  # The parity stream through tools/hil/parity_check.py (firmware/README.md): the short
+  # vectors in the harness's configuration and in the pedal's (maxBlockSize 48), which must
+  # give the same bits.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND AND NOT BRAINSCAPE_FP_NEGATIVE_CONTROL)
+    foreach(maxblock 512 48)
+      add_test(NAME golden_parity_stream_mb${maxblock}
+        COMMAND ${CMAKE_COMMAND} -DSTREAM=$<TARGET_FILE:brainscape_parity_stream>
+                -DMAX_BLOCK=${maxblock} -DTAG=ctest-$<CONFIG>
+                -DPYTHON=${Python3_EXECUTABLE}
+                -DCHECK=${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/hil/parity_check.py
+                -DGOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/golden.json
+                -DOUT=${CMAKE_CURRENT_BINARY_DIR}/parity-stream-mb${maxblock}-$<CONFIG>.jsonl
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/ParityStreamCheck.cmake)
+    endforeach()
+  endif()
 endif()

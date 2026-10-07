@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 
 #include "../FpEnvTestUtil.h"
 #include "EventScript.h"
@@ -160,11 +161,9 @@ Renderer::Renderer(const RenderConfig& cfg)
     : cfg_(cfg),
       queue_(std::make_unique<EventQueue>()),
       blockEvents_(EventQueue::kCapacity) {
-  EngineConfig ec;
-  ec.historyFrames      = 1u << cfg_.historyLog2;
-  const MemoryPlan plan = PlanMemory(ec);
+  const MemoryPlan plan = PlanMemory(MakeEngineConfig());
   ok_                   = !cfg_.blockPattern.empty();
-  for (uint32_t b : cfg_.blockPattern) ok_ = ok_ && b >= 1 && b <= ec.maxBlockSize;
+  for (uint32_t b : cfg_.blockPattern) ok_ = ok_ && b >= 1 && b <= cfg_.maxBlockSize;
   for (size_t t = 0; t < kNumTiers; ++t) {
     arenas_.bytes[t] = plan.bytes[t];
     if (plan.bytes[t] == 0) continue;
@@ -177,8 +176,42 @@ Renderer::Renderer(const RenderConfig& cfg)
   }
 }
 
+Renderer::Renderer(const RenderConfig& cfg, const Placement& placement)
+    : cfg_(cfg),
+      arenas_(placement.arenas),
+      engineStorage_(placement.engine),
+      queue_(std::make_unique<EventQueue>()),
+      blockEvents_(EventQueue::kCapacity) {
+  const MemoryPlan plan = PlanMemory(MakeEngineConfig());
+  ok_ = !cfg_.blockPattern.empty() && engineStorage_ != nullptr &&
+        reinterpret_cast<uintptr_t>(engineStorage_) % alignof(Engine) == 0;
+  for (uint32_t b : cfg_.blockPattern) ok_ = ok_ && b >= 1 && b <= cfg_.maxBlockSize;
+  for (size_t t = 0; t < kNumTiers; ++t) {
+    if (plan.bytes[t] == 0) continue;
+    ok_ = ok_ && arenas_.base[t] != nullptr && arenas_.bytes[t] >= plan.bytes[t] &&
+          reinterpret_cast<uintptr_t>(arenas_.base[t]) % plan.align[t] == 0;
+  }
+}
+
 Renderer::~Renderer() {
+  if (engineStorage_ != nullptr && engine_ != nullptr) engine_->~Engine();
   for (void* p : raw_) std::free(p);
+}
+
+EngineConfig Renderer::MakeEngineConfig() const {
+  EngineConfig ec;
+  ec.historyFrames = 1u << cfg_.historyLog2;
+  ec.maxBlockSize  = cfg_.maxBlockSize;
+  return ec;
+}
+
+Engine* Renderer::NewEngine() {
+  if (engineStorage_ == nullptr) {
+    ownedEngine_ = std::make_unique<Engine>();
+    return ownedEngine_.get();
+  }
+  if (engine_ != nullptr) engine_->~Engine();
+  return new (engineStorage_) Engine();
 }
 
 bool Renderer::Render(const VectorCase& v, const std::vector<testsignal::Note>& notes,
@@ -202,15 +235,15 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   // Exact-restart state (profile §2.3 #3), then LoadPreset(P, Exact). The engine is
   // Init'd once and every render restarts it, so each render after the first checks
   // that Restart returns a used engine to the state Init leaves.
-  EngineConfig cfg;
-  cfg.historyFrames = 1u << cfg_.historyLog2;
+  const EngineConfig cfg = MakeEngineConfig();
   if (engine_ == nullptr || cfg_.freshEngine) {
     for (size_t t = 0; t < kNumTiers; ++t) {
       if (arenas_.base[t] != nullptr) std::memset(arenas_.base[t], 0, arenas_.bytes[t]);
     }
-    engine_ = std::make_unique<Engine>();
+    engine_ = NewEngine();
     if (!engine_->Init(cfg, arenas_)) {
-      engine_.reset();
+      engine_ = nullptr;
+      ownedEngine_.reset();
       return false;
     }
   }
