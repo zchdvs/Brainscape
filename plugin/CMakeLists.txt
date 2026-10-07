@@ -74,10 +74,12 @@ target_compile_options(brainscape_plugin_warnings INTERFACE
 target_link_libraries(Brainscape
   PUBLIC
     brainscape_dsp
+    # The offline render, its hashes and recipes (tools/audition, mode-compiler.md §8.1, §9.1):
+    # JUCE-free, shared with `bspc render`. PUBLIC, as Audition.h includes its header.
+    brainscape_audition
   PRIVATE
     brainscape_compiler      # the exact number reader behind typed text (mode-compiler.md §6.5)
     juce::juce_audio_utils
-    juce::juce_cryptography  # SHA-256 of audition renders (companion §4.9)
     juce::juce_recommended_warning_flags
     brainscape_plugin_warnings
 )
