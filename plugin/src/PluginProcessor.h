@@ -116,6 +116,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   // The curation slice's document (mode-compiler.md §9.1): message thread only.
   CurationSession& Curation() noexcept { return *curation_; }
+  // The editor's view (BrainscapeEditor::View), kept while the editor is closed. Message thread.
+  int  EditorView() const noexcept { return editorView_; }
+  void SetEditorView(int view) noexcept { editorView_ = view; }
 
   // A monitoring trim on the output, after the output level: the curation slice's level-matched
   // A/B (§9.1). Never saved, never part of a preset or a render. Any thread.
@@ -323,6 +326,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<float> inputGainDb_{0.f}, outputGainDb_{0.f};
   std::atomic<float> monitorTrimDb_{0.f};
   std::atomic<uint32_t> loadSerial_{0};
+  int                   editorView_ = 0;
 
   std::atomic<double>   hostRate_{0.0};
   std::atomic<double>   statusEngineRate_{0.0};

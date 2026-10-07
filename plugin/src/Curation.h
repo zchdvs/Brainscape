@@ -128,6 +128,8 @@ class CurationSession {
     float  trimWorking = 0.f;  // dB, on B's output
   };
   LevelMatch GetLevelMatch() const;
+  // The working state changed since the last measurement: a new one starts once the knobs rest.
+  bool       MatchPending() const { return matchLevel_ && matchStale_; }
 
   // The mode's input class (§11.3): what the render scripts and the level match play into it,
   // Plucks for an attack mode, SoftNotes for a pad mode. Documents cannot declare it (the ratings

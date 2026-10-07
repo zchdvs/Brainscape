@@ -38,6 +38,7 @@ set(BRAINSCAPE_PLUGIN_SOURCES
   src/StateCodec.cpp
   src/TestInput.cpp
   src/gui/BrainscapeLookAndFeel.cpp
+  src/gui/CurationViews.cpp
   src/gui/Widgets.cpp
 )
 target_sources(Brainscape PRIVATE ${BRAINSCAPE_PLUGIN_SOURCES})
@@ -109,7 +110,9 @@ if(BRAINSCAPE_BUILD_TESTS)
 
   # Renders the editor offscreen to PNG at the default and minimum sizes.
   add_executable(brainscape_editor_snapshot tests/editor_snapshot.cpp)
-  target_link_libraries(brainscape_editor_snapshot PRIVATE Brainscape)
+  target_link_libraries(brainscape_editor_snapshot PRIVATE Brainscape brainscape_compiler)
+  target_compile_definitions(brainscape_editor_snapshot PRIVATE
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data")
   target_include_directories(brainscape_editor_snapshot PRIVATE
     src
     $<TARGET_PROPERTY:Brainscape,INCLUDE_DIRECTORIES>)

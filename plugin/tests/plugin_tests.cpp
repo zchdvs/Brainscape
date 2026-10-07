@@ -29,6 +29,7 @@
 #include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
 #include "Curation.h"
 #include "PlainAttachment.h"
+#include "gui/CurationViews.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
 #include "brainscape/Engine.h"
@@ -2146,6 +2147,55 @@ TEST_CASE("one click renders the document through the audition scripts with the 
   REQUIRE(st.dir.getChildFile("audition.json").existsAsFile());
   REQUIRE(st.dir.findChildFiles(juce::File::findFiles, false, "*.wav").size() >= 1);
   REQUIRE(st.summary.contains("factory.engram"));
+}
+
+// The pedal view's knob (mode-compiler.md §3.5, Q8): after a load it waits until the hand reaches
+// the stored position, then moves the macro; a caught knob follows what the host moves.
+TEST_CASE("a pedal knob picks up after a load, then sends MacroMoves") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  BrainscapeParam& time = proc->Macro(ParamId::MacroTime);
+  PickupKnob       knob;
+  knob.Bind(&time, juce::Colours::white, "Time", "", "");
+  REQUIRE(knob.Caught());  // opened at the value
+  REQUIRE(knob.Pointer() == time.getValue());
+  juce::String error;
+  REQUIRE(proc->Curation().Open(scratch.Copy("engram.json"), &error));
+  // Engram stores Time at 0.5, the knob's pointer too: still caught. Moved to 0.3 by the host:
+  // a caught knob follows.
+  time.setValueNotifyingHost(0.3f);
+  knob.Refresh({});
+  REQUIRE(knob.Pointer() == 0.3f);
+  // A load that stores another position locks it: Spillover-load Engram with Time at 0.7.
+  auto state = CompiledState("engram.json");
+  for (uint32_t k = 0; k < state->control.macroCount; ++k) {
+    if (state->control.positions[k].macroId == static_cast<uint32_t>(ParamId::MacroTime)) {
+      state->control.positions[k].position = 0.7f;
+    }
+  }
+  REQUIRE(proc->LoadPresetState(*state));
+  knob.Lock();
+  knob.Refresh({});
+  REQUIRE_FALSE(knob.Caught());
+  REQUIRE(knob.Pointer() == 0.3f);  // the hand stays where it was
+  knob.MoveTo(0.5f);                // short of 0.7: nothing moves
+  Pump(*proc);
+  REQUIRE_FALSE(knob.Caught());
+  REQUIRE(Bits(time.Plain()) == Bits(0.7f));
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));  // the stored leaf
+  knob.MoveTo(0.75f);  // across 0.7: caught, and the move goes out as a MacroMove
+  Pump(*proc);
+  REQUIRE(knob.Caught());
+  REQUIRE(Bits(time.Plain()) == Bits(0.75f));
+  PresetLeaf out[kMaxMacroTargets];
+  REQUIRE(EvalMacro(state->mode, ParamId::MacroTime, 0.75f, out, kMaxMacroTargets) == 1u);
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(out[0].value));
+  // Double-click catches a locked knob where the value is, sending nothing.
+  REQUIRE(proc->LoadPresetState(*state));
+  knob.Lock();
+  REQUIRE_FALSE(knob.Caught());
+  knob.Bind(nullptr, juce::Colours::white, "", "", "");
+  REQUIRE(knob.Caught());  // a knob with no target has nothing to wait for
 }
 
 TEST_CASE("latency, tail and supported layouts") {

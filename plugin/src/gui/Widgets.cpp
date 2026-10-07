@@ -21,8 +21,10 @@ juce::String DbText(float db) {
   return (db > 0.f ? "+" : "") + juce::String(db, 1) + " dB";
 }
 
+}  // namespace
+
 void DrawPanel(juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title,
-               juce::Colour accent, float scale, const juce::String& note = {}) {
+               juce::Colour accent, float scale, const juce::String& note) {
   const auto b = area.toFloat().reduced(0.5f);
   g.setColour(palette::kPanel);
   g.fillRoundedRectangle(b, 8.0f);
@@ -42,14 +44,12 @@ void DrawPanel(juce::Graphics& g, juce::Rectangle<int> area, const juce::String&
   }
 }
 
-void StyleCaption(juce::Label& l, float height, juce::Colour colour, bool bold = false) {
+void StyleCaption(juce::Label& l, float height, juce::Colour colour, bool bold) {
   l.setFont(UiFont(height, bold));
   l.setColour(juce::Label::textColourId, colour);
   l.setJustificationType(juce::Justification::centred);
   l.setInterceptsMouseClicks(false, false);
 }
-
-}  // namespace
 
 // ── ParamKnob ─────────────────────────────────────────────────────────────────────────
 
@@ -127,6 +127,10 @@ ParamKnob::ParamKnob(BrainscapeParam& param, juce::Colour accent) {
     slider_.setTooltip(tip);
     value_.setTooltip(tip);
   }
+  baseTip_        = getTooltip();
+  slider_.onPopup = [this] {
+    if (onPopup) onPopup();
+  };
   value_.setText(attachment_->DisplayText(), juce::dontSendNotification);
   Refresh();
 }
@@ -144,6 +148,45 @@ void ParamKnob::Refresh() {
   if (value_.isBeingEdited()) return;
   const juce::String text = attachment_->DisplayText();
   if (text != value_.getText()) value_.setText(text, juce::dontSendNotification);
+}
+
+void ParamKnob::SetMarks(const std::vector<juce::Colour>& macros, bool detached, bool pending,
+                         const juce::String& tip) {
+  const juce::String full = tip.isEmpty() ? baseTip_ : baseTip_ + "\n" + tip;
+  if (macros == marks_ && detached == detached_ && pending == pending_ && full == getTooltip()) return;
+  marks_    = macros;
+  detached_ = detached;
+  pending_  = pending;
+  setTooltip(full);
+  slider_.setTooltip(full);
+  value_.setTooltip(full);
+  value_.setColour(juce::Label::textColourId, pending ? palette::kWarn : palette::kText);
+  repaint();
+}
+
+void ParamKnob::mouseDown(const juce::MouseEvent& e) {
+  if (e.mods.isPopupMenu() && onPopup) onPopup();
+}
+
+// One dot per macro that moves the leaf, just left of the caption; hollow when detached.
+void ParamKnob::paintOverChildren(juce::Graphics& g) {
+  if (marks_.empty()) return;
+  const float d     = 6.0f * scale_;
+  const float space = 2.0f * scale_;
+  const auto  t     = title_.getBounds().toFloat();
+  const float textW = juce::GlyphArrangement::getStringWidth(title_.getFont(), title_.getText());
+  const float dotsW = static_cast<float>(marks_.size()) * (d + space);
+  float       x     = std::max(t.getX() + 1.0f, t.getCentreX() - textW * 0.5f - dotsW - 2.0f * scale_);
+  for (const juce::Colour& c : marks_) {
+    const auto dot = juce::Rectangle<float>(d, d).withCentre({x + d * 0.5f, t.getCentreY()});
+    g.setColour(c);
+    if (detached_) {
+      g.drawEllipse(dot.reduced(0.5f), 1.2f);
+    } else {
+      g.fillEllipse(dot);
+    }
+    x += d + space;
+  }
 }
 
 void ParamKnob::SetScale(float scale) {
