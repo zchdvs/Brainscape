@@ -119,8 +119,8 @@ std::string FormatDocument(const Document& doc, bool withEditor = true);
 // crush, a modulator, the step table; every other leaf's always does.
 bool ElementPresent(const brainscape::ModeBlob& mode, uint32_t id);
 // The row a schema-1 leaf name names (a Leaf or Reserved row the document addresses by its
-// path), or null. Rows 27 and 28 are structure in schema 1 (scheduler.sources lists onset; a
-// layer's position.source), so their names are not leaves of the document.
+// path), or null. Rows 27 and 28 are Retired since sound revision 2 (their names gone): schema 1
+// writes them as structure (scheduler.sources lists onset; a layer's position.source).
 const brainscape::ParamDescriptor* SchemaLeaf(std::string_view name);
 bool                               IsSchemaLeaf(uint32_t id);
 // The document path of a leaf name ("layer0.size_ms" -> "layers[0].size_ms"), and its JSON
@@ -132,10 +132,6 @@ const char* LeafWave(uint32_t id);
 // The macro ids' names: "activity" .. "aux2" for 69..76; null for other ids.
 const char* MacroName(uint32_t id);
 uint32_t    MacroIdByName(std::string_view name);  // 0 if none
-// Leaves held as structure in schema 1 and their value from the structure (rows 27, 28 while
-// they are Leaf rows, until sound revision 2 retires them).
-bool     StructureLeaf(uint32_t id);
-uint32_t StructureLeafBits(const brainscape::ModeBlob& mode, uint32_t id);
 
 // Floats as bits (no floating-point arithmetic in the compiler, §1.4 principle 3).
 uint32_t BitsOf(const float& f);

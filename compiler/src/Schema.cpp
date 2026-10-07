@@ -1528,9 +1528,7 @@ class Reader {
       std::string why = " is not a leaf of schema 1";
       for (const ParamDescriptor& d : kParamTable) {
         if (d.name == nullptr || name != d.name) continue;
-        if (StructureLeaf(static_cast<uint32_t>(d.id))) {
-          why = " is structure in schema 1 (scheduler.sources, a layer's position.source)";
-        } else if (d.kind == ParamKind::Macro) {
+        if (d.kind == ParamKind::Macro) {
           why = " is a macro; a macro targets leaves";
         } else {
           why = " is not a leaf of a preset";
@@ -1730,16 +1728,14 @@ class Reader {
               "a scale needs at least one pitch class");
       }
     }
-    // The leaves: every Leaf row of a present element, ascending (§6.2 STAT); rows 27 and 28
-    // from the structure while they are Leaf rows.
+    // The leaves: every Leaf row of a present element, ascending (§6.2 STAT).
     s.leafCount = 0;
     for (const ParamDescriptor& row : kParamTable) {
       const auto leafId = static_cast<uint32_t>(row.id);
       if (row.kind != ParamKind::Leaf || !ElementPresent(m, leafId)) continue;
       PresetLeaf& leaf = s.leaves[s.leafCount++];
       leaf.id          = leafId;
-      SetBits(&leaf.value,
-              StructureLeaf(leafId) ? StructureLeafBits(m, leafId) : leafBits_[leafId]);
+      SetBits(&leaf.value, leafBits_[leafId]);
     }
     // E11: two layers share the voices and the slots.
     if (m.schedule.layerCount == 2u) LayerBudget(s);

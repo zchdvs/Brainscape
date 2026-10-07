@@ -182,13 +182,6 @@ TEST_CASE("compile: every leaf is addressed by its path; later waves' leaves at 
       REQUIRE_FALSE(Compile(With(LeafPath(row.name), Num("0"))).ok);
       continue;
     }
-    if (StructureLeaf(id)) {
-      // Rows 27 and 28 are structure in schema 1: scheduler.onset_trigger is an unknown key,
-      // layers[0].position.source an enumeration.
-      Refused(With(LeafPath(row.name), Num("1")), id == 27u ? "E2" : "E3", nullptr);
-      REQUIRE(SchemaLeaf(row.name) == nullptr);
-      continue;
-    }
     REQUIRE(SchemaLeaf(row.name) == &row);
     const uint32_t    def   = Bits(row.def);
     const uint32_t    value = def != Bits(row.max) ? Bits(row.max) : Bits(row.min);
@@ -240,6 +233,43 @@ TEST_CASE("compile: the schema's ElementPresent is the validator's", "[compile]"
   }
 }
 
+TEST_CASE("compile: the retired rows 27 and 28 are structure, which this build plays",
+          "[compile]") {
+  using namespace brainscape;
+  // Sound revision 2 retired them (§4.2): no name, no leaf; schema 1 writes them as structure.
+  REQUIRE(FindParam(ParamId::OnsetTrigger)->kind == ParamKind::Retired);
+  REQUIRE(FindParam(ParamId::PositionSource)->kind == ParamKind::Retired);
+  REQUIRE(SchemaLeaf("scheduler.onset_trigger") == nullptr);
+  REQUIRE(SchemaLeaf("layer0.position.source") == nullptr);
+  Refused(With("scheduler.onset_trigger", Num("1")), "E2", "/scheduler/onset_trigger");
+  Refused(With("layers[0].position.source", Num("1")), "E3", "/layers/0/position/source");
+  // The structure they became compiles here (kSupportedModeFeatures), and no STAT leaf names
+  // them.
+  struct Case {
+    const char* path;
+    const char* json;
+    uint32_t    feature;
+  };
+  const Case cases[] = {
+      {"scheduler.sources", R"(["periodic", "onset", "footswitch", "midi_note"])",
+       kModeFeatureOnset},
+      {"layers[0].position.source", R"("mark")", kModeFeatureMarkPosition},
+  };
+  for (const Case& c : cases) {
+    INFO(c.path << " = " << c.json);
+    const std::string    text = With(c.path, Parse(c.json));
+    const CompileResult  r    = Ok(text);
+    const DecodedPackage p    = DecodePackage(r.package.data(), r.package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.features == c.feature);
+    for (uint32_t i = 0; i < p.state->leafCount; ++i) {
+      REQUIRE(p.state->leaves[i].id != static_cast<uint32_t>(ParamId::OnsetTrigger));
+      REQUIRE(p.state->leaves[i].id != static_cast<uint32_t>(ParamId::PositionSource));
+    }
+    RoundTrip(text);
+  }
+}
+
 TEST_CASE("compile: each later-wave feature is E6 here and compiles where supported", "[compile]") {
   using namespace brainscape;
   struct Case {
@@ -249,9 +279,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"scheduler.sources", R"(["periodic", "onset", "footswitch", "midi_note"])",
-       kModeFeatureOnset, "sound revision 2"},
-      {"layers[0].position.source", R"("mark")", kModeFeatureMarkPosition, "sound revision 2"},
       {"scheduler.sources", R"(["periodic", "footswitch"])", kModeFeatureSources, "W1"},
       {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", kModeFeaturePitchSet, "W1"},
       {"layers[0].pitch.select", R"("random")", kModeFeaturePitchSet, "W1"},
@@ -361,7 +388,7 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
       With("scheduler.sources", Parse(R"(["clock", "periodic", "footswitch", "midi_note"])")), "E6",
       "/scheduler/sources");
   REQUIRE(clock[0].message ==
-          "`clock` needs W2 (CLOCK); this build supports periodic, footswitch, midi_note");
+          "`clock` needs W2 (CLOCK); this build supports periodic, onset, footswitch, midi_note");
   Refused(With("layers[0].voice_count", Num("8")), "E6", "/layers/0/voice_count");
   Refused(
       With(
@@ -767,9 +794,9 @@ TEST_CASE("migrate: a BSWS v1 session becomes a preset document", "[compile]") {
   const std::string text = FormatDocument(d);
   REQUIRE(text.find("\"sources\": [\"periodic\", \"onset\", \"footswitch\", \"midi_note\"]") !=
           std::string::npos);
-  // It compiles where onset is supported (sound revision 2), and is E6 here.
-  Refused(text, "E6", "/scheduler/sources");
-  Ok(text, AllFeatures());
+  // Onset is sound revision 2's structure, which this build plays.
+  REQUIRE(d.state->mode.features == brainscape::kModeFeatureOnset);
+  Ok(text);
   s[4] = 2;
   REQUIRE_FALSE(MigrateSession(s.data(), s.size(), "x", "X", &d, &f));
 }

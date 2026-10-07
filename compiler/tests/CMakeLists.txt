@@ -40,8 +40,8 @@ add_test(NAME compiler_unit COMMAND bsc_tests)
 # bspc-roundtrip over the committed example documents (§8.3): each compiles, is canonical and
 # stamped, decompiles to itself, rebuilds without its JSON section and recompiles to the same
 # bytes; the sorted manifest of package, sound and control hashes must equal the committed one
-# on every host. No package is committed before sound revision 2 (§7.6 item 3): the manifest
-# holds their hashes.
+# on every host. The examples commit no package: the manifest holds their hashes (the golden
+# corpus's packages are committed, dsp/tests/golden/presets/).
 file(GLOB _bsc_examples RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/data CONFIGURE_DEPENDS
      ${CMAKE_CURRENT_SOURCE_DIR}/data/*.json)
 list(SORT _bsc_examples)

@@ -236,11 +236,6 @@ bool DocumentFromPackage(const uint8_t* bytes, const DecodedPackage& p, Document
     if (row == nullptr || row->kind != ParamKind::Leaf || !ElementPresent(s.mode, leafId)) {
       return fail("STAT holds id " + Dec(leafId) + ", which schema 1 has no key for here");
     }
-    if (StructureLeaf(leafId) && BitsOf(s.leaves[i].value) != StructureLeafBits(s.mode, leafId)) {
-      return fail(std::string(row->name) +
-                  " disagrees with the structure, which schema 1 "
-                  "writes instead (scheduler.sources, position.source)");
-    }
   }
   for (const ParamDescriptor& row : kParamTable) {
     const auto leafId = static_cast<uint32_t>(row.id);

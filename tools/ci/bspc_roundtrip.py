@@ -30,7 +30,7 @@ and every leg writes the same sorted manifest of package hashes.
 
 Document sets:
   compiler/tests/data        the compiler's example documents; MANIFEST holds their hashes
-                             (no package is committed before sound revision 2, §7.6 item 3)
+                             (the examples commit no package)
   dsp/tests/golden/presets   the golden corpus's package presets (§10.3): each .json beside
                              its .bsp, and MANIFEST; frozen/ is exempt (never rebuilt or
                              re-stamped)

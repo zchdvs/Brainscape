@@ -154,28 +154,12 @@ bool ElementPresent(const ModeBlob& mode, uint32_t leafId) {
   return true;
 }
 
-bool StructureLeaf(uint32_t leafId) {
-  return leafId == static_cast<uint32_t>(ParamId::OnsetTrigger) ||
-         leafId == static_cast<uint32_t>(ParamId::PositionSource);
-}
-
-uint32_t StructureLeafBits(const ModeBlob& mode, uint32_t leafId) {
-  constexpr uint32_t kOne = 0x3F800000u;
-  if (leafId == static_cast<uint32_t>(ParamId::OnsetTrigger)) {
-    return (mode.schedule.sources & kSourceOnset) != 0u ? kOne : 0u;
-  }
-  if (leafId == static_cast<uint32_t>(ParamId::PositionSource)) {
-    return mode.layers[0].source == PositionSource::Mark ? kOne : 0u;
-  }
-  return 0u;
-}
-
 bool IsSchemaLeaf(uint32_t leafId) {
   // A Leaf row, or a Reserved row that a later wave makes a Leaf: IDs 29-68 (design §4.2). The
   // Reserved rows from 69 on become performance and device rows (perf.reverse, perf.loop_level,
   // global.trigger_offset), which no preset document holds.
   const ParamDescriptor* d = FindParam(static_cast<ParamId>(leafId));
-  return d != nullptr && d->name != nullptr && !StructureLeaf(leafId) &&
+  return d != nullptr && d->name != nullptr &&
          (d->kind == ParamKind::Leaf || (d->kind == ParamKind::Reserved &&
                                          leafId < static_cast<uint32_t>(ParamId::MacroActivity)));
 }

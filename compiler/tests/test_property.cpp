@@ -209,12 +209,13 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 }
 
 // Committed digests (§8.3): the same on every host. Re-minted only when the compiler's output
-// or verdicts change on purpose (the package rule, §8.3).
+// or verdicts change on purpose (the package rule, §8.3). Re-minted at sound revision 2: the
+// header's sound_rev, STAT without the retired rows 27 and 28, onset and mark compiled.
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "ff5ade932ce1c3f5fd2e9adb8579a468f865cf8d590c71b4241f3a0b6d7baa62";
+    "6570a2fff1b9a26bd6284e8a2cf6d5d9469b5387a32f6c0d19da0abc70796f7a";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "e933b4c460eacf30cf86435190d7ce0d809de45ce502abd025b783357d22b508";
+const char* const  kFuzzDigest = "5ce41a995b0e65b640972b0fd906fc821aec35adbb4a9f400ff41b768471c798";
 
 }  // namespace
 

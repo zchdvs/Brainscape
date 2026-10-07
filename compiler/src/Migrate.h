@@ -20,7 +20,7 @@ void MigrateByName(json::Value* root, uint32_t fromVersion);
 // document (§4.4): IDs 1-26 by name; ID 27 at 0.5 or more lists onset among the sources; ID 28
 // at 0.5 or more sets layer 0's position source to mark; macros take their defaults and their
 // positions 0.5. Values are canonicalized as SetParam would. Warnings name what changes: a
-// nonzero wet trim (it no longer scales the dry signal from sound revision 2), and ids this
+// nonzero wet trim (it no longer scales the dry signal since sound revision 2), and ids this
 // build does not hold as leaves. False for a malformed or newer session.
 bool MigrateSession(const uint8_t* bytes, size_t length, const std::string& id,
                     const std::string& name, Document* out, std::vector<Finding>* findings);
