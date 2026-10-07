@@ -58,7 +58,7 @@ def index(pid, family="echoic", rev=3, sound="a" * 64, renders=None, failed=Fals
 class RatingsTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="bsa-ratings-")
-        self.log = os.path.join(self.dir, "factory", "AUDITION.json")
+        self.log = os.path.join(self.dir, "factory", "AUDITION.md")
         self.renders = os.path.join(self.dir, "renders")
         os.makedirs(self.renders)
 
@@ -78,8 +78,7 @@ class RatingsTest(unittest.TestCase):
             json.dump(idx, f)
 
     def log_json(self):
-        with open(self.log, encoding="utf-8") as f:
-            return json.load(f)
+        return ratings.load_log(self.log)
 
     def rate(self, pid, verdict="keep", knobs=4):
         args = ["rate", "--log", self.log, "--renders", self.renders, pid, "--chord", "yes",
@@ -119,12 +118,24 @@ class RatingsTest(unittest.TestCase):
         self.assertEqual(rec["hash"], h("S3.x.plucks/v1/all"))
         self.assertEqual(len(rec["seconds"]), 20 * ratings.SECOND_DIGITS)
         self.assertFalse(r["prescreen_failed"])
-        md = read(ratings.md_path(self.log))
+        md = read(self.log)
         self.assertIn("| factory.engram | echoic | attack | rated | 3 | aaaaaaaaaaaa |", md)
         self.assertEqual(self.run_cli("md", "--log", self.log, "--check")[0], 0)
-        with open(ratings.md_path(self.log), "a", encoding="utf-8") as f:
-            f.write("hand edit\n")
+        # The table is generated: a hand edit is found, and `md` restores it from the data.
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(md.replace("| rated |", "| keep |"))
         self.assertEqual(self.run_cli("md", "--log", self.log, "--check")[0], 1)
+        self.assertEqual(self.run_cli("md", "--log", self.log)[0], 0)
+        self.assertEqual(read(self.log), md)
+        # The data block is the log: without it, or broken, nothing is read.
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(md.replace(ratings.DATA_MARKER, "<!-- -->"))
+        rc, out = self.run_cli("md", "--log", self.log, "--check")
+        self.assertEqual(rc, 2)
+        self.assertIn("no ratings data block", out)
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(md.replace('"format": "brainscape-ratings/1",', '"format": "brainscape-ratings/1"'))
+        self.assertEqual(self.run_cli("md", "--log", self.log, "--check")[0], 2)
 
     def test_rate_refuses_partial_renders_and_bad_knobs(self):
         self.run_cli("init", "--log", self.log)
@@ -191,7 +202,7 @@ class RatingsTest(unittest.TestCase):
         self.assertEqual([(x["render"], x["from_second"]) for x in row["relisten"]],
                          [("S3.x.plucks", 4), ("S7.x.plucks", 0)])
         self.assertEqual(row["rating"]["sound_rev"], 3)  # not carried
-        md = read(ratings.md_path(self.log))
+        md = read(self.log)
         self.assertIn("`factory.lull`: S3.x.plucks from 4 s; S7.x.plucks from 0 s", md)
         # Re-rated on the new renders, the row is current again.
         self.assertEqual(self.rate("factory.lull")[0], 0)

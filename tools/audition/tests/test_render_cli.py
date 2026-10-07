@@ -17,6 +17,9 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RATINGS = os.path.join(os.path.dirname(HERE), "ratings.py")
+sys.path.insert(0, os.path.dirname(HERE))
+import ratings  # noqa: E402
+
 ARGS = None
 
 
@@ -104,11 +107,16 @@ class RenderCliTest(unittest.TestCase):
             rc, text = self.bspc("--declarations", bad, self.engram)
             self.assertEqual(rc, 2, (declare, text))
             self.assertIn("declare.", text)
+        with open(bad, "w") as f:
+            f.write("# Factory audition log\n\nNo data block.\n")
+        rc, text = self.bspc("--declarations", bad, self.engram)
+        self.assertEqual(rc, 2, text)
+        self.assertIn("no ratings data block", text)
         rc, text = self.bspc(self.engram, self.engram)
         self.assertEqual(rc, 2, text)  # one id twice
 
     def test_declarations_and_the_carry_forward(self):
-        log = os.path.join(ARGS.work, "factory", "AUDITION.json")
+        log = os.path.join(ARGS.work, "factory", "AUDITION.md")
         rc, text = run(sys.executable, RATINGS, "init", "--log", log)
         self.assertEqual(rc, 0, text)
         rc, text = run(sys.executable, RATINGS, "declare", "--log", log, "factory.engram", "--class", "pad")
@@ -143,7 +151,7 @@ class RenderCliTest(unittest.TestCase):
         self.assertIn("stale", text)
         rc, text = run(sys.executable, RATINGS, "carry", "--log", log, "--renders", renders2)
         self.assertEqual(rc, 0, text)
-        row = load(log)["presets"]["factory.engram"]
+        row = ratings.load_log(log)["presets"]["factory.engram"]
         self.assertEqual(row["status"], "re-listen")
         gone = [x for x in row["relisten"] if x["why"] == "gone"]
         moved = [x for x in row["relisten"] if x["why"] == "changed"]
@@ -153,7 +161,7 @@ class RenderCliTest(unittest.TestCase):
         # Back on the original renders, the rating holds again.
         rc, text = run(sys.executable, RATINGS, "carry", "--log", log, "--renders", renders)
         self.assertEqual(rc, 0, text)
-        self.assertEqual(load(log)["presets"]["factory.engram"]["status"], "rated")
+        self.assertEqual(ratings.load_log(log)["presets"]["factory.engram"]["status"], "rated")
 
 
 def main():

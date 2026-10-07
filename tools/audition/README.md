@@ -36,7 +36,7 @@ in binary64, so they are the same bytes on every machine too.
 ## `bspc render`
 
 ```bash
-bspc render [--script S0,S2,...|all] [--class attack|pad] [--declarations LOG.json]
+bspc render [--script S0,S2,...|all] [--class attack|pad] [--declarations AUDITION.md]
             [--metrics] [--no-wav] [-o DIR] FILE...
 ```
 
@@ -134,9 +134,11 @@ and Activity's response is judged through the output; both are information, not 
 
 ## The ratings log
 
-`ratings.py` keeps the factory audition's ratings in one JSON file, by default
-`firmware/factory/AUDITION.json`, and generates `AUDITION.md` beside it. A row per preset `id`
-holds what the mode declares (input class, self-oscillation, needs attacks) and the owner's
+`ratings.py` keeps the factory audition's ratings in the file the design names,
+`firmware/factory/AUDITION.md` by default: tables generated for reading, and at its end the log
+itself, a JSON block under a marker line that the script writes and `bspc render
+--declarations` reads. (It is not a `.json` file because every `.json` in `firmware/factory/` is
+a preset document to `bspc_roundtrip.py`.) A row per preset `id` holds what the mode declares (input class, self-oscillation, needs attacks) and the owner's
 rating: one chord sounds finished (yes or no), each knob 1–5, the level against bypass, keep,
 revise or drop, notes; recorded with the `sound_rev`, `sound_hash` and the hash of every
 S0–S11 render the rating was made on (with per-second hashes), and whether the pre-screen had
@@ -145,7 +147,7 @@ failed.
 ```bash
 python tools/audition/ratings.py init
 python tools/audition/ratings.py declare factory.lull --class pad --self-oscillating
-bspc render --script all --metrics --declarations firmware/factory/AUDITION.json -o renders firmware/factory/*.json
+bspc render --script all --metrics --declarations firmware/factory/AUDITION.md -o renders firmware/factory/*.json
 python tools/audition/ratings.py rate --renders renders factory.lull --chord yes \
     --knob activity=4 --knob repeats=3 --knob shape=4 --knob time=3 --knob space=4 --knob filter=5 \
     --level "+0.8 LU" --verdict keep --notes "..."
@@ -162,7 +164,8 @@ any other row is marked "re-listen", naming each changed or missing render and i
 differing second. Renders a rating never heard (S11 against a mode added to the set since) do
 not break the carry; they are listed. `exit` checks §11.3's exit: at least 10 modes kept, one
 in every family, every kept mode's knobs rated 3 or more, and no objective failure in their
-latest pre-screen. `md --check` fails when `AUDITION.md` is stale.
+latest pre-screen. `md` regenerates the tables from the data block, and `md --check` fails when
+they differ from it (a hand edit).
 
 ## Tests
 
@@ -175,8 +178,9 @@ latest pre-screen. `md --check` fails when `AUDITION.md` is stale.
   plan; every pre-screen threshold on both sides of its edge; a suite written to disk.
 - `audition_ratings` (`tests/test_ratings.py`): the log, declarations, a rating, the
   carry-forward on a re-stamp, re-listen with the first differing second, gone and new renders,
-  the exit criteria and `AUDITION.md`'s freshness, over synthetic indexes.
+  the exit criteria, the tables against the data block and a missing or broken block, over
+  synthetic indexes.
 - `audition_bspc_render` (`tests/test_render_cli.py`): `bspc render` end to end on
   `compiler/tests/data/engram.json`: the files and their hashes, the same hashes without WAVs,
-  refused usage, declarations read from a log, and a rating carried and then marked re-listen
-  when the document changes what it plays.
+  refused usage and declarations, declarations read from a log, and a rating carried and then
+  marked re-listen when the document changes what it plays.

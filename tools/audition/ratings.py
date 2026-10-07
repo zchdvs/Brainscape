@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """The factory audition's ratings log and its carry-forward (docs/design/mode-compiler.md §11.3).
 
-The log is one JSON file (by default firmware/factory/AUDITION.json) with AUDITION.md generated
-beside it. It holds one row per preset, keyed by the preset `id`:
+The log is one file, by default firmware/factory/AUDITION.md: a table generated for reading, and
+under it the log itself, a JSON block the script writes (every *.json in firmware/factory is a
+preset document to bspc_roundtrip, so the data lives in the Markdown file the design names). It
+holds one row per preset, keyed by the preset `id`:
 
   * what the mode declares for its audition: its input class (attack or pad), whether it is meant
     to self-oscillate, whether it is documented as needing attacks. `bspc render --declarations`
@@ -29,8 +31,9 @@ against a mode added to the set since) do not break the carry; they are listed a
   ratings.py exit     [--log LOG] [--renders DIR]
   ratings.py md       [--log LOG] [--check]
 
-Exit codes: 0 success; 1 a check failed (carry --check: a row would change; md --check: AUDITION.md
-is stale; exit: the criteria are not met); 2 usage or input errors. Standard library only.
+Exit codes: 0 success; 1 a check failed (carry --check: a row would change; md --check: the
+table is not what the data block generates; exit: the criteria are not met); 2 usage or input
+errors. Standard library only.
 """
 import argparse
 import hashlib
@@ -43,7 +46,11 @@ FORMAT = "brainscape-ratings/1"
 INDEX_FORMAT = "brainscape-audition-index/1"
 # The repository's log, wherever the script is run from.
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_LOG = os.path.join(REPO, "firmware", "factory", "AUDITION.json")
+DEFAULT_LOG = os.path.join(REPO, "firmware", "factory", "AUDITION.md")
+# The data block: this line, then a ```json fence holding the log, then a closing ``` line.
+# bspc render --declarations finds it the same way (tools/bspc/main.cpp, kRatingsMarker).
+DATA_MARKER = "<!-- brainscape-ratings/1 data: written by tools/audition/ratings.py, never by hand -->"
+FENCE_OPEN, FENCE_CLOSE = "```json", "```"
 SCRIPTS = ["S%d" % i for i in range(12)]
 KNOBS = ["activity", "repeats", "shape", "time", "space", "filter"]
 FAMILIES = ["recall", "reverie", "misfire", "echoic"]
@@ -65,14 +72,33 @@ def empty_log():
     return {"format": FORMAT, "presets": {}}
 
 
-def load_log(path):
+def parse_log(text, path):
+    """The log in a file's data block."""
+    lines = text.splitlines()
+    if DATA_MARKER not in lines:
+        raise UsageError("%s has no ratings data block (ratings.py init)" % path)
+    start = lines.index(DATA_MARKER) + 1
+    end = next((i for i in range(start + 1, len(lines)) if lines[i] == FENCE_CLOSE), None)
+    if start >= len(lines) or lines[start] != FENCE_OPEN or end is None:
+        raise UsageError("%s: the data block is not a ```json fence after its marker line" % path)
+    try:
+        log = json.loads("\n".join(lines[start + 1:end]))
+    except ValueError as e:
+        raise UsageError("%s: the data block: %s" % (path, e))
+    if not isinstance(log, dict) or log.get("format") != FORMAT or not isinstance(log.get("presets"), dict):
+        raise UsageError("%s is not a %s log" % (path, FORMAT))
+    return log
+
+
+def read_text(path):
     if not os.path.exists(path):
         raise UsageError("%s does not exist (ratings.py init)" % path)
     with open(path, encoding="utf-8") as f:
-        log = json.load(f)
-    if log.get("format") != FORMAT or not isinstance(log.get("presets"), dict):
-        raise UsageError("%s is not a %s log" % (path, FORMAT))
-    return log
+        return f.read()
+
+
+def load_log(path):
+    return parse_log(read_text(path), path)
 
 
 def dump_json(obj):
@@ -82,13 +108,7 @@ def dump_json(obj):
 def save_log(path, log):
     log["presets"] = dict(sorted(log["presets"].items()))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(dump_json(log))
-    with open(md_path(path), "w", encoding="utf-8", newline="\n") as f:
         f.write(render_md(log))
-
-
-def md_path(log_path):
-    return os.path.join(os.path.dirname(log_path), "AUDITION.md")
 
 
 def new_row():
@@ -288,9 +308,10 @@ def cell(text):
 
 def render_md(log):
     out = ["# Factory audition log", "",
-           "Generated from `AUDITION.json` by `tools/audition/ratings.py` (docs/design/mode-compiler.md",
-           "§11.3); change it through the script (`declare`, `rate`, `carry`), not by hand. Ratings are",
-           "keyed by preset id and the S0-S11 render hashes they were made on; *Renders* names that set.",
+           "The factory modes' ratings (docs/design/mode-compiler.md §11.3), written by",
+           "`tools/audition/ratings.py` (`declare`, `rate`, `carry`, `refresh`), never by hand: the",
+           "tables are generated from the data block at the end, which is the log. Ratings are keyed",
+           "by preset id and the S0-S11 render hashes they were made on; *Renders* names that set.",
            "Knobs are rated 1-5.", ""]
     head = ["Preset", "Family", "Class", "Status", "sound_rev", "sound_hash", "Renders", "Chord"] + \
            [k.capitalize() for k in KNOBS] + ["Level", "Verdict", "Notes"]
@@ -321,7 +342,11 @@ def render_md(log):
     met, lines = exit_report(log)
     out += ["", "## Exit criteria", "", "Met." if met else "Not met.", ""]
     out += ["    " + line for line in lines]
-    return "\n".join(out) + "\n"
+    out += ["", "## Data", "",
+            "The log: each preset's declarations (which `bspc render --declarations` reads), its",
+            "rating and the hashes of the renders it was made on.", "",
+            DATA_MARKER, FENCE_OPEN]
+    return "\n".join(out) + "\n" + dump_json(log) + FENCE_CLOSE + "\n"
 
 
 # ── Commands ────────────────────────────────────────────────────────────────────────────────
@@ -331,7 +356,7 @@ def cmd_init(a):
         raise UsageError("%s exists" % a.log)
     os.makedirs(os.path.dirname(a.log) or ".", exist_ok=True)
     save_log(a.log, empty_log())
-    print("wrote %s and %s" % (a.log, md_path(a.log)))
+    print("wrote %s" % a.log)
     return 0
 
 
@@ -449,20 +474,14 @@ def cmd_exit(a):
 
 
 def cmd_md(a):
-    log = load_log(a.log)
-    text = render_md(log)
-    path = md_path(a.log)
+    current = read_text(a.log)
+    log = parse_log(current, a.log)
     if a.check:
-        current = None
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                current = f.read()
-        if current != text:
-            print("%s is stale (ratings.py md)" % path)
+        if current != render_md(log):
+            print("%s differs from what its data block generates (ratings.py md)" % a.log)
             return 1
         return 0
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    save_log(a.log, log)
     return 0
 
 

@@ -224,7 +224,7 @@ int Usage() {
       "                                     manifest of package, sound and control hashes\n"
       "  migrate-session SESSION [--id ID] [--name NAME] [-o OUT.json]\n"
       "                                     a BSWS v1 plugin session as a preset document\n"
-      "  render [--script S0,...|all] [--class attack|pad] [--declarations LOG.json] [--metrics]\n"
+      "  render [--script S0,...|all] [--class attack|pad] [--declarations AUDITION.md] [--metrics]\n"
       "         [--no-wav] [-o DIR] FILE...  the audition scripts S0-S11 for each document or\n"
       "                                     package (the files are the set S10 and S11 visit):\n"
       "                                     16-bit WAVs, a recipe per render, hashes and, with\n"
@@ -640,18 +640,57 @@ std::string Span(const Bytes& b, const brainscape::SectionSpan& s) {
   return std::string(reinterpret_cast<const char*>(b.data()) + s.offset, s.length);
 }
 
+// The ratings log's data block (tools/audition/ratings.py, DATA_MARKER): this line, then a
+// ```json fence holding the log, then a closing ``` line, in firmware/factory/AUDITION.md.
+constexpr std::string_view kRatingsMarker =
+    "<!-- brainscape-ratings/1 data: written by tools/audition/ratings.py, never by hand -->";
+
+// The log's JSON: AUDITION.md's data block, or the whole file when it is JSON alone. The block's
+// first line number in the file, for messages, goes to *firstLine.
+bool RatingsJson(const std::string& text, std::string* json, uint32_t* firstLine) {
+  std::vector<std::string_view> lines;
+  for (size_t at = 0; at <= text.size();) {
+    size_t end = text.find('\n', at);
+    if (end == std::string::npos) end = text.size();
+    std::string_view line(text.data() + at, end - at);
+    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+    lines.push_back(line);
+    at = end + 1;
+  }
+  const auto marker = std::find(lines.begin(), lines.end(), kRatingsMarker);
+  if (marker == lines.end()) {
+    const size_t first = text.find_first_not_of(" \t\r\n");
+    *json      = text;
+    *firstLine = 1;
+    return first != std::string::npos && text[first] == '{';
+  }
+  const auto open = marker + 1;
+  if (open == lines.end() || *open != "```json") return false;
+  const auto close = std::find(open + 1, lines.end(), std::string_view("```"));
+  if (close == lines.end()) return false;
+  json->clear();
+  for (auto it = open + 1; it != close; ++it) json->append(it->data(), it->size()).push_back('\n');
+  *firstLine = static_cast<uint32_t>(open - lines.begin()) + 2;
+  return true;
+}
+
 // The declarations of a ratings log (tools/audition/ratings.py): presets.<id>.declare.
 bool ReadDeclarations(const std::string& path,
                       std::vector<std::pair<std::string, bsa::Declarations>>* out) {
-  std::string text;
+  std::string text, json;
   if (!ReadText(path, &text)) {
     ErrLine("bspc render: cannot read " + path);
     return false;
   }
+  uint32_t firstLine = 1;
+  if (!RatingsJson(text, &json, &firstLine)) {
+    ErrLine(path + ": no ratings data block (tools/audition/ratings.py init)");
+    return false;
+  }
   bsc::json::Value      root;
   bsc::json::ParseError e;
-  if (!bsc::json::Parse(text, &root, &e)) {
-    ErrLine(path + ":" + bsc::Dec(e.line) + ":" + bsc::Dec(e.column) + ": " + e.message);
+  if (!bsc::json::Parse(json, &root, &e)) {
+    ErrLine(path + ":" + bsc::Dec(e.line + firstLine - 1) + ":" + bsc::Dec(e.column) + ": " + e.message);
     return false;
   }
   const bsc::json::Value* format  = root.Find("format");
