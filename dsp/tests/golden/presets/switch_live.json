@@ -4,7 +4,7 @@
   "name": "Switch live",
   "family": "none",
   "sound_rev": 2,
-  "sound_hash": "0c6582a3ba0604ee2149c91a1c1a969f891c276a785e8802641cdfc3d7fedbc1",
+  "sound_hash": "41616be2fd560a3b68977401a8b32e36bfa42f0f4e4a68bd072fbb169b756103",
   "meta": {
     "author": "",
     "description": "Golden corpus: mode switches, the default structure.",
@@ -39,8 +39,8 @@
           }
         ],
         "select": "cycle",
-        "transpose_st": 0,
-        "spread_cents": 0,
+        "transpose_st": -5,
+        "spread_cents": 15,
         "reverse_prob": 0
       },
       "pan_spread": 0.5
@@ -157,6 +157,23 @@
           "curve": 4
         }
       ]
+    },
+    {
+      "id": "aux1",
+      "targets": [
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.6],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.pan_spread",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
     }
   ],
   "controls": {
@@ -166,7 +183,22 @@
       "shape": 0.5,
       "time": 0.5,
       "space": 0.5,
-      "filter": 0.5
-    }
+      "filter": 0.5,
+      "aux1": 0.5
+    },
+    "expression": [
+      {
+        "target": "macro.aux1",
+        "lo": 0.2,
+        "hi": 1,
+        "curve": 1
+      },
+      {
+        "target": "layer0.window.sustain",
+        "lo": 0.1,
+        "hi": 0.9,
+        "curve": 2
+      }
+    ]
   }
 }

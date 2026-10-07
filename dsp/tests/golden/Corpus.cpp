@@ -57,15 +57,18 @@ PresetCase FreezeMarks() {
 // toggles and footswitch triggers among them (grown from the prototype battery). Until sound
 // revision 2 it toggled rows 27 and 28 too; now that they are structure, every other step is a
 // Spillover load between two modes (presets/mode_onset_marks.json, onset and marks, and the
-// default mode), in both switch styles, before the step's leaves are set again.
+// default mode), in both switch styles, before the step's leaves are set again. A load turns
+// freeze off (profile §5.10), so none lands while a freeze is held (steps k % 17 = 6 to 8): each
+// freeze holds its second, as before revision 2.
 PresetCase AutomationOffGrid(int64_t frames) {
   PresetCase p = Preset("automation_offgrid", {});
   Script&    s = p.script;
   int64_t    k = 0;
   for (int64_t base = 0; base < frames; base += S(1) / 4, ++k) {
-    const int64_t f = base + 1 + (k * 37) % 47;  // never a multiple of 48
-    if (k > 0 && k % 2 == 0) {  // the mode changes with (k / 2) % 2
-      // FastCut and Trails each into both modes: FastCut at k = 2, 8, 10, 16, ...
+    const int64_t f      = base + 1 + (k * 37) % 47;  // never a multiple of 48
+    const bool    frozen = k % 17 >= 6 && k % 17 <= 8;  // engaged at 5, released at 9
+    if (k > 0 && k % 2 == 0 && !frozen) {  // the mode changes with (k / 2) % 2
+      // FastCut and Trails each into both modes: FastCut at k = 2, 10, 16, 18, 26, ...
       const SwitchStyle style = k % 8 == 0 || k % 8 == 2 ? SwitchStyle::FastCut : SwitchStyle::Trails;
       if ((k / 2) % 2 == 1) {
         s.SpilloverPackage(f, "mode_onset_marks", style);
@@ -103,9 +106,9 @@ PresetCase AutomationOffGrid(int64_t frames) {
     if (k % 17 == 9) s.Freeze(f, false);
     if (k % 6 == 3) s.Trigger(f + 5);
   }
-  p.require   = {{C::Events, 1000},     {C::OffGridEvents, 1000}, {C::Triggers, 5},
-                 {C::FreezeEngages, 2}, {C::Onsets, 5},          {C::Loads, 20},
-                 {C::ModeSwitches, 20}};
+  p.require   = {{C::Events, 1000},       {C::OffGridEvents, 1000}, {C::Triggers, 5},
+                 {C::FreezeEngages, 3},   {C::FrozenFrames, S(2)},  {C::FrozenOnsets, 3},
+                 {C::Onsets, 5},          {C::Loads, 18},           {C::ModeSwitches, 17}};
   p.ablate    = {Feature::ModeSwitch, Feature::FastCut};
   p.invariant = {Invariance::HostileFpEnv};
   return p;
@@ -232,26 +235,43 @@ PresetCase ExpressionPedal() {
   return p;
 }
 
-// Mode changes are Spillover loads (mode-compiler.md §7.3), here with long dense grains: from
-// onsets and marks (presets/switch_marks.json) to the default mode with Trails
-// (switch_live.json), to onsets alone with FastCut (switch_onset.json), back to marks with
-// FastCut 77 frames later, inside the first fade (each load fades its own grains), the same
-// mode again with FastCut (no switch, but a cut), onsets with Trails, and the default mode with
-// FastCut and a footswitch trigger at its frame.
+// Mode changes are Spillover loads (mode-compiler.md §7.3), here with long dense grains (about
+// 33 voices, so past the 8 Hermite ones): from onsets and marks at unity (presets/
+// switch_marks.json) to the default mode at -5 st with Trails (switch_live.json), to onsets
+// alone at +7 st with FastCut (switch_onset.json), back to marks with FastCut 77 frames later,
+// inside the first fade (each load fades its own grains), the same mode again with another CTRL
+// and FastCut (switch_marks_ctrl.json: no switch, but a cut, and the pedal assigned), onsets
+// with Trails, and the default mode with FastCut and a footswitch trigger at its frame. So the
+// FastCuts fade unity, Hermite and linear grains alike. Each switch package has its own macro
+// table and CTRL (aux1 only in switch_live, aux2 and another Repeats range only in
+// switch_onset), and macro and expression moves follow the loads, some at a load's own frame
+// after it: each evaluates on the mode and CTRL just loaded (§3.4, §7.3 step 3).
 PresetCase ModeSwitchChain() {
   PresetCase p = PackagePreset("mode_switch", "switch_marks");
   Script&    s = p.script;
+  s.Macro(S(1) + 4321, P::MacroSpace, 0.4f);
   s.SpilloverPackage(S(2) + 101, "switch_live", SwitchStyle::Trails);
+  s.Macro(S(2) + 101, P::MacroAux1, 0.8f);  // at the load's frame, after it
+  s.Expression(S(3) + 1234, 0.7f);
   s.SpilloverPackage(S(4) + 333, "switch_onset", SwitchStyle::FastCut);
+  s.Expression(S(4) + 333, 0.25f);
+  s.Macro(S(4) + 400, P::MacroRepeats, 0.9f);
   s.SpilloverPackage(S(4) + 410, "switch_marks", SwitchStyle::FastCut);
-  s.SpilloverPackage(S(6) + 5, "switch_marks", SwitchStyle::FastCut);
+  s.Macro(S(5) + 2000, P::MacroAux2, 0.5f);  // switch_marks has no aux2: nothing moves
+  s.SpilloverPackage(S(6) + 5, "switch_marks_ctrl", SwitchStyle::FastCut);
+  s.Expression(S(7) + 777, 0.5f);
   s.SpilloverPackage(S(8) + 999, "switch_onset", SwitchStyle::Trails);
+  s.Macro(S(8) + 999, P::MacroAux2, 0.7f);
+  s.Expression(S(9) + 3333, 0.9f);
   s.SpilloverPackage(S(10) + 4, "switch_live", SwitchStyle::FastCut);
   s.Trigger(S(10) + 4);
-  p.require   = {{C::Loads, 6, 6},    {C::ModeSwitches, 5, 5}, {C::Triggers, 1, 1},
-                 {C::Onsets, 10},     {C::OffGridEvents, 7}};
-  p.ablate    = {Feature::ModeSwitch, Feature::FastCut,      Feature::Spillover,
-                 Feature::MarkPosition, Feature::OnsetTrigger};
+  s.Expression(S(10) + 4, 0.4f);
+  s.Macro(S(11) + 555, P::MacroAux1, 0.3f);
+  p.require   = {{C::Loads, 6, 6},          {C::ModeSwitches, 5, 5}, {C::Triggers, 1, 1},
+                 {C::MacroMoves, 6, 6},     {C::ExpressionEvents, 5, 5},
+                 {C::Onsets, 10},           {C::OffGridEvents, 18}};
+  p.ablate    = {Feature::ModeSwitch,   Feature::FastCut,      Feature::Spillover,
+                 Feature::MarkPosition, Feature::OnsetTrigger, Feature::Macro};
   p.invariant = {Invariance::HostileFpEnv};
   return p;
 }
@@ -259,7 +279,10 @@ PresetCase ModeSwitchChain() {
 // The wet kill (mode-compiler.md §7.2): into and out of the 40 Hz minimum by SetParam and by
 // the Filter macro (the default mode's, 40 Hz-20 kHz), lone trim and effect-volume changes
 // while killed (they stay muted), and the effect volume, a device setting, scaling the wet
-// only. A high-pass, so 41 Hz, one hertz above the kill, passes nearly everything.
+// only. A high-pass, so 41 Hz, one hertz above the kill, passes nearly everything. The kills by
+// the macro and by the second SetParam run at mix 1, where a killed wet path leaves the output
+// exactly ±0 under a sounding input (mutedFrames): the output shows the kill, not only the
+// script's cutoff target (killedFrames).
 PresetCase WetKillCase() {
   PresetCase p = Preset("wet_kill",
       {{P::Mix, 0.5f}, {P::FilterMorph, 2.0f}, {P::FilterCutoffHz, 800.0f}, {P::Feedback, 0.3f},
@@ -269,14 +292,18 @@ PresetCase WetKillCase() {
   s.Param(S(2) + 29, P::WetTrimDb, -6.0f);
   s.Param(S(3) + 7, P::FilterCutoffHz, 41.0f);
   s.Macro(S(5) + 5, P::MacroFilter, 0.0f);
+  s.Param(S(5) + 5, P::Mix, 1.0f);
   s.Param(S(6) + 77, P::WetTrimDb, 3.0f);
   s.Macro(S(7) + 9, P::MacroFilter, 1.0f);
+  s.Param(S(7) + 9, P::Mix, 0.5f);
   s.Param(S(8) + 1, P::EffectVolumeDb, -12.0f);
   s.Param(S(9) + 33, P::FilterCutoffHz, 40.0f);
+  s.Param(S(9) + 33, P::Mix, 1.0f);
   s.Param(S(10) + 3, P::EffectVolumeDb, 0.0f);
   s.Param(S(11) + 11, P::FilterCutoffHz, 20000.0f);
-  p.require   = {{C::KilledFrames, S(5)}, {C::MacroMoves, 2, 2}, {C::Events, 10},
-                 {C::OffGridEvents, 10}};
+  s.Param(S(11) + 11, P::Mix, 0.5f);
+  p.require   = {{C::KilledFrames, S(5)}, {C::MutedFrames, S(2)}, {C::MacroMoves, 2, 2},
+                 {C::Events, 14},         {C::OffGridEvents, 14}};
   p.ablate    = {Feature::WetKill, Feature::Macro};
   p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
   return p;
@@ -334,6 +361,7 @@ const char* CounterName(Counter c) noexcept {
     case C::ExpressionEvents: return "expressionEvents";
     case C::ModeSwitches: return "modeSwitches";
     case C::KilledFrames: return "killedFrames";
+    case C::MutedFrames: return "mutedFrames";
     case C::kCount: break;
   }
   return "unknown";

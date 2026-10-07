@@ -27,7 +27,12 @@ namespace brainscape::golden {
 // (macro moves, expression, mode switches, the wet kill, a lone change per leaf); the macroMoves,
 // expressionEvents, modeSwitches and killedFrames counters; the mode, macro, modeSwitch, fastCut
 // and wetKill ablations and the amongEdits invariance.
-inline constexpr uint32_t kCorpusVersion = 6;
+// 7 (lane C's review): mode_switch's macro and expression moves after its loads, on switch
+// packages each with its own macro table and CTRL (and switch_marks_ctrl, the same mode with
+// another CTRL), its FastCuts on pitched grains; automation_offgrid holds each freeze, no load
+// cutting it short; wet_kill's kills at mix 1 and the mutedFrames counter, the kill measured
+// on the output.
+inline constexpr uint32_t kCorpusVersion = 7;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -54,7 +59,12 @@ enum class Counter : uint8_t {
   ExpressionEvents,   // Expression events applied
   ModeSwitches,       // loads whose mode differed by content (Engine::ModeSwitches), after
                       // the render's first load
-  KilledFrames,       // frames rendered with the cutoff target at its minimum: the wet kill
+  KilledFrames,       // frames rendered with the cutoff target at its minimum, the wet kill,
+                      // as the script sets it (the harness's model, not the output)
+  // Output frames exactly ±0 on both channels while the input is nonzero on either: at mix
+  // below 1 the dry signal shows, so only mix 1 over a killed wet path (or a wet path not yet
+  // sounding) gives one. Bits only, so no FP mode can change it.
+  MutedFrames,
   kCount
 };
 const char* CounterName(Counter) noexcept;

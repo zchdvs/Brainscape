@@ -2,7 +2,7 @@
   "format": "brainscape-golden/1",
   "soundRevision": 2,
   "generatorVersion": 1,
-  "corpusVersion": 6,
+  "corpusVersion": 7,
   "sampleRate": 48000,
   "stereoInput": true,
   "ditherRingWrite": true,
@@ -55,7 +55,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -97,7 +98,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -142,7 +144,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -184,7 +187,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -226,7 +230,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -268,7 +273,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -310,7 +316,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -369,7 +376,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 2223
           }
         },
         {
@@ -415,7 +423,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -461,7 +470,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 6337
           }
         }
       ]
@@ -510,7 +520,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -560,7 +571,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -600,7 +612,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -640,7 +653,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -686,7 +700,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 11046
           }
         }
       ]
@@ -746,7 +761,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -796,7 +812,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -959,7 +976,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1072,7 +1090,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -1175,7 +1194,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1310,7 +1330,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 22919
           }
         }
       ]
@@ -1325,44 +1346,45 @@
       "presets": [
         {
           "name": "automation_offgrid",
-          "hash": "4c117a25ca9dd6e5bf3c8bd35fe4b39c70e9e5f74377f1819b69e0b891e0b7cf",
+          "hash": "681a62a24e7358f027a4a9327cc1025d30a1ebc66371525349e059dc0c624491",
           "secondHashes": [
             "d76ab32fe82ad89c2c143907f057cbe4233941f83c90331182532e11575d7c45",
-            "72e082798dadee4b59acf9ebc369b2c3ed008bb0801766fa0f22e6a1e96becf1",
-            "c9aa23d27469c856d666348e33a7216daba875dbff31f11b29b3a654d8fbe88f",
-            "491e1283dcd6342d9f41def630a569bd5220ed2a8c9d8735af41421de5e7d245",
-            "fbcb0fddd531a1248bc6a1ae79b3e0ff04f00ae94fc32e35d30e973274fce91c",
-            "fe991af2c677e8ce9f789a8239ad9150b06c0a8b20dcc656f11dab6c4e98c239",
-            "8e0dde8c46c7805f7eae73919140963b202ef01352313d1da692889ad95684b2",
-            "a674d448e2dade968b9f4cab0843a7c4b3a50a16ad0de50e1a60222f1a007033",
-            "c6755f2fbd4166af219dc80f8a793ea76392846bcbe6996ecc958c78c6c826a4",
-            "fa4e71e70e26c8e59a444307fbec3e059abb0128b9e7773f171ea58790df7b48",
-            "cd64e8c9f2929f375cda26c9f957fe880cb1e26f805eb733ab30a6a76f21cf67",
-            "834a4dcfc6b8065bdb78ecbc49bfe3388f5e8b0b39edb5a7ead1a7a29fba4e63"
+            "2aef980c7323271a477d319782cce8100e9b91c34490ef2cfb71ffb26f133ba0",
+            "9bff02e92e9763cf408eaaae79ce6a03473dd7a31a3bd5980830160f0fa8dd37",
+            "72d5d2f2674d6c29c2322b1b9ba7589e53fc09a9f244bb761ac99b4610bd7633",
+            "4273c58105d02661121f80f802c1baeb63f30bb618e20613f2117ee83708e41a",
+            "5c26b9e79da6c91493a2815a72cef74799903b0b488cd6484097cc0019913c8f",
+            "93159565719758d1b56bc2ca8aeccab5513fd4f4d3ace2347f8e1d07e2ab5250",
+            "81175aa92a2b8ff06f28490a49db38edc6a8439e39a9cc1ee8c258ac42cfa448",
+            "3b2f37e2196f351fd2eb7272e4425b8b1b1ba1543ecdae161ab98b40e2d9537d",
+            "3987e51651b274a0d7a14502f642fa9c0579a07bbaf3013f617ebe593fbf5049",
+            "565a2cea48a045521f8e74a108bb13bb485c7e0abbfe1f9c903125b6f0bbf6a8",
+            "b74287b94beae9a4d09ea70e7a5c4058c121d8872eefe6b2e7acc6fd7d76ed4d"
           ],
           "counters": {
             "frames": 576000,
-            "events": 1285,
-            "offGridEvents": 1285,
+            "events": 1280,
+            "offGridEvents": 1280,
             "triggers": 8,
-            "loads": 23,
+            "loads": 18,
             "restarts": 0,
             "onsets": 24,
-            "frozenOnsets": 1,
-            "frozenFrames": 48007,
+            "frozenOnsets": 6,
+            "frozenFrames": 143974,
             "freezeEngages": 3,
             "fbAbove1Frames": 48016,
             "inClipFrames": 0,
             "silentInFrames": 57601,
-            "outActiveFrames": 568564,
-            "tailActiveFrames": 50232,
+            "outActiveFrames": 568580,
+            "tailActiveFrames": 50229,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 575999,
             "lastNonzeroFrame": 575999,
             "macroMoves": 0,
             "expressionEvents": 0,
-            "modeSwitches": 23,
-            "killedFrames": 0
+            "modeSwitches": 17,
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1419,7 +1441,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 2,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -1466,7 +1489,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -1510,7 +1534,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 1,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1556,7 +1581,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -1592,7 +1618,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1649,7 +1676,8 @@
             "macroMoves": 114,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 39933
+            "killedFrames": 39933,
+            "mutedFrames": 0
           }
         },
         {
@@ -1696,7 +1724,8 @@
             "macroMoves": 0,
             "expressionEvents": 300,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
@@ -1704,27 +1733,27 @@
           "package": "switch_marks",
           "soundHash": "fb40d0b39ece8d9511c227931537be44cb118b6dd9a9d47104e39ee65e6050c1",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
-          "hash": "446530e41f7750d080c093a43b9854ba23830ba755e33a7748961b8ba74a33a2",
+          "hash": "a69e97951ea4dc8dc5dc87df2801ce914c5281d7d8701ad64db259514fbefcd5",
           "secondHashes": [
             "ab586a963b5fdf1250223e8cdc3c511da8bcdad554b211e1488ba29cb185ab45",
-            "292acd489033d3ee7fa500bc13c918efc9c775dccc4e5032edd6d7a19b971152",
-            "4d469de212687fb6ca5ad903e0540a871539b47fe04913a804509d17ac6537cb",
-            "0a667ec01c06a5138b7693924b2fbb8cc34fa900dd17930b2a55624c4b787ea5",
-            "90a589a8680783a585c8e7b042ef7586ab2256cc2fa9185185fdeff9504eeaed",
-            "d137f87e295a27436b61cac13446cd0b682e1bcd2b9a720c59727c6f34ef81b2",
-            "48312d1cab39475579a608acf6a85b0059a3f9d750c750928d5ef7a83e7a5523",
-            "1322017390dbbf9212566b3ebd6a543b485be945c3e96cdf4b36081b4c106592",
-            "b244b2994fc62db2a2f69b7dc4499c8659dad5d7839677df80b4300fd89c23c6",
-            "0f3beeb7fc82264bba2aa5ed7c278cff96e3d91b901f9576a73e394741b55678",
-            "af0fda3ad80779d46107948a336ef66262130f010b85638f1249b9aa21682bea",
-            "daff970809619926c50b7fdbcc6669bd85752d02ebe14c24105b3e0c3600aef2",
-            "031543df778450e71d9d2b57478f38700647461bd8caad6a94ba9b269f4ac0cd",
-            "063e07b84ea0db6681455adbff01ff7e95ebcf04f88a0f04501980499222158b"
+            "35d1c2f3bb3197bdffb7dbed9a60e57a58516cf31aa815c9f39fbc790d872fa2",
+            "c09f5e6565866bd5b7608f2a2968680ce7658a42292f2e9060398eb3a9423093",
+            "c64e002a0b7d95cc066fed79b01cba6664e46dfa0a5da53f359770aa176f7c76",
+            "9c8022ab095e53027576c0c18adfeaa77fbd02b61f758a68b89f6fac828cb983",
+            "0f9b674f25a3992de3c1a0841d6e52017d1edb554c91a088de93d176c8180af8",
+            "cbe8a3e588edeb462f4ff1e037bc57a2a81b3e6b5ef83628cfbe7a6ae9ac072f",
+            "a48e178bd8b15d4c356a7e389586068dea73d85c94e4186b0df0c996d9b9ee3b",
+            "f22e8321b1b538dd545768489f8ca4f013f92a7b686f719ccd9b96a25205cb8e",
+            "db965a290c32596980271a148dd8bc10d52e31e938b4a288a02c9f0486e184c6",
+            "dcd8a115a61c4286639c53b63183b54bbdf3dc7868a5b447b1812df950cc6836",
+            "4a6ba091059ede88bb0b41abfc079ae2459fc5887a9481bf2e9d06fcc15044a4",
+            "6e3c345f37b664d77993b3f1582b3707f48e74eaa0838ac08c69c918097e54a7",
+            "e2c0f70cd72d1f2ac930c619fc6fa7662010ef692a863f4a69dedf126255899e"
           ],
           "counters": {
             "frames": 672000,
-            "events": 7,
-            "offGridEvents": 7,
+            "events": 18,
+            "offGridEvents": 18,
             "triggers": 1,
             "loads": 6,
             "restarts": 0,
@@ -1735,40 +1764,41 @@
             "fbAbove1Frames": 0,
             "inClipFrames": 0,
             "silentInFrames": 153601,
-            "outActiveFrames": 657956,
-            "tailActiveFrames": 139558,
+            "outActiveFrames": 670355,
+            "tailActiveFrames": 151956,
             "subnormalOutFrames": 0,
-            "lastActiveFrame": 671968,
+            "lastActiveFrame": 671999,
             "lastNonzeroFrame": 671999,
-            "macroMoves": 0,
-            "expressionEvents": 0,
+            "macroMoves": 6,
+            "expressionEvents": 5,
             "modeSwitches": 5,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         },
         {
           "name": "wet_kill",
-          "hash": "b6bc3404bb395e8b42325b7f9688945f4f6b0124a3bb45247dc886a56f7d6820",
+          "hash": "f192b0e6eddc1c8801959a97a0e5edab7b48fa81a5cf4c969c63aad841e5de94",
           "secondHashes": [
             "4ef8ae491cb7f1aa628b381e2429a2f2573d2127a93210e01fbd91c3742abfc0",
             "e5d7b749286ecd50eba749ee4cff797b160fa8f8c59209b46a95e2b65944a39d",
             "a632ae02b4303c54a6380608418f36368a496694e861b5e8e14e084fde1dbb33",
             "cf44c2a267e45b3f92e5d240f67a7e2d4ef15392784d45780d2cf432ae46725d",
             "c60e0531c87cd0de0f8c26ab857dca763a38e8283757a91032beeea8a4fbe758",
-            "8a12ec7c9122c06784c28fe3c2b3cbcfa1b9c3c0d908777648238c635803349f",
-            "62ac6207955f67d844f9002369e8c99f7901c1c48724e9b32af415d35270b428",
-            "a51e4c7578bf198b2bfb04c4bd33585e863b3034e1094541c8c6e39e35303a86",
+            "f43550786cb48a4cf7c0ee2c5d059bc48d1929d105502711891a1cbbf5a79636",
+            "2d46bf3dc59a62599780586531c1b65f0fe61e5e1462931b93d4c9a46805b4db",
+            "f6c303ee7afde58f6f3a0be1d8c89535552548cd4df0dc9c8cf5bc762a29f52e",
             "5c26ac12f09255f559c860d61d49fde6bd81083680869b508ba01c55c50b70cd",
-            "649de6ff4205f0736a2de6437861a28f1f8df990623b7577dae15e9d61ee35c5",
-            "f7b69418d0b62c1d1b2da19b65c4b353a3ad18fe0780acf2ded1218aec3d4172",
-            "b40761cd58c603c5f0e9130a0ca6017e99a96144b5222a79d71dd7014c34ad9b",
+            "9bc13f1b506d0b4d8758aa3fdc19c1f07fe260214247beb4aa08955919ef1719",
+            "dd3267dcd1fb426c3e2920a1fb4cdf1962051b1ff7be714039dc16b1f5dfe671",
+            "3b5ed8d5032ecf385edf0b5206845ceb18cb7399010c4e3801c5f68e8815c122",
             "f2c8ea835012936b7eae70aec4f588ca25f8306b25cdf060bd40b1e9b795e959",
             "f016e057c14f4ae0c6a3cd930a4849c0a8858db0e825b48f6e2aba8b5e4f8b58"
           ],
           "counters": {
             "frames": 672000,
-            "events": 10,
-            "offGridEvents": 10,
+            "events": 14,
+            "offGridEvents": 14,
             "triggers": 0,
             "loads": 0,
             "restarts": 0,
@@ -1779,7 +1809,7 @@
             "fbAbove1Frames": 0,
             "inClipFrames": 0,
             "silentInFrames": 153601,
-            "outActiveFrames": 645406,
+            "outActiveFrames": 477775,
             "tailActiveFrames": 127170,
             "subnormalOutFrames": 0,
             "lastActiveFrame": 671999,
@@ -1787,7 +1817,8 @@
             "macroMoves": 2,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 287976
+            "killedFrames": 287976,
+            "mutedFrames": 131781
           }
         },
         {
@@ -1834,7 +1865,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]
@@ -1878,7 +1910,8 @@
             "macroMoves": 0,
             "expressionEvents": 0,
             "modeSwitches": 0,
-            "killedFrames": 0
+            "killedFrames": 0,
+            "mutedFrames": 0
           }
         }
       ]

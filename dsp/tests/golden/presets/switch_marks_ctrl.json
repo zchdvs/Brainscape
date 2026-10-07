@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "id": "corpus.switch_onset",
-  "name": "Switch onset",
+  "id": "corpus.switch_marks_ctrl",
+  "name": "Switch marks CTRL",
   "family": "none",
   "sound_rev": 2,
-  "sound_hash": "c08510448dbb0d632f2b27355b5750144ea61f5ad31b1be8d53f0843c9962213",
+  "sound_hash": "fb40d0b39ece8d9511c227931537be44cb118b6dd9a9d47104e39ee65e6050c1",
   "meta": {
     "author": "",
-    "description": "Golden corpus: mode switches, onsets on the live position.",
+    "description": "Golden corpus: mode switches, the marks mode with the pedal assigned.",
     "tags": []
   },
   "global": {
@@ -21,7 +21,7 @@
   "layers": [
     {
       "position": {
-        "source": "live",
+        "source": "mark",
         "base_ms": 250,
         "spray_ms": 30
       },
@@ -39,8 +39,8 @@
           }
         ],
         "select": "cycle",
-        "transpose_st": 7,
-        "spread_cents": 20,
+        "transpose_st": 0,
+        "spread_cents": 0,
         "reverse_prob": 0
       },
       "pan_spread": 0.5
@@ -96,9 +96,9 @@
       "targets": [
         {
           "param": "feedback.amount",
-          "range": [0.2, 0.7],
+          "range": [0, 0.9],
           "in_range": [0, 1],
-          "curve": 2
+          "curve": 1
         }
       ]
     },
@@ -157,23 +157,6 @@
           "curve": 4
         }
       ]
-    },
-    {
-      "id": "aux2",
-      "targets": [
-        {
-          "param": "post.reverb.mix",
-          "range": [0, 0.8],
-          "in_range": [0, 1],
-          "curve": 1
-        },
-        {
-          "param": "post.filter.cutoff_hz",
-          "range": [20000, 2000],
-          "in_range": [0, 1],
-          "curve": 3
-        }
-      ]
     }
   ],
   "controls": {
@@ -183,20 +166,19 @@
       "shape": 0.5,
       "time": 0.5,
       "space": 0.5,
-      "filter": 0.5,
-      "aux2": 0.5
+      "filter": 0.5
     },
     "expression": [
       {
-        "target": "macro.repeats",
+        "target": "post.reverb.mix",
         "lo": 0,
-        "hi": 1,
+        "hi": 0.6,
         "curve": 1
       },
       {
-        "target": "post.delay.mix",
+        "target": "macro.shape",
         "lo": 0,
-        "hi": 0.5,
+        "hi": 1,
         "curve": 1
       }
     ]

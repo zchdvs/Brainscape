@@ -448,6 +448,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
           l > kActiveLevel || l < -kActiveLevel || r > kActiveLevel || r < -kActiveLevel;
       const bool silent = !Nonzero(inL[i]) && !Nonzero(inR[i]);
       if (silent) ++At(out, Counter::SilentInFrames);
+      if (!silent && !Nonzero(l) && !Nonzero(r)) ++At(out, Counter::MutedFrames);
       if (active) {
         ++At(out, Counter::OutActiveFrames);
         if (silent) ++At(out, Counter::TailActiveFrames);
