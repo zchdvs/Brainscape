@@ -13,6 +13,13 @@ name: sound-rev
 # description, which a code owner approves; a golden preset's changed render whose package
 # changed is the package's, not the engine's, unless the pull request also touches the path
 # trigger's paths without a bump. Editing the description re-runs the gate.
+# Sound revisions are checked per commit: each revision is one commit that raises
+# kSoundRevision by exactly one and mints its golden file; a pull request may carry several
+# consecutive revisions. The gate walks every commit between the merge commit's first parent
+# and the merge commit and fails a commit that lowers the revision or raises it by more than
+# one, a revision two commits introduce, one the base already has, a gap in the numbers and a
+# revision no commit minted. The walk needs the whole history (fetch-depth: 0); on a shallow
+# clone or a missing object the gate fails rather than pass.
 # Its own workflow, so adding or removing a label re-runs this job and not the parity legs.
 # The gate runs the pull request's own copy of this file and of the script, so it holds
 # only while code owners review changes to .github/workflows/ and tools/ci/ and branch
@@ -30,10 +37,11 @@ jobs:
     name: sound-rev-gate
     runs-on: ubuntu-24.04
     steps:
-      # The pull request's merge commit and its first parent, the base it merges into.
+      # The pull request's merge commit, its first parent (the base it merges into) and the whole
+      # history, which the per-commit walk reads.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Self-test the gate on synthetic pull requests
         run: python3 tools/ci/test_sound_rev_gate.py
       # The description goes through a file: it is untrusted text, never part of a command.

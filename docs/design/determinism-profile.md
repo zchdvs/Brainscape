@@ -893,6 +893,18 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > alters what a document means, not what the engine plays.
 > That design amends this section and §6.1 when it is accepted (its §12.5).
 
+> **Update (2026-10-07, revisions per commit).** The gate holds the bump rule per commit, not
+> per pull request: each revision is one commit that raises `kSoundRevision` by exactly one and
+> mints its golden file; a pull request may carry several consecutive revisions (step 3 carries
+> r2 and r3, and wave 1 one per feature). The gate walks every commit the pull request adds and
+> CI's merge commit. A commit below the highest of its parents' revisions, or more than one above
+> it, fails. The revisions introduced above the base's must run from the base's + 1 to the
+> head's, each introduced by one commit (two would be two sounds sharing a number) and each
+> minted, in the bump or a later commit of the same pull request. A commit that introduces a
+> number the base already has (a parallel line's claim) fails until the line is renumbered on top
+> of the base. The walk needs the whole history: `sound-rev.yml` checks out with
+> `fetch-depth: 0`, and the gate fails on a shallow clone or a missing object rather than pass.
+
 ### 5.13 Shared deterministic test-signal generator
 
 Add `dsp/include/brainscape/TestSignal.h`: an integer-only, versioned generator of noise bursts

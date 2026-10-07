@@ -269,11 +269,16 @@ run in every build, so `host.yml` and `plugin.yml` gate on the file as well. `so
 (companion-app.md §3.4's `sound-rev-gate`) fails a pull request that changes a golden hash
 without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp/src`,
 `dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
-forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
-bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
-Its package rule (mode-compiler.md §8.3, lane G) fails one that changes a committed package's
-`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
-`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the
+forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label.
+It checks bumps per commit: each revision is one commit that raises `kSoundRevision` by exactly
+one and mints its golden file (`brainscape_golden --mode mint`, in that commit or a later one of
+the pull request); a pull request may carry several consecutive revisions. It walks every commit
+the pull request adds and fails a commit that lowers the revision or skips a number, a revision
+two commits introduce or one the base already has, and a revision never minted; the walk needs
+the whole history, so the job checks out with `fetch-depth: 0` and the gate fails on a shallow
+clone. Its package rule (mode-compiler.md §8.3, lane G) fails a pull request that changes a
+committed package's `soundHash` or `controlHash` (a golden preset's, a corpus or factory
+package's in `dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the
 "package-change" label and a `Package-change: <cause>` line in its description, and counts a
 package preset's changed render as an engine change unless its package changed too and the pull
 request touches no path-trigger path without a bump; no package is committed yet, so it binds

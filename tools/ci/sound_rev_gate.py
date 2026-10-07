@@ -2,7 +2,9 @@
 """Sound-revision gate for a pull request (determinism profile §5.12, companion §3.4).
 
 Compares two commits, the pull request's base and its head (in CI, the merge commit's
-first parent and the merge commit), and fails (exit 1) when:
+first parent and the merge commit), reads every commit between them (base..head: the pull
+request's own commits and the merge commit, not those already in the base), and fails
+(exit 1) when:
 
   * hard trigger: a golden hash changed (dsp/tests/golden/golden.json: a preset's hash or
     per-second hashes differ, or a preset was dropped) and kSoundRevision was not bumped.
@@ -23,12 +25,26 @@ first parent and the merge commit), and fails (exit 1) when:
     "Package-change: <cause>" line of its description. A compiler or document change alters
     what a document means, not what the engine plays for a package, so it needs visibility,
     not a bump; a bump does not waive it, and "sound-neutral" does not either;
-  * kSoundRevision went down or skipped a number: a bump is exactly one;
+  * the sound-revision rule, per commit: each revision is one commit that raises
+    kSoundRevision by exactly one and mints its golden file; a pull request may carry several
+    consecutive revisions. A commit's revision is the header's kSoundRevision (0 without the
+    header); a commit fails when it is below the highest of its parents' (it went down) or more
+    than one above it (it skipped a number), and introduces its revision when it is exactly one
+    above (a merge commit may, when it resolves two lines by bumping). The revisions introduced
+    above the base's must be the base's + 1 to the head's, each introduced by one commit (two
+    are two different sounds sharing a number), and each minted: some commit of the pull
+    request, the bump or a later one, writes golden.json keyed to it. A commit that introduces
+    a revision the base already has (a parallel line claimed its number) fails: renumber on top
+    of the base. The head going below the base fails too;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
 
 New presets, packages, counters and corpus versions change no committed hash, so they pass,
 and so does a re-stamped package (sound_rev and package hash only).
+
+The walk needs the whole history between base and head: in a shallow clone (actions/checkout
+fetches one commit unless told fetch-depth: 0), or when a commit or file it reads is missing,
+the gate fails and asks for the full history. It never passes on a history it cannot read.
 
   sound_rev_gate.py --base REV [--head REV] [--labels JSON_OR_COMMA_LIST]
                     [--body-file FILE] [--summary FILE]
@@ -56,6 +72,10 @@ PACKAGE_MANIFESTS = ("dsp/tests/golden/presets/MANIFEST", "firmware/factory/MANI
 PACKAGE_CAUSE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?package-change:[ \t]*(\S.*?)[ \t]*$",
                            re.IGNORECASE | re.MULTILINE)
 MANIFEST_LINE = re.compile(r"^([0-9a-f]{64}) ([0-9a-f]{64}) ([0-9a-f]{64}) (\S.*)$")
+FULL_HISTORY = ("fetch the full history (actions/checkout with fetch-depth: 0) and run the gate again; "
+                "it does not pass on a history it cannot read")
+BLOBS = {}
+SUBJECTS = {}
 
 
 def git(*args, check=True):
@@ -65,10 +85,41 @@ def git(*args, check=True):
     return p
 
 
+def unread(what, p):
+    """Fails closed on a commit or file the repository does not have."""
+    sys.exit(f"sound_rev_gate: cannot read {what} ({'; '.join(p.stderr.strip().splitlines())}): {FULL_HISTORY}.")
+
+
+def blob_id(rev, path):
+    """The object id of a file at a revision, or None when it does not exist there.
+
+    Fails closed when the revision, or a tree on the file's path, is not in the repository: a
+    file a shallow or partial clone lacks is not a file the history lacks.
+    """
+    p = git("ls-tree", "--full-tree", "-z", rev, "--", path, check=False)
+    if p.returncode != 0:
+        unread(f"{path} at {rev}", p)
+    for entry in p.stdout.split("\0"):
+        meta, _, name = entry.partition("\t")
+        if name == path and meta.split(" ")[1] == "blob":
+            return meta.split(" ")[2]
+    return None
+
+
+def blob(oid):
+    """A file's text by its object id."""
+    if oid not in BLOBS:
+        p = git("cat-file", "blob", oid, check=False)
+        if p.returncode != 0:
+            unread(f"object {oid}", p)
+        BLOBS[oid] = p.stdout
+    return BLOBS[oid]
+
+
 def show(rev, path):
     """The file at a revision, or None when it does not exist there."""
-    p = git("show", f"{rev}:{path}", check=False)
-    return p.stdout if p.returncode == 0 else None
+    oid = blob_id(rev, path)
+    return None if oid is None else blob(oid)
 
 
 def revision(rev):
@@ -89,6 +140,96 @@ def golden(rev):
         return json.loads(text)
     except ValueError as err:
         sys.exit(f"sound_rev_gate: {GOLDEN} at {rev} is not JSON: {err}")
+
+
+def keyed(text):
+    """The sound revision a golden file says it is for, or None when the text is not one."""
+    try:
+        g = json.loads(text)
+    except ValueError:
+        return None
+    return g.get("soundRevision") if isinstance(g, dict) else None
+
+
+def history(base, head):
+    """The commits of base..head, parents first, as (commit, its kSoundRevision, the highest of
+    its parents', the revision of the golden file it writes or None).
+
+    A commit writes golden.json when its file differs from every parent's, so a merge that keeps
+    one side's file writes nothing. Fails closed on a shallow clone or a commit it cannot read.
+    """
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+        sys.exit(f"sound_rev_gate: the repository is a shallow clone, so the pull request's commits "
+                 f"cannot all be read: {FULL_HISTORY}.")
+    p = git("rev-list", "--topo-order", "--reverse", "--parents", f"{base}..{head}", check=False)
+    if p.returncode != 0:
+        unread(f"the commits of {base}..{head}", p)
+    states = {}
+
+    def state(commit):
+        """(kSoundRevision, 0 without the header; golden.json's object id or None)."""
+        if commit not in states:
+            states[commit] = (revision(commit) or 0, blob_id(commit, GOLDEN))
+        return states[commit]
+
+    out = []
+    for line in p.stdout.splitlines():
+        commit, *parents = line.split()
+        rev, gold = state(commit)
+        prev = max((state(c)[0] for c in parents), default=0)
+        writes = gold is not None and all(state(c)[1] != gold for c in parents)
+        out.append((commit, rev, prev, keyed(blob(gold)) if writes else None))
+    return out
+
+
+def describe(commit):
+    """A commit as its `short hash` and subject."""
+    if commit not in SUBJECTS:
+        SUBJECTS[commit] = git("log", "-1", "--format=`%h` %s", commit).stdout.strip()
+    return SUBJECTS[commit]
+
+
+def revision_failures(commits, base_rev, head_rev):
+    """The sound-revision rule over the walked commits.
+
+    Returns (failures, {revision: the commits that introduce it}, {revision: the commits that
+    write golden.json keyed to it}).
+    """
+    failures, introduced, mints = [], {}, {}
+    for commit, rev, prev, minted in commits:
+        if rev < prev:
+            failures.append(f"kSoundRevision went down at {describe(commit)}, {prev} -> {rev}.")
+        elif rev > prev + 1:
+            failures.append(f"kSoundRevision skipped a number at {describe(commit)}, {prev} -> {rev}: each "
+                            f"revision is one commit that raises it by exactly one.")
+        elif rev == prev + 1:
+            introduced.setdefault(rev, []).append(commit)
+        if minted is not None:
+            mints.setdefault(minted, []).append(commit)
+    # A commit that went down or skipped already explains a gap in the numbers or a head below
+    # the base.
+    stepped = bool(failures)
+    if head_rev < base_rev and not stepped:
+        failures.append(f"kSoundRevision went down, {base_rev} -> {head_rev}.")
+    missing = [str(r) for r in range(base_rev + 1, head_rev + 1) if r not in introduced]
+    if missing and not stepped:
+        failures.append(f"Sound revision(s) {', '.join(missing)} between the base's {base_rev} and the head's "
+                        f"{head_rev} are introduced by no commit of the pull request: each revision is one "
+                        f"commit that raises kSoundRevision by exactly one.")
+    for r, cs in sorted(introduced.items()):
+        if len(cs) > 1:
+            failures.append(f"Sound revision {r} is introduced by {len(cs)} commits, "
+                            f"{'; '.join(describe(c) for c in cs)}: two different sounds cannot share a "
+                            f"number; renumber one of them on top of the other.")
+        if r <= base_rev:
+            failures += [f"{describe(c)} introduces sound revision {r}, a number the base already has "
+                         f"(kSoundRevision {base_rev} there): a parallel line claimed it; renumber the pull "
+                         f"request's revisions on top of the base's, from {base_rev + 1}." for c in cs]
+        if r not in mints:
+            failures.append(f"Sound revision {r} never minted its golden file: no commit of the pull request "
+                            f"writes {GOLDEN} keyed to it; mint it at that revision with brainscape_golden "
+                            f"--mode mint.")
+    return failures, introduced, mints
 
 
 def preset_hashes(g):
@@ -212,6 +353,7 @@ def main():
     ap.add_argument("--summary", help="also append the Markdown to this file ($GITHUB_STEP_SUMMARY)")
     args = ap.parse_args()
 
+    commits = history(args.base, args.head)
     paths = [p for p in git("diff", "--name-only", "--no-renames", args.base, args.head).stdout.splitlines() if p]
     touched = triggers(paths)
     labels = parse_labels(args.labels)
@@ -231,11 +373,8 @@ def main():
     changed, attributed = golden_changes(base_golden, head_golden, frozenset() if engine_unbumped else packaged)
     withheld = golden_changes(base_golden, head_golden, packaged)[1] if engine_unbumped else []
 
-    failures, notes = [], []
-    if head_rev < base_rev:
-        failures.append(f"kSoundRevision went down, {base_rev} -> {head_rev}.")
-    elif head_rev > base_rev + 1:
-        failures.append(f"kSoundRevision skipped a number, {base_rev} -> {head_rev}: a bump is exactly one.")
+    failures, introduced, mints = revision_failures(commits, base_rev, head_rev)
+    notes = []
     if changed and not bumped:
         failures.append(f"{len(changed)} golden hash(es) changed without a kSoundRevision bump (hard "
                         f"trigger, profile §5.12; no label overrides it)."
@@ -270,7 +409,12 @@ def main():
     lines = ["# Sound-revision gate", "",
              f"kSoundRevision {base_rev} -> {head_rev} ({'bumped' if bumped else 'not bumped'}); "
              f"labels: {', '.join(sorted(labels)) or 'none'}.", ""]
-    lines.append(f"Sound-relevant paths changed: {len(touched)}" + (":" if touched else "."))
+    lines.append(f"Sound revisions introduced ({len(commits)} commit(s) read): {len(introduced)}"
+                 + (":" if introduced else "."))
+    for r, cs in sorted(introduced.items()):
+        lines += [f"- r{r}: {describe(c)}" for c in cs]
+        lines += [f"  - minted at {describe(c)}" for c in mints.get(r, [])] or ["  - never minted"]
+    lines += ["", f"Sound-relevant paths changed: {len(touched)}" + (":" if touched else ".")]
     lines += [f"- `{p}`" for p in touched]
     lines += ["", f"Golden hashes changed: {len(changed)}" + (":" if changed else ".")]
     lines += [f"- {c}" for c in changed]
