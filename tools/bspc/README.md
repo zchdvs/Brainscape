@@ -20,7 +20,7 @@ build/tools/bspc/Release/bspc compile compiler/tests/data/engram.json   # writes
 | `fmt [--check] DOC.json...` | Rewrites documents in canonical form (§6.4); `--check` lists the files that differ and exits 1. The stamp is kept as written. |
 | `verify PKG.bsp...` | The package decodes and validates, and its JSON section (unless stale) compiles to the same STAT and MODE. |
 | `stamp [--check] FILE...` | Documents: rewrites `sound_rev` and `sound_hash` for this build. Needed after any change to what the preset plays (a leaf, `derive`, the structure) and after a sound-revision bump. Packages: recompiles them from their JSON section. `--check` lists what is stale. |
-| `lint [--factory] DOC.json...` | Lint findings L1–L9 (§2.7), as warnings; `--factory` makes L4 and L7–L9 errors. |
+| `lint [--factory] DOC.json...` | Lint findings L1–L9 (§2.7), as warnings; `--factory` makes L4, L7–L9 and L5's empty source set (a mode that never plays a grain) errors. |
 | `diff A.bsp B.bsp` | The first differing field: a header format or revision, else the document's fields by JSON pointer (`/layers/0/size_ms: 120 -> 150`), those that play or control the sound before the id, name, META and display names; then the header flags, which follow from the id. |
 | `derive [--solve] DOC.json...` | Rewrites each targeted leaf as its macro's value at the stored position (§3.5); `--solve` first sets each position from its first target's leaf, keeping the stored position when it already lands as near as any. In place; says when the stamp has gone stale. |
 | `roundtrip [--expect M] [--write-manifest M] DOC.json...` | The `bspc-roundtrip` checks (§8.3, §10.1): each document compiles (to its committed `.bsp`, when there is one), is canonical and stamped, decompiles to itself, rebuilds from its package without the JSON section, and its JSON section recompiles to the same bytes. Prints the sorted manifest: package hash, `sound_hash`, `control_hash` and path per line; with `--expect`, names each document whose hashes differ. |
@@ -50,10 +50,13 @@ errors or differences, 2 usage or I/O.
 `render` (§8.2) arrives with the audition tooling in `tools/audition/` (lane E).
 
 **What this build compiles.** Schema 1 names the whole vocabulary of the waves (§1.2); a
-field this build cannot play is error E6, naming the feature and the wave that brings it. Since
-sound revision 2 the default structure compiles, with the onset source and mark positioning
-(rows 27 and 28 until then): no wave-1 to wave-3 fields, and the leaves of later waves only at
-their defaults. Macros, macro positions and expression assignments compile.
+field this build cannot play is error E6, naming the feature and the wave that brings it. This
+build compiles the default structure with the onset source and mark positioning (sound revision
+2; rows 27 and 28 until then) and wave 1: source selection with leaves 57–59 (intermittency and
+bursts, revision 4), pitch sets with their selection (revision 5), leaves 29 and 30 (repeat and
+decay, revision 6) and leaf 31 (voice count, revision 7). Wave-2 and wave-3 fields are E6, and the
+leaves of later waves compile only at their defaults. Macros, macro positions and expression
+assignments compile.
 
 **Tests.** `ctest` runs `compiler_unit` (the JSON grammar suite, every rule E1–E12, the
 canonical form, packages, lint and derive, and two committed digests: 400 random documents'
