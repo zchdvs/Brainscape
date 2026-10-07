@@ -15,13 +15,16 @@ determinism profile**: one `dsp/` build profile, in-tree math, a full floating-p
 control-word guard, a deterministic denormal flush, a NaN-free boundary, the block-split
 fix, the engine state API (an exact `Restart`, a random-number epoch, one `LoadPreset`
 entry point and frame-stamped events) and the post-delay time glide. **Internal sound
-revision 1 is minted**: `dsp/tests/golden/golden.json` holds the hashes of a 28-preset corpus
-that MSVC, GCC, Clang and the Cortex-M7 code run under emulation all reproduce, at any block
-size and from a hostile caller floating-point environment, and CI now fails a pull request
-that changes them (see [Internal sound revision 1](#internal-sound-revision-1)). A JUCE
+revision 2 is minted** (mode-compiler lane C, 2026-10-07): the engine plays compiled modes, and
+`dsp/tests/golden/golden.json` holds the hashes of a 33-preset corpus, 12 of them loaded from
+packages that `bspc` compiled, that MSVC, GCC, Clang and the Cortex-M7 code run under emulation
+all reproduce, at any block size and from a hostile caller floating-point environment; CI fails
+a pull request that changes them (see [Internal sound revision 2](#internal-sound-revision-2)
+and [1](#internal-sound-revision-1)). A JUCE
 plugin and standalone skeleton hosts the engine through its stamped events and `LoadPreset`,
-with reproducible bounces and an offline audition render. Nothing has touched real hardware,
-and the preset jobs that mode-compiler lane G added to CI have not yet run on GitHub.
+with reproducible bounces and an offline audition render; it plays the default mode (loading
+packages is lane D's). Nothing has touched real hardware, and the preset jobs that
+mode-compiler lane G added to CI have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -33,8 +36,8 @@ and the preset jobs that mode-compiler lane G added to CI have not yet run on Gi
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A and G are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), which compiles only the default structure until sound revision 2, and their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs). Next: sound revision 2 (lane C) |
-| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; none is committed before sound revision 2, and upload needs hardware |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill). Next: wave 1 (lane F), the audition tooling (lane E), the app's curation slice (lane D) |
+| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 17 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
 | Firmware bring-up (Daisy Seed3) | ⬜ Not started (CI cross-compiles `dsp/` for Cortex-M7 today) |
@@ -76,13 +79,63 @@ float32 output, whatever block sizes each side uses. Not
 covered: the pedal's analog path, live playing, preset loads that keep trails (Spillover),
 DAW sessions at other sample rates, and DAW automation. The full contract is in
 [determinism-profile.md](design/determinism-profile.md). The engine now has every piece of
-that recipe except compiled presets: the `.bsp` decoder exists (mode-compiler lane B), but no
-compiler writes packages yet, so the corpus presets are parameter lists. The golden harness
+that recipe: the corpus's presets with structure are packages compiled by `bspc` and decoded
+by `DecodePreset` (mode-compiler lane C), the rest parameter lists of the default mode. The golden harness
 Inits one engine, and for every render restarts it with `LoadPreset(…, Exact)` from a preset
 state and hands its scripted events to `Process` through the engine's `EventQueue`; three
 presets also load Spillover, restart, or load Exact mid-render. Rendering with a fresh `Init`
 per preset, with the events applied between blocks split at their frames, or from a caller
 whose control word is FTZ|DAZ (on the M7, FZ|DN) with round toward zero, gives the same bits.
+
+## Internal sound revision 2
+
+Minted 2026-10-07 by mode-compiler lane C ([mode-compiler.md](design/mode-compiler.md) §7,
+§7.6 item 4): `kSoundRevision` is 2 and [`golden.json`](../dsp/tests/golden/golden.json) is
+re-minted. Internal, like revision 1, and it keeps all of revision 1's gates.
+
+**What changed in the engine.** A parameter change rebuilds what its row's domain names (R1;
+no routing by ID, so a lone change always takes effect at its frame). Rows 27 and 28 are
+retired into mode structure (R2b): the onset source and mark positioning come from the loaded
+mode. `wet_trim_db` and the effect volume (`global.effect_volume_db`, ID 82, a device setting)
+scale the wet signal after the post chain, as one gain, and the cutoff's minimum kills the wet
+signal (R3, `WetGainTarget`). `LoadPreset` validates the mode and CTRL and applies nothing when
+they fail, applies the `sinceRev` rule, copies the mode into the Warm arena and reports
+unsupported performance state (R5). `MacroMove` and `Expression` events fan out through the
+shared evaluator (R6). A Spillover load is Trails or FastCut, which fades the sounding grains
+over 128 frames (R7). `Engine::Impl` grew to 6,600 bytes on the M7 (budget raised to
+7,168) and 6,752 on x86-64 (7,424).
+
+**What changed in the corpus** (version 6). The revision-1 presets that set rows 27 or 28 take
+that structure from committed packages compiled by `bspc` from documents holding exactly their
+values (`dsp/tests/golden/presets/`, with `MANIFEST`): eight start from one and `exact_load_mid`
+loads one mid-render; the automation preset's toggles of 27 and 28
+became Spillover loads between two modes in both styles; `post_max` moved from 40 Hz to 41 Hz,
+since 40 Hz now kills the wet; and a new 14 s vector holds a macro sweep, the expression pedal on
+macros and leaves, a chain of mode switches, the wet kill and one lone change per leaf, with
+counters for macro moves, expression events, mode switches and killed frames, ablations for the
+mode, the moves, the switches, FastCut and the kill, and an invariance that renders every
+parameter event among edits rebuilding every other domain. `golden.json` records each package
+preset's `soundHash` and `controlHash`, which check mode compares.
+
+**What the re-mint changed, preset by preset.** Of revision 1's 28 presets, 25 reproduce
+revision 1's hashes bit for bit (every converted package preset included, and `hot_out`, whose
++24 dB trim runs at mix 1, where wet-only and whole-output trims give the same bits), and
+exactly the three the design expects changed: `automation_offgrid` (mode switches instead of 27
+and 28, and its trim, below full mix, now wet only; from second 0), `subnormal_wet` (−6 dB trim
+at mix 0.5; from second 0) and `post_max` (41 Hz; from second 2). The five new presets have no
+earlier hash.
+
+**Which builds agree.** In check mode against the file: MSVC 19.40 (Release SSE2 and AVX2,
+Debug), GCC 11.4 (Release and Debug), Clang 14 (Release) and the Cortex-M7 archive from
+arm-none-eabi 10.3 under `qemu-arm -cpu cortex-m7`. GCC Release ran blocks of 1, 48 and 512, the
+patterns {48, 1, 127, 32} and {300, 512, 5, 64}, random patterns 1 and 2, a hostile caller,
+split delivery ({300, 512, 5, 64} and random 3, macro and expression moves sent as `SetParam`s
+of the evaluator's leaves) and fresh engines; the M7 ran blocks of 1, 48 and 512, {48, 1, 127,
+32}, random 1, a hostile caller and the forced-flush control; MSVC SSE2 blocks of 1, 48 and 512,
+{48, 1, 127, 32}, random 1, a hostile caller and split delivery, and AVX2 blocks of 1, 48 and 512
+and {48, 1, 127, 32}; GCC Debug 48-frame blocks, {300, 512, 5, 64}, random 2 and 1-frame blocks
+from a hostile caller, MSVC Debug ctest's checks. The package fuzzer's re-minted digest and the
+15 frozen fixtures match on the host legs and the M7.
 
 ## Internal sound revision 1
 
@@ -195,28 +248,28 @@ implementing:
   LP→BP→HP→Notch morph (equal-power laws throughout).
 - **Trigger layer** — spectral-flux onset detection (512/256, in-tree FFT) with
   adaptive whitening, a relative whitening floor, Dixon's peak-picker and growth
-  hysteresis; a mark ring feeding POS_MARK grain positioning (the Strum-family
-  mechanism); ONSET as an OR'd trigger source with oldest-steal allocation; an
+  hysteresis; a mark ring feeding mark positioning (the Strum-family mechanism), and
+  onsets as an OR'd trigger source with oldest-steal allocation, both chosen by the loaded
+  mode (sound revision 2); an
   external `Trigger()` fallback that never drops; and a counted onset indicator for
   the trigger LED. End-to-end onset→grain latency: **5.3 ms** (measured).
 - **The permanent parameter-ID table** ([mode-compiler.md](design/mode-compiler.md) §4): 82
   rows, each with a kind, a domain bitmask (what a change rebuilds) and the sound revision that
-  made it a leaf. IDs 1–28 keep their numbers (4 is now `wet_trim_db` and 8
-  `layer0.pitch.transpose_st`) and are the 28 Leaf rows the engine plays; 29–68 are Reserved
-  under their final names until wave 1 or wave 3 builds them; 69–76 are the eight macros, 77
-  and 78 the freeze and expression performance controls, 79–81 Reserved, and 82 the effect
-  volume, a Global device setting that the engine stores and every load and `Restart` keeps
-  (nothing reads it before sound revision 2). `SetParam` stores only Leaf and Global rows, and
-  `LoadPreset` reads only Leaf rows (any other id is unknown and makes the load inexact). The
-  domain column is data until sound revision 2 routes changes by it (design §7.1 R1): the
-  engine keeps revision 1's routing by ID, unchanged for IDs 1–28, which loses a lone change to
-  27 or 28 (Known gaps). Tapers, step counts, display text, groups and host flags for every
+  made it a leaf. IDs 1–26 keep their numbers (4 is now `wet_trim_db`, the wet signal's trim,
+  and 8 `layer0.pitch.transpose_st`, an offset over the pitch set) and are the 26 Leaf rows the
+  engine plays; 27 and 28 are Retired since sound revision 2, their structure in the mode; 29–68
+  are Reserved under their final names until wave 1 or wave 3 builds them; 69–76 are the eight
+  macros, 77 and 78 the freeze and expression performance controls, 79–81 Reserved, and 82 the
+  effect volume, a Global device setting that scales the wet signal with the trim and that every
+  load and `Restart` keeps. `SetParam` stores only Leaf and Global rows, and `LoadPreset` reads
+  only Leaf rows (any other id is unknown and makes the load inexact). A change rebuilds what
+  its row's domain bitmask names (design §7.2, R1). Tapers, step counts, display text, groups and host flags for every
   row, Reserved ones included, live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a
   pedal pot and a plugin knob at the same position give the same plain bits. The host flags
   follow the recommended host model (owner question Q12, provisionally: only Mix, the macros,
   the effect volume and the performance rows automatable), except that revision 1's leaves stay
   automatable until the plugin registers the macro parameters (lane D). In the plugin today
-  every registered parameter, the 28 leaves and Freeze, is automatable; the macro, expression
+  every registered parameter, the 26 leaves and Freeze, is automatable; the macro, expression
   and effect-volume parameters arrive with lane D (design §9.2). Every consumer, the golden
   harness and the plugin included, iterates the Leaf rows, and the plugin's 32-bit touched mask
   is a per-leaf set.
@@ -237,9 +290,9 @@ implementing:
   elements' leaves at their defaults. The encoder gives one encoding per state: decoding then
   re-encoding gives back every package's bytes, META, JSON and unknown sections carried. It is all integer-only: built for the Cortex-M7 (`-mgeneral-regs-only`)
   its objects hold no floating-point instruction, not even a move, and import only `memcpy`
-  and `memset` (*measured*). This build supports no mode feature yet, so a package decodes only
-  with the default structure and any macros (design §7.6 item 3), and `LoadPreset` reads only
-  the leaves until sound revision 2 (lane C). Also from lane B: the SHA-256 core moved into
+  and `memset` (*measured*). This build supports the onset source and mark positioning (sound
+  revision 2), so a package decodes with them, the default structure otherwise and any macros.
+  Also from lane B: the SHA-256 core moved into
   the engine library (`brainscape::Sha256Hasher`; the tests keep `golden::Sha256` for hex), and
   the random-number keys gained the design's extension (layer, same-frame ordinal, purposes 8
   and up, mixed into the frame's hash), which keeps every revision-1 key and aliases no other
@@ -263,11 +316,23 @@ implementing:
   derives targeted leaves from macro positions and solves positions from leaves, runs the
   round-trip checks with a hash manifest, and migrates BSWS v1 sessions. What lint and derive
   compute in floating point is two guarded `dsp/` functions, `EvalMacro` (the design's
-  evaluator, §3.3) and `NearGuardMs` (`brainscape/ModeEval.h`), which nothing in the engine
-  calls before sound revision 2. This build supports no mode feature, so a document compiles
-  only with the default structure (any macros, positions and expression assignments
-  included); anything else is error E6 naming its wave, and later waves' leaves are accepted
-  at their defaults only. The plugin's typed text is now read by the same exact reader.
+  evaluator, §3.3) and `NearGuardMs` (`brainscape/ModeEval.h`), whose bodies the engine's macro
+  and expression events run too. A document compiles with the default structure, the onset
+  source and mark positioning (any macros, positions and expression assignments included);
+  anything else is error E6 naming its wave, and later waves' leaves are accepted at their
+  defaults only. The plugin's typed text is now read by the same exact reader.
+- **The mode runtime** ([mode-compiler.md](design/mode-compiler.md) §7, lane C, sound revision
+  2). `LoadPreset` follows the design's steps 0–5: it validates the mode and CTRL with
+  `ValidateMode`'s rules (STAT's leaves are canonicalized and counted instead) and applies
+  nothing when they fail; counts a missing leaf only if its row existed at the package's
+  revision (`sinceRev`); copies the mode and CTRL into one active mode in the Warm arena,
+  compared with the previous one by content (`ModeSwitches`), never by `modeHash`; and counts
+  stored performance state it cannot play yet. The `SpilloverLoad` event's `id` picks Trails or
+  FastCut (every grain sounding at the load fades to zero over 128 frames, each load fading its
+  own). `MacroMove` (4) and `Expression` (5) events apply the mode's targets and CTRL's
+  assignments as `SetParam` events would, through the exported `EvalMacro` and
+  `EvalExpression`. The wet signal's gain after the post chain is `WetGainTarget`: the trim and
+  the effect volume in decibels as one gain, exactly 0 at the cutoff's minimum (shown `Kill`).
 - **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
   - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
     `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
@@ -288,7 +353,8 @@ implementing:
     a load before the first block is real-time safe), a
     random-number epoch that Spillover loads restart, `LoadPreset(PresetState, Exact or
     Spillover)` in the profile's fixed order with a report of inexact loads, frame-stamped
-    events in `ProcessContext` (parameter, freeze, trigger and Spillover load) applied at
+    events in `ProcessContext` (parameter, freeze, trigger, Spillover load, macro and
+    expression moves) applied at
     their frames by splitting the block inside `Process` (freeze settling once per frame),
     the `EventQueue` transport (it refuses and counts overflows and out-of-order stamps, is
     cleared with a restart, and retires events so a staged preset can be reused), and a
@@ -349,15 +415,14 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (153 test cases / ~4.1M assertions in Release, 152 in Debug;
-two are `[!shouldfail]` cases that hold the routing of IDs 27 and 28 until sound revision 2;
-29 are the package's, `test_blob.cpp`, and 6 the macro evaluator's, `test_mode_eval.cpp`), the
+**Suite** (`ctest`): `dsp_unit` (164 test cases / ~4.1M assertions in Release, 163 in Debug; 29 are the package's, `test_blob.cpp`, 7 the
+evaluators', `test_mode_eval.cpp`, and 10 the mode runtime's, `test_modes.cpp`), the
 forced-flush tests, the undefined-symbol audit and its negative control, the configure-check self-test, `golden_check` (every golden hash of sound
-revision 1), `golden_check_edits` (check mode fails on edited copies of the golden file), the
+revision 2), `golden_check_edits` (check mode fails on edited copies of the golden file), the
 corpus's forced-flush control `golden_forced_flush`, `blob_fuzz` (200,000 mutated packages, a
 quarter of them structurally, against a committed digest of every decoder and validator
-verdict that the emulated M7 reproduces) and `blob_fixtures` (the 14 frozen packages), and the compiler's `compiler_number_unit` and `compiler_number_hashes` (the
-number code's per-pull-request sets against committed hashes), `compiler_unit` (23 test cases:
+verdict that the emulated M7 reproduces) and `blob_fixtures` (the 15 frozen packages), and the compiler's `compiler_number_unit` and `compiler_number_hashes` (the
+number code's per-pull-request sets against committed hashes), `compiler_unit` (29 test cases:
 the JSON grammar suite, every rule E1–E12, the canonical form, packages, decompile, verify and
 diff, lint and derive, and two committed digests that every host must reproduce, the packages
 of 400 random documents and the verdicts of a 20,000-mutant reader fuzz) and
@@ -366,7 +431,7 @@ hash manifest); a plugin build adds the wrapper tests (32 test cases), the edito
 a hosted-VST3 check. The `dsp/` and compiler
 tests are green in Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14,
 the compiler's digests and manifest identical on all three (GCC 14, and Clang 14 in Debug,
-were last run before the ID table), and the emulated M7 runs
+were last run before the ID table; at sound revision 2 MSVC AVX2 ran the whole suite too), and the emulated M7 runs
 the package fuzzer and fixtures beside the golden check; the plugin tests with MSVC, Release
 and Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
@@ -446,14 +511,6 @@ records live in [docs/design/reviews/](design/reviews/).
   (§6.4); the Rosetta 2 and Prism host legs (§6.2); and a mint job: revision 1 was minted
   locally, and its pull request must pass every x86 leg and the emulated M7 against the
   committed file in one CI run, the deviation §6.1 records.
-- **A lone change to ID 27 or 28 is lost** (mode-compiler.md §7.2, record §2.1): revision 1
-  routes both to the post rebuild, which does not read them, so turning the onset trigger or
-  the mark position source on or off alone, by an event, a Spillover load or a plugin knob,
-  takes effect only at the next granular change. Routing them by their domain (R1) changes
-  output for such a change, so the fix lands with sound revision 2, which retires both rows into
-  mode structure (design §7.6); the routing-fixed build reproduces every golden hash of
-  revision 1, since no golden preset changes either alone. Two `[!shouldfail]` tests hold the
-  bug until then.
 - **Merging the Rev7 bring-up branch needs an integration fix that git does not flag.**
   `kNumParams` now counts all 82 table rows, and `firmware/live/main.cpp` on
   `claude/rev7-bringup` assumes one row per leaf: it asserts that its 28 `kIdNames` cover
@@ -469,6 +526,19 @@ records live in [docs/design/reviews/](design/reviews/).
   The table also grows the engine archive's code and constants, which the Rev7 images copy into
   the 64 KiB ITCM, from 47,001 to 53,134 bytes of `.text` and `.rodata` on the M7
   (`Engine.cpp` +3,079, `ParamDisplay.cpp` +3,054; *measured*), for that branch's size table.
+- **Sound revision 2 adds more for that merge** (lane C), none a textual conflict. Rows 27 and 28
+  are Retired: `kNumLeafParams` is 26, so the live image's 28 `kIdNames` and its `onset` and
+  `marks` commands (a `SetParam` on either is now a no-op) and the bench's preset lists that set
+  `OnsetTrigger` and `PositionSource` lose them silently, though the enumerators still compile;
+  onset triggering and mark positioning need a mode (`ModeBlob::schedule.sources`,
+  `layers[0].source`) in the `PresetState` the image loads, and its golden hashes are revision
+  2's. `Engine::Impl` grows to 6,600 bytes on the M7 (`kEngineImplBytes` 7,168), for the
+  DTCM placement, and `PlanMemory`'s Warm tier grows by the active mode's 1,616 bytes, which an
+  image sizing its AXI arena from `PlanMemory` follows. `Engine::LoadPreset` takes an optional
+  fourth argument and `EventType` gains `MacroMove` and `Expression`, so a `switch` over the
+  event types there wants two more cases. The archive's `.text` and `.rodata` on the M7 are
+  86,100 bytes (*measured*; 83,504 before), with `Engine.cpp` 14,034 bytes of code and the
+  package objects still free of floating-point instructions.
 - **Lane B adds two more things for that merge to weigh, neither a textual conflict.**
   `PresetState` grows from 1,032 to 2,656 bytes and its default is no longer all zero (it holds
   the default mode), so the live image's ten global `PresetState`s (`g_presets[8]`,
@@ -491,7 +561,12 @@ records live in [docs/design/reviews/](design/reviews/).
   element is still a Reserved row, so `UnsupportedTarget` comes first) and is tested through
   `ElementPresent`; the frozen `w1-leaf-*.bsp` fixtures change verdict in the W1 pull request
   that makes `layer0.decay_ms` a Leaf row. META's byte layout and its free-text limits (author
-  64, description 512, eight tags of 32) are this lane's, for lane A's schema to adopt. **The
+  64, description 512, eight tags of 32) are this lane's, for lane A's schema to adopt. Lane C
+  (sound revision 2) widened the supported features to onset and mark, which re-minted the
+  fuzzer's verdict digest, took 27 and 28 out of the samples' macro targets, made the revision-1
+  fixtures load inexact (their 27 and 28 are unknown ids) and added `r2-onset-marks.bsp`, which
+  must load exact on every later build; the fixtures' recipes now spell out each revision's
+  leaves, so they keep rebuilding the committed bytes. **The
   number code's committed hashes are provisional:** measured on x86-64 (MSVC 19.40, GCC 11.4,
   Clang 14; the exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit
   Cortex-M7 under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review), but the
@@ -501,9 +576,11 @@ records live in [docs/design/reviews/](design/reviews/).
   on; a leg that differs is a finding, not a reason to re-mint. The fuzzers' M7 run, the
   libFuzzer leg and the number-check legs are CI jobs since lane G, and the plugin's typed-text
   parser now uses `Number` (lane A).
-- **Mode compiler lane A's open ends.** The compiler admits only the default structure until
-  sound revision 2 widens `kSupportedModeFeatures` (onset and mark); its tests already compile,
-  decode and round-trip the whole vocabulary of every wave with the support table widened, but
+- **Mode compiler lane A's open ends.** The compiler admits the default structure, the onset
+  source and mark positioning (sound revision 2 widened `kSupportedModeFeatures`; lane C dropped
+  the shims that wrote rows 27 and 28 from the structure, re-stamped the examples and re-minted
+  the property and fuzz digests); its tests compile, decode and round-trip the whole vocabulary
+  of every wave with the support table widened, but
   later waves' vocabulary that the design leaves open stays provisional: tempo divisions are
   accepted as `"off"` only (W2 defines them, so anything else is E6 whatever the support),
   `quantize.scale` is a list of pitch classes, route sources are `modulator0`/`modulator1` and
@@ -546,7 +623,7 @@ records live in [docs/design/reviews/](design/reviews/).
   the gate requires and prints (the workflow re-runs on edits); a dropped package or a package
   preset turned back into a parameter list is a change, a re-stamp is not; an unbumped change to
   a path-trigger path beside a package change leaves the package preset's changed render to the
-  hard trigger (land the two apart, or bump); the corpus also commits a `MANIFEST`, which the
+  hard trigger (land the two apart, or bump); the corpus commits a `MANIFEST` (since lane C), which the
   gate reads beside `golden.json`'s pairs, so a package change the render does not hear still
   needs the label; the source ban also bans the stream and locale headers and the other float
   formatters, and the import check rejects the same families as imports (a superset of libm,
@@ -556,19 +633,32 @@ records live in [docs/design/reviews/](design/reviews/).
   table, Q12 and companion Q17) and the optional `bspc` leg on the emulated M7. The design's
   probes are kept, sources only, in [`tools/parity/modes/`](../tools/parity/modes/)
   (`tools/parity/README.md`).
-- **Engine API still to come:** `LoadPreset` reads only the leaves of a `PresetState`; the
-  mode, CTRL and the performance state it now carries (lane B), validation at load, the
-  `sinceRev` rule and Trails or FastCut mode switches arrive with sound revision 2 (lane C);
-  tap/tempo, mode-switch, macro and expression events (the macro and performance rows exist,
-  without their events);
-  `SaveState`/`LoadState` (which will carry the epoch). Smaller items: automating `DelayMs`
+- **Mode compiler lane C's open ends** (sound revision 2). Choices the design left: step 0
+  validates the mode and CTRL with `ValidateMode`'s rules but not STAT's, so a state built in
+  memory with non-canonical, unsorted or duplicate leaves still loads (inexact), as before;
+  `fadeStart` is the grain's own frame index and a FastCut shortens the grain to end with its
+  fade; `LoadPreset` takes the switch style as an optional argument for wrappers that split
+  their own blocks; `Engine::ModeSwitches()` exposes the content comparison. Not built:
+  sequencing state (none exists before W1, so the reset on a mode change is a hook, and §10.4's
+  "a stale `modeHash` resets sequencing" is tested as the comparison only), `ActiveModeInfo`,
+  the `trigger_offset` device setting (row 81 stays Reserved until phase D, so the detector reads
+  the preset's sensitivity alone), and the DTCM map audit the raised `kEngineImplBytes` should
+  pass. The golden file ties a preset's render to the package it starts from, not to packages it
+  loads mid-render: a change to one of those shows in `MANIFEST` (the label), and its render's
+  change counts as the engine's, conservatively. Unit tests whose parameter lists named 27 or 28
+  still do, read as structure (`dsp/tests/RetiredRows.h`). The plugin cannot load a mode yet
+  (lane D), so its onset and mark switches are gone and an older session loads without them.
+  Nothing lane C added has run on GitHub; the M7 and the x86 legs here agree.
+- **Engine API still to come:** tap/tempo events (W2) and `SaveState`/`LoadState` (which will
+  carry the epoch). Smaller items: automating `DelayMs`
   still splices clean delays (the grain engine's glide, below), input above 0 dBFS
   hard-clips in the int16 ring, and a trigger's source and velocity are carried but unread.
 - **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
   natively), the wrapper bypass with crossfade, the pedal-faithful live input option
   (`ConditionInput24`; the audition render applies it), event scripts in the audition, MIDI CC
-  mapping, pluginval in CI, CLAP and LV2, `.bsp` session state, the macro, performance and
-  effect-volume parameters with the host model's reporting (mode-compiler.md §9.2), and the
+  mapping, pluginval in CI, CLAP and LV2, `.bsp` presets and session state (so modes: the
+  plugin plays the default mode), the macro, performance and effect-volume parameters with the
+  host model's reporting (mode-compiler.md §9.2), and the
   freeze of parameter IDs and tapers (the table exists; step 6 freezes it). The In/Out level
   controls are wrapper code outside the guard and never part of a preset.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
@@ -586,9 +676,10 @@ records live in [docs/design/reviews/](design/reviews/).
 - **Trigger layer**: no sidechain input; detector constants are calibrated for 44.1/48 kHz
   (the plugin design runs the engine at 48 kHz and resamples at other host rates; until that
   mode lands, the skeleton runs it at the host rate).
-- **Engine features from the design not yet built**: glide, per-grain SVF/crush
-  modifiers, dual layers, step tables, `POS_GRID`, CLOCK-quantized triggering, scale
-  quantization of the pitch set, intermittency.
+- **Engine features from the design not yet built**: wave 1's trigger sources, bursts,
+  intermittency, pitch sets, `repeat`, `decay_ms` and `voice_count` (lane F, one sound revision
+  each); glide, per-grain SVF/crush modifiers, dual layers, step tables, `POS_GRID`,
+  CLOCK-quantized triggering, scale quantization of the pitch set.
 - **Post chain**: reverb damping/bandwidth as parameters, tempo-synced delay time,
   runtime stage reordering.
 - **The central product risk is unchanged**: mode *feel*. No amount of architecture
@@ -620,7 +711,11 @@ Steps 1–4 need no hardware.
    the CI: the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the
    decoder's fuzzers on every leg and the emulated M7, libFuzzer, nightly legs and the compiler
    audit (on their first GitHub run, the arm64 and macOS legs must reproduce the number code's
-   and the compiler's committed hashes). Next: sound revision 2 (lane C).
+   and the compiler's committed hashes); and lane C, the engine runtime at sound revision 2
+   (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
+   trim, the effect volume and the wet kill, the corpus on compiled packages). Next: wave 1, one
+   revision per feature (lane F; the owner's Q2 puts it before CLOCK), lane E's audition render
+   and scripts, lane D's curation slice; the Mix law (Q13) is its own revision when approved.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, `.bsp` presets and session state, and the rest of the plugin gaps above.

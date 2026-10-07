@@ -377,6 +377,14 @@ slow-pad onsets — we market the fallbacks and the visibility, not a solved pro
 > guard warning per pitch entry is L2); `d_min_fb` is dropped. That design amends this section
 > when it is accepted (its §12.5).
 
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The engine plays the
+> compiled mode as [mode-compiler.md](mode-compiler.md) §7.3 specifies: one active mode, copied in
+> at a load's frame from the staged `PresetState` into the Warm arena, with no blob ring, epochs
+> or `PublishMode`; validated on every load without a sample rate; compared with the active one
+> by content, never by `modeHash`. A mode switch is a Spillover load, Trails or FastCut. Sound
+> revision 2 plays the onset source and mark positioning from it (rows 27 and 28 retired);
+> wave 1's features follow, one revision each.
+
 A mode is a JSON document outside `dsp/` and a compiled POD **`ModeBlob`** inside it (one
 name throughout; sizeof computed from the vocabulary, reconciled against the §7 slot budget).
 The engine never parses text; `modes::Compile()` — source in `dsp/`, host-callable,
@@ -621,6 +629,12 @@ estimated ([determinism-profile.md](determinism-profile.md), "Effect on the grai
 budget").
 
 ## 9. `dsp/` core API
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The API as built is
+> [mode-compiler.md](mode-compiler.md) §7.4's: `LoadPreset(state, Exact or Spillover, report,
+> style)` instead of `PublishMode` and `LoadMode`, the `MacroMove` and `Expression` events, the
+> exported `EvalMacro` and `EvalExpression`, `ValidateMode` without a sample rate, and
+> `Engine::ModeSwitches()`; `ActiveModeInfo` is not built.
 
 ```cpp
 namespace brainscape {

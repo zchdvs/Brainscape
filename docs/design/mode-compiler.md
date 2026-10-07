@@ -11,9 +11,9 @@
 > probes), the disagreements it resolves and its provenance are in
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
-> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A and G
-> are built (docs/STATUS.md), and notes marked "as built" record what an implementing lane
-> decided where this document left a choice.
+> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A, G
+> and C (sound revision 2) are built (docs/STATUS.md), and notes marked "as built" record what an
+> implementing lane decided where this document left a choice.
 
 ---
 
@@ -386,6 +386,9 @@ power exponent, as engine §6 folds in the research's `lin|exp|log` and `curve_a
 As built: `EvalMacro` landed in `dsp/` with lane A (`brainscape/ModeEval.h`), beside
 `NearGuardMs` for lint L2, because lint and `derive` need it before R6; nothing in the engine
 calls it until R6, so it is sound-neutral by construction. 848 bytes on the M7 (*measured*).
+Since lane C (R6) the engine's `MacroMove` and `Expression` events run the same bodies
+(`detail/ModeEvalBody.h`) inside the engine's own guard, so one evaluator serves the engine,
+lint, `derive` and the app.
 
 **Cost on the M7:** about 538 cycles (1.1 µs) per curved target (*estimated* with LLVM 14's
 `llvm-mca` Cortex-M7 model): an 8-target move is about 0.9 % of a 48-frame block, paid only
@@ -407,6 +410,13 @@ the compiler (record §2.6).
   curated assignments.
 - **Parity.** CTRL is outside `sound_hash` yet reaches the sound through expression, so a
   recipe or PARITY request with expression events also records `control_hash` (§6.3).
+
+As built (lane C): an assignment maps the pedal position as a macro target with `in_range`
+[0, 1] would, through its `lo`, `hi` and `curve`; on a macro the result is the macro's
+position, and its targets follow as a `MacroMove`'s. The exported `EvalExpression(mode, control,
+position, out, cap)` writes the resulting leaves in application order (at most 32). A
+`MacroMove` or `Expression` with a non-macro id, an undefined macro or no assignment does
+nothing, and `SetParam` on a macro row stays a no-op.
 
 ### 3.5 Positions, leaves and soft takeover
 
@@ -536,6 +546,12 @@ Ranges and defaults are those of §2.3–§2.4. The detector uses
 `clamp(trigger.sensitivity + global.trigger_offset, 0, 1)`, so a mode keeps its threshold and
 a player's calibration applies everywhere. Trigger, Tap and Bypass stay outside the table
 (companion §5.7).
+
+As built (lane C): rows 27 and 28 are `Retired` tombstones (null name, no domain) since sound
+revision 2; the C++ enumerators `OnsetTrigger` and `PositionSource` keep their ids, so code
+naming them still builds, and a `SetParam` on them is a no-op. Their display rows stay, never
+registered. Row 81 stays `Reserved` until phase D, so the detector reads
+`trigger.sensitivity` alone. The cutoff shows `Kill` at its minimum.
 
 A transpose leaf survives beside the pitch set because with the default set `{0}` the engine
 computes `(0 + transpose) + detune`, bit for bit today's `PitchSt + detune`
@@ -821,6 +837,12 @@ changes every preset with 0 < mix < 1, so it takes its own bump after r2.
 bytes (`Granular.h:25-38`); 3a adds 4, W1 about 20 and W3 about 40, so W3 must pack it
 (risk 4). The active mode goes in the Warm arena through `PlanMemory`.
 
+As built (lane C, *measured*): `Grain` is 80 bytes (the 4-byte `fadeStart` and 4 of
+alignment), so `Engine::Impl` grew by 568 bytes on the M7 (512 of them the grain pool's), to
+6,600 of the raised 7,168 (`kEngineImplBytes`; x86-64: 6,752 of 7,424, from 6,168). The active
+mode and its CTRL, 1,616 bytes rounded to 16, end the Warm arena. No DTCM map audit exists yet
+to check the raise against.
+
 ### 7.2 Parameter domains: the routing fix
 
 `Engine::Impl::ApplyParam` rebuilds granular parameters only for IDs below 16
@@ -839,6 +861,16 @@ cutoff)`, gives the smoothed wet gain's target: 0 at the cutoff minimum, else
 while killed stays muted; today's trim handler (`:561-565`) and the raw-cutoff bypass in
 `RebuildPostParams` (`:593-597`) would each re-open the bug class alone. Tests: one lone change
 per `Leaf` row against the same change among other edits, and §10.3's kill cases.
+
+As built (lane C): a change marks its row's domain bits; before the next frame renders,
+`RebuildDirty` rebuilds each marked domain once, through a switch that names all six (Mix,
+Feedback, Wet and Detector included, which revision 1 applied at once by ID; the order cannot
+matter, their state is disjoint). `WetGainTarget` is the target of a 10 ms smoother, as the
+trim's was, that scales the wet signal after the post chain and before the mix: `dry·(1 − mix)
++ (wet·g)·mix`. At `g` = 1 every product is exact, so a preset without trim plays revision 1's
+bits; the kill is exact silence once the smoother snaps to 0 (about 0.46 s). The trim and the
+effect volume add in decibels before the one conversion, so `(−6, 0)` and `(0, −6)` give the
+same bits. The bypass at the cutoff's maximum stays the post rebuild's.
 
 ### 7.3 Loading a mode, without a blob ring
 
@@ -881,6 +913,20 @@ active one, which the engine checks itself, word by word, rather than trusting `
 every index is reduced modulo its table's size on any load. Scheduler phase and grains always
 carry over.
 
+As built (lane C): step 0 is `ValidateMode`'s rules on the mode and CTRL, structural and
+semantic, but not STAT's: the leaves are step 2's, which canonicalizes them and counts what is
+unknown, duplicated or changed instead of refusing the load (a non-canonical value or an
+unsorted leaf list in a state built in memory stays loadable, as before). The comparison of
+modes is `ModeBlob`'s bytes up to `modeHash` (the struct has no implicit padding), and each load
+whose mode differs counts in `Engine::ModeSwitches()`; sound revision 2 has no sequencing state
+to reset, so the reset is a hook for W1. FastCut stamps `fadeStart` as the grain's own frame
+index (a `uint32_t`, no absolute frame), shortens the grain to end with its fade, which frees
+its voice, and renders frames from `fadeStart` on with the envelope times `(128 − k)/128`,
+exact multiples of 2⁻⁷; frames before it render as any grain's, so a Trails load and a grain no
+load cut keep revision 1's arithmetic. A direct `LoadPreset(…, Spillover)` takes the style as
+an optional last argument (Trails by default), so a wrapper splitting blocks itself, as the
+golden harness's split delivery does, can cut too. No `ActiveModeInfo` exists yet.
+
 ### 7.4 Events and API
 
 | Type | No. | `id` | `value` | Wave |
@@ -903,6 +949,13 @@ New exported functions: `DecodePreset` and `ValidateMode` (integer-only, unguard
 `EvalMacro(const ModeBlob&, ParamId, float position, PresetLeaf* out, size_t cap)` and
 `EvalExpression` (guarded); `CheckPreset` also validates the mode. `LoadReport` gains
 `invalidMode` and `unsupported`.
+
+As built (lane C): events 4 and 5 as above; a `SpilloverLoad` event's `id` is its
+`SwitchStyle` (0 Trails, 1 FastCut, anything else Trails), and `LoadPreset` takes the style as
+an optional fourth argument. `kFastCutFrames` = 128 is in `Engine.h` beside
+`kFeedbackDelayFrames`. `Engine::ModeSwitches()` (audio thread) counts the loads whose mode
+differed by content. `LoadReport.unsupported` counts stored performance fields away from their
+defaults; `applied` is false for an invalid mode.
 
 ### 7.5 Wave 1 and shared rules
 
@@ -989,6 +1042,12 @@ default buys is that older packages stay exact (§7.3). The pull requests, in or
 
 Bumps are cheap until a revision is published (companion §8.1); the last internal revision
 before step 6 becomes the first published one.
+
+As built (lane C, item 4): of revision 1's 28 golden presets, 25 reproduce their hashes bit for
+bit at r2, every converted package preset included, and exactly the three item 4 expects
+change: `automation_offgrid` (its toggles of 27 and 28 became mode switches; it also moves the
+trim below full mix), `subnormal_wet` (trim −6 dB at mix 0.5) and `post_max` (40 Hz to 41 Hz,
+from second 2). `hot_out` (trim +24 dB at mix 1) reproduces, as the arithmetic says it must.
 
 ## 8. The compiler library and `bspc`
 
@@ -1212,6 +1271,31 @@ at `-O1` with asserts live, seeded with the frozen fixtures. Every `parity-host`
 
 Each W1 feature adds unit tests and contracts #1 and #3 over its cases.
 
+As built (lane C): `PresetCase` names its package (`package`); a script stages packages too
+(`SpilloverPackage`, `ExactLoadPackage`), with a switch style per load. The documents are in
+`dsp/tests/golden/presets/` with their packages and `MANIFEST`, compiled by `bspc` at r2: ten
+for the r1 presets that used 27 or 28 at their start or in a load (each holding exactly the r1
+values), the automation preset's second mode, and six for the new presets. The harness decodes
+each package on the host and the M7 alike and records `package`, `soundHash` and `controlHash`
+per package preset in `golden.json`, which check mode compares. Corpus version 6 adds the vector
+`plucks_modes_14s` with `macro_sweep` (114 macro moves over all eight macros, the Filter macro
+through the kill, a `SetParam` and a `MacroMove` on one leaf at one frame in both orders),
+`expression` (300 pedal moves over four assignments, two on macros), `mode_switch` (six
+Spillover loads among three modes, Trails and FastCut, two FastCuts 77 frames apart, one load of
+the same mode), `wet_kill` (into and out of 40 Hz by `SetParam` and the Filter macro, lone trim
+and effect-volume changes while killed) and `lone_changes` (every `Leaf` row and the effect
+volume changed alone); the counters `macroMoves`, `expressionEvents`, `modeSwitches` (the
+engine's, after the render's first load) and `killedFrames`; the ablations `mode` (the default
+mode and CTRL), `macro` (moves dropped), `modeSwitch` (every load keeps the starting mode),
+`fastCut` (FastCut loads made Trails) and `wetKill` (40 Hz moved to 41 Hz), with `markPosition`
+and `onsetTrigger` now switching structure off; and the invariance `amongEdits`, which renders
+every `SetParam` of a script among edits that rebuild every other domain and must give the same
+bits (R1 on every leg, the M7 included). Every render starts from the device settings' defaults
+(part of a render's recipe, §3.8). An ablation that switches structure off edits the decoded
+`ModeBlob`; the presets themselves take it only from packages. A staged package's
+hashes are not in `golden.json`: a change to one is visible in `MANIFEST`, and its render's
+change counts as the engine's, a conservative attribution.
+
 ### 10.4 Engine and plugin tests
 
 - **Per-kind rules**: STAT containing IDs 27, 31, 69 or 81 loads inexact and changes no
@@ -1225,6 +1309,14 @@ Each W1 feature adds unit tests and contracts #1 and #3 over its cases.
 - **Plugin**: typed text `.5 s`, `5. ms`, `05` and `+25`; a per-leaf touched set replacing the
   32-bit mask (`plugin/src/PluginProcessor.cpp:24`); the release checklist's host recording
   test (§3.6).
+
+As built (lane C): `dsp/tests/test_modes.cpp` holds the load, event, wet-gain and FastCut cases,
+`test_params.cpp` the per-kind rules (27 and 28 among the unknown ids) and one lone change per
+`Leaf` row and the effect volume, `test_mode_eval.cpp` `EvalExpression`, and the frozen fixture
+`r2-onset-marks.bsp` the `sinceRev` rule. "A different mode with a stale `modeHash` resets
+sequencing" is tested as the content comparison (`ModeSwitches`, and the stale-hash load
+playing as the true one): r2 has no sequencing state, so the reset itself is W1's test. Unit
+tests whose parameter lists named 27 or 28 still do, read as structure (`RetiredRows.h`).
 
 ## 11. Step 4: the first factory modes
 

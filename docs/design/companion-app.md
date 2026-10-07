@@ -674,6 +674,13 @@ only canonical values, and the UI always shows the canonical value.
 
 ### 5.6 Host automation
 
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The engine plays the macro
+> and expression moves (events 4 and 5, through the shared evaluator) and the effect volume
+> (`global.effect_volume_db`, a device setting that scales the wet signal with the mode's
+> `wet_trim_db`); the plugin's parameters for them arrive with lane D
+> ([mode-compiler.md](mode-compiler.md) §9.2), and the onset trigger and mark positioning, rows
+> 27 and 28 until then, are mode structure, which the plugin does not load yet.
+
 - **VST3 (JUCE 9.0.3):** last value per parameter per host block, `approximatelyEqual` changes
   dropped (§2.3); stamped at frame 0 of the block (§4.10). AU and LV2 are unchecked; assume the
   same.
@@ -713,6 +720,14 @@ resume.
 ## 6. Preset model and file format
 
 ### 6.1 Complete-state presets, applied by one `dsp/` function
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** `LoadPreset` applies the
+> whole decoded package as [mode-compiler.md](mode-compiler.md) §7.3 specifies: it validates the
+> mode and CTRL first and applies nothing when they fail, copies the mode in at the load's
+> frame, and counts a missing leaf only if its row existed at the package's `sound_rev`
+> (`sinceRev`), so a leaf a later revision adds does not make an older package inexact. "A new
+> leaf can land as sound-neutral" is withdrawn there (§7.6): any change that can alter output
+> bumps the revision. That design amends this section when it is accepted (its §12.5).
 
 A preset is **complete state**: every leaf with an explicit value, defaults included, because
 load order changes the output (smoothers gliding versus snapping differed by −56 to −69 dB,
