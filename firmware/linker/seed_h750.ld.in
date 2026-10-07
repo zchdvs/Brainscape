@@ -10,6 +10,8 @@
  *   .axi_bss      AXI SRAM (D1), cached: the Warm arena and the USB serial rings (Tier::Warm)
  *   .sram1_bss    D2 SRAM, first 32 KiB, MPU non-cacheable: libDaisy's audio DMA buffers
  *   .sdram_bss    SDRAM, cached write-back: the Bulk arena (Tier::Bulk)
+ *   .backup_sram  libDaisy's boot_info (the Daisy bootloader's handshake, first), then the
+ *                 platform's fault record (platform/Fault.cpp), kept across a reset
  *   .heap         what is left of @BRAINSCAPE_LD_HEAP@, for the golden harness's containers
  *                 (never engine state; the firmware's _sbrk waits for the SDRAM init)
  *
@@ -53,9 +55,13 @@ SECTIONS
 
 	/* The engine's code and constants in ITCM (zero-wait, beside the 16 KiB I-cache), as
 	 * determinism-profile.md §7.1 requires for the inner loops: @BRAINSCAPE_LD_ENGINE_CODE@.
-	 * Copied from its load address by the platform's preinit hook before any constructor
-	 * runs. It starts 64 bytes in, so no object sits at address 0, which a pointer test would
-	 * read as null. Calls between ITCM and QSPI or flash go through linker veneers. */
+	 * With them, libgcc's helpers and the firmware's memcpy, memmove and memset
+	 * (platform/MemFunctions.c), which the engine calls every block. Copied from its load
+	 * address by the platform's preinit hook before any constructor runs: nothing that runs
+	 * earlier (the startup code, SysTick) may call into it, which the build checks
+	 * (firmware/cmake/BootCheck.cmake). It starts 64 bytes in, so no object sits at address
+	 * 0, which a pointer test would read as null. Calls between ITCM and QSPI or flash go
+	 * through linker veneers. */
 	/* The unwind index of the run-time helpers moved to ITCM: a PREL31 entry in .exidx
 	 * (QSPI or flash) cannot reach ITCM at address 0, and nothing unwinds (the images and the
 	 * engine build without exceptions). */
@@ -244,3 +250,5 @@ ASSERT(_estack - __brainscape_dtcm_top >= __brainscape_min_stack,
        "brainscape: DTCM leaves less than 32 KiB for the main stack")
 ASSERT(__brainscape_heap_end - __heap_start >= @BRAINSCAPE_LD_MIN_HEAP@,
        "brainscape: the heap region is smaller than the image needs (BRAINSCAPE_LD_MIN_HEAP)")
+ASSERT(_ZN5daisy9boot_infoE == ORIGIN(BACKUP_SRAM),
+       "brainscape: libDaisy's boot_info must open the backup SRAM, where the Daisy bootloader looks")

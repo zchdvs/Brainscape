@@ -26,14 +26,16 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR NOT CMAKE_SYSTEM_PROCESSOR STREQU
   message(FATAL_ERROR "BRAINSCAPE_BUILD_FIRMWARE needs the arm-none-eabi toolchain file "
                       "(-DCMAKE_TOOLCHAIN_FILE=tools/cmake/arm-none-eabi-toolchain.cmake)")
 endif()
+# The engine archive the images link must be the one CI audits and renders under qemu-arm
+# (parity.yml, parity-m7; firmware.yml compares the two archives byte for byte): a Release
+# build with the pinned compiler, or the images test something else.
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
-  # The engine archive the images link must be the one CI audits (parity.yml, parity-m7).
-  message(WARNING "brainscape firmware: CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}', not Release: "
-                  "the engine archive will differ from the audited one")
+  message(FATAL_ERROR "brainscape firmware: CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}', not Release: "
+                      "the engine archive would differ from the audited one")
 endif()
 if(NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 10.3.1)
-  message(WARNING "brainscape firmware: arm-none-eabi-g++ ${CMAKE_CXX_COMPILER_VERSION}, not the "
-                  "pinned 10.3-2021.10 (determinism-profile.md §6.8)")
+  message(FATAL_ERROR "brainscape firmware: arm-none-eabi-g++ ${CMAKE_CXX_COMPILER_VERSION}, not the "
+                      "pinned 10.3-2021.10 (determinism-profile.md §6.8)")
 endif()
 
 # Where the images run (firmware/README.md, "App type"). BOOT_QSPI, the default: execute in
@@ -97,11 +99,14 @@ add_custom_target(brainscape_fw_gitinfo
   COMMENT "Recording the source commit"
   VERBATIM)
 configure_file(platform/BuildInfo.cpp.in ${_bs_generated}/BuildInfo.cpp @ONLY)
+# engine-archives.sha256, beside the images, is what tools/hil/parity_check.py and
+# bench_report.py --expect-archive compare the device's hello line with.
 add_custom_command(
-  OUTPUT ${_bs_generated}/EngineArchiveSha256.h
+  OUTPUT ${_bs_generated}/EngineArchiveSha256.h ${CMAKE_CURRENT_BINARY_DIR}/engine-archives.sha256
   COMMAND ${CMAKE_COMMAND} -DARCHIVE=$<TARGET_FILE:brainscape_dsp>
           -DHOOKS_ARCHIVE=$<TARGET_FILE:brainscape_dsp_fpenv_hooks>
           -DOUT=${_bs_generated}/EngineArchiveSha256.h
+          -DOUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/engine-archives.sha256
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchiveSha256.cmake
   DEPENDS brainscape_dsp brainscape_dsp_fpenv_hooks $<TARGET_FILE:brainscape_dsp>
           $<TARGET_FILE:brainscape_dsp_fpenv_hooks> ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchiveSha256.cmake
@@ -131,14 +136,20 @@ endfunction()
 _brainscape_fw_golden(brainscape_fw_golden brainscape_dsp)
 _brainscape_fw_golden(brainscape_fw_golden_hooks brainscape_dsp_fpenv_hooks)
 
-# The platform layer: board bring-up, the FP boot word, DWT, USB serial, arena placement.
+# The platform layer: board bring-up, the FP boot word, DWT, fault handling, USB serial,
+# arena placement.
 add_library(brainscape_fw_platform STATIC
   platform/Seed.cpp
+  platform/Fault.cpp
   platform/UsbSerial.cpp
   platform/Placement.cpp
   platform/Syscalls.c
   ${_bs_generated}/BuildInfo.cpp
   ${_bs_generated}/EngineArchiveSha256.h)
+# The preinit hook runs before the copy to ITCM, where an ITCM image keeps memcpy and memset
+# (below): its loops must stay loops, not become calls to them.
+set_source_files_properties(platform/Seed.cpp platform/Fault.cpp PROPERTIES
+  COMPILE_OPTIONS -fno-tree-loop-distribute-patterns)
 add_dependencies(brainscape_fw_platform brainscape_fw_gitinfo)
 target_include_directories(brainscape_fw_platform
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR} ${_bs_golden} ${CMAKE_SOURCE_DIR}/dsp/include
@@ -146,9 +157,19 @@ target_include_directories(brainscape_fw_platform
 target_link_libraries(brainscape_fw_platform PUBLIC brainscape_daisy brainscape::fp_profile)
 _brainscape_fw_flags(brainscape_fw_platform)
 
+# memcpy, memmove and memset moving 32 bytes per iteration instead of newlib-nano's byte
+# loops (platform/MemFunctions.c). An object library, so every image links the objects
+# themselves and libc.a's members are never pulled in; -ffreestanding and
+# -fno-tree-loop-distribute-patterns keep the compiler from turning the loops into calls to
+# the functions they implement.
+add_library(brainscape_fw_mem OBJECT platform/MemFunctions.c)
+target_compile_options(brainscape_fw_mem PRIVATE -ffreestanding -fno-tree-loop-distribute-patterns)
+_brainscape_fw_flags(brainscape_fw_mem)
+
 get_filename_component(_bs_tool_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
 find_program(BRAINSCAPE_ARM_SIZE arm-none-eabi-size HINTS ${_bs_tool_dir} REQUIRED)
 find_program(BRAINSCAPE_ARM_OBJCOPY arm-none-eabi-objcopy HINTS ${_bs_tool_dir} REQUIRED)
+find_program(BRAINSCAPE_ARM_OBJDUMP arm-none-eabi-objdump HINTS ${_bs_tool_dir} REQUIRED)
 
 # One firmware image: an ELF, the .bin the web programmer flashes, a .hex, a map file, and
 # a memory-region report. ENGINE_CODE ITCM places the engine archive's code and constants in
@@ -159,9 +180,10 @@ function(brainscape_firmware_image name)
   set(BRAINSCAPE_LD_MIN_HEAP ${ARG_MIN_HEAP})
   if(ARG_ENGINE_CODE STREQUAL "ITCM")
     set(BRAINSCAPE_LD_ENGINE_CODE "ITCM")
-    # With the run-time helpers it calls (64-bit division and conversions). Not libc's
-    # memcpy and memset: the startup code calls them before the copy to ITCM.
-    set(BRAINSCAPE_LD_ITCM_INPUTS "*libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *libgcc.a:*(.text .text.*)")
+    # With the run-time helpers it calls (64-bit division and conversions) and the
+    # firmware's memcpy, memmove and memset (platform/MemFunctions.c; libDaisy's startup code
+    # is built not to call them before the copy to ITCM, cmake/LibDaisy.cmake).
+    set(BRAINSCAPE_LD_ITCM_INPUTS "*libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
     set(BRAINSCAPE_LD_ITCM_DISCARD "*libgcc.a:*(.ARM.exidx .ARM.exidx.*)")
   elseif(ARG_ENGINE_CODE STREQUAL "XIP")
     set(BRAINSCAPE_LD_ENGINE_CODE "with the rest of the code, ${BRAINSCAPE_LD_TEXT}")
@@ -173,7 +195,7 @@ function(brainscape_firmware_image name)
   set(ld ${CMAKE_CURRENT_BINARY_DIR}/${name}.ld)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/linker/seed_h750.ld.in ${ld} @ONLY)
   add_executable(${name} ${ARG_SOURCES})
-  target_link_libraries(${name} PRIVATE ${ARG_LIBS} brainscape_fw_platform)
+  target_link_libraries(${name} PRIVATE brainscape_fw_mem ${ARG_LIBS} brainscape_fw_platform)
   _brainscape_fw_flags(${name})
   target_compile_definitions(${name} PRIVATE BRAINSCAPE_FW_IMAGE="${name}"
                                              BRAINSCAPE_FW_ENGINE_CODE="${ARG_ENGINE_CODE}")
@@ -190,6 +212,8 @@ function(brainscape_firmware_image name)
             -DFLASH_ADDRESS=${BRAINSCAPE_FLASH_ADDRESS} -DENGINE_CODE=${ARG_ENGINE_CODE}
             -DOUT=${CMAKE_CURRENT_BINARY_DIR}/${name}.size.txt
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ImageReport.cmake
+    COMMAND ${CMAKE_COMMAND} -DELF=$<TARGET_FILE:${name}> -DOBJDUMP=${BRAINSCAPE_ARM_OBJDUMP}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BootCheck.cmake
     BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/${name}.bin ${CMAKE_CURRENT_BINARY_DIR}/${name}.hex
                ${CMAKE_CURRENT_BINARY_DIR}/${name}.map ${CMAKE_CURRENT_BINARY_DIR}/${name}.size.txt
     VERBATIM)

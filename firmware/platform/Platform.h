@@ -54,18 +54,46 @@ uint64_t Cycles64();
 
 // ---- LED -------------------------------------------------------------------------------
 
+// Driven at 1 kHz from SysTick by writing the LED's GPIO (PC7) directly, once BoardInit has
+// armed it. A hardware fault has a pattern of its own, bit-banged without SysTick (below).
 enum class LedMode : uint8_t {
   Idle,   // a short blink every second: alive, waiting for a command
   Busy,   // fast blink: rendering or measuring
   Done,   // on
-  Fault,  // three quick flashes, a pause: Fatal() was called (not SOS, the bootloader's)
+  Fault,  // three quick flashes, a pause: Fatal() in thread mode (not SOS, the bootloader's)
   Manual, // the image drives it (SetLed)
   Pulse,  // on until the deadline PulseLed set, then off (the live image's onset light)
 };
 void SetLedMode(LedMode mode);
 void SetLed(bool on);
-// Lights the LED for `ms` milliseconds; safe from the audio interrupt.
+// Lights the LED for `ms` milliseconds; safe from the audio interrupt. Never overrides the
+// Fault pattern.
 void PulseLed(uint32_t ms);
+
+// Milliseconds since BoardInit (the SysTick count).
+uint32_t UptimeMs();
+
+// ---- Faults (platform/Fault.cpp) ----------------------------------------------------------
+
+// Every fault vector (NMI, HardFault, MemManage, BusFault, UsageFault) and every unhandled
+// interrupt goes to the platform's handler: it saves a record to the backup SRAM, blinks two
+// long flashes and a pause for about 10 s (GPIO written directly, DWT busy-wait), then resets
+// the chip. The next boot reports the record once, as the hello line's "lastFault".
+enum class FaultKind : uint32_t { Exception = 1, FatalIsr = 2, FatalThread = 3 };
+void              SaveFaultRecord(FaultKind kind, const char* message, uint32_t pc, uint32_t lr,
+                                  uint32_t xpsr, uint32_t excReturn, uint32_t sp);
+[[noreturn]] void FaultBlinkAndReset();
+std::string       LastFaultJson();  // the previous boot's record as JSON, or null
+// Platform internals: BoardInit and the preinit hook call these.
+void     TakeLastFault();
+void     PrepareFaultVectors();
+void     UseFaultVectors(bool on);
+uint32_t ImageVectorTable();  // where the image's own vector table is linked
+const char* ImageName();
+
+// The cache, MPU and QSPI state the measurements run under (SCB->CCR, every enabled MPU
+// region, QUADSPI CR/DCR/CCR) and where the firmware's mem* functions run, as raw JSON.
+std::string CpuStateJson();
 
 // ---- Identity --------------------------------------------------------------------------
 
@@ -86,7 +114,10 @@ std::string HelloJson(const char* image, const std::string& extra = "");
 
 // ---- Errors and the bootloader ---------------------------------------------------------
 
-// Reports `message` as {"type":"error"} (best effort), blinks the fault pattern forever.
+// Saves `message` as the fault record. In thread mode: reports it as {"type":"error"} (best
+// effort) and blinks the Fatal pattern forever, still serving USB. From an interrupt, where
+// neither SysTick nor the USB interrupt can preempt: the hardware-fault path (no USB, the
+// two-long-flash pattern, a reset after about 10 s).
 [[noreturn]] void Fatal(const char* message);
 
 // Reboots into the bootloader that flashes this app type, so a new image can be flashed

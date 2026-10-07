@@ -133,13 +133,17 @@ void Run(const std::vector<std::string>& words) {
   UsbSink            sink;
   const StreamResult r = StreamCorpus(renderer, so, sink);
   fw::SetLedMode(r.renderFailures == 0 ? fw::LedMode::Done : fw::LedMode::Fault);
+  // After parity-end: whether the transport lost anything (parity_check.py reads it and
+  // fails the run on any loss).
   Serial().WriteLine(JsonObj()
                          .Str("type", "idle")
                          .Hex("fpscr", fw::ReadFpscr())
                          .UInt("heapUsed", BrainscapeHeapUsed())
                          .UInt("droppedBytes", Serial().DroppedBytes())
+                         .UInt("droppedLines", Serial().DroppedLines())
                          .Done(),
                      UsbSerial::Mode::Block);
+  Serial().Flush(2000);
 }
 
 }  // namespace

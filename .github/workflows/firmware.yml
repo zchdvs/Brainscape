@@ -3,9 +3,10 @@ name: firmware
 # The Daisy Seed bring-up images (firmware/README.md), cross-built with the pinned
 # arm-none-eabi 10.3-2021.10 and -Werror, compile only: no hardware runs here. The job
 # fails when an image stops building or stops fitting its memory regions (the linker's
-# region and stack/heap checks, firmware/linker/seed_h750.ld.in), when the engine archive
-# the images link fails the static audits of determinism-profile.md §6.3, or when it
-# carries a GOT relocation. The images link ST's SLA0044 USB code through libDaisy on
+# region and stack/heap checks, firmware/linker/seed_h750.ld.in), when its boot path calls
+# into ITCM before ITCM is filled (firmware/cmake/BootCheck.cmake, part of the build), when
+# the engine archive the images link differs from the M7 oracle's (parity-m7), fails the
+# static audits of determinism-profile.md §6.3, or carries a GOT relocation. The images link ST's SLA0044 USB code through libDaisy on
 # purpose (companion-app.md §7.2): firmware-elf-audit runs in its prototype mode, which
 # lists that code and labels the images not distributable instead of failing.
 
@@ -53,6 +54,31 @@ jobs:
         run: |
           cat build-fw/firmware/*.size.txt
           sha256sum build-fw/dsp/libbrainscape_dsp.a build-fw/dsp/libbrainscape_dsp_fpenv_hooks.a build-fw/firmware/*.bin
+      # The images must link the archives parity-m7 audits and renders the corpus with under
+      # qemu-arm: the same sources, toolchain and flags configured as the M7 oracle build must
+      # give byte-identical archives, and the hashes the images embed (their hello line) and
+      # the host tools' --expect-archive file must be theirs.
+      - name: The images' engine archives equal the M7 oracle's (parity-m7)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake -B build-m7 -DCMAKE_TOOLCHAIN_FILE=tools/cmake/arm-none-eabi-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=OFF -DBRAINSCAPE_BUILD_M7_ORACLE=ON
+          cmake --build build-m7 --target brainscape_dsp brainscape_dsp_fpenv_hooks -j "$(nproc)"
+          rc=0
+          for a in libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a; do
+            fw=$(sha256sum "build-fw/dsp/$a" | cut -d' ' -f1)
+            m7=$(sha256sum "build-m7/dsp/$a" | cut -d' ' -f1)
+            echo "$a: firmware build $fw, M7 oracle build $m7"
+            if [ "$fw" != "$m7" ]; then
+              echo "::error::$a differs between the firmware build and the M7 oracle build"
+              rc=1
+            fi
+            if ! grep -q "^$fw  $a\$" build-fw/firmware/engine-archives.sha256; then
+              echo "::error::engine-archives.sha256 does not record $a as $fw"
+              rc=1
+            fi
+          done
+          exit $rc
       - name: Audit imported symbols of the engine archive (arm-none-eabi, no libm)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: python3 tools/ci/audit_symbols.py --toolchain arm --nm arm-none-eabi-nm build-fw/dsp/libbrainscape_dsp.a
@@ -82,6 +108,7 @@ jobs:
           name: firmware-images
           path: |
             build-fw/firmware/*.bin
+            build-fw/firmware/engine-archives.sha256
             build-fw/firmware/*.elf
             build-fw/firmware/*.map
             build-fw/firmware/*.size.txt

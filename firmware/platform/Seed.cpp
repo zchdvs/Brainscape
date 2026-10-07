@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <cstring>
 
 #include "JsonLine.h"
@@ -11,6 +12,10 @@ using brainscape::golden::JsonHex32;
 using brainscape::golden::JsonString;
 using brainscape::golden::JsonUInt;
 
+// This file is compiled with -fno-tree-loop-distribute-patterns (firmware/CMakeLists.txt):
+// the preinit hook below runs before the copy to ITCM, so its loops must stay loops instead
+// of becoming calls to memcpy, which an ITCM image keeps there (platform/MemFunctions.c).
+
 namespace brainscape::fw {
 
 namespace {
@@ -23,7 +28,15 @@ volatile uint32_t g_cycLast = 0;
 volatile LedMode  g_ledMode = LedMode::Idle;
 volatile uint32_t g_ms      = 0;
 volatile uint32_t g_pulseUntil = 0;
-bool              g_ledReady = false;
+
+// The SysTick hook runs from the image's first instruction: the Daisy bootloader hands over
+// with SysTick running (its HAL_Init started it), before the startup code has copied .data
+// and zeroed .bss, so every variable here may still hold whatever the previous image left at
+// its address. The hook does nothing until BoardInit has stored this 32-bit value, and it
+// drives the LED by writing its GPIO directly rather than through the DaisySeed object.
+constexpr uint32_t kArmed   = 0x4C454421u;  // "LED!"
+volatile uint32_t  g_armed  = 0;
+constexpr uint32_t kLedPin  = 7;  // PC7, the Seed's user LED (libDaisy src/daisy_seed.cpp)
 
 void ExtendCycles() {
   const uint32_t now = DWT->CYCCNT;
@@ -32,7 +45,7 @@ void ExtendCycles() {
 }
 
 void LedWrite(bool on) {
-  if (g_ledReady) g_seed.SetLed(on);
+  if (g_armed == kArmed) GPIOC->BSRR = on ? (1u << kLedPin) : (1u << (kLedPin + 16u));
 }
 
 // The LED pattern for the current mode, at 1 kHz from SysTick.
@@ -42,8 +55,8 @@ void LedTick(uint32_t ms) {
     case LedMode::Busy: LedWrite(ms % 200u < 100u); break;
     case LedMode::Done: LedWrite(true); break;
     case LedMode::Fault:
-      // Three quick flashes, then a pause: the Daisy bootloader's error signal is SOS, so
-      // the images use another one.
+      // Three quick flashes, then a pause: the Daisy bootloader's error signal is SOS, and a
+      // hardware fault blinks two long flashes (platform/Fault.cpp).
       LedWrite((ms % 1500u) < 750u && (ms % 250u) < 80u);
       break;
     case LedMode::Manual: break;
@@ -51,8 +64,10 @@ void LedTick(uint32_t ms) {
   }
 }
 
+daisy::System::MemoryRegion ImageRegion() { return daisy::System::GetMemoryRegion(ImageVectorTable()); }
+
 const char* BootRegionName() {
-  switch (daisy::System::GetProgramMemoryRegion()) {
+  switch (ImageRegion()) {
     case daisy::System::MemoryRegion::INTERNAL_FLASH: return "internal flash";
     case daisy::System::MemoryRegion::ITCMRAM: return "ITCM";
     case daisy::System::MemoryRegion::DTCMRAM: return "DTCM";
@@ -66,6 +81,9 @@ const char* BootRegionName() {
 }
 
 const char* BootloaderName() {
+  // libDaisy reads the bootloader's handshake unless the program runs from internal flash,
+  // which it decides from SCB->VTOR; the vector table lives in DTCM here (Fault.cpp).
+  if (ImageRegion() == daisy::System::MemoryRegion::INTERNAL_FLASH) return "none";
   switch (daisy::System::GetBootloaderVersion()) {
     case daisy::System::BootInfo::Version::NONE: return "none";
     case daisy::System::BootInfo::Version::LT_v6_0: return "Daisy bootloader < v6.0";
@@ -96,31 +114,35 @@ std::string AudioJson() {
          "}";
 }
 
-// FPSCR = 0 and FPDSCR = 0 before main and before any static constructor: the startup code
-// calls __libc_init_array, which runs .preinit_array first. CP10/CP11 access is granted
-// here too, in case the code that ran before (SystemInit, or the Daisy bootloader for a
-// bootloaded app) did not.
 extern "C" {
-// firmware/linker/seed_h750.ld.in: the engine's code and constants, when an image places
-// them in ITCM (profile §7.1).
-extern char __itcm_text_start, __itcm_text_end, __itcm_text_load;
+// firmware/linker/seed_h750.ld.in: the engine's code and constants (and the firmware's mem*
+// functions), when an image places them in ITCM (profile §7.1).
+extern uint32_t __itcm_text_start, __itcm_text_end, __itcm_text_load;
+extern char     __brainscape_image_end;
 void BrainscapeHeapReady(void);  // Syscalls.c
 }
 
-extern "C" void BrainscapePreinitFp() {
+// Runs from .preinit_array, before main and before any static constructor (the startup code
+// calls __libc_init_array, which runs .preinit_array first): SysTick off (the bootloader's;
+// HAL_Init restarts it), FPSCR = 0 and FPDSCR = 0, the engine's code into ITCM, and the
+// platform's fault vectors. CP10/CP11 access is granted here too, in case the code that ran
+// before (SystemInit, or the Daisy bootloader for a bootloaded app) did not.
+extern "C" void BrainscapePreinit() {
+  SysTick->CTRL = 0u;
   SCB->CPACR |= (3UL << 20) | (3UL << 22);
   __DSB();
   __ISB();
   SetBootFpWord();
-  // Before any constructor, so no engine code can run from ITCM before it is there.
-  const size_t itcm = static_cast<size_t>(&__itcm_text_end - &__itcm_text_start);
-  if (itcm != 0) {
-    std::memcpy(&__itcm_text_start, &__itcm_text_load, itcm);
-    __DSB();
-    __ISB();
-  }
+  // Before any constructor, so no engine code can run from ITCM before it is there. Words:
+  // the section starts 64 bytes into ITCM and ends 8-aligned (linker script).
+  const uint32_t* src = &__itcm_text_load;
+  for (uint32_t* dst = &__itcm_text_start; dst != &__itcm_text_end; ++dst, ++src) *dst = *src;
+  __DSB();
+  __ISB();
+  PrepareFaultVectors();
+  UseFaultVectors(true);
 }
-__attribute__((section(".preinit_array"), used)) void (*const g_preinitFp)() = BrainscapePreinitFp;
+__attribute__((section(".preinit_array"), used)) void (*const g_preinit)() = BrainscapePreinit;
 
 }  // namespace
 
@@ -149,13 +171,24 @@ uint64_t Cycles64() {
 
 uint32_t SysClkHz() { return daisy::System::GetSysClkFreq(); }
 
+uint32_t UptimeMs() { return g_ms; }
+
+// The fault handler copies it, possibly before the startup code has initialized g_image: only
+// a pointer into this image's own flash is followed.
+const char* ImageName() {
+  const auto p = reinterpret_cast<uintptr_t>(g_image);
+  return p >= ImageVectorTable() && p < reinterpret_cast<uintptr_t>(&__brainscape_image_end) ? g_image : "unknown";
+}
+
 void SetLedMode(LedMode mode) { g_ledMode = mode; }
 void SetLed(bool on) {
+  if (g_ledMode == LedMode::Fault) return;
   g_ledMode = LedMode::Manual;
   LedWrite(on);
 }
 
 void PulseLed(uint32_t ms) {
+  if (g_ledMode == LedMode::Fault) return;
   g_pulseUntil = g_ms + ms;
   g_ledMode    = LedMode::Pulse;
 }
@@ -181,11 +214,15 @@ void BoardInit(const char* image) {
   // LED, and the audio path of the detected revision: on a Rev7 the PD5 strap selects
   // DAISY_SEED_1_2, whose PCM3060 runs in hardware mode on SAI1 (A: transmit on PE6, B:
   // receive on PE3, MCLK PE2, FS PE4, SCK PE5; reset on PB11), 24-bit at 48 kHz, 48-frame
-  // blocks, postgain 1 (libDaisy src/daisy_seed.cpp, ConfigureAudio).
+  // blocks, postgain 1 (libDaisy src/daisy_seed.cpp, ConfigureAudio). libDaisy reads
+  // SCB->VTOR to tell where the program runs, so the image's own vector table is installed
+  // for the call.
+  UseFaultVectors(false);
   g_seed.Init(true);
+  UseFaultVectors(true);
   BrainscapeHeapReady();  // the heap lives in the SDRAM Init just brought up
   g_board = g_seed.CheckBoardVersion();
-  g_ledReady = true;
+  TakeLastFault();
   SetBootFpWord();
 
   // DWT cycle counter. The Cortex-M7's DWT needs its lock access register unlocked when no
@@ -196,8 +233,41 @@ void BoardInit(const char* image) {
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
   g_cycLast = 0u;
   g_cycHigh = 0u;
+  g_ms      = 0u;
+  g_ledMode = LedMode::Idle;
+  __DSB();
+  g_armed = kArmed;  // the LED pin is an output now (DaisySeed::Init)
 
   Serial().Init();
+}
+
+std::string CpuStateJson() {
+  const uint32_t ccr = SCB->CCR;
+  std::string    mpu = "[";
+  const uint32_t regions = (MPU->TYPE & MPU_TYPE_DREGION_Msk) >> MPU_TYPE_DREGION_Pos;
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  const uint32_t savedRnr = MPU->RNR;
+  bool           first    = true;
+  for (uint32_t r = 0; r < regions; ++r) {
+    MPU->RNR            = r;
+    const uint32_t rbar = MPU->RBAR;
+    const uint32_t rasr = MPU->RASR;
+    if ((rasr & MPU_RASR_ENABLE_Msk) == 0u) continue;
+    mpu += std::string(first ? "" : ",") + "{\"region\":" + JsonUInt(r) + ",\"rbar\":" + JsonHex32(rbar) +
+           ",\"rasr\":" + JsonHex32(rasr) + "}";
+    first = false;
+  }
+  MPU->RNR = savedRnr;
+  if (primask == 0u) __enable_irq();
+  mpu += "]";
+  const uint32_t memsetAt = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&::memset));
+  return "{\"ccr\":" + JsonHex32(ccr) + ",\"icache\":" + ((ccr & SCB_CCR_IC_Msk) ? "true" : "false") +
+         ",\"dcache\":" + ((ccr & SCB_CCR_DC_Msk) ? "true" : "false") + ",\"mpuCtrl\":" + JsonHex32(MPU->CTRL) +
+         ",\"mpu\":" + mpu + ",\"qspi\":{\"cr\":" + JsonHex32(QUADSPI->CR) + ",\"dcr\":" + JsonHex32(QUADSPI->DCR) +
+         ",\"ccr\":" + JsonHex32(QUADSPI->CCR) + "}" +
+         ",\"memFunctions\":{\"source\":\"firmware/platform/MemFunctions.c (word-wise)\",\"memset\":" +
+         JsonHex32(memsetAt) + ",\"in\":" + JsonString(memsetAt < 0x10000u ? "ITCM" : "QSPI") + "}}";
 }
 
 std::string HelloJson(const char* image, const std::string& extra) {
@@ -224,6 +294,9 @@ std::string HelloJson(const char* image, const std::string& extra) {
        ",\"cpuid\":" + JsonHex32(SCB->CPUID) + ",\"idcode\":" + JsonHex32(DBGMCU->IDCODE) + "}";
   s += ",\"fp\":{\"fpscr\":" + JsonHex32(ReadFpscr()) + ",\"fpdscr\":" + JsonHex32(ReadFpdscr()) +
        ",\"fpccr\":" + JsonHex32(ReadFpccr()) + "}";
+  s += ",\"cpu\":" + CpuStateJson();
+  s += ",\"lastFault\":" + LastFaultJson();
+  s += ",\"uptimeMs\":" + JsonUInt(UptimeMs());
   s += ",\"memory\":" + MemoryMapJson();
   if (!extra.empty()) s += "," + extra;
   s += "}";
@@ -231,6 +304,14 @@ std::string HelloJson(const char* image, const std::string& extra) {
 }
 
 void Fatal(const char* message) {
+  if (__get_IPSR() != 0u) {
+    // An interrupt handler (the audio callback, USB): SysTick and the USB interrupt cannot
+    // preempt it, so nothing could be sent and no SysTick pattern would run.
+    __disable_irq();
+    SaveFaultRecord(FaultKind::FatalIsr, message, 0u, 0u, 0u, 0u, __get_MSP());
+    FaultBlinkAndReset();
+  }
+  SaveFaultRecord(FaultKind::FatalThread, message, 0u, 0u, 0u, 0u, __get_MSP());
   g_ledMode = LedMode::Fault;
   Serial().WriteLine("{\"type\":\"error\",\"image\":" + JsonString(g_image) +
                          ",\"message\":" + JsonString(message) + "}",
@@ -243,7 +324,7 @@ void RebootToBootloader() {
   Serial().WriteLine("{\"type\":\"rebooting\",\"to\":\"bootloader\"}", UsbSerial::Mode::Block);
   Serial().Flush(200);
   daisy::System::Delay(50);
-  if (daisy::System::GetProgramMemoryRegion() == daisy::System::MemoryRegion::INTERNAL_FLASH) {
+  if (ImageRegion() == daisy::System::MemoryRegion::INTERNAL_FLASH) {
     daisy::System::ResetToBootloader(daisy::System::BootloaderMode::STM);
   } else {
     daisy::System::ResetToBootloader(daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
@@ -255,9 +336,11 @@ void RebootToBootloader() {
 }  // namespace brainscape::fw
 
 // libDaisy's SysTick_Handler calls HAL_IncTick, then HAL_SYSTICK_IRQHandler, which calls
-// this weak HAL hook at 1 kHz: it extends CYCCNT to 64 bits and drives the LED.
+// this weak HAL hook at 1 kHz: it extends CYCCNT to 64 bits and drives the LED, once
+// BoardInit has armed it (see g_armed).
 extern "C" void HAL_SYSTICK_Callback(void) {
   using namespace brainscape::fw;
+  if (g_armed != kArmed) return;
   ExtendCycles();
   g_ms = g_ms + 1u;
   LedTick(g_ms);

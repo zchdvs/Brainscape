@@ -79,6 +79,14 @@ endif()
 add_compile_definitions(${BRAINSCAPE_DAISY_DEFINITIONS})
 add_compile_options(-ffunction-sections -fdata-sections)
 add_subdirectory(${libdaisy_SOURCE_DIR} ${libdaisy_BINARY_DIR} EXCLUDE_FROM_ALL)
+# libDaisy's Reset_Handler copies .data and zeroes .bss in plain loops, which GCC turns into
+# calls to memcpy and memset. An ITCM image keeps the firmware's memcpy and memset in ITCM
+# (platform/MemFunctions.c), which holds nothing until the preinit hook has copied it in, so
+# the startup file is built with the loops kept as loops (checked from the disassembly as
+# every image links, firmware/cmake/BootCheck.cmake).
+set_source_files_properties(${libdaisy_SOURCE_DIR}/core/startup_stm32h750xx.c
+  DIRECTORY ${libdaisy_SOURCE_DIR}
+  PROPERTIES COMPILE_OPTIONS -fno-tree-loop-distribute-patterns)
 
 # Everything a firmware translation unit that includes libDaisy headers needs.
 add_library(brainscape_daisy INTERFACE)
