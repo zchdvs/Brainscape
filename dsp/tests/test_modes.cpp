@@ -1,13 +1,15 @@
 // Sound revision 2's mode runtime (docs/design/mode-compiler.md §7, §10.4): LoadPreset's steps
 // with the mode and CTRL (validation, the per-kind rules, sinceRev, performance state, modes
-// compared by content), the macro and expression events, the wet gain and the cutoff kill, and
-// Trails and FastCut mode switches, with their block-split invariance (contract #1).
+// compared by content), the macro and expression events on the mode and CTRL a load installs,
+// the wet gain and the cutoff kill, and Trails and FastCut mode switches, with their block-split
+// invariance (contract #1) and a hostile caller's FP environment (determinism profile §4.1).
 #include <algorithm>
 #include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "FpEnvTestUtil.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "brainscape/Mode.h"
@@ -140,13 +142,16 @@ Ev Load(int64_t frame, uint32_t seq, const PresetState* preset,
 }
 
 // Renders `in` from the engine's current frame in blocks of `pattern` (repeated), with
-// `events` (sorted by frame, then sequence) stamped into each block.
+// `events` (sorted by frame, then sequence) stamped into each block. With `word`, that control
+// word is the caller's around every Process call, as a careless host would leave it; each call
+// must hand it back.
 Stereo Render(Engine& e, const Stereo& in, const std::vector<Ev>& events,
-              const std::vector<uint32_t>& pattern = {48}) {
+              const std::vector<uint32_t>& pattern = {48},
+              const detail::FpWord* word = nullptr) {
   const int64_t start = e.SampleCounter();
   Stereo        out{std::vector<float>(in.l.size()), std::vector<float>(in.l.size())};
   std::vector<Engine::BlockEvent> block;
-  size_t next = 0, bi = 0;
+  size_t next = 0, bi = 0, wordsLost = 0;
   for (size_t pos = 0; pos < in.l.size();) {
     const size_t  n  = std::min<size_t>(pattern[bi++ % pattern.size()], in.l.size() - pos);
     const int64_t f0 = start + static_cast<int64_t>(pos);
@@ -170,9 +175,16 @@ Stereo Render(Engine& e, const Stereo& in, const std::vector<Ev>& events,
     ctx.numFrames = static_cast<uint32_t>(n);
     ctx.events    = block.data();
     ctx.numEvents = static_cast<uint32_t>(block.size());
-    e.Process(ctx);
+    if (word == nullptr) {
+      e.Process(ctx);
+    } else {
+      const testing::HostileFpScope scope(*word);
+      e.Process(ctx);
+      wordsLost += detail::ReadFpControl() != *word ? 1u : 0u;
+    }
     pos += n;
   }
+  REQUIRE(wordsLost == 0u);
   return out;
 }
 
@@ -439,6 +451,66 @@ TEST_CASE("an Expression event applies CTRL's assignments as SetParam events wou
   CHECK(Same(RenderFrom(*plain, input, {Expr(7001, 0, 0.7f)}), RenderFrom(*plain, input, {})));
 }
 
+// A load installs its mode's macro table and its CTRL (design §3.4, §7.3 step 3): the moves
+// after it, one at the load's own frame included, evaluate on the loaded preset, never on the one
+// before (review finding: a Spillover load that kept either passed every test).
+TEST_CASE("moves after a Spillover load evaluate on the loaded mode and CTRL", "[modes]") {
+  const Stereo input  = Plucks(14400);
+  const auto   plain  = Complete(kBusy);    // the default mode: aux1 undefined, no assignments
+  const auto   custom = CustomMode(kBusy);  // aux1 defined; the pedal on macro.time, reverb mix
+  PresetLeaf   m[kMaxMacroTargets];
+  const size_t nm = EvalMacro(custom->mode, ParamId::MacroAux1, 0.9f, m, kMaxMacroTargets);
+  PresetLeaf   x[kMaxExpressions * kMaxMacroTargets];
+  const size_t nx =
+      EvalExpression(custom->mode, custom->control, 0.8f, x, kMaxExpressions * kMaxMacroTargets);
+  REQUIRE(nm == 2u);
+  REQUIRE(nx == 2u);
+  const Stereo loadOnly = RenderFrom(*plain, input, {Load(3001, 0, custom.get())});
+  for (const int64_t at : {int64_t{3001}, int64_t{4801}}) {  // at the load's frame, then after it
+    INFO("the macro move at frame " << at);
+    std::vector<Ev> sets = {Load(3001, 0, custom.get())};
+    for (size_t i = 0; i < nm; ++i) {
+      sets.push_back(Set(at, static_cast<uint32_t>(1 + i), static_cast<ParamId>(m[i].id), m[i].value));
+    }
+    for (size_t i = 0; i < nx; ++i) {
+      sets.push_back(Set(6001, static_cast<uint32_t>(i), static_cast<ParamId>(x[i].id), x[i].value));
+    }
+    const Stereo viaMoves = RenderFrom(*plain, input,
+        {Load(3001, 0, custom.get()), Macro(at, 1, ParamId::MacroAux1, 0.9f), Expr(6001, 0, 0.8f)});
+    CHECK_FALSE(Same(viaMoves, loadOnly));
+    CHECK(Same(viaMoves, RenderFrom(*plain, input, sets)));
+  }
+}
+
+TEST_CASE("a load of the same mode with another CTRL installs that CTRL", "[modes]") {
+  const Stereo input  = Plucks(14400);
+  const auto   first  = CustomMode(kBusy);
+  auto         second = CustomMode(kBusy);  // the same ModeBlob, the pedal on the post delay mix
+  second->control.exprCount      = 1;
+  second->control.expressions[0] =
+      ExpressionAssignment{static_cast<uint32_t>(ParamId::DelayMix), 0.0f, 1.0f, 1.0f};
+  second->control.expressions[1] = ExpressionAssignment{};
+  PresetDiagnostic d;
+  REQUIRE(ValidateMode(*second, &d));
+  REQUIRE(std::memcmp(&first->mode, &second->mode, sizeof(ModeBlob)) == 0);
+  {
+    Rig rig;  // not a mode switch: the content is the same
+    REQUIRE(rig.engine.LoadPreset(*first, LoadMode::Exact));
+    const uint32_t before = rig.engine.ModeSwitches();
+    REQUIRE(rig.engine.LoadPreset(*second, LoadMode::Spillover));
+    CHECK(rig.engine.ModeSwitches() == before);
+  }
+  PresetLeaf   x[kMaxExpressions * kMaxMacroTargets];
+  const size_t nx =
+      EvalExpression(second->mode, second->control, 0.8f, x, kMaxExpressions * kMaxMacroTargets);
+  REQUIRE(nx == 1u);
+  const Stereo viaMove = RenderFrom(*first, input, {Load(3001, 0, second.get()), Expr(6001, 0, 0.8f)});
+  const Stereo viaSet  = RenderFrom(*first, input,
+      {Load(3001, 0, second.get()), Set(6001, 0, static_cast<ParamId>(x[0].id), x[0].value)});
+  CHECK(Same(viaMove, viaSet));
+  CHECK_FALSE(Same(viaMove, RenderFrom(*first, input, {Load(3001, 0, second.get())})));
+}
+
 // ── Trails and FastCut (design §7.3, R7) ───────────────────────────────────────────────────
 
 TEST_CASE("a FastCut load fades the sounding grains over 128 frames; Trails keeps them", "[modes]") {
@@ -499,5 +571,52 @@ TEST_CASE("mode switches, macro and expression moves are block-split invariant",
            {7}, {48}, {127}, {512}, {48, 1, 127, 32}, {300, 512, 5, 64}}) {
     INFO("block pattern starting " << pattern[0]);
     CHECK(Same(RenderFrom(*preset, input, script, pattern), ref));
+  }
+}
+
+// Determinism profile §4.1, §6.4: macro, expression and load events run inside Process's guard,
+// and CheckPreset and LoadPreset own the control word too, so a hostile caller (FTZ|DAZ or FZ|DN
+// with round-toward-zero) gets the clean render and its own word back after every call; on x64 so
+// does a caller with every exception unmasked, where FP work outside a guard would trap.
+TEST_CASE("macro, expression and load events ignore the caller's FP environment", "[modes]") {
+  const Stereo input  = Plucks(24000);
+  const auto   preset = CustomMode(kBusy);
+  auto         marks  = CustomMode(kBusy);
+  Structure(marks.get(), true, true);
+  const std::vector<Ev> script = {
+      Macro(1001, 0, ParamId::MacroActivity, 0.8f), Expr(2003, 0, 0.3f),
+      Load(3007, 0, marks.get(), SwitchStyle::FastCut), Macro(3007, 1, ParamId::MacroAux1, 0.7f),
+      Expr(3007, 2, 0.6f), Load(3050, 0, preset.get(), SwitchStyle::FastCut), Expr(9001, 0, 0.9f),
+      Load(12011, 0, marks.get(), SwitchStyle::Trails), Macro(15013, 0, ParamId::MacroFilter, 0.0f),
+      Set(17777, 0, ParamId::WetTrimDb, -6.0f), Macro(19001, 0, ParamId::MacroFilter, 1.0f)};
+  const Stereo clean = RenderFrom(*preset, input, script);
+  detail::FpWord words[] = {testing::kHostileFpWord,
+#if defined(BRAINSCAPE_FPENV_X64)
+                            testing::kTrapAllFpWord,
+#endif
+  };
+  for (const detail::FpWord word : words) {
+    INFO("caller's word " << word);
+    const EngineConfig cfg = Config();
+    MemoryPlan         plan;
+    bool               ok = false, exact = false;
+    size_t             wordsLost = 0;
+    auto call = [&](auto&& fn) {
+      const testing::HostileFpScope scope(word);
+      fn();
+      wordsLost += detail::ReadFpControl() != word ? 1u : 0u;
+    };
+    call([&] { plan = PlanMemory(cfg); });
+    host::HeapArenas arenas(plan);
+    REQUIRE(arenas.ok());
+    Engine engine;
+    call([&] { ok = engine.Init(cfg, arenas.get()); });
+    REQUIRE(ok);
+    call([&] { exact = CheckPreset(*marks); });
+    REQUIRE(exact);
+    call([&] { ok = engine.LoadPreset(*preset, LoadMode::Exact); });
+    REQUIRE(ok);
+    CHECK(Same(Render(engine, input, script, {48}, &word), clean));
+    REQUIRE(wordsLost == 0u);
   }
 }

@@ -132,27 +132,58 @@ TEST_CASE("EvalMacro: monotonic with exact endpoints over every 12-bit pot code"
   }
 }
 
-TEST_CASE("EvalMacro and NearGuardMs ignore the caller's FP environment", "[modeeval]") {
+// Determinism profile §4.1: each exported helper owns the control word, so a hostile caller
+// (FTZ|DAZ or FZ|DN with round-toward-zero) gets the clean bits and its own word back; on x64 a
+// caller with every exception unmasked also gets them, so FP work outside a guard would trap.
+TEST_CASE("EvalMacro, EvalExpression and NearGuardMs ignore the caller's FP environment",
+          "[modeeval]") {
   const auto m = OneTarget(ParamId::SprayMs, 0.0f, 2000.0f, 3.0f);
-  for (uint32_t code = 0; code <= 4095u; code += 7u) {
-    const float position = static_cast<float>(code) / 4095.0f;
-    const float clean    = Eval1(*m, position);
-    PresetLeaf  out[1];
-    size_t      n = 0;
-    {
-      const testing::HostileFpScope hostile;
-      n = EvalMacro(*m, ParamId::MacroActivity, position, out, 1);
+  // The pedal on a leaf at curve 2 and, reversed, on the default Filter macro (curve 4).
+  const auto   mode = std::make_unique<ModeBlob>();
+  ControlState ctrl;
+  ctrl.exprCount      = 2;
+  ctrl.expressions[0] = ExpressionAssignment{static_cast<uint32_t>(ParamId::DelayMs), 20.0f, 2000.0f, 2.0f};
+  ctrl.expressions[1] = ExpressionAssignment{static_cast<uint32_t>(ParamId::MacroFilter), 1.0f, 0.0f, 1.0f};
+  detail::FpWord words[] = {testing::kHostileFpWord,
+#if defined(BRAINSCAPE_FPENV_X64)
+                            testing::kTrapAllFpWord,
+#endif
+  };
+  for (const detail::FpWord word : words) {
+    INFO("caller's word " << word);
+    size_t wordsLost = 0;  // calls after which the caller's word was not handed back
+    for (uint32_t code = 0; code <= 4095u; code += 7u) {
+      const float position = static_cast<float>(code) / 4095.0f;
+      const float clean    = Eval1(*m, position);
+      PresetLeaf  cleanExpr[2];
+      REQUIRE(EvalExpression(*mode, ctrl, position, cleanExpr, 2) == 2u);
+      PresetLeaf out[1], expr[2];
+      size_t     n = 0, nx = 0;
+      {
+        const testing::HostileFpScope hostile(word);
+        n = EvalMacro(*m, ParamId::MacroActivity, position, out, 1);
+        wordsLost += detail::ReadFpControl() != word ? 1u : 0u;
+        nx = EvalExpression(*mode, ctrl, position, expr, 2);
+        wordsLost += detail::ReadFpControl() != word ? 1u : 0u;
+      }
+      REQUIRE(n == 1u);
+      REQUIRE(Bits(out[0].value) == Bits(clean));
+      REQUIRE(nx == 2u);
+      for (size_t i = 0; i < nx; ++i) {
+        REQUIRE(expr[i].id == cleanExpr[i].id);
+        REQUIRE(Bits(expr[i].value) == Bits(cleanExpr[i].value));
+      }
     }
-    REQUIRE(n == 1u);
-    REQUIRE(Bits(out[0].value) == Bits(clean));
+    const float guard        = NearGuardMs(123.0f, 7.0f, 0.5f, 33.0f);
+    float       hostileGuard = 0.0f;
+    {
+      const testing::HostileFpScope hostile(word);
+      hostileGuard = NearGuardMs(123.0f, 7.0f, 0.5f, 33.0f);
+      wordsLost += detail::ReadFpControl() != word ? 1u : 0u;
+    }
+    REQUIRE(Bits(guard) == Bits(hostileGuard));
+    REQUIRE(wordsLost == 0u);
   }
-  const float guard        = NearGuardMs(123.0f, 7.0f, 0.5f, 33.0f);
-  float       hostileGuard = 0.0f;
-  {
-    const testing::HostileFpScope hostile;
-    hostileGuard = NearGuardMs(123.0f, 7.0f, 0.5f, 33.0f);
-  }
-  REQUIRE(Bits(guard) == Bits(hostileGuard));
 }
 
 TEST_CASE("NearGuardMs: size * (r - 1) for the highest pitch, 0 at or below unison", "[modeeval]") {

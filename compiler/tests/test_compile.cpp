@@ -800,3 +800,58 @@ TEST_CASE("migrate: a BSWS v1 session becomes a preset document", "[compile]") {
   s[4] = 2;
   REQUIRE_FALSE(MigrateSession(s.data(), s.size(), "x", "X", &d, &f));
 }
+
+TEST_CASE("migrate: rows 27 and 28 become the onset source and mark positioning", "[compile]") {
+  // A session holding only the retired rows, by bit pattern. Revision 1 canonicalized them to
+  // [0, 1] (NaN and infinities to 0) and read them at 0.5, so on is a finite value of 0.5 or more.
+  struct Case {
+    uint32_t onset, mark;
+    bool     onsetOn, markOn;
+  };
+  const Case cases[] = {
+      {Bits(0.0f), Bits(1.0f), false, true},      // 28 alone: mark positioning
+      {Bits(0.5f), 0x3EFFFFFFu, true, false},     // the threshold: 0.5 on, the float below off
+      {0x7F800000u, Bits(2.0f), false, true},     // +inf canonicalized to 0, 2 to 1
+      {0xFF800000u, 0x7FC00000u, false, false},   // -inf, NaN
+      {Bits(-1.0f), 0x00000001u, false, false},   // negative, subnormal
+      {Bits(-0.0f), Bits(0.75f), false, true},
+      {Bits(1.0f), Bits(1.0f), true, true},
+  };
+  for (const Case& c : cases) {
+    INFO("27 = 0x" << std::hex << c.onset << ", 28 = 0x" << c.mark);
+    std::vector<uint8_t> s   = {'B', 'S', 'W', 'S', 1, 0, 0, 0};
+    const auto           put = [&](uint32_t v) {
+      for (int k = 0; k < 4; ++k) s.push_back(static_cast<uint8_t>(v >> (8 * k)));
+    };
+    put(2);
+    put(27);
+    put(c.onset);
+    put(28);
+    put(c.mark);
+    put(0);  // no settings
+    Document             d;
+    std::vector<Finding> f;
+    REQUIRE(MigrateSession(s.data(), s.size(), "user.migrated", "Migrated", &d, &f));
+    const brainscape::ModeBlob& m = d.state->mode;
+    REQUIRE(((m.schedule.sources & brainscape::kSourceOnset) != 0u) == c.onsetOn);
+    REQUIRE((m.layers[0].source == brainscape::PositionSource::Mark) == c.markOn);
+    REQUIRE(m.features == ((c.onsetOn ? brainscape::kModeFeatureOnset : 0u) |
+                           (c.markOn ? brainscape::kModeFeatureMarkPosition : 0u)));
+    REQUIRE(f.size() == (c.onsetOn || c.markOn ? 1u : 0u));  // the note naming what moved
+    const std::string text = FormatDocument(d);
+    REQUIRE((text.find("\"source\": \"mark\"") != std::string::npos) == c.markOn);
+    // It compiles; the package decodes and loads exact, with no leaf for 27 or 28.
+    const CompileResult  r = Ok(text);
+    const DecodedPackage p = DecodePackage(r.package.data(), r.package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.features == m.features);
+    REQUIRE(p.state->mode.layers[0].source == m.layers[0].source);
+    REQUIRE(p.state->mode.schedule.sources == m.schedule.sources);
+    REQUIRE(p.state->leafCount == brainscape::kNumLeafParams);
+    for (uint32_t i = 0; i < p.state->leafCount; ++i) {
+      REQUIRE(p.state->leaves[i].id != static_cast<uint32_t>(ParamId::OnsetTrigger));
+      REQUIRE(p.state->leaves[i].id != static_cast<uint32_t>(ParamId::PositionSource));
+    }
+    REQUIRE(brainscape::CheckPreset(*p.state));
+  }
+}
