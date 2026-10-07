@@ -210,12 +210,14 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 
 // Committed digests (§8.3): the same on every host. Re-minted only when the compiler's output
 // or verdicts change on purpose (the package rule, §8.3). Re-minted at sound revision 2: the
-// header's sound_rev, STAT without the retired rows 27 and 28, onset and mark compiled.
+// header's sound_rev, STAT without the retired rows 27 and 28, onset and mark compiled. Re-minted
+// at sound revision 3 for the header's sound_rev alone: built with kSoundRevision 2, the same
+// tree gives revision 2's digests.
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "6570a2fff1b9a26bd6284e8a2cf6d5d9469b5387a32f6c0d19da0abc70796f7a";
+    "b5adfa2711341f21d649a7c72e34c4ea878f90dd8de7629259233eae65f4ff49";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "5ce41a995b0e65b640972b0fd906fc821aec35adbb4a9f400ff41b768471c798";
+const char* const  kFuzzDigest = "f5c5d14d782b3dee4807ae6cbdf82de4960644596f390e5e884e0c648c2c0576";
 
 }  // namespace
 

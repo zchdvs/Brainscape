@@ -20,7 +20,8 @@ namespace brainscape {
 enum class ParamId : uint32_t {
   // ── Sound revision 1's rows ───────────────────────────────────────────────────────
   DelayMs        = 1,   // layer0.position.base_ms — grain position behind the write head
-  Mix            = 2,   // global wet/dry, linear crossfade (grain-delay-theory.md §3.11)
+  Mix            = 2,   // global wet/dry: dry at unity to the middle, wet at unity from it
+                        // (sound revision 3, mode-compiler.md §7.1 R3b; was a linear crossfade)
   Feedback       = 3,   // feedback.amount (the taming chain lands with the post chain)
   WetTrimDb      = 4,   // wet_trim_db (was out_trim_db): the mode's level match, on the wet
                         // signal only, after the post chain (mode-compiler.md §7.1 R3)

@@ -2,7 +2,8 @@
 // with the mode and CTRL (validation, the per-kind rules, sinceRev, performance state, modes
 // compared by content), the macro and expression events on the mode and CTRL a load installs,
 // the wet gain and the cutoff kill, and Trails and FastCut mode switches, with their block-split
-// invariance (contract #1) and a hostile caller's FP environment (determinism profile §4.1).
+// invariance (contract #1) and a hostile caller's FP environment (determinism profile §4.1);
+// and sound revision 3's Mix law (§7.1, R3b).
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "brainscape/Preset.h"
 #include "brainscape/SoundRevision.h"
 #include "catch.hpp"
+#include "detail/MixLaw.h"
 
 using namespace brainscape;
 
@@ -392,6 +394,121 @@ TEST_CASE("the cutoff minimum kills the wet; a trim change while killed stays mu
   CHECK(active(144001 + 4800, 192001));   // 41 Hz is not the kill
   CHECK(silent(192001 + 24000, out.l.size()));
   CHECK(rig.engine.GetParam(ParamId::FilterCutoffHz) == 40.0f);
+}
+
+// ── The Mix law (design §7.1, R3b; sound revision 3) ───────────────────────────────────────
+
+namespace {
+
+// The law as the design states it, written apart from the engine's (detail/MixLaw.h): dry at
+// unity up to the middle and wet at unity from it, each falling linearly to 0 at its far end.
+float LawDry(float m) { return m <= 0.5f ? 1.0f : 2.0f * (1.0f - m); }
+float LawWet(float m) { return m >= 0.5f ? 1.0f : 2.0f * m; }
+
+Params WithMix(Params params, float mix, float cutoffHz = 3000.0f) {
+  for (auto& p : params) {
+    if (p.first == ParamId::Mix) p.second = mix;
+    if (p.first == ParamId::FilterCutoffHz) p.second = cutoffHz;
+  }
+  return params;
+}
+
+}  // namespace
+
+TEST_CASE("the Mix law's gains are exact, monotonic and at unity across the middle", "[modes]") {
+  using detail::MixLaw;
+  CHECK(Bits(MixLaw(0.0f).dry) == Bits(1.0f));
+  CHECK(Bits(MixLaw(0.0f).wet) == Bits(0.0f));
+  CHECK(Bits(MixLaw(0.5f).dry) == Bits(1.0f));
+  CHECK(Bits(MixLaw(0.5f).wet) == Bits(1.0f));
+  CHECK(Bits(MixLaw(1.0f).dry) == Bits(0.0f));
+  CHECK(Bits(MixLaw(1.0f).wet) == Bits(1.0f));
+  CHECK(MixLaw(0.25f).wet == 0.5f);
+  CHECK(MixLaw(0.75f).dry == 0.5f);
+  // Every binary32 Mix within 2^14 ulps of 0, 0.5 and 1, and one in 4,093 elsewhere in [0, 1], in
+  // ascending order: each gain is the law's, the reals' 2m and 2(1 - m) exactly (checked in
+  // binary64), within [0, 1]; dry never rises, wet never falls, and they never sum below 1, so
+  // no Mix plays less than unity in all.
+  const uint32_t half = Bits(0.5f), one = Bits(1.0f), window = 1u << 14;
+  size_t         checked = 0, wrong = 0;
+  float          lastDry = 1.0f, lastWet = 0.0f;
+  for (uint32_t u = 0;;) {
+    float m;
+    std::memcpy(&m, &u, sizeof m);
+    const detail::MixGains g  = MixLaw(m);
+    const double           dm = static_cast<double>(m);
+    const bool ok = Bits(g.dry) == Bits(LawDry(m)) && Bits(g.wet) == Bits(LawWet(m)) &&
+                    (m <= 0.5f || static_cast<double>(g.dry) == 2.0 - 2.0 * dm) &&
+                    (m >= 0.5f || static_cast<double>(g.wet) == 2.0 * dm) && g.dry >= 0.0f &&
+                    g.dry <= 1.0f && g.wet >= 0.0f && g.wet <= 1.0f && g.dry <= lastDry &&
+                    g.wet >= lastWet && static_cast<double>(g.dry) + g.wet >= 1.0;
+    wrong += ok ? 0u : 1u;
+    ++checked;
+    lastDry = g.dry;
+    lastWet = g.wet;
+    if (u == one) break;
+    const bool dense = u < window || (u + window > half && u < half + window) || u + window > one;
+    u                = dense ? u + 1u : std::min(u + 4093u, one);
+  }
+  CHECK(checked > 300000u);
+  CHECK(wrong == 0u);
+}
+
+TEST_CASE("Mix 0 plays the dry input and Mix 1 the wet only; the middle plays both at unity",
+          "[modes]") {
+  const Stereo input = Plucks(14400);
+  // The wet path never reads Mix, so the render at Mix 1 is the wet signal itself when the law
+  // holds; every Mix then plays dry·LawDry(m) + wet·LawWet(m), bit for bit. A dry share left at
+  // Mix 1, or a wet below unity above the middle, would break the cases above 0.5; a dry below
+  // unity up to the middle, those below it.
+  const Stereo wet = RenderFrom(*Complete(WithMix(kBusy, 1.0f)), input, {});
+  CHECK(Same(RenderFrom(*Complete(WithMix(kBusy, 0.0f)), input, {}), input));
+  for (const float m : {0.1f, 0.25f, 0.35f, 0.45f, 0.5f, 0.55f, 0.75f, 0.9f}) {
+    INFO("mix " << m);
+    Stereo expected = input;
+    for (size_t i = 0; i < input.l.size(); ++i) {
+      expected.l[i] = input.l[i] * LawDry(m) + wet.l[i] * LawWet(m);
+      expected.r[i] = input.r[i] * LawDry(m) + wet.r[i] * LawWet(m);
+    }
+    CHECK(Same(RenderFrom(*Complete(WithMix(kBusy, m)), input, {}), expected));
+  }
+  // With the wet killed from the load's frame (the cutoff minimum), the dry alone: the input
+  // itself up to the middle, half of it at 0.75, and silence at Mix 1 while the input sounds.
+  for (const float m : {0.0f, 0.3f, 0.5f, 0.75f}) {
+    INFO("killed, mix " << m);
+    Stereo expected = input;
+    for (size_t i = 0; i < input.l.size(); ++i) {
+      expected.l[i] = input.l[i] * LawDry(m);
+      expected.r[i] = input.r[i] * LawDry(m);
+    }
+    CHECK(Same(RenderFrom(*Complete(WithMix(kBusy, m, 40.0f)), input, {}), expected));
+  }
+  const Stereo muted = RenderFrom(*Complete(WithMix(kBusy, 1.0f, 40.0f)), input, {});
+  size_t       sounding = 0;
+  for (size_t i = 0; i < input.l.size(); ++i) {
+    sounding += (Bits(muted.l[i]) << 1 | Bits(muted.r[i]) << 1) != 0u ? 1u : 0u;  // not ±0
+  }
+  CHECK(sounding == 0u);
+}
+
+TEST_CASE("a Mix move lands on the endpoints' bits once smoothed", "[modes]") {
+  const Stereo input = Plucks(48000);
+  // From 0.2 to 1 and from 0.6 to 0 at 0.1 s: once the smoother lands on its target (within
+  // 0.5 s), the output is the static Mix 1 and Mix 0 renders' bits.
+  const Stereo wet  = RenderFrom(*Complete(WithMix(kBusy, 1.0f)), input, {});
+  const Stereo up   = RenderFrom(*Complete(WithMix(kBusy, 0.2f)), input,
+                                 {Set(4801, 0, ParamId::Mix, 1.0f)});
+  const Stereo down = RenderFrom(*Complete(WithMix(kBusy, 0.6f)), input,
+                                 {Set(4801, 0, ParamId::Mix, 0.0f)});
+  const size_t from = 4801 + 24000;
+  auto         tail = [&](const Stereo& a, const Stereo& b) {
+    const size_t bytes = (a.l.size() - from) * sizeof(float);
+    return std::memcmp(a.l.data() + from, b.l.data() + from, bytes) == 0 &&
+           std::memcmp(a.r.data() + from, b.r.data() + from, bytes) == 0;
+  };
+  CHECK(tail(up, wet));
+  CHECK(tail(down, input));
+  CHECK_FALSE(Same(up, wet));  // before the move, Mix 0.2 plays
 }
 
 // ── Macro and expression events (design §3.4) ──────────────────────────────────────────────

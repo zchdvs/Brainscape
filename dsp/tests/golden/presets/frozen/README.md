@@ -10,7 +10,7 @@ supports, a retired leaf) is updated in the pull request that changes it, saying
 never change. `brainscape_blob_tool --write-fixtures DIR` shows how each was made and refuses to
 overwrite one.
 
-| File | Verdict at sound revision 2 | What it pins |
+| File | Verdict at sound revisions 2 and 3 | What it pins |
 |---|---|---|
 | `r1-default-mode.bsp` | decodes, loads inexact | a revision-1 package: every r1 leaf, the default mode, CTRL with an expression assignment, META. It loaded exact at r1; since r2 retired IDs 27 and 28 into mode structure, its leaves for them are unknown, so the load is inexact (so is every fixture below built from it) |
 | `r2-onset-marks.bsp` | decodes, loads exact | a revision-2 package: every r2 leaf (IDs 1-26), onsets on marks, the default macros with Space on the reverb only, CTRL with expression assignments on a macro and a leaf, META. Loads exact, with no missing ID, on every later build: a leaf a later revision adds has a later `sinceRev` and is not missing from it (§7.3) |

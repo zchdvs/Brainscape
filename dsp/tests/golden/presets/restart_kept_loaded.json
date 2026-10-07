@@ -3,7 +3,7 @@
   "id": "corpus.restart_kept_loaded",
   "name": "Restart kept loaded",
   "family": "none",
-  "sound_rev": 2,
+  "sound_rev": 3,
   "sound_hash": "b33c78c6e486c76cb7d3bf0bcf17113026b6aa904fde9b8501ab9e888ff84a7b",
   "meta": {
     "author": "",

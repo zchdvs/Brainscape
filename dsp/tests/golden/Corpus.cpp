@@ -860,9 +860,10 @@ std::vector<VectorCase> BuildCorpus() {
     dry.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(dry);
     // Subnormal input through the ring write, the onset detector and a scaled dry path,
-    // under a wet path that decays to exact zero.
+    // under a wet path that decays to exact zero. Mix 0.75: the dry at 0.5 under the Mix law
+    // (sound revision 3), as at Mix 0.5 under the linear crossfade before it.
     PresetCase wet = Preset("subnormal_wet",
-        {{P::Mix, 0.5f}, {P::WetTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
+        {{P::Mix, 0.75f}, {P::WetTrimDb, -6.0f}, {P::Feedback, 0.5f}, {P::DelayMs, 250.0f}});
     wet.require   = {{C::SubnormalOutFrames, S(1)}, {C::Onsets, 4}};
     wet.invariant = {Invariance::HostileFpEnv};
     v.presets.push_back(wet);

@@ -15,7 +15,9 @@ namespace brainscape::blobtest {
 
 // Fuzz(kFuzzIterations, kFuzzSeed) on every leg, the M7 included (blob_tool). Re-minted at sound
 // revision 2: onset and mark became supported, and the samples no longer target rows 27 and 28.
-const char* const kFuzzDigest = "a7b2f799ea6f57862bc296696e8b0e604882115ccfb503f29e3f44d768366135";
+// Re-minted at sound revision 3 for the samples' soundRev alone (kSoundRevision): built with
+// kSoundRevision 2, the same tree gives revision 2's digest.
+const char* const kFuzzDigest = "9238138b334e619c66b8903e3337f86f23f0304c36c3dc43d6de28d3e12469a3";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",

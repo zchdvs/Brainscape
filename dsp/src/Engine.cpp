@@ -16,6 +16,7 @@
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
 #include "detail/Granular.h"
+#include "detail/MixLaw.h"
 #include "detail/ModeEvalBody.h"
 #include "detail/OnsetDetector.h"
 #include "detail/PostChain.h"
@@ -414,8 +415,9 @@ struct Engine::Impl {
   ActiveMode*  mode_       = nullptr;  // Warm arena: the active mode and CTRL (design §7.3)
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
-  // mix_: the wet/dry crossfade; wetGain_: the wet signal's gain after the post chain (trim,
-  // effect volume, the cutoff kill: WetGainTarget); feedback_; norm_: the voice normalization.
+  // mix_: the Mix knob, smoothed (its law: detail/MixLaw.h); wetGain_: the wet signal's gain
+  // after the post chain (trim, effect volume, the cutoff kill: WetGainTarget); feedback_;
+  // norm_: the voice normalization.
   Smoother     mix_, wetGain_, feedback_, norm_;
   int64_t      sampleCounter_ = 0;
   int64_t      epochStart_    = 0;  // random draws are keyed on sampleCounter_ - epochStart_
@@ -1122,22 +1124,25 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
 
   // ── Pass 3c: the wet gain, then the wet/dry mix.
   for (uint32_t n = 0; n < count; ++n) {
-    const float mix = mix_.Next();
+    // The Mix law (mode-compiler.md §7.1, R3b; sound revision 3): dry at unity up to the
+    // middle, wet at unity from it, on the smoothed Mix (detail/MixLaw.h).
+    const detail::MixGains mix = detail::MixLaw(mix_.Next());
     // The wet signal's gain after the post chain (design §7.2, R3): the mode's trim and the
-    // player's effect volume, or exactly 0 under the cutoff kill. Dry is never scaled. At gain
-    // 1 every product below is exact, so a preset with no trim plays revision 1's bits.
+    // player's effect volume, or exactly 0 under the cutoff kill; it never scales the dry. At
+    // gain 1 every product below is exact, so a preset with no trim plays revision 1's bits.
     const float g   = wetGain_.Next();
-    // Linear wet/dry crossfade (grain-delay-theory.md §3.11); dry is never delayed.
-    // Two-multiply form, not dry + mix*(wet-dry): the lerp form is not bit-exact at
-    // the endpoints, which would break the Tu null contract (design §10 #2).
+    // Dry is never delayed (grain-delay-theory.md §3.11). Two-multiply form, not dry +
+    // mix*(wet-dry): the lerp form is not bit-exact at the endpoints, which would break the Tu
+    // null contract (design §10 #2); at Mix 0 and 1 the law's gains are exactly (1, 0) and
+    // (0, 1), revision 2's products.
     // Both dry reads precede either write: hosts process in place (in[0] == out[0])
     // and mono input aliases inR to inL, so writing outL first corrupted every outR.
     const float dryL = inL[n];
     const float dryR = inR[n];
     const float wl   = wetL_[n] * g;
     const float wr   = wetR_[n] * g;
-    float       oL   = dryL * (1.0f - mix) + wl * mix;
-    float       oR   = dryR * (1.0f - mix) + wr * mix;
+    float       oL   = dryL * mix.dry + wl * mix.wet;
+    float       oR   = dryR * mix.dry + wr * mix.wet;
     // Finite input gives finite output (determinism profile §3.7): a sum near FLT_MAX
     // saturates instead of overflowing. One-sided compares, so NaN from unsanitized input
     // still reaches the Debug check below.

@@ -32,7 +32,9 @@ namespace brainscape::golden {
 // another CTRL), its FastCuts on pitched grains; automation_offgrid holds each freeze, no load
 // cutting it short; wet_kill's kills at mix 1 and the mutedFrames counter, the kill measured
 // on the output.
-inline constexpr uint32_t kCorpusVersion = 7;
+// 8 (sound revision 3, the Mix law): subnormal_wet at Mix 0.75, where the law scales its dry
+// path by 0.5 as the linear crossfade did at 0.5; under the law Mix 0.5 plays the dry at unity.
+inline constexpr uint32_t kCorpusVersion = 8;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
