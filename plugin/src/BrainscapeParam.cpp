@@ -186,8 +186,10 @@ bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::stri
       {DisplayKind::FilterMorph, "hp", 2.0f}, {DisplayKind::FilterMorph, "notch", 3.0f},
       {DisplayKind::MsOrOff, "off", 0.0f},    {DisplayKind::Division, "off", 0.0f},
   };
-  if (m.kind == DisplayKind::FilterCutoff && t == "off") {
-    out = d.max;
+  // The cutoff's two named ends, as FormatPlain shows them: Off (the bypass, its maximum) and
+  // Kill (the wet kill, its minimum; mode-compiler.md §4.3).
+  if (m.kind == DisplayKind::FilterCutoff && (t == "off" || t == "kill")) {
+    out = t == "off" ? d.max : d.min;
     return true;
   }
   for (const Name& n : kNames) {

@@ -549,6 +549,9 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 2500.0f);
   REQUIRE(cutoff.CommitText("Off"));
   REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 20000.0f);
+  REQUIRE(cutoff.CommitText("Kill"));  // the minimum, the wet kill, as it is shown
+  REQUIRE(proc.Param(ParamId::FilterCutoffHz).Plain() == 40.0f);
+  REQUIRE(cutoff.DisplayText() == "Kill");
   REQUIRE_FALSE(delay.CommitText("fast"));
   REQUIRE_FALSE(delay.CommitText("12 st"));
   REQUIRE(proc.Param(ParamId::DelayMs).Plain() == 250.0f);
@@ -646,6 +649,25 @@ TEST_CASE("typed text is read by the compiler's exact reader, typed forms includ
   REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, ".", v));
   REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "1..5", v));
   REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "4e38 ms", v));  // past FLT_MAX
+}
+
+TEST_CASE("the text shown at a parameter's ends and default can be typed back") {
+  // What the host shows can be typed in and shows the same: the named ends (Off, Kill, the
+  // filter types) included, which a missing name left unparsable (review finding).
+  for (const ParamDescriptor& d : LeafRows()) {
+    for (const float v : {d.min, d.max, d.def}) {
+      const juce::String shown = FormatPlainText(d.id, Canonicalize(d.id, v));
+      INFO(d.name << ": " << shown);
+      float back = 0.f;
+      REQUIRE(ParsePlainText(d.id, shown, back));
+      REQUIRE(FormatPlainText(d.id, back) == shown);
+    }
+  }
+  float v = 0.f;
+  REQUIRE(ParsePlainText(ParamId::FilterCutoffHz, "Kill", v));
+  REQUIRE(Bits(v) == Bits(40.0f));
+  REQUIRE(ParsePlainText(ParamId::FilterCutoffHz, "off", v));
+  REQUIRE(Bits(v) == Bits(20000.0f));
 }
 
 TEST_CASE("session state round-trips bit for bit") {
