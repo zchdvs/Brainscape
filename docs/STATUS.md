@@ -40,7 +40,7 @@ jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), and the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it. Next: wave 1 (lane F), the audition tooling (lane E), the app's curation slice (lane D) |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), and the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it; and lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash). Next: wave 1 (lane F), the first factory documents and their listening pass, the app's curation slice (lane D) |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
@@ -712,7 +712,7 @@ records live in [docs/design/reviews/](design/reviews/).
   `compiler/src` since the tests cross-check against `std::from_chars`, `to_chars` and `printf`,
   and CODEOWNERS for `compiler/`, `tools/bspc/`, `firmware/factory/` and `.gitattributes`. The
   compiler's digests, like the number code's hashes, are measured on x86-64 only until those
-  legs first run on GitHub. `render` waits for lane E's `tools/audition/`.
+  legs first run on GitHub. `render` came with lane E's `tools/audition/`.
 - **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run is
   the gate for the number code's and the compiler's digests on arm64 and macOS (above), and for
   `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
@@ -773,7 +773,8 @@ records live in [docs/design/reviews/](design/reviews/).
   hard-clips in the int16 ring, and a trigger's source and velocity are carried but unread.
 - **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
   natively), the wrapper bypass with crossfade, the pedal-faithful live input option
-  (`ConditionInput24`; the audition render applies it), event scripts in the audition, MIDI CC
+  (`ConditionInput24`; the audition render applies it), event scripts in the app's audition panel
+  (the shared render plays them, as `bspc render`'s scripts do), MIDI CC
   mapping, pluginval in CI, CLAP and LV2, `.bsp` presets and session state (so modes: the
   plugin plays the default mode), the macro, performance and effect-volume parameters with the
   host model's reporting (mode-compiler.md §9.2), and the
@@ -833,7 +834,7 @@ Steps 1–4 need no hardware.
    (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
    trim, the effect volume and the wet kill, the corpus on compiled packages). Next: wave 1, one
    revision per feature (lane F; the owner's Q2 puts it before CLOCK), lane E's audition render
-   and scripts, lane D's curation slice. The Mix law (Q13, the owner's provisional answer) is
+   and scripts (built: `tools/audition`, `bspc render`), lane D's curation slice. The Mix law (Q13, the owner's provisional answer) is
    sound revision 3, with the first set's recipes re-measured under it.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host

@@ -349,7 +349,7 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
       std::string tag;
       Planned     p;
       for (int k = 0; k < 4; ++k) {
-        const float pos = (bits >> (3 - k)) & 1u ? 1.f : 0.f;
+        const float pos = ((bits >> (3 - k)) & 1u) != 0 ? 1.f : 0.f;
         tag += letters[k];
         tag += pos != 0.f ? '1' : '0';
         if (MacroDefined(st, corners[k])) p.positions.push_back({corners[k], pos});
