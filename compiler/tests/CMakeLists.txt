@@ -16,3 +16,15 @@ if(MSVC)
   target_compile_options(bsc_number_tests PRIVATE /EHsc)
   target_compile_options(bsc_number_check PRIVATE /EHsc)
 endif()
+
+# The compiler's tests (§10.1, §10.2): so far the JSON grammar suite.
+add_executable(bsc_tests
+  ../../dsp/tests/test_main.cpp
+  test_json.cpp
+)
+target_link_libraries(bsc_tests PRIVATE brainscape_compiler)
+target_include_directories(bsc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../dsp/tests/vendor)
+if(MSVC)
+  target_compile_options(bsc_tests PRIVATE /EHsc /bigobj)
+endif()
+add_test(NAME compiler_unit COMMAND bsc_tests)
