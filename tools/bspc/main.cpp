@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,8 +16,10 @@
 #endif
 
 #include "Compile.h"
+#include "Json.h"
 #include "Lint.h"
 #include "Migrate.h"
+#include "Suite.h"
 #include "Text.h"
 #include "brainscape/SoundRevision.h"
 
@@ -93,6 +96,7 @@ struct Args {
   std::string              expect;
   std::string              manifestOut;
   std::string              id, name;
+  std::string              scripts, inputClass, declarations;
   bool                     Has(const char* flag) const {
                         return std::find(flags.begin(), flags.end(), flag) != flags.end();
   }
@@ -115,6 +119,7 @@ const CommandSpec kCommands[] = {
     {"derive", "--solve"},
     {"roundtrip", "--expect= --write-manifest="},
     {"migrate-session", "--id= --name= -o="},
+    {"render", "--script= --class= --declarations= --metrics --no-wav -o="},
     {"version", ""},
 };
 
@@ -190,6 +195,9 @@ bool Parse(const CommandSpec& c, int argc, char** argv, Args* a) {
     if (s == "--write-manifest") a->manifestOut = v;
     if (s == "--id") a->id = v;
     if (s == "--name") a->name = v;
+    if (s == "--script") a->scripts = v;
+    if (s == "--class") a->inputClass = v;
+    if (s == "--declarations") a->declarations = v;
   }
   return true;
 }
@@ -216,6 +224,11 @@ int Usage() {
       "                                     manifest of package, sound and control hashes\n"
       "  migrate-session SESSION [--id ID] [--name NAME] [-o OUT.json]\n"
       "                                     a BSWS v1 plugin session as a preset document\n"
+      "  render [--script S0,...|all] [--class attack|pad] [--declarations LOG.json] [--metrics]\n"
+      "         [--no-wav] [-o DIR] FILE...  the audition scripts S0-S11 for each document or\n"
+      "                                     package (the files are the set S10 and S11 visit):\n"
+      "                                     16-bit WAVs, a recipe per render, hashes and, with\n"
+      "                                     --metrics, the pre-screen (exit 1 on a failed check)\n"
       "  version                            this build's sound revision and formats\n"
       "Each command takes only the options shown (-- ends them). Exit codes: 0 success (lint\n"
       "warnings included), 1 errors or differences, 2 usage or I/O.\n");
@@ -609,6 +622,172 @@ int CmdMigrateSession(const Args& a) {
   return kOk;
 }
 
+// ── render (§8.2, §11.3): the audition scripts through tools/audition ────────────────────
+
+const char* FamilyName(brainscape::PresetFamily f) {
+  switch (f) {
+    case brainscape::PresetFamily::Recall: return "recall";
+    case brainscape::PresetFamily::Reverie: return "reverie";
+    case brainscape::PresetFamily::Misfire: return "misfire";
+    case brainscape::PresetFamily::Echoic: return "echoic";
+    case brainscape::PresetFamily::None: break;
+  }
+  return "none";
+}
+
+std::string Span(const Bytes& b, const brainscape::SectionSpan& s) {
+  if (s.length == 0) return std::string();
+  return std::string(reinterpret_cast<const char*>(b.data()) + s.offset, s.length);
+}
+
+// The declarations of a ratings log (tools/audition/ratings.py): presets.<id>.declare.
+bool ReadDeclarations(const std::string& path,
+                      std::vector<std::pair<std::string, bsa::Declarations>>* out) {
+  std::string text;
+  if (!ReadText(path, &text)) {
+    ErrLine("bspc render: cannot read " + path);
+    return false;
+  }
+  bsc::json::Value      root;
+  bsc::json::ParseError e;
+  if (!bsc::json::Parse(text, &root, &e)) {
+    ErrLine(path + ":" + bsc::Dec(e.line) + ":" + bsc::Dec(e.column) + ": " + e.message);
+    return false;
+  }
+  const bsc::json::Value* presets = root.Find("presets");
+  if (presets == nullptr || presets->type != bsc::json::Type::Object) {
+    ErrLine(path + ": no \"presets\" object");
+    return false;
+  }
+  for (const bsc::json::Member& m : presets->members) {
+    const bsc::json::Value* d = m.value.Find("declare");
+    if (d == nullptr) continue;
+    bsa::Declarations decl;
+    if (const bsc::json::Value* c = d->Find("class")) {
+      if (c->type != bsc::json::Type::String || (c->text != "attack" && c->text != "pad")) {
+        ErrLine(path + ": " + m.key + ": declare.class is \"attack\" or \"pad\"");
+        return false;
+      }
+      decl.inputClass = c->text == "pad" ? bsa::InputClass::Pad : bsa::InputClass::Attack;
+    }
+    if (const bsc::json::Value* v = d->Find("self_oscillating")) decl.selfOscillating = v->boolean;
+    if (const bsc::json::Value* v = d->Find("needs_attacks")) decl.needsAttacks = v->boolean;
+    out->emplace_back(m.key, decl);
+  }
+  return true;
+}
+
+int CmdRender(const Args& a) {
+  if (a.files.empty()) return Usage();
+  bsa::SuiteOptions options;
+  options.metrics = a.Has("--metrics");
+  options.wav     = !a.Has("--no-wav");
+  options.outDir  = a.output.empty() ? std::string("audition") : a.output;
+  options.scripts.clear();
+  const std::string list = a.scripts.empty() ? std::string("S0") : a.scripts;
+  if (list == "all") {
+    for (const char* s : bsa::kScriptNames) options.scripts.push_back(s);
+  } else {
+    size_t start = 0;
+    while (start <= list.size()) {
+      size_t end = list.find(',', start);
+      if (end == std::string::npos) end = list.size();
+      const std::string s = list.substr(start, end - start);
+      start               = end + 1;
+      bool known          = false;
+      for (const char* n : bsa::kScriptNames) known = known || s == n;
+      if (!known) {
+        ErrLine("bspc render: unknown script `" + s + "` (S0 to S11, or all)");
+        return kUsage;
+      }
+      options.scripts.push_back(s);
+    }
+  }
+  bsa::InputClass defaultClass = bsa::InputClass::Attack;
+  if (a.inputClass == "pad") {
+    defaultClass = bsa::InputClass::Pad;
+  } else if (!a.inputClass.empty() && a.inputClass != "attack") {
+    ErrLine("bspc render: --class is attack or pad");
+    return kUsage;
+  }
+  std::vector<std::pair<std::string, bsa::Declarations>> declared;
+  if (!a.declarations.empty() && !ReadDeclarations(a.declarations, &declared)) return kUsage;
+
+  std::vector<std::unique_ptr<bsa::Preset>> presets;
+  for (const std::string& file : a.files) {
+    Bytes b;
+    if (!ReadFile(file, &b)) {
+      ErrLine("bspc: cannot read " + file);
+      return kUsage;
+    }
+    if (!EndsWith(file, ".bsp")) {  // a document: compiled in memory, as it reads now
+      const bsc::CompileResult r =
+          bsc::Compile(std::string(reinterpret_cast<const char*>(b.data()), b.size()));
+      if (Report(r.findings, file) || !r.ok) return kFound;
+      const bool stale = !r.doc.stamped || r.doc.soundRev != brainscape::kSoundRevision ||
+                         std::memcmp(r.doc.soundHash.bytes, r.soundHash.bytes, 32) != 0;
+      if (stale) ErrLine(file + ": its stamp is missing or stale; rendering what it says now");
+      b = r.package;
+    }
+    bsc::DecodedPackage p = bsc::DecodePackage(b.data(), b.size());
+    if (!p.ok) {
+      ErrLine(file + ": " + bsc::DescribeDiagnostic(p.diagnostic));
+      return kFound;
+    }
+    auto preset                  = std::make_unique<bsa::Preset>();
+    preset->identity.package     = true;
+    preset->identity.id          = Span(b, p.meta.id);
+    preset->identity.name        = Span(b, p.meta.name);
+    preset->identity.family      = FamilyName(p.meta.family);
+    preset->identity.source      = Normalize(file);
+    preset->identity.soundRev    = p.info.soundRev;
+    preset->identity.soundHash   = bsc::Hex(p.info.soundHash.bytes, 32);
+    preset->identity.controlHash = bsc::Hex(p.info.controlHash.bytes, 32);
+    preset->identity.packageHash = bsc::Hex(p.info.packageHash.bytes, 32);
+    preset->state = std::shared_ptr<const brainscape::PresetState>(std::move(p.state));
+    preset->declare.inputClass = defaultClass;
+    for (const auto& d : declared) {
+      if (d.first == preset->identity.id) preset->declare = d.second;
+    }
+    if (preset->identity.id.empty()) {
+      ErrLine(file + ": the package has no META id");
+      return kFound;
+    }
+    for (const auto& q : presets) {
+      if (q->identity.id == preset->identity.id) {
+        ErrLine(file + ": the id " + preset->identity.id + " is given twice");
+        return kUsage;
+      }
+    }
+    presets.push_back(std::move(preset));
+  }
+
+  bsa::Renderer renderer;
+  if (!renderer.ok()) {
+    ErrLine("bspc render: the engine could not be set up");
+    return kUsage;
+  }
+  std::vector<const bsa::Preset*> set;
+  for (const auto& p : presets) set.push_back(p.get());
+  int rc = kOk;
+  for (const auto& p : presets) {
+    const bsa::SuiteResult r = bsa::RunSuite(renderer, *p, set, options);
+    if (options.metrics) {
+      Out(bsa::Summary(*p, r));
+    } else {
+      Out(p->identity.id + ": " + bsc::Dec(r.renders.size()) + " renders\n");
+    }
+    std::fflush(stdout);  // the summary before any error about it
+    for (const bsa::Rendered& x : r.renders) {
+      if (!x.error.empty()) ErrLine(p->identity.id + ": " + x.plan.name + ": " + x.error);
+    }
+    if (!r.ok || (options.metrics && r.Failed())) rc = kFound;
+  }
+  ErrLine("bspc render: " + bsc::Dec(presets.size()) + " presets into " + options.outDir);
+  return rc;
+}
+
+
 int CmdVersion() {
   Out("bspc: sound revision " + bsc::Dec(brainscape::kSoundRevision) + ", package format " +
       bsc::Dec(brainscape::kPackageFormat) + ", blob format " + bsc::Dec(brainscape::kBlobFormat) +
@@ -643,6 +822,7 @@ int main(int argc, char** argv) {
   if (cmd == "derive") return CmdDerive(a);
   if (cmd == "roundtrip") return CmdRoundTrip(a);
   if (cmd == "migrate-session") return CmdMigrateSession(a);
+  if (cmd == "render") return CmdRender(a);
   if (cmd == "version") return a.files.empty() ? CmdVersion() : Usage();
   return Usage();
 }
