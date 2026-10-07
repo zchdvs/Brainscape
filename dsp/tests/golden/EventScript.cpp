@@ -2,9 +2,14 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "brainscape/ModeEval.h"
+
+#if defined(BRAINSCAPE_GOLDEN_EMBEDDED_PACKAGES)
+#include "EmbeddedPackages.h"
+#endif
 
 #ifndef BRAINSCAPE_GOLDEN_PRESETS
 #define BRAINSCAPE_GOLDEN_PRESETS "presets"
@@ -51,17 +56,35 @@ std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
 }
 
 bool LoadPackage(const char* name, PresetState* out, PackageInfo* info) {
+#if defined(BRAINSCAPE_GOLDEN_EMBEDDED_PACKAGES)
+  // The program's copy of presets/NAME.bsp (EmbeddedPackages.h): no file system.
+  const std::string      path    = std::string("embedded ") + name + ".bsp";
+  size_t                 count   = 0;
+  const EmbeddedPackage* all     = EmbeddedPackages(&count);
+  const EmbeddedPackage* package = nullptr;
+  for (size_t i = 0; i < count && package == nullptr; ++i) {
+    if (std::strcmp(all[i].name, name) == 0) package = &all[i];
+  }
+  if (package == nullptr) {
+    std::fprintf(stderr, "the corpus package %s is not embedded (presets/MANIFEST)\n", name);
+    return false;
+  }
+  const uint8_t* const bytes = package->bytes;
+  const size_t         n     = package->size;
+#else
   const std::string path = std::string(BRAINSCAPE_GOLDEN_PRESETS) + "/" + name + ".bsp";
   FILE*             f    = std::fopen(path.c_str(), "rb");
   if (f == nullptr) {
     std::fprintf(stderr, "cannot open the corpus package %s\n", path.c_str());
     return false;
   }
-  std::vector<uint8_t> bytes(kMaxPackageBytes + 1u);
-  const size_t         n = std::fread(bytes.data(), 1, bytes.size(), f);
+  std::vector<uint8_t> buffer(kMaxPackageBytes + 1u);
+  const size_t         n     = std::fread(buffer.data(), 1, buffer.size(), f);
+  const uint8_t* const bytes = buffer.data();
   std::fclose(f);
+#endif
   PresetDiagnostic diag;
-  if (!DecodePreset(bytes.data(), n, out, &diag, info)) {
+  if (!DecodePreset(bytes, n, out, &diag, info)) {
     std::fprintf(stderr, "the corpus package %s does not decode: %s (detail %u)\n", path.c_str(),
                  PresetErrorName(diag.error), static_cast<unsigned>(diag.detail));
     return false;

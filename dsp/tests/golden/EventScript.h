@@ -113,6 +113,8 @@ class Script {
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params);
 
 // The committed package presets/NAME.bsp, decoded; false when it cannot be read or decoded.
+// A program that links the embedded packages (EmbeddedPackages.h: the firmware images and
+// brainscape_parity_stream) reads its compiled-in copy of the file instead.
 bool LoadPackage(const char* name, PresetState* out, PackageInfo* info = nullptr);
 
 // A preset source, complete: the package's state (or the default mode's leaves) with `params`

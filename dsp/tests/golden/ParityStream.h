@@ -14,17 +14,23 @@
 // firmware's parity image streams it over USB serial, brainscape_parity_stream prints it on
 // the host and under qemu-arm, and tools/hil/parity_check.py compares it with golden.json.
 //
-// Format brainscape-parity-stream/2, one JSON object per line, integers and strings only:
+// Format brainscape-parity-stream/3, one JSON object per line, integers and strings only:
 //   {"type":"parity-begin", "seq":0, ...header: the golden file's header fields, the run's
 //    configuration, the harness and engine toolchains, the clock, the platform...}
+//   {"type":"package", "seq", "name", "loaded", "bytes", "soundRev", "packageHash",
+//    "soundHash", "controlHash"}  one per package the corpus loads, whatever the run selects
 //   {"type":"vector", "seq", "name", "source", "generatorVersion", "frames", "inputHash",
 //    "ringSizes", "notes"}
-//   {"type":"preset", "seq", "vector", "name", "rendered", "hash", "secondHashes",
-//    "counters", "frames", "cycles"}
-//   {"type":"parity-end", "seq", "presets", "vectors", "lines", "renderFailures", "cycles"}
+//   {"type":"preset", "seq", "vector", "name", "rendered", ["package", "soundHash",
+//    "controlHash",] "hash", "secondHashes", "counters", "frames", "cycles"}
+//   {"type":"parity-end", "seq", "presets", "vectors", "packages", "lines", "renderFailures",
+//    "cycles"}
 // "seq" numbers the stream's lines from 0, so a reader sees a lost line as a gap; "lines"
-// is how many came before parity-end. "cycles" is 0 when the clock is "none". (Version 1
-// had no "seq", "vectors" or "lines".)
+// is how many came before parity-end. "cycles" is 0 when the clock is "none". A package line
+// carries the hashes `bspc roundtrip --write-manifest` writes (presets/MANIFEST), as the
+// program decoded the package; a preset that starts from a package names it with its sound
+// and control hashes, as golden.json does (mode-compiler.md §8.3). (Version 1 had no "seq",
+// "vectors" or "lines"; version 2, sound revision 1's, no package lines or package fields.)
 namespace brainscape::golden {
 
 class LineSink {

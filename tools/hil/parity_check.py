@@ -2,10 +2,11 @@
 """Silicon parity check: the golden corpus rendered on the Daisy Seed against golden.json.
 
 Drives the firmware's parity image over USB serial (or reads a captured stream) and compares
-every preset's whole-render SHA-256, per-second hashes and coverage counters, every vector's
-input hash, and the header's sound revision, versions and engine configuration with
-dsp/tests/golden/golden.json, as brainscape_golden --mode check does
-(docs/design/determinism-profile.md §6.1, §6.6). Stdlib only.
+every preset's whole-render SHA-256, per-second hashes, coverage counters and package hashes,
+every vector's input hash, and the header's sound revision, versions and engine configuration
+with dsp/tests/golden/golden.json, as brainscape_golden --mode check does
+(docs/design/determinism-profile.md §6.1, §6.6), and the packages the image carries with the
+corpus's committed set, dsp/tests/golden/presets/MANIFEST (mode-compiler.md §8.3). Stdlib only.
 
   parity_check.py --port auto [--run "run"] [--save run.log]   # drive the device (or COM5)
   parity_check.py --log run.log [--run "run pedal"]            # check a capture
@@ -17,11 +18,17 @@ configuration), "hostile" (FZ|DN and round toward zero in the caller's FPSCR), "
 long vectors) and "only=VECTOR[/PRESET],...". The stream's header must say it ran what the
 command asked for (with --port always, with --log when --run is given).
 
-The stream itself is checked as strictly as the hashes (format brainscape-parity-stream/2):
-every line numbered without a gap, every line well formed, as many preset and vector lines
-as parity-end counts, a vector line for every preset's vector, no "resync" notice (the
+The stream itself is checked as strictly as the hashes (format brainscape-parity-stream/3):
+every line numbered without a gap, every line well formed, as many preset, vector and package
+lines as parity-end counts, a vector line for every preset's vector, no "resync" notice (the
 device's USB serial dropped a line), and from a device the "idle" line after parity-end with
-droppedBytes 0. --expect-archive compares the engine archive the device reports with the
+droppedBytes 0.
+
+Packages (sound revision 2): a preset that starts from a package must name the package and
+its sound and control hashes as golden.json does, and the stream's package lines (every
+package the corpus loads, as the image decoded its embedded copy) must be exactly
+presets/MANIFEST's packages with its package, sound and control hashes; --manifest names
+another MANIFEST. --expect-archive compares the engine archive the device reports with the
 one the firmware build hashed (build/fw/firmware/engine-archives.sha256) or with a hash.
 
 Exit status: 0 PASS; 1 FAIL (a difference from the golden file, a render failure, presets
@@ -41,12 +48,15 @@ import hilserial  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GOLDEN = os.path.normpath(os.path.join(HERE, "..", "..", "dsp", "tests", "golden", "golden.json"))
-STREAM_FORMAT = "brainscape-parity-stream/2"
+STREAM_FORMAT = "brainscape-parity-stream/3"
 HEADER_INTS = ("soundRevision", "generatorVersion", "corpusVersion", "sampleRate", "historyFrames")
 HEADER_BOOLS = ("stereoInput", "ditherRingWrite")
 VECTOR_KEYS = ("seq", "name", "generatorVersion", "frames", "inputHash", "ringSizes")
 PRESET_KEYS = ("seq", "vector", "name", "rendered", "hash", "secondHashes", "counters")
-END_KEYS = ("seq", "presets", "vectors", "lines", "renderFailures")
+PRESET_PACKAGE_KEYS = ("package", "soundHash", "controlHash")  # a package preset's, as golden.json
+PACKAGE_KEYS = ("seq", "name", "loaded", "packageHash", "soundHash", "controlHash")
+MANIFEST_HASHES = ("packageHash", "soundHash", "controlHash")  # bspc roundtrip --write-manifest
+END_KEYS = ("seq", "presets", "vectors", "packages", "lines", "renderFailures")
 IDLE_WAIT = 10.0  # seconds to wait for the device's idle line after parity-end
 
 
@@ -58,6 +68,7 @@ class Stream:
         self.idle = None
         self.vectors = []
         self.presets = []
+        self.packages = []      # package lines: the packages the image carries, as it decoded them
         self.seqs = []          # seq of every numbered line from parity-begin to parity-end
         self.garbled = []       # lines between parity-begin and parity-end that are not JSON objects
         self.malformed = []     # JSON objects missing a required key
@@ -132,6 +143,12 @@ def collect(source, save, run_command, timeout):
                     st.vectors.append(obj)
                 else:
                     st.malformed.append(line[:120])
+            elif kind == "package" and inside:
+                st.seqs.append(obj.get("seq"))
+                if all(k in obj for k in PACKAGE_KEYS):
+                    st.packages.append(obj)
+                else:
+                    st.malformed.append(line[:120])
             elif kind == "preset" and inside:
                 st.seqs.append(obj.get("seq"))
                 if all(k in obj for k in PRESET_KEYS):
@@ -172,6 +189,23 @@ def expected_config(run_command):
             "subset": any(w.startswith("only=") for w in words)}
 
 
+def load_manifest(path):
+    """presets/MANIFEST (bspc roundtrip --write-manifest): {name: {packageHash, soundHash, controlHash}}."""
+    packages = {}
+    with open(path, encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            parts = line.split()
+            if not parts:
+                continue
+            if (len(parts) != 4 or not all(re.fullmatch(r"[0-9a-f]{64}", h) for h in parts[:3])
+                    or not parts[3].endswith(".json")):
+                raise SystemExit("%s:%d: not a manifest line" % (path, n))
+            packages[os.path.basename(parts[3])[:-len(".json")]] = dict(zip(MANIFEST_HASHES, parts[:3]))
+    if not packages:
+        raise SystemExit("%s: no packages" % path)
+    return packages
+
+
 def load_expected_archives(spec):
     """--expect-archive: a hash, or a sha256sum-style file (engine-archives.sha256)."""
     if spec is None:
@@ -189,7 +223,7 @@ def load_expected_archives(spec):
     return archives
 
 
-def check(golden, st, expect, archives):
+def check(golden, st, expect, archives, manifest):
     """(parity differences, transport problems, notes)."""
     diffs, transport, notes = [], [], []
     begin, end = st.begin, st.end
@@ -244,6 +278,8 @@ def check(golden, st, expect, archives):
             transport.append("parity-end counts %s preset(s), %d arrived" % (end.get("presets"), len(st.presets)))
         if end.get("vectors") != len(st.vectors):
             transport.append("parity-end counts %s vector(s), %d arrived" % (end.get("vectors"), len(st.vectors)))
+        if end.get("packages") != len(st.packages):
+            transport.append("parity-end counts %s package(s), %d arrived" % (end.get("packages"), len(st.packages)))
         if isinstance(end.get("lines"), int) and isinstance(end.get("seq"), int) and end["lines"] != end["seq"]:
             transport.append("parity-end: lines %s, seq %s" % (end.get("lines"), end.get("seq")))
         if end.get("renderFailures"):
@@ -281,6 +317,11 @@ def check(golden, st, expect, archives):
         if g is None:
             diffs.append("%s: not in the golden file" % name)
             continue
+        # The package rule (mode-compiler.md §8.3): the package the preset starts from, and its
+        # hashes, are golden.json's.
+        for key in PRESET_PACKAGE_KEYS:
+            if g.get(key) != p.get(key):
+                diffs.append("%s: %s %s, golden %s" % (name, key, str(p.get(key))[:16], str(g.get(key))[:16]))
         if not p.get("rendered", False):
             diffs.append("%s: the render failed on the device" % name)
             continue
@@ -294,6 +335,26 @@ def check(golden, st, expect, archives):
         for k in sorted(set(gc) | set(pc)):
             if gc.get(k) != pc.get(k):
                 diffs.append("%s: counter %s = %r, golden %r" % (name, k, pc.get(k), gc.get(k)))
+    # The packages the image carries: exactly the committed set, hash for hash. Every run lists
+    # them all, whatever it renders; the transport check above covers a lost line.
+    if end is not None and not transport:
+        seen_packages = {}
+        for k in st.packages:
+            if k["name"] in seen_packages:
+                diffs.append("package %s: listed twice" % k["name"])
+            seen_packages[k["name"]] = k
+        for pname in sorted(set(manifest) | set(seen_packages)):
+            k, want = seen_packages.get(pname), manifest.get(pname)
+            if want is None:
+                diffs.append("package %s: the image carries it, presets/MANIFEST does not list it" % pname)
+            elif k is None:
+                diffs.append("package %s: in presets/MANIFEST, not in the image's package lines" % pname)
+            elif not k.get("loaded"):
+                diffs.append("package %s: the image could not decode it" % pname)
+            else:
+                for key in MANIFEST_HASHES:
+                    if k.get(key) != want[key]:
+                        diffs.append("package %s: %s %s, MANIFEST %s" % (pname, key, str(k.get(key))[:16], want[key][:16]))
     whole = not begin.get("quick") and not begin.get("subset")
     if whole:
         seen = {(p["vector"], p["name"]) for p in st.presets}
@@ -311,6 +372,7 @@ def main():
     ap.add_argument("--port", help="serial port of the Seed (COM5, /dev/ttyACM0, ..., or auto)")
     ap.add_argument("--log", help="a captured stream instead of a port ('-' for stdin)")
     ap.add_argument("--golden", default=DEFAULT_GOLDEN, help="golden file (default: %(default)s)")
+    ap.add_argument("--manifest", help="the corpus packages' MANIFEST (default: presets/MANIFEST beside the golden file)")
     ap.add_argument("--run", help='device command (default "run"; see above). With --log: the command the '
                                   "capture must have run")
     ap.add_argument("--save", help="also write the raw stream to this file")
@@ -323,6 +385,8 @@ def main():
 
     with open(args.golden, encoding="utf-8") as f:
         golden = json.load(f)
+    manifest = load_manifest(args.manifest or os.path.join(os.path.dirname(os.path.abspath(args.golden)),
+                                                           "presets", "MANIFEST"))
     archives = load_expected_archives(args.expect_archive)
     run_command = args.run or "run"
     expect = expected_config(run_command) if (args.port or args.run) else None
@@ -353,7 +417,7 @@ def main():
     et = begin.get("engineToolchain", {})
     print("engine: %s %s %s, fp flags %s" % (et.get("compiler"), et.get("version"), et.get("target"),
                                            et.get("fpFlagsHash")))
-    diffs, transport, notes = check(golden, st, expect, archives)
+    diffs, transport, notes = check(golden, st, expect, archives, manifest)
     bad = {d.split(":")[0] for d in diffs}
     total_frames = total_cycles = 0
     print("%-46s %-16s %s" % ("preset", "sha256", "result" + ("  (x realtime)" if hz else "")))
@@ -387,8 +451,8 @@ def main():
               "that arrived match %s, but this run proves nothing: rerun it" % (
                   len(transport), len(st.presets), os.path.basename(args.golden)))
         return 2
-    print("VERDICT: PASS - %d preset(s) match %s bit for bit (sound revision %s, %s)" % (
-        len(st.presets), os.path.basename(args.golden), golden.get("soundRevision"), scope))
+    print("VERDICT: PASS - %d preset(s) match %s bit for bit, %d package(s) match MANIFEST (sound revision %s, %s)" % (
+        len(st.presets), os.path.basename(args.golden), len(st.packages), golden.get("soundRevision"), scope))
     return 0
 
 

@@ -35,6 +35,11 @@ _brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks go
 _brainscape_golden_harness(brainscape_parity_stream brainscape_dsp parity_stream_main.cpp)
 # --placement takes the parity image's arena sizes from firmware/platform/Placement.h.
 target_include_directories(brainscape_parity_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware)
+# The packages compiled in, as the firmware images carry them (EmbeddedPackages.h), not read
+# from presets/: the stream renders from the bytes the parity image renders from.
+include(GoldenPackages.cmake)
+brainscape_golden_packages(brainscape_golden_packages)
+target_link_libraries(brainscape_parity_stream PRIVATE brainscape_golden_packages)
 
 if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
   # Check mode (profile §6.1): every hash, per-second hash and counter must equal
