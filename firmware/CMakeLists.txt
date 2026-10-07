@@ -195,7 +195,14 @@ function(brainscape_firmware_image name)
     VERBATIM)
 endfunction()
 
-add_custom_target(brainscape_firmware ALL)  # the images follow as they land
+brainscape_firmware_image(brainscape_parity
+  SOURCES parity/main.cpp
+  LIBS brainscape_fw_golden
+  ENGINE_CODE ITCM
+  MIN_HEAP 4M)
+
+add_custom_target(brainscape_firmware ALL
+  DEPENDS brainscape_parity)
 
 # The Daisy bootloader binary libDaisy ships, beside the images, for a BOOT_QSPI setup.
 if(BRAINSCAPE_FIRMWARE_APP_TYPE STREQUAL "BOOT_QSPI")

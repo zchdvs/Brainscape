@@ -7,7 +7,7 @@ input hash, and the header's sound revision, versions and engine configuration w
 dsp/tests/golden/golden.json, as brainscape_golden --mode check does
 (docs/design/determinism-profile.md §6.1, §6.6). Stdlib only.
 
-  parity_check.py --port COM5 [--run "run"] [--save run.log]   # drive the device
+  parity_check.py --port auto [--run "run"] [--save run.log]   # drive the device (or COM5)
   parity_check.py --log run.log                                # check a capture
   brainscape_parity_stream --quick | parity_check.py --log -   # host or qemu stream
 
@@ -145,7 +145,7 @@ def check(golden, begin, vectors, presets, end):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", help="serial port of the Seed (COM5, /dev/ttyACM0, ...)")
+    ap.add_argument("--port", help="serial port of the Seed (COM5, /dev/ttyACM0, ..., or auto)")
     ap.add_argument("--log", help="a captured stream instead of a port ('-' for stdin)")
     ap.add_argument("--golden", default=DEFAULT_GOLDEN, help="golden file (default: %(default)s)")
     ap.add_argument("--run", default="run", help='device command (default "run"; see above)')
