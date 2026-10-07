@@ -13,8 +13,11 @@ namespace brainscape {
 // A bump is exactly one and regenerates dsp/tests/golden/golden.json with the harness's
 // --mode mint in the same pull request; sound-rev.yml fails a sound-relevant change
 // without one (tools/ci/sound_rev_gate.py). Revisions before the first published one
-// are internal (§1.5). 1: the first minted revision (profile §8.4 step 10).
-inline constexpr uint32_t kSoundRevision = 1;
+// are internal (§1.5). 1: the first minted revision (profile §8.4 step 10). 2: the mode
+// runtime (docs/design/mode-compiler.md §7.6 item 4): domain routing, rows 27 and 28 retired
+// into mode structure, the wet-only trim, effect volume and cutoff kill, LoadPreset with the
+// mode and CTRL, macro and expression events, Trails and FastCut mode switches.
+inline constexpr uint32_t kSoundRevision = 2;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

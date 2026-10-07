@@ -36,9 +36,9 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
     sections_[g]     = std::make_unique<SectionPanel>(GroupTitle(group), palette::GroupAccent(group));
     addAndMakeVisible(*sections_[g]);
   }
-  for (const ParamDescriptor& d : kParamTable) {
-    const ParamDisplay* m = FindParamDisplay(d.id);
-    knobs_.push_back(&sections_[static_cast<size_t>(m->group)]->AddKnob(processor_.Param(d.id)));
+  for (size_t i = 0; i < kNumLeafParams; ++i) {  // the registered rows
+    const ParamDisplay* m = FindParamDisplay(LeafId(i));
+    knobs_.push_back(&sections_[static_cast<size_t>(m->group)]->AddKnob(processor_.Param(LeafId(i))));
   }
 
   freeze_.onClick = [this] { ToggleFreeze(); };

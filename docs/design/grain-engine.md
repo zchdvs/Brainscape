@@ -370,6 +370,21 @@ slow-pad onsets — we market the fallbacks and the visibility, not a solved pro
 
 ## 5. Modes as data
 
+> **Update (2026-10-07, mode-compiler lane A).** The compiler is built as
+> [mode-compiler.md](mode-compiler.md) §8 specifies: `bsc::Compile` in the top-level
+> `compiler/`, with the `bspc` tool, integer-only, storing semitones rather than ratios. The
+> validation below is that design's errors E1-E12 (the Shape map is E10) and lint L1-L9 (the
+> guard warning per pitch entry is L2); `d_min_fb` is dropped. That design amends this section
+> when it is accepted (its §12.5).
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The engine plays the
+> compiled mode as [mode-compiler.md](mode-compiler.md) §7.3 specifies: one active mode, copied in
+> at a load's frame from the staged `PresetState` into the Warm arena, with no blob ring, epochs
+> or `PublishMode`; validated on every load without a sample rate; compared with the active one
+> by content, never by `modeHash`. A mode switch is a Spillover load, Trails or FastCut. Sound
+> revision 2 plays the onset source and mark positioning from it (rows 27 and 28 retired);
+> wave 1's features follow, one revision each.
+
 A mode is a JSON document outside `dsp/` and a compiled POD **`ModeBlob`** inside it (one
 name throughout; sizeof computed from the vocabulary, reconciled against the §7 slot budget).
 The engine never parses text; `modes::Compile()` — source in `dsp/`, host-callable,
@@ -495,6 +510,12 @@ filter concurrency vs. tier capacity); `d_min_fb` when feedback > 0; grain-lengt
 
 ## 6. Parameter and macro model
 
+> **Update (2026-10-06, mode-compiler lane 0).** The permanent ID table is
+> [mode-compiler.md](mode-compiler.md) §4.2, built in `Params.h`: `out_trim_db` here and in
+> §3 and §5 is now `wet_trim_db` (wet only from sound revision 2), and the pitch leaf is
+> `layer0.pitch.transpose_st`, an offset over the pitch set. That design amends this section
+> when it is accepted (its §12.5).
+
 Two tiers over **one** parameter system (microcosm.md §13.1; preset doc recs #6–#7).
 
 **The leaf/structure split** (review finding — a `constexpr` table cannot enumerate leaves of
@@ -608,6 +629,12 @@ estimated ([determinism-profile.md](determinism-profile.md), "Effect on the grai
 budget").
 
 ## 9. `dsp/` core API
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The API as built is
+> [mode-compiler.md](mode-compiler.md) §7.4's: `LoadPreset(state, Exact or Spillover, report,
+> style)` instead of `PublishMode` and `LoadMode`, the `MacroMove` and `Expression` events, the
+> exported `EvalMacro` and `EvalExpression`, `ValidateMode` without a sample rate, and
+> `Engine::ModeSwitches()`; `ActiveModeInfo` is not built.
 
 ```cpp
 namespace brainscape {
@@ -736,6 +763,15 @@ and display functions whose results reach the engine (`PlainFromNormalized`,
 ([determinism-profile.md](determinism-profile.md), "A full control-word guard on every
 engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
 rewrite").
+
+> **Update (2026-10-07, mode-compiler lane B).** As built, the key is sound revision 1's
+> `(sample, purpose)` for purposes 0–7, layer 0 and ordinal 0, so no revision 1 key changes.
+> Otherwise a 6-bit extension (layer, same-frame ordinal, purpose >> 3) and the purpose's low
+> three bits are mixed into the frame's hash, `Hash32(Hash32(Fold(sample·8)) ^ ((ext << 3) |
+> (purpose & 7)))` (`dsp/src/detail/GrainMath.h`; [mode-compiler.md](mode-compiler.md) §7.5,
+> R8): the keys of one frame are distinct, and keys of two frames meet only by chance, never at
+> a fixed frame offset (tested against both deterministic aliasings the design's drafts had).
+> Amended here when that design is accepted (its §12.5).
 
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
 ambiguous and collides): a Philox/Squares-class counter PRNG keyed on the tuple

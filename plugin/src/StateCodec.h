@@ -25,8 +25,13 @@ inline constexpr float kWrapperGainRangeDb = 24.f;
 //   "BSWS"  u32 version=1  u32 n  n x {u32 ParamId, u32 bits}  u32 m  m x {u32 key, u32 bits}
 // Readers skip setting keys they do not know, so a setting is added without a new version.
 // Freeze is a performance state and is never stored (companion §6.2).
+// The leaves are the Leaf rows (mode-compiler.md §4.1), by ordinal: sessions written before
+// the ID table (IDs 1-28, all still Leaf rows) decode unchanged. An id that is not a Leaf
+// row of this build (a Macro, Performance, Global, Reserved or Retired row, or one it lacks)
+// is unknown. BSWS v2, a .bsp plus wrapper settings, replaces this layout and migrates v1
+// sessions to preset documents (mode-compiler.md §4.4, §9.2).
 struct WrapperState {
-  float           plain[kNumParams];
+  float           plain[kNumLeafParams];
   WrapperSettings settings;
   uint32_t        unknownIds = 0;  // ids in the blob this build lacks (ignored)
   uint32_t        missingIds = 0;  // ids this build has that the blob lacks (defaults)

@@ -8,6 +8,7 @@
 #include "EventScript.h"
 #include "Sha256.h"
 #include "brainscape/Engine.h"
+#include "brainscape/ModeEval.h"
 
 namespace brainscape::golden {
 
@@ -29,6 +30,14 @@ constexpr detail::FpWord kModeMask = ~detail::kFpFlagBits;
 #endif
 
 int64_t& At(RenderOutput* out, Counter c) { return out->counters[static_cast<size_t>(c)]; }
+
+// A leaf's stored value in a complete preset.
+float LeafValue(const PresetState& preset, ParamId id) {
+  for (uint32_t i = 0; i < preset.leafCount; ++i) {
+    if (preset.leaves[i].id == static_cast<uint32_t>(id)) return preset.leaves[i].value;
+  }
+  return FindParam(id)->def;
+}
 
 // The counters run under the hostile control word, where x86 DAZ and Arm FZ make a
 // subnormal compare equal to 0. LLVM 21 folds a masked bit test of a float back into a
@@ -215,17 +224,32 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
     }
   }
   Engine& engine = *engine_;
+  // The device settings are part of a render's recipe (mode-compiler.md §3.8): every render
+  // starts from their defaults, whatever an earlier render on this engine left.
+  for (const ParamDescriptor& d : kParamTable) {
+    if (d.kind == ParamKind::Global) engine.SetParam(d.id, d.def);
+  }
   // Inexact presets are corpus bugs.
-  if (!engine.LoadPreset(*CompletePreset(p.params), LoadMode::Exact)) return false;
+  PackageInfo                        info;
+  const std::unique_ptr<PresetState> initial =
+      CompletePreset(PresetSource{p.package, p.params}, p.strip, nullptr, &info);
+  if (initial == nullptr || !engine.LoadPreset(*initial, LoadMode::Exact)) return false;
+  if (p.package != nullptr) {
+    out->soundHash   = Sha256::ToHex(info.soundHash.bytes, sizeof info.soundHash.bytes);
+    out->controlHash = Sha256::ToHex(info.controlHash.bytes, sizeof info.controlHash.bytes);
+  }
+  const uint32_t switchesBefore = engine.ModeSwitches();
   queue_->Clear();  // the load restarted the engine: a new timeline
   StagedPresets staged;
-  for (const ParamList& s : p.script.Staged()) {
-    staged.push_back(CompletePreset(s));
-    if (!CheckPreset(*staged.back())) return false;
+  for (const StagedLoad& s : p.script.Staged()) {
+    StagedState st;
+    st.state = CompletePreset(s.preset, p.strip, (p.strip & kKeepMode) != 0 ? initial.get() : nullptr);
+    st.style = s.style;
+    if (st.state == nullptr || !CheckPreset(*st.state)) return false;
+    staged.push_back(std::move(st));
   }
-  const auto stagedFeedback = [&staged](uint32_t i) {
-    return staged[i]->leaves[static_cast<uint32_t>(ParamId::Feedback) - 1u].value;
-  };
+  // The preset whose mode and CTRL the engine plays: macro and expression moves evaluate on it.
+  const PresetState* active = initial.get();
 
   const int64_t frames   = static_cast<int64_t>(v.frames) - inputStart;
   const auto&   restarts = p.script.Restarts();
@@ -259,6 +283,19 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   bool          freezeLevel = false;  // what the events at the current frame leave
   int64_t       pinAbs      = 0;
   float         feedback    = engine.GetParam(ParamId::Feedback);  // the smoother's target
+  float         cutoff      = engine.GetParam(ParamId::FilterCutoffHz);  // the kill's
+  const float   killHz      = FindParam(ParamId::FilterCutoffHz)->min;
+  auto          track       = [&](uint32_t id, float value) {
+    if (id == static_cast<uint32_t>(ParamId::Feedback)) feedback = Canonicalize(ParamId::Feedback, value);
+    if (id == static_cast<uint32_t>(ParamId::FilterCutoffHz)) {
+      cutoff = Canonicalize(ParamId::FilterCutoffHz, value);
+    }
+  };
+  auto loaded = [&](const PresetState& preset) {
+    active   = &preset;
+    feedback = LeafValue(preset, ParamId::Feedback);
+    cutoff   = LeafValue(preset, ParamId::FilterCutoffHz);
+  };
   int64_t       reach       = slack >= ring ? 0 : frames;
   auto          reachBy     = [&reach](int64_t f) { reach = f < reach ? f : reach; };
   int64_t       base        = 0;  // the render frame of the engine timeline's frame 0
@@ -272,8 +309,8 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
     for (; nextRestart < restarts.size() && restarts[nextRestart].frame == pos; ++nextRestart) {
       const RestartPoint& r = restarts[nextRestart];
       if (r.load) {
-        if (!engine.LoadPreset(*staged[r.staged], LoadMode::Exact)) return false;
-        feedback = stagedFeedback(r.staged);
+        if (!engine.LoadPreset(*staged[r.staged].state, LoadMode::Exact)) return false;
+        loaded(*staged[r.staged].state);
       } else {
         engine.Restart();
       }
@@ -327,6 +364,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
         if (pinAbs + pinReach < segEnd) reachBy(pinAbs + pinReach);
       }
       if (feedback > 1.0f) At(out, Counter::FbAbove1Frames) += segEnd - segStart;
+      if (!(cutoff > killHz)) At(out, Counter::KilledFrames) += segEnd - segStart;
       segStart = segEnd;
     };
     for (uint32_t i = 0; i < nev; ++i) {
@@ -337,27 +375,36 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
         frozenAtHopSeen = true;
       }
       if (cfg_.delivery == Delivery::Split) {
-        ApplyUnstamped(engine, ev, staged);
+        ApplyUnstamped(engine, ev, staged, *active);
       } else if (!queue_->Push(ToEngineEvent(ev, base, staged))) {
         return false;  // refused: outside the contract (profile §5.11)
       }
       ++At(out, Counter::Events);
       if (ev.frame % kPedalBlock != 0) ++At(out, Counter::OffGridEvents);
+      PresetLeaf leaves[kMaxExpressions * kMaxMacroTargets];
+      size_t     moved = 0;
       switch (ev.type) {
-        case EventType::SetParam:
-          if (ev.id == static_cast<uint32_t>(ParamId::Feedback)) {
-            feedback = Canonicalize(ParamId::Feedback, ev.value);
-          }
-          break;
+        case EventType::SetParam: track(ev.id, ev.value); break;
         case EventType::Freeze: freezeLevel = ev.value != 0.f; break;
         case EventType::Trigger: ++At(out, Counter::Triggers); break;
         case EventType::SpilloverLoad:
           ++At(out, Counter::Loads);
           freezeLevel = false;
           frozen      = false;
-          feedback    = stagedFeedback(ev.id);
+          loaded(*staged[ev.id].state);
+          break;
+        case EventType::MacroMove:
+          ++At(out, Counter::MacroMoves);
+          moved = EvalMacro(active->mode, static_cast<ParamId>(ev.id), ev.value, leaves,
+                            kMaxMacroTargets);
+          break;
+        case EventType::Expression:
+          ++At(out, Counter::ExpressionEvents);
+          moved = EvalExpression(active->mode, active->control, ev.value, leaves,
+                                 kMaxExpressions * kMaxMacroTargets);
           break;
       }
+      for (size_t k = 0; k < moved; ++k) track(leaves[k].id, leaves[k].value);
     }
     closeSegment(end);
     if (!frozenAtHopSeen) frozenAtHop = frozen;
@@ -401,6 +448,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
           l > kActiveLevel || l < -kActiveLevel || r > kActiveLevel || r < -kActiveLevel;
       const bool silent = !Nonzero(inL[i]) && !Nonzero(inR[i]);
       if (silent) ++At(out, Counter::SilentInFrames);
+      if (!silent && !Nonzero(l) && !Nonzero(r)) ++At(out, Counter::MutedFrames);
       if (active) {
         ++At(out, Counter::OutActiveFrames);
         if (silent) ++At(out, Counter::TailActiveFrames);
@@ -420,8 +468,9 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   }
   if (queue_->ConsumeRefused() != 0) return false;
 
-  At(out, Counter::Frames) = frames;
-  out->ringReachFrame      = reach;
+  At(out, Counter::Frames)       = frames;
+  At(out, Counter::ModeSwitches) = static_cast<int64_t>(engine.ModeSwitches() - switchesBefore);
+  out->ringReachFrame            = reach;
   hasher.Finish(out);
   return true;
 }

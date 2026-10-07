@@ -93,18 +93,18 @@ int main(int argc, char* argv[]) {
       haveDelay |= p->getName(64) == "Delay time";
       haveFreeze |= p->getName(64) == "Freeze";
     }
-    // 28 engine parameters, freeze, and the bypass JUCE's VST3 wrapper adds.
-    Check(host->getParameters().size() == 30 && haveDelay && haveFreeze,
+    // The Leaf rows, freeze, and the bypass JUCE's VST3 wrapper adds.
+    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 2 && haveDelay && haveFreeze,
           juce::String(host->getParameters().size()) + " host parameters, engine and freeze present");
 
     // A session state with exact values: the record's two awkward ones (companion-app
     // record §2.5) on top of the busy preset.
     Preset preset = Busy();
-    preset.push_back({ParamId::PitchSt, 7.02f});
+    preset.push_back({ParamId::TransposeSt, 7.02f});
     preset.push_back({ParamId::FilterMorph, 0.4f});
     const Preset all = Complete(preset);
     WrapperState state{};
-    for (size_t i = 0; i < kNumParams; ++i) state.plain[i] = all[i].second;
+    for (size_t i = 0; i < kNumLeafParams; ++i) state.plain[i] = all[i].second;
     state.settings.inputMode = InputMode::Stereo;
     std::vector<uint8_t> blob;
     EncodeState(state, blob);
@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
     WrapperState back{};
     const auto   echoed = ComponentState(*host);
     bool         exact  = DecodeState(echoed.data(), echoed.size(), back);
-    for (size_t i = 0; exact && i < kNumParams; ++i) exact = Bits(back.plain[i]) == Bits(state.plain[i]);
+    for (size_t i = 0; exact && i < kNumLeafParams; ++i) exact = Bits(back.plain[i]) == Bits(state.plain[i]);
     Check(exact, "every plain value read back bit for bit after the controller's echo");
 
     host->prepareToPlay(48000.0, 512);

@@ -11,7 +11,9 @@
 > probes), the disagreements it resolves and its provenance are in
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
-> `main` `42773a2`. Status: **draft v2**, revised after review (record §6), not implemented.
+> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A, G
+> and C (sound revision 2) are built (docs/STATUS.md), and notes marked "as built" record what an
+> implementing lane decided where this document left a choice.
 
 ---
 
@@ -166,9 +168,13 @@ post delay, whose taps are exact (§11.1).
 - **Strings.** `id`: `[a-z0-9._-]`, 1–48 bytes, stable once released; `name`: 1–32 bytes
   of UTF-8; `display_name`: 1–16 bytes.
 - **Derived fields.** `sound_rev` and `sound_hash` are written by `bspc stamp` and ignored
-  as input (§8.2). **Editor-only data** lives under `editor` (schema 1 defines
-  `editor.ratio_gen`, engine §5's pitch-set generator, and `editor.detached`, the targeted
-  leaves not derived from positions, §3.5): validated, kept, never compiled.
+  as input (§8.2). As built: `fmt` keeps them as written; `compile` stamps the JSON section
+  and `stamp` the document with this build's revision and the computed hash. **Editor-only
+  data** lives under `editor` (schema 1 defines `editor.ratio_gen`, engine §5's pitch-set
+  generator, and `editor.detached`, the targeted leaves not derived from positions, §3.5):
+  validated, kept, never compiled. As built: `editor.ratio_gen`'s keys stay open until the
+  editor defines them, but it is in canonical form like the rest: its numbers are read as
+  binary32 (overflow is E4) and written as canonical text, its object members sorted by key.
 
 ### 2.3 Top level, scheduler, output and post
 
@@ -281,6 +287,17 @@ the last note (record §2.2); L7 a macro targets a Shift-secondary leaf (§3.1);
 overridden Filter or Space macro breaks the universal endpoints (§3.1); L9 a product string
 (`name`, `display_name`, META, tags) matches the denylist of other makers' marks (§11.2).
 
+As built (lane A): a document's text over 1 MiB is refused before parsing (E12), and the
+reader's duplicate-key check and column count are linear. L2 compares the smallest `base_ms`
+the leaf and macro targets reach with the near guard at the largest size, transpose and spread
+they reach, per pitch entry, through `dsp/`'s `NearGuardMs`; L4's display resolution is the
+display text, `FormatPlain`, of the leaf against the derived value, and L4 names leaves as
+schema 1 does (`layer0.position.spray_ms`, the form `editor.detached` takes); L5's
+free-running sources are `periodic` and `clock`; L8 wants a Filter target on
+`post.filter.cutoff_hz` from its minimum to its maximum, and every Space target on
+`post.delay.mix` or `post.reverb.mix` starting at 0; L9 matches whole words of the id, name,
+author, description, tags and display names, case-insensitively.
+
 Engine §3's `d_min_fb` guard is dropped: it prevents a comb at the guard-margin period inside
 the feedback loop, but feedback re-enters the ring through a fixed 512-frame FIFO
 (`dsp/include/brainscape/Engine.h:16-22`), so every loop is at least 10.67 ms long
@@ -331,7 +348,9 @@ which `Compile` fills in and the formatter writes, so every preset plays from th
 | aux1, aux2 | none |
 
 Step 4 tunes the defaults. Display names go to META, not MODE (§6.2), so renaming a knob
-keeps `sound_hash`.
+keeps `sound_hash`. As built: a macro written without `targets` keeps these (per-key
+defaulting, §2.2), so `{"id": "space", "display_name": "Room"}` only renames Space; `[]`
+empties it.
 
 ### 3.3 The evaluator
 
@@ -364,6 +383,13 @@ exponents 1.5 and 3.0 (record §2.6). The output is never rounded to a grid. `cu
 power exponent, as engine §6 folds in the research's `lin|exp|log` and `curve_amount`
 (preset-parameter-and-patch-format.md §4.2): below 1 is the "log" shape, above 1 the "exp".
 
+As built: `EvalMacro` landed in `dsp/` with lane A (`brainscape/ModeEval.h`), beside
+`NearGuardMs` for lint L2, because lint and `derive` need it before R6; nothing in the engine
+calls it until R6, so it is sound-neutral by construction. 848 bytes on the M7 (*measured*).
+Since lane C (R6) the engine's `MacroMove` and `Expression` events run the same bodies
+(`detail/ModeEvalBody.h`) inside the engine's own guard, so one evaluator serves the engine,
+lint, `derive` and the app.
+
 **Cost on the M7:** about 538 cycles (1.1 µs) per curved target (*estimated* with LLVM 14's
 `llvm-mca` Cortex-M7 model): an 8-target move is about 0.9 % of a 48-frame block, paid only
 while a pot moves. Tables would be 17 times cheaper but need 32 KiB per mode and DetMath in
@@ -385,6 +411,13 @@ the compiler (record §2.6).
 - **Parity.** CTRL is outside `sound_hash` yet reaches the sound through expression, so a
   recipe or PARITY request with expression events also records `control_hash` (§6.3).
 
+As built (lane C): an assignment maps the pedal position as a macro target with `in_range`
+[0, 1] would, through its `lo`, `hi` and `curve`; on a macro the result is the macro's
+position, and its targets follow as a `MacroMove`'s. The exported `EvalExpression(mode, control,
+position, out, cap)` writes the resulting leaves in application order (at most 32). A
+`MacroMove` or `Expression` with a non-macro id, an undefined macro or no assignment does
+nothing, and `SetParam` on a macro row stays a no-op.
+
 ### 3.5 Positions, leaves and soft takeover
 
 Macro positions in CTRL are pickup references (companion §6.2): after a load each macro pot
@@ -405,6 +438,12 @@ so the leaf is derived, not typed:
 - **The compiler only checks**: L4 flags a leaf further than its display resolution from the
   derived value, or an omitted position (compiled as 0.5); both are errors for factory
   packages.
+
+As built (lane A): "solve position" compares distances exactly; of the positions that land
+equally near the leaf it keeps the stored one, so a derived document solves back to itself
+byte for byte (`EvalMacro` is flat over runs of positions, and 0.49999997 often gives what 0.5
+gives), and otherwise takes the smallest, also past either end of the range. `derive` logs
+each leaf's net change once, and says when the stamp has gone stale.
 
 ### 3.6 What hosts see
 
@@ -508,6 +547,12 @@ Ranges and defaults are those of §2.3–§2.4. The detector uses
 a player's calibration applies everywhere. Trigger, Tap and Bypass stay outside the table
 (companion §5.7).
 
+As built (lane C): rows 27 and 28 are `Retired` tombstones (null name, no domain) since sound
+revision 2; the C++ enumerators `OnsetTrigger` and `PositionSource` keep their ids, so code
+naming them still builds, and a `SetParam` on them is a no-op. Their display rows stay, never
+registered. Row 81 stays `Reserved` until phase D, so the detector reads
+`trigger.sensitivity` alone. The cutoff shows `Kill` at its minimum.
+
 A transpose leaf survives beside the pitch set because with the default set `{0}` the engine
 computes `(0 + transpose) + detune`, bit for bit today's `PitchSt + detune`
 (`dsp/src/Granular.cpp:101-104`). `steps.count`, `layer_mix`, `glide.curve`, the burst
@@ -550,6 +595,10 @@ published at step 6 get hint 1; a row activated later gets its release's ordinal
 checks that it exceeds every earlier hint. Published rows are never renumbered, renamed or
 reused.
 
+As built (lane G): the manifest check and the version-hint check wait for step 6's committed
+manifest, which needs Q12 and companion Q17 settled first; until then the table may change in
+place (principle 5), so there is nothing to check against.
+
 ## 5. The compiled preset
 
 ### 5.1 Decoded types
@@ -586,7 +635,9 @@ frames above 4 KiB, which the symbol audit rejects (*measured*, record §2.7).
   chunked layout before this is cited as measured.
 - **Additive evolution**: an older decoder rejects an unknown MODE chunk as
   `UnsupportedFeature`, naming it, so a new chunk does not bump `blob_format`; a changed layout
-  does, and after step 6 the firmware keeps older decoders (companion §6.5).
+  does, and after step 6 the firmware keeps older decoders (companion §6.5). A macro or
+  expression target on a later wave's leaf (a `Reserved` row of the older build) is
+  `UnsupportedTarget`, named, not a corrupt target (added when lane B was built).
 - **No floating point, allocation or C library beyond `memcpy` and `memset`**: the probe's M7
   decoder and validator had no floating-point instruction in 4,775 bytes (*measured*). Byte
   comparisons are loops, since `memcmp` is not on the symbol allowlist.
@@ -631,7 +682,7 @@ A 128-byte header, then sections; at most 16,384 bytes in all.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `magic` | 4 bytes | `BSPK` |
-| 4, 6 | `package_format`, `flags` | u16, u16 | 1; bit 0 `FACTORY`, bit 1 `JSON_STALE` (companion §6.9), others 0 |
+| 4, 6 | `package_format`, `flags` | u16, u16 | 1; bit 0 `FACTORY` (as built: the compiler sets it for ids under `factory.`), bit 1 `JSON_STALE` (companion §6.9), others 0 |
 | 8 | `sound_rev` | u32 | revision of the build that compiled or stamped it, never 0 |
 | 12, 16 | `blob_format`, `schema_version` | u32, u32 | 1, 1 |
 | 20, 24, 28 | `total_bytes`, `section_count`, reserved | u32 × 3 | reserved is 0 |
@@ -778,13 +829,20 @@ The recommended law keeps dry at unity up to the middle and wet at unity from it
 `dry = min(1, 2(1 − m))`, `wet = min(1, 2m)`, exact at `m` = 0 and 1 for contract #2. It
 changes every preset with 0 < mix < 1, so it takes its own bump after r2.
 
-**Budgets.** `Engine::Impl` (6,032 of 6,656 bytes on the M7, `Engine.h:24-30`) holds the
-64-voice pool (`dsp/src/detail/Granular.h:134`), so each `Grain` byte costs 64: it grows about
-0.6–1.1 KiB in 3a (FastCut included), 1.3–1.5 KiB in W1 and 2.5 KiB in W3 before packing
-(*estimated*), all within engine §7's DTCM row. Each wave's pull request raises
-`kEngineImplBytes` under the DTCM map audit (engine §10, gate 10). `Grain` is 72 of its 128
-bytes (`Granular.h:25-38`); 3a adds 4, W1 about 20 and W3 about 40, so W3 must pack it
-(risk 4). The active mode goes in the Warm arena through `PlanMemory`.
+**Budgets.** `Engine::Impl` (6,096 of 6,656 bytes on the M7 at r1, *measured* in lane C's
+review, where `Engine.h:24-30` said 6,032) holds the 64-voice pool
+(`dsp/src/detail/Granular.h:134`), so each `Grain` byte costs 64: it grows about 0.6–1.1 KiB in
+3a (FastCut included), 1.3–1.5 KiB in W1 and 2.5 KiB in W3 before packing (*estimated*), all
+within engine §7's DTCM row. Each wave's pull request raises `kEngineImplBytes` under the
+DTCM map audit (engine §10, gate 10). `Grain` is 72 of its 128 bytes (`Granular.h:25-38`); 3a
+adds 4, W1 about 20 and W3 about 40, so W3 must pack it (risk 4). The active mode goes in the
+Warm arena through `PlanMemory`.
+
+As built (lane C, *measured*): `Grain` is 80 bytes (the 4-byte `fadeStart` and 4 of
+alignment), so `Engine::Impl` grew by 504 bytes on the M7, from 6,096 (the grain pool's 512,
+less 8 elsewhere), to 6,600 of the raised 7,168 (`kEngineImplBytes`; x86-64: by 512, from 6,240
+to 6,752 of 7,424). W1 and W3 budget from these. The active mode and its CTRL, 1,616 bytes
+rounded to 16, end the Warm arena. No DTCM map audit exists yet to check the raise against.
 
 ### 7.2 Parameter domains: the routing fix
 
@@ -804,6 +862,16 @@ cutoff)`, gives the smoothed wet gain's target: 0 at the cutoff minimum, else
 while killed stays muted; today's trim handler (`:561-565`) and the raw-cutoff bypass in
 `RebuildPostParams` (`:593-597`) would each re-open the bug class alone. Tests: one lone change
 per `Leaf` row against the same change among other edits, and §10.3's kill cases.
+
+As built (lane C): a change marks its row's domain bits; before the next frame renders,
+`RebuildDirty` rebuilds each marked domain once, through a switch that names all six (Mix,
+Feedback, Wet and Detector included, which revision 1 applied at once by ID; the order cannot
+matter, their state is disjoint). `WetGainTarget` is the target of a 10 ms smoother, as the
+trim's was, that scales the wet signal after the post chain and before the mix: `dry·(1 − mix)
++ (wet·g)·mix`. At `g` = 1 every product is exact, so a preset without trim plays revision 1's
+bits; the kill is exact silence once the smoother snaps to 0 (about 0.46 s). The trim and the
+effect volume add in decibels before the one conversion, so `(−6, 0)` and `(0, −6)` give the
+same bits. The bypass at the cutoff's maximum stays the post rebuild's.
 
 ### 7.3 Loading a mode, without a blob ring
 
@@ -846,6 +914,20 @@ active one, which the engine checks itself, word by word, rather than trusting `
 every index is reduced modulo its table's size on any load. Scheduler phase and grains always
 carry over.
 
+As built (lane C): step 0 is `ValidateMode`'s rules on the mode and CTRL, structural and
+semantic, but not STAT's: the leaves are step 2's, which canonicalizes them and counts what is
+unknown, duplicated or changed instead of refusing the load (a non-canonical value or an
+unsorted leaf list in a state built in memory stays loadable, as before). The comparison of
+modes is `ModeBlob`'s bytes up to `modeHash` (the struct has no implicit padding), and each load
+whose mode differs counts in `Engine::ModeSwitches()`; sound revision 2 has no sequencing state
+to reset, so the reset is a hook for W1. FastCut stamps `fadeStart` as the grain's own frame
+index (a `uint32_t`, no absolute frame), shortens the grain to end with its fade, which frees
+its voice, and renders frames from `fadeStart` on with the envelope times `(128 − k)/128`,
+exact multiples of 2⁻⁷; frames before it render as any grain's, so a Trails load and a grain no
+load cut keep revision 1's arithmetic. A direct `LoadPreset(…, Spillover)` takes the style as
+an optional last argument (Trails by default), so a wrapper splitting blocks itself, as the
+golden harness's split delivery does, can cut too. No `ActiveModeInfo` exists yet.
+
 ### 7.4 Events and API
 
 | Type | No. | `id` | `value` | Wave |
@@ -868,6 +950,13 @@ New exported functions: `DecodePreset` and `ValidateMode` (integer-only, unguard
 `EvalMacro(const ModeBlob&, ParamId, float position, PresetLeaf* out, size_t cap)` and
 `EvalExpression` (guarded); `CheckPreset` also validates the mode. `LoadReport` gains
 `invalidMode` and `unsupported`.
+
+As built (lane C): events 4 and 5 as above; a `SpilloverLoad` event's `id` is its
+`SwitchStyle` (0 Trails, 1 FastCut, anything else Trails), and `LoadPreset` takes the style as
+an optional fourth argument. `kFastCutFrames` = 128 is in `Engine.h` beside
+`kFeedbackDelayFrames`. `Engine::ModeSwitches()` (audio thread) counts the loads whose mode
+differed by content. `LoadReport.unsupported` counts stored performance fields away from their
+defaults; `applied` is false for an invalid mode.
 
 ### 7.5 Wave 1 and shared rules
 
@@ -905,12 +994,19 @@ beyond it are refused and triggers steal the oldest. The free-running target bec
 
 **Random-number keys (R8).** Today's key is `abs·8 + purpose`, all 8 purposes used, folded
 to 32 bits as `lo ^ hi` (`GrainMath.h:26-48`). A 6-bit `ext` packs the layer (1 bit), a
-same-frame ordinal (3 bits) and `purpose >> 3` (2 bits): `k32 = Fold(abs·8 + (purpose & 7))`,
-then, if `ext` ≠ 0, `k32 = Hash32(k32 ^ Hash32(ext))`. With `ext` = 0 every r1 key is
-unchanged. XOR-ing `ext << 56` before the fold would alias every layer-1 draw with the layer-0
-draw 2²¹ frames away (*measured*, record §2.8); since `Hash32` is a bijection, extended keys
-within a frame are pairwise distinct and meet an r1 key only by chance (2⁻³² per pair), never
-at a fixed offset. New purposes start at 8 (pitch select, intermittency, step shuffle, step
+same-frame ordinal (3 bits) and `purpose >> 3` (2 bits). With `ext` = 0 the key is r1's,
+`Fold(abs·8 + purpose)`, so every r1 key is unchanged; otherwise the frame is hashed before the
+extension is mixed in: `k32 = Hash32(Hash32(Fold(abs·8)) ^ ((ext << 3) | (purpose & 7)))`. The
+504 extended keys of a frame are pairwise distinct (one value XOR-ed with distinct 9-bit
+values, then the bijection `Hash32`), and keys of two frames meet only by chance (2⁻²³ per
+pair of frames), never at a fixed offset. Both simpler forms alias deterministically: XOR-ing
+`ext << 56` before the fold aliases every layer-1 draw with the layer-0 draw 2²¹ frames away
+(*measured*, record §2.8), and this draft's first formula, `Hash32(Fold(abs·8 + (purpose & 7))
+^ Hash32(ext))`, leaves the frame linear under the XOR, so every draw of one `ext` equalled a
+draw of another at frame `abs ^ (D >> 3)`, `D = Hash32(ext) ^ Hash32(ext')`, some within 2¹⁸
+frames (*measured*, lane B review; amended when lane B was built). A purpose from 8 on goes
+through the extension whichever overload keys it, since r1's fold would give it the next
+frame's key. New purposes start at 8 (pitch select, intermittency, step shuffle, step
 probability, mark walk, random cutoff). Re-keying everything would change every jittered
 golden hash and blunt §7.6's check of the r2 re-mint.
 
@@ -947,6 +1043,17 @@ default buys is that older packages stay exact (§7.3). The pull requests, in or
 
 Bumps are cheap until a revision is published (companion §8.1); the last internal revision
 before step 6 becomes the first published one.
+
+As built (lane C, item 4): of revision 1's 28 golden presets, 25 reproduce their hashes bit for
+bit at r2, every converted package preset included, and exactly the three item 4 expects
+change: `automation_offgrid` (its toggles of 27 and 28 became mode switches; it also moves the
+trim below full mix), `subnormal_wet` (trim −6 dB at mix 0.5) and `post_max` (40 Hz to 41 Hz,
+from second 2). `hot_out` (trim +24 dB at mix 1) reproduces, as the arithmetic says it must.
+Lane C's review re-minted three presets r2 alone has: `automation_offgrid` loads no mode while a
+freeze is held, so its freezes hold their second as at r1 (143,974 frozen frames and 6 frozen
+onsets, r1's counts, which r2's first mint had cut to 48,007 and 1), `mode_switch` moves macros
+and the pedal after its loads, and `wet_kill` kills at mix 1. No other hash moved, and against r1
+the same three of 28 differ.
 
 ## 8. The compiler library and `bspc`
 
@@ -995,6 +1102,18 @@ are deterministic across hosts (profile §3.9).
 | `render [--metrics]` | the shared render (companion §4.9) with an input and an event script; WAV, recipe, hashes, §11.3's metrics |
 | `migrate-session` | a `BSWS` v1 session to a preset document (§4.4) |
 
+As built (lane A): `bspc roundtrip` runs §8.3's checks with a sorted hash manifest
+(`--expect`, which names each document whose hashes differ), and `bspc version` prints the
+build's constants; `render` arrives with lane E. Each command takes only its own options:
+anything else exits 2 before a file is touched, so a misspelled `--check` or `--factory` in CI
+fails instead of passing or rewriting. `diff` compares what plays and controls the sound
+before the id, name, META and display names, and the header flags (FACTORY follows from the
+id) after them. On Windows `bspc` runs with UTF-8 as its code page, so any file name opens.
+Later waves' vocabulary that this document leaves open is provisional: tempo divisions are
+`"off"` only until W2 defines them, `quantize.scale` lists pitch classes, route sources are
+`modulator0`/`modulator1`, link endpoints `grain.pitch`-style names (engine §5), a step's
+`gain` and `prob` default to 1, and `modulatorN.x` leaves live at `modulators[N].x`.
+
 ### 8.3 Determinism and its gate
 
 Compiling is a pure function of the JSON and the build's constants (companion §6.6): no
@@ -1018,6 +1137,44 @@ clock, user, locale, hash-map order, pointer-ordered sort or floating-point arit
   are header-only and import nothing that names them (*measured*, record §2.8).
 
 An optional leg runs `bspc` on the emulated M7, for later on-pedal compilation.
+
+As built (lane G): `bspc-roundtrip` is a job in `.github/workflows/parity.yml` on
+`parity-host`'s seven legs. It runs the compiler's tests (`ctest -R '^compiler_'`: the number
+sets of §10.2, the JSON grammar, the property and reader-fuzz digests, `bspc roundtrip` over the
+examples and `bspc`'s command line), then `tools/ci/bspc_roundtrip.py` over every document set
+that exists: `compiler/tests/data`, `dsp/tests/golden/presets` (lane C; `frozen/` exempt) and
+`firmware/factory` (lane E), the last two with a committed `.bsp` beside each `.json` and a
+`.json` beside each `.bsp`. Every set with documents must commit its `MANIFEST` (`bspc roundtrip
+--write-manifest`, paths relative to the set) and is checked against it, so no package changes
+without its manifest line changing; and the root `.gitattributes` must give every document and
+`MANIFEST` `text eol=lf` and every `.bsp` `binary`, which the script checks with `git
+check-attr` on every leg (canonical JSON is LF, §6.4, and Git for Windows checks text out as
+CRLF under `core.autocrlf`, so without the rule the Windows legs would reject every document). A
+self-test step first proves each of those checks can fail and that the committed rules cover all
+three sets; CODEOWNERS covers `/.gitattributes` too. Each leg uploads the combined manifest,
+paths prefixed with their set, and `parity-summary` requires all seven byte-identical. The
+package rule reads `dsp/tests/golden/presets/MANIFEST` and `firmware/factory/MANIFEST` in `bspc
+roundtrip --write-manifest`'s format, and `soundHash` and `controlHash` (64 hex digits, as
+`bspc` prints them) from each preset entry of `golden.json` that has them, which lane C's
+harness writes and its check mode must verify against the package the preset loads; the
+manifests catch a package change that `golden.json`'s entry misses (a CTRL-only change, or a
+STAT change the render does not hear), and `golden.json`'s entries tie a preset's render to its
+package. A changed render counts as its package's only when the pull request touches none of the
+path trigger's paths without a bump: with the engine changed beside the package, nothing tells
+which moved the render, so it is the hard trigger's, whatever the labels (land the two apart, or
+bump). "Naming the cause" is a `Package-change: <cause>` line in the pull request's description,
+which the gate requires beside the label and prints, re-running when the description is edited.
+A dropped package or a package preset turned back into a parameter list counts as a change; a
+new package, a preset that gains one and a re-stamp (`sound_rev` and package hash only) do not;
+neither a bump nor "sound-neutral" waives the label. The compiler audit is
+`tools/ci/audit_compiler.py`: the source ban runs over `compiler/src` in `parity-audits`, after
+a self-test of cases it must and must not flag (comments and string literals are skipped); it
+also bans the stream and locale headers and the other float formatters (`ecvt`, `gcvt`,
+`strfrom*`). The import check runs on the GCC and Clang `bspc-roundtrip` legs and rejects the
+same families as imports (libm, the `strto`/`wcsto`/`ato` families, `printf` and `scanf`, the
+float formatters, and `to_chars`, `from_chars`, `to_string` or string streams), after proving on
+`tools/ci/compiler_audit_selftest.cpp`'s object that it catches `strtof`, `strtod` and libm. The
+optional M7 leg is not built.
 
 ## 9. App integration
 
@@ -1085,6 +1242,16 @@ random valid states, and `bspc-roundtrip` gives cross-leg identity (§8.3).
   the host legs miss; host and M7 must accept and reject the same inputs, and every accepted
   input must re-encode to the same STAT, MODE and CTRL bytes with its carried sections intact.
 
+As built (lane G): the per-pull-request number sets run on the seven `bspc-roundtrip` legs; the
+nightly workflow (`.github/workflows/nightly.yml`) runs the exhaustive round trip on
+linux-x64-gcc and linux-arm64-gcc without the standard library cross-checks (the committed hash
+is the in-house code's; the per-pull-request sets keep the cross-checks), and libFuzzer for 30
+minutes from a corpus kept between nights in the Actions cache and minimized after each run.
+`blob-libfuzzer` runs 90 s per pull request with AddressSanitizer and UndefinedBehaviorSanitizer
+at `-O1` with asserts live, seeded with the frozen fixtures. Every `parity-host` leg and
+`parity-m7` run `brainscape_blob_tool --fuzz` against its committed verdict digest and
+`--fixtures`.
+
 ### 10.3 The golden corpus with modes
 
 - `PresetCase` (`dsp/tests/golden/Corpus.h:80-87`) gains an optional committed package
@@ -1110,6 +1277,45 @@ random valid states, and `bspc-roundtrip` gives cross-leg identity (§8.3).
 
 Each W1 feature adds unit tests and contracts #1 and #3 over its cases.
 
+As built (lane C): `PresetCase` names its package (`package`); a script stages packages too
+(`SpilloverPackage`, `ExactLoadPackage`), with a switch style per load. The documents are in
+`dsp/tests/golden/presets/` with their packages and `MANIFEST`, compiled by `bspc` at r2: ten
+for the r1 presets that used 27 or 28 at their start or in a load (each holding exactly the r1
+values), the automation preset's second mode, and seven for the new presets. The harness decodes
+each package on the host and the M7 alike and records `package`, `soundHash` and `controlHash`
+per package preset in `golden.json`, which check mode compares. Corpus version 6 adds the vector
+`plucks_modes_14s` with `macro_sweep` (114 macro moves over all eight macros, the Filter macro
+through the kill, a `SetParam` and a `MacroMove` on one leaf at one frame in both orders),
+`expression` (300 pedal moves over four assignments, two on macros), `mode_switch` (six
+Spillover loads among three modes, Trails and FastCut, two FastCuts 77 frames apart, one load of
+the same mode with another CTRL), `wet_kill` (into and out of 40 Hz by `SetParam` and the Filter macro, lone trim
+and effect-volume changes while killed) and `lone_changes` (every `Leaf` row and the effect
+volume changed alone); the counters `macroMoves`, `expressionEvents`, `modeSwitches` (the
+engine's, after the render's first load) and `killedFrames`; the ablations `mode` (the default
+mode and CTRL), `macro` (moves dropped), `modeSwitch` (every load keeps the starting mode),
+`fastCut` (FastCut loads made Trails) and `wetKill` (40 Hz moved to 41 Hz), with `markPosition`
+and `onsetTrigger` now switching structure off; and the invariance `amongEdits`, which renders
+every `SetParam` of a script among edits that rebuild every other domain and must give the same
+bits (R1 on every leg, the M7 included). Every render starts from the device settings' defaults
+(part of a render's recipe, §3.8). An ablation that switches structure off edits the decoded
+`ModeBlob`; the presets themselves take it only from packages. A staged package's
+hashes are not in `golden.json`: a change to one is visible in `MANIFEST`, and its render's
+change counts as the engine's, a conservative attribution.
+
+Corpus version 7 (lane C's review) closes what that left untested. `mode_switch` moves macros and
+the pedal after its loads, one of each at a load's own frame after it (six macro moves, five
+expression events), and its switch packages each have their own macro table and CTRL (aux1 only
+in `switch_live`, aux2 and another Repeats range only in `switch_onset`, and
+`switch_marks_ctrl`, `switch_marks`'s mode with the pedal assigned: a load that is no switch but
+installs CTRL), so a load that kept the old macros or CTRL changes its render; `switch_live`
+plays at −5 st and `switch_onset` at +7 st among about 33 voices, so its FastCuts fade unity,
+Hermite and linear grains. `wet_kill` kills at mix 1, by the Filter macro and by `SetParam`, and
+the counter `mutedFrames` (output frames exactly ±0 while the input sounds) measures the kill on
+the output, which `killedFrames`, the script's cutoff target, cannot. `automation_offgrid` loads
+no mode while a freeze is held. Mutants that keep the old macro table or CTRL over a Spillover
+load, install CTRL only on a switch, drop the kill, or misplace the Hermite or linear fade by one
+frame each fail the check.
+
 ### 10.4 Engine and plugin tests
 
 - **Per-kind rules**: STAT containing IDs 27, 31, 69 or 81 loads inexact and changes no
@@ -1118,10 +1324,26 @@ Each W1 feature adds unit tests and contracts #1 and #3 over its cases.
   no leaves is inexact; an invalid `ModeBlob` is not applied; a Spillover load of a different
   mode carrying a stale `modeHash` resets sequencing.
 - **Defaults and keys**: the default `ModeBlob`'s hash (§5.1); no key aliasing at ±2²¹ and
-  ±2²⁵ frames (§7.5).
+  ±2²⁵ frames, between two extended streams at their XOR partners, or between a purpose from 8
+  on and the next frame's key (§7.5).
 - **Plugin**: typed text `.5 s`, `5. ms`, `05` and `+25`; a per-leaf touched set replacing the
   32-bit mask (`plugin/src/PluginProcessor.cpp:24`); the release checklist's host recording
   test (§3.6).
+
+As built (lane C): `dsp/tests/test_modes.cpp` holds the load, event, wet-gain and FastCut cases,
+`test_params.cpp` the per-kind rules (27 and 28 among the unknown ids) and one lone change per
+`Leaf` row and the effect volume, `test_mode_eval.cpp` `EvalExpression`, and the frozen fixture
+`r2-onset-marks.bsp` the `sinceRev` rule. "A different mode with a stale `modeHash` resets
+sequencing" is tested as the content comparison (`ModeSwitches`, and the stale-hash load
+playing as the true one): r2 has no sequencing state, so the reset itself is W1's test. Unit
+tests whose parameter lists named 27 or 28 still do, read as structure (`RetiredRows.h`).
+After lane C's review, `test_modes.cpp` also checks that moves after a Spillover load, one at its
+frame included, evaluate on the loaded mode and CTRL, and that a load of the same mode with
+another CTRL installs it; and that macro, expression and load events, `CheckPreset` and
+`LoadPreset` give a hostile caller the clean render and its word back (on x64 also a caller with
+every exception unmasked), as `test_mode_eval.cpp` does for `EvalExpression`. The compiler's
+migrate test covers rows 27 and 28 at the 0.5 threshold's edges and at non-finite values, and the
+plugin parses `Kill`, the cutoff minimum's display text.
 
 ## 11. Step 4: the first factory modes
 

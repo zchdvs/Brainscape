@@ -17,8 +17,10 @@ namespace brainscape {
 // FTZ/DAZ or rounding mode cannot change a result. Canonicalization is
 // brainscape::Canonicalize (Params.h), the rule SetParam applies.
 //
-// Not final: tapers, titles and groups are frozen with the parameter IDs at the first
-// public release (companion §5.7).
+// Every row of the table has a display row, Reserved rows included (docs/design/
+// mode-compiler.md §4.3): a feature that lands changes its row's kind, never its display.
+// Not final: tapers, titles, groups and flags are frozen with the parameter IDs at the first
+// public release (companion §5.7, mode-compiler.md §4.5).
 
 // Power tapers need only IEEE basic operations and sqrt, so they are bit-identical on
 // every conforming target without the in-tree transcendental kernels (profile §3.9).
@@ -41,15 +43,29 @@ enum class DisplayKind : uint8_t {
   FilterMorph,   // 0..3: LP -> BP -> HP -> Notch
   OffOn,         // >= 0.5 is on (the engine's threshold)
   LiveMark,      // PositionSource: >= 0.5 is POS_MARK
+  Count,         // an integer leaf, shown as the integer the engine reads:
+                 // RoundHalfAwayI32 of the canonical value (mode-compiler.md §3.7)
+  MsOrOff,       // milliseconds, "Off" at 0 (decay_ms)
+  Signed,        // -1..1 shown as -100..+100 %
+  ReverbMode,    // 0..3: Bright room, Dark medium, Large hall, Ambient
+  Division,      // post.delay.sync: "Off" at 0, then "Div N" until W2 names the divisions
 };
 
 // The post-chain groups follow its signal order (grain-engine.md §2): mod -> delay ->
-// reverb -> filter.
+// reverb -> filter. The groups after Triggers hold rows added for the mode system
+// (mode-compiler.md §4.3); Layer2 is layer index 1, which hosts show as "Layer 2".
 enum class ParamGroup : uint8_t {
   GrainDelay, Grains, Pitch, Window, Mod, PostDelay, Reverb, Filter, Triggers,
+  Scheduler, Layer2, Modifiers, Modulation, Macros, Performance, Device,
 };
-inline constexpr size_t kNumParamGroups = 9;
+inline constexpr size_t kNumParamGroups = 16;
 
+// kParamAutomatable follows the host model (mode-compiler.md §3.6, Q12): option (b), the
+// recommended one, provisionally until the owner decides: macros, global.mix, the effect
+// volume and the performance rows are automatable; every other leaf is registered but not
+// automatable, so a host records the knobs a player turns, not the leaves they fan out to.
+// The plugin switches to it in lane D (§12.4), when it registers the macro parameters; until
+// then sound revision 1's leaves keep the automation they had.
 enum ParamFlag : uint16_t {
   kParamAutomatable = 1u << 0,
   kParamDiscrete    = 1u << 1,
@@ -64,6 +80,7 @@ struct ParamDisplay {
   Taper       taper;
   DisplayKind kind;
   uint16_t    steps;       // 0 = continuous; otherwise the number of discrete positions
+                           // (an integer leaf: max - min + 1)
   uint16_t    flags;       // ParamFlag bits
 };
 

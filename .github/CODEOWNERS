@@ -1,6 +1,8 @@
 # Paths whose changes can alter the engine's sound or the gates that certify it
-# (determinism-profile.md §5.12, §6.1). Owner review binds only when branch
-# protection on main requires code-owner review.
+# (determinism-profile.md §5.12, §6.1), and what a preset document means: the compiler, its
+# tool, the factory packages and the line-ending rules that keep documents canonical on every
+# checkout (mode-compiler.md §6.4, §8.1, §8.3; the golden corpus's packages sit under /dsp/).
+# Owner review binds only when branch protection on main requires code-owner review.
 
 /dsp/                                    @zchdvs
 /cmake/                                  @zchdvs
@@ -9,3 +11,7 @@
 /tools/ci/                               @zchdvs
 /.github/workflows/                      @zchdvs
 /.github/CODEOWNERS                      @zchdvs
+/compiler/                               @zchdvs
+/tools/bspc/                             @zchdvs
+/firmware/factory/                       @zchdvs
+/.gitattributes                          @zchdvs

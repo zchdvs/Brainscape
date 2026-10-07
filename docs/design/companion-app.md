@@ -201,6 +201,13 @@ The compiler sits beside the decoder so schema and blob layout change in one pla
 grain-engine design's single shared compiler, `grain-engine.md` §5), in its own target so the
 firmware never links a text parser (§6.6).
 
+> **Update (2026-10-07, mode-compiler lane A).** As built, the compiler is the top-level
+> `compiler/` (target `brainscape_compiler`, namespace `bsc`, desktop hosts only), not
+> `dsp/src/compiler/`, so a compiler change is gated by its committed outputs and the package
+> rule rather than the sound-revision path trigger ([mode-compiler.md](mode-compiler.md) §8.1).
+> `tools/bspc/` is its command-line tool. That design amends this section when it is accepted
+> (its §12.5).
+
 ### 3.2 JUCE in the build
 
 - **Fetched only when needed:** inside `if(BRAINSCAPE_BUILD_PLUGIN)` (`CMakeLists.txt:9`,
@@ -256,6 +263,17 @@ compiled or inlined under a JUCE translation unit's flags picks up its contracti
 The existing `macos-latest` leg passes no contraction flag and is inferred to contract today.
 
 ### 3.4 CI
+
+> **Update (2026-10-07, mode-compiler lane G).** `bspc-roundtrip` is built as
+> [mode-compiler.md](mode-compiler.md) §8.3 specifies, on the seven host legs of `parity.yml`
+> (Linux GCC, Clang and arm64, MSVC and MSVC AVX2, both macOS legs) rather than three OSes: every
+> committed document compiles to its committed package and `parity-summary` requires the legs'
+> manifests identical. Beside it: the compiler audit (a source ban over `compiler/src` and, on
+> the GCC and Clang legs, an import check), the package decoder's mutation fuzzer and frozen
+> fixtures on every parity leg and the emulated M7, a libFuzzer job, nightly legs, and the
+> sound-revision gate's package rule (a changed package needs a "package-change" label and a
+> named cause). `symbol-scan`, when built, is scoped to functions (mode-compiler.md §8.1). That
+> design amends this section when it is accepted (its §12.5).
 
 The existing jobs in `.github/workflows/host.yml` stay. The profile owns the parity legs (profile
 §6.2), including the full specification of `standalone-parity` and `plugin-format-parity`.
@@ -609,6 +627,8 @@ One `BrainscapeParam : juce::RangedAudioParameter` per descriptor row (`Params.h
   `juce_audio_plugin_client_LV2.cpp:164-190`) returns a range whose three lambdas call `dsp/`'s
   `PlainFromNormalized`, `NormalizedFromPlain` and `Canonicalize`.
 - **Retired parameters** stay registered as non-automatable tombstones (`Params.h:50-53`).
+  *Superseded by [mode-compiler.md](mode-compiler.md) §4.1 and §9.2 (amended here when that
+  design is accepted, its §12.5): neither Retired nor Reserved rows are registered.*
 
 **The GUI cannot use `juce::SliderParameterAttachment`:** it routes typed text and slider values
 through the normalised float, drops edits within `approximatelyEqual` and displays a
@@ -654,6 +674,13 @@ only canonical values, and the UI always shows the canonical value.
 
 ### 5.6 Host automation
 
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The engine plays the macro
+> and expression moves (events 4 and 5, through the shared evaluator) and the effect volume
+> (`global.effect_volume_db`, a device setting that scales the wet signal with the mode's
+> `wet_trim_db`); the plugin's parameters for them arrive with lane D
+> ([mode-compiler.md](mode-compiler.md) §9.2), and the onset trigger and mark positioning, rows
+> 27 and 28 until then, are mode structure, which the plugin does not load yet.
+
 - **VST3 (JUCE 9.0.3):** last value per parameter per host block, `approximatelyEqual` changes
   dropped (§2.3); stamped at frame 0 of the block (§4.10). AU and LV2 are unchecked; assume the
   same.
@@ -666,6 +693,12 @@ only canonical values, and the UI always shows the canonical value.
   pedal's expression jack, arriving with the macro work.
 
 ### 5.7 Identities to freeze before the first public release
+
+> **Update (2026-10-06, mode-compiler lane 0).** The ID table is now
+> [mode-compiler.md](mode-compiler.md) §4.2, built in `Params.h`: 82 rows with kinds, the
+> macro IDs 69–76, and IDs 4 and 8 renamed `wet_trim_db` and `layer0.pitch.transpose_st`.
+> That design's §4.5 restates the gate below; this section is amended when it is accepted
+> (its §12.5).
 
 VST3 and AU write parameter identities, and VST3 normalised automation, into users' projects, so
 the first public plugin release freezes IDs, names and tapers for good. The 28 current IDs
@@ -687,6 +720,14 @@ resume.
 ## 6. Preset model and file format
 
 ### 6.1 Complete-state presets, applied by one `dsp/` function
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** `LoadPreset` applies the
+> whole decoded package as [mode-compiler.md](mode-compiler.md) §7.3 specifies: it validates the
+> mode and CTRL first and applies nothing when they fail, copies the mode in at the load's
+> frame, and counts a missing leaf only if its row existed at the package's `sound_rev`
+> (`sinceRev`), so a leaf a later revision adds does not make an older package inexact. "A new
+> leaf can land as sound-neutral" is withdrawn there (§7.6): any change that can alter output
+> bumps the revision. That design amends this section when it is accepted (its §12.5).
 
 A preset is **complete state**: every leaf with an explicit value, defaults included, because
 load order changes the output (smoothers gliding versus snapping differed by −56 to −69 dB,
@@ -742,6 +783,13 @@ calibration (§4.8), and the DAW session snapshot (§6.9).
 
 ### 6.3 The `.bsp` package
 
+> **Update (2026-10-07, mode-compiler lane B).** The package is built as
+> [mode-compiler.md](mode-compiler.md) §5–§6 specifies, in `dsp/src/blob/` behind
+> `brainscape/Preset.h`: a 128-byte header that adds `control_hash`, MODE as tagged chunks (a new
+> chunk is an `UnsupportedFeature`, not a `blob_format` bump), CTRL and META with their own rules,
+> and `DecodePreset`, `ValidateMode` and the encoder, integer-only (no floating-point instruction
+> on the M7). That design amends this section when it is accepted (its §12.5).
+
 A fixed header then tag-length-value sections; integers little-endian, floats as raw binary32
 bits, nothing `memcpy`'d from a struct.
 
@@ -763,6 +811,11 @@ explicit zeroed padding, `static_assert` on `sizeof`/`offsetof` in both builds; 
 and the M7 (*measured* [parity-v1]). Hashes cover serialized bytes, never structs.
 
 ### 6.4 Canonical JSON
+
+> **Update (2026-10-07, mode-compiler lane B).** The numbers are written and read by in-house
+> integer code (`compiler/src/Number.*`, mode-compiler.md §6.5; no vendored `fast_float`, owner
+> question Q1 provisionally), and the two values below are written with eight digits,
+> `±7.0385307e-26`, not nine (mode-compiler.md §6.4). Amended here when that design is accepted.
 
 The JSON is what people read, edit and keep in git. It follows the mode schema rules
 (`grain-engine.md` §5: `schema_version`, stable names never reused, plain units, per-key
@@ -789,6 +842,12 @@ defaulting) plus:
 | firmware semver + git hash | every release; reported in `HELLO` |
 
 ### 6.6 Compilation happens on the desktop only
+
+> **Update (2026-10-07, mode-compiler lane A).** `bspc` is built
+> ([tools/bspc/README.md](../../tools/bspc/README.md)): `compile`, `decompile`, `fmt`, `verify`,
+> `stamp`, `lint`, `diff`, `derive`, `roundtrip` and `migrate-session`
+> ([mode-compiler.md](mode-compiler.md) §8.2); `render` comes with the audition tooling. The header's `FACTORY` flag is set for ids under `factory.`, so it too
+> comes from the JSON. Amended here when that design is accepted (its §12.5).
 
 The app and **`bspc`** (`tools/bspc/`: `compile`, `decompile`, `fmt`, `verify`, `render`) compile
 JSON into STAT + MODE + CTRL and pack the `.bsp`. The firmware links only the decoder and a

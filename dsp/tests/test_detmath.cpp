@@ -106,7 +106,7 @@ TEST_CASE("DetMath exp2 is within 1 ULP over the pitch and trim domains") {
     const float x = static_cast<float>(k) * 0x1p-16f;
     st.Add(detmath::Exp2F(x), std::exp2(static_cast<double>(x)), x);
   }
-  // OutTrimDb: dB * log2(10)/20 for dB in [-24, 24].
+  // WetTrimDb: dB * log2(10)/20 for dB in [-24, 24].
   for (int32_t k = -24 * 256; k <= 24 * 256; ++k) {
     const float x = (static_cast<float>(k) * 0x1p-8f) * 0.16609640474436813f;
     st.Add(detmath::Exp2F(x), std::exp2(static_cast<double>(x)), x);

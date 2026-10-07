@@ -1,0 +1,10 @@
+# Preset documents and their manifests (docs/design/mode-compiler.md §6.4, §8.3): canonical
+# JSON is LF by definition and `bspc roundtrip --expect MANIFEST` compares MANIFEST's text, so
+# no checkout may convert them (Git for Windows checks text out as CRLF under core.autocrlf).
+# tools/ci/bspc_roundtrip.py checks these rules on every leg. compiler/tests/data keeps its own.
+/dsp/tests/golden/presets/**/*.json text eol=lf
+/dsp/tests/golden/presets/MANIFEST text eol=lf
+/firmware/factory/**/*.json text eol=lf
+/firmware/factory/MANIFEST text eol=lf
+# Packages are bytes: never converted, never diffed as text.
+*.bsp binary

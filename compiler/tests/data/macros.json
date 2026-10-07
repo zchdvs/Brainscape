@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "id": "example.macros",
+  "name": "Every macro",
+  "family": "reverie",
+  "sound_rev": 2,
+  "sound_hash": "c7488c33ead588d95f42a5ad88da9d992230311b1d7298e13c25287593a970a8",
+  "meta": {
+    "author": "",
+    "description": "",
+    "tags": []
+  },
+  "global": {
+    "mix": 0.5
+  },
+  "scheduler": {
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.55,
+    "jitter": 0.2
+  },
+  "layers": [
+    {
+      "position": {
+        "source": "live",
+        "base_ms": 250,
+        "spray_ms": 20
+      },
+      "size_ms": 90,
+      "window": {
+        "sustain": 0.3,
+        "skew": 0.5,
+        "smoothness": 0.7
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 0,
+        "spread_cents": 0,
+        "reverse_prob": 0
+      },
+      "pan_spread": 0.5
+    }
+  ],
+  "feedback": {
+    "amount": 0
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 0,
+  "trigger": {
+    "sensitivity": 0.5
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "display_name": "Schwärm",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.25, 0.95],
+          "in_range": [0, 1],
+          "curve": 1.5
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [0, 1500],
+          "in_range": [0, 1],
+          "curve": 3
+        },
+        {
+          "param": "scheduler.jitter",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.pitch.spread_cents",
+          "range": [0, 35],
+          "in_range": [0.5, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "display_name": "Écho",
+      "targets": [
+        {
+          "param": "feedback.amount",
+          "range": [0.7, 1.06],
+          "in_range": [0, 1],
+          "curve": 0.8
+        },
+        {
+          "param": "post.delay.fb",
+          "range": [0, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.size_ms",
+          "range": [400, 90],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.6],
+          "in_range": [0, 1],
+          "curve": 0.0625
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "display_name": "Contour",
+      "targets": [
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.9, 0.1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.2, 0.95],
+          "in_range": [0, 1],
+          "curve": 16
+        },
+        {
+          "param": "layer0.window.smoothness",
+          "range": [0.5, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.pitch.reverse_prob",
+          "range": [0, 0.5],
+          "in_range": [0, 0.25],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [20, 3000],
+          "in_range": [0, 1],
+          "curve": 2
+        },
+        {
+          "param": "post.delay.time_ms",
+          "range": [90, 1500],
+          "in_range": [0, 1],
+          "curve": 2
+        },
+        {
+          "param": "layer0.pan_spread",
+          "range": [1, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 0.4],
+          "in_range": [0.75, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "wet_trim_db",
+          "range": [0, -6],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "trigger.sensitivity",
+          "range": [0.5, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "display_name": "Tone",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        },
+        {
+          "param": "post.filter.morph",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.pitch.transpose_st",
+          "range": [-12, 12],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.overlap",
+          "range": [0.5, 0.6],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "aux1",
+      "display_name": "Aux ①",
+      "targets": [
+        {
+          "param": "layer0.pitch.transpose_st",
+          "range": [0, 24],
+          "in_range": [0, 0.5],
+          "curve": 1
+        },
+        {
+          "param": "feedback.amount",
+          "range": [0, 1.1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [20000, 40],
+          "in_range": [0, 1],
+          "curve": 0.25
+        },
+        {
+          "param": "layer0.size_ms",
+          "range": [1, 500],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "aux2",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [1, 5000],
+          "in_range": [0, 1],
+          "curve": 0.5
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [2000, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.delay.time_ms",
+          "range": [10, 2000],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [1, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.5,
+      "repeats": 0.25,
+      "shape": 0.75,
+      "time": 0.5,
+      "space": 0,
+      "filter": 1,
+      "aux1": 0.5,
+      "aux2": 0.125
+    }
+  }
+}

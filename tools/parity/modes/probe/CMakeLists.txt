@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.22)
+project(mode_probe LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BRAINSCAPE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# The engine tree to render with (it ran against dsp/ at 42773a2; see tools/parity/README.md).
+set(MODE_PROBE_DSP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../dsp CACHE PATH "dsp/ tree to probe")
+add_subdirectory(${MODE_PROBE_DSP_DIR} ${CMAKE_BINARY_DIR}/dsp)
+add_executable(mode_probe probe.cpp)
+target_link_libraries(mode_probe PRIVATE brainscape_dsp)

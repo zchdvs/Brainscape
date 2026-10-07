@@ -772,6 +772,28 @@ renders diverged permanently (**measured** [preset]). `SaveState` stores it (con
 
 ### 5.10 A single `LoadPreset` entry point with a fixed order
 
+> **Update (2026-10-06, mode-compiler lane 0).** Built with [mode-compiler.md](mode-compiler.md)
+> §4.1's per-kind rules, which amend this section when that design is accepted (its §12.5):
+> step 1 applies the defaults of the `Leaf` rows only, step 2 counts an id that is not a `Leaf`
+> row as unknown, and `Global` rows (device settings) keep their values across every load and
+> `Restart`.
+>
+> **Update (2026-10-07, mode-compiler lane B).** `PresetState` is now the whole decoded
+> package (mode-compiler.md §5.1): `soundRev`, the leaves, the `ModeBlob`, CTRL and the stored
+> performance state, from `DecodePreset`. Until sound revision 2 (lane C) `LoadPreset` still
+> reads only the leaves; validating the mode at load (step 0), the `sinceRev` rule and the
+> mode's structure arrive with it (mode-compiler.md §7.3).
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** `LoadPreset` now reads the
+> whole package ([mode-compiler.md](mode-compiler.md) §7.3): a step 0 validates the mode and CTRL
+> (`ValidateMode`'s rules, not STAT's, which step 2 canonicalizes and counts) and applies
+> nothing when they fail (`LoadReport.invalidMode`); step 2 counts a missing leaf only if its row
+> existed at the package's revision (`sinceRev`; 0 or above this build's counts as this build's);
+> step 3 copies the mode and CTRL's expression table in at the load frame, one active mode in the
+> Warm arena instead of a published ring, and rebuilds every domain; step 4 counts stored
+> performance fields this build cannot play (`LoadReport.unsupported`). Rows 27 and 28 are
+> retired into the mode, and a change to any row rebuilds what its domain names (R1).
+
 Add `bool Engine::LoadPreset(const PresetState&, LoadMode)`, with `LoadMode` `Exact` or
 `Spillover` and `PresetState` the decoded package (companion §6.3). The firmware and every
 desktop path call only this, because order matters (gliding and snapped smoothers differ by
@@ -801,6 +823,14 @@ Spillover load, macro move (fanned out to leaves in target-list order through De
 and expression. Frames before *f* use the old state, the event applies from *f*, and
 same-frame events apply in sequence order: at a block start, exactly today's "`SetParam`,
 then `Process`".
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The mode switch is a
+> Spillover load with a style ([mode-compiler.md](mode-compiler.md) §7.3): the `SpilloverLoad`
+> event's `id` is Trails (0, grains finish as resolved) or FastCut (1, grains sounding at the load
+> fade to zero over 128 frames), and `LoadPreset` takes the style for a wrapper that splits its
+> own blocks. Macro moves (event 4) and expression moves (event 5) are built, fanned out through
+> the exported evaluator inside the guard. The corpus checks all three for block-split invariance
+> on every leg, the M7 included.
 
 `Process` takes the block's events as in-block offsets and splits internally at each, once, in
 `dsp/`; the same split done in a wrapper is **measured** bit-exact across host blocks of
@@ -852,6 +882,17 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 - **Toolchain ID:** each build embeds its compiler, version, target and a hash of the FP
   flags; the parity reply carries it for triage only (companion §7.4).
 
+> **Update (2026-10-07, mode-compiler lane G).** The gate also holds
+> [mode-compiler.md](mode-compiler.md) §8.3's package rule: a golden preset that plays a
+> committed package records its `soundHash` and `controlHash`, and a changed render of such a
+> preset is excused from the hard trigger only when those changed too and the pull request
+> touches none of this section's trigger paths without a bump. A changed package (there, or a
+> corpus or factory package's in `dsp/tests/golden/presets/MANIFEST` or
+> `firmware/factory/MANIFEST`) needs a code-owner-approved "package-change" label and a
+> `Package-change: <cause>` line in the description, bump or not: a compiler or document change
+> alters what a document means, not what the engine plays.
+> That design amends this section and §6.1 when it is accepted (its §12.5).
+
 ### 5.13 Shared deterministic test-signal generator
 
 Add `dsp/include/brainscape/TestSignal.h`: an integer-only, versioned generator of noise bursts
@@ -877,6 +918,13 @@ positioning; freezes shorter and longer than 0.75 × ring with onsets during the
 reverse and with pitch above 0 st; a reverse mark aging past one ring, and far-rail
 positions; dense automation off the 48-frame grid, including freeze, triggers and macros;
 Exact and Spillover loads mid-render; silent tails of at least 120 s.
+
+> **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The corpus now loads its
+> structured presets as committed packages, compiled by `bspc` (`dsp/tests/golden/presets/`), and
+> records each package preset's `soundHash` and `controlHash`, which check mode compares (the
+> package rule's tie, [mode-compiler.md](mode-compiler.md) §8.3); revision 2 adds macro and
+> expression moves, mode switches in both styles and the wet kill, with their counters and
+> ablations (that design's §10.3 as built).
 
 **Coverage counters** per vector and preset: births, onsets, steals, reverse and
 mark-positioned births, re-anchors, far-rail clamps, frames with feedback above 1, blocks with

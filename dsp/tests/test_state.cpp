@@ -13,9 +13,11 @@
 #include <vector>
 
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "brainscape/Engine.h"
 #include "brainscape/EventQueue.h"
 #include "brainscape/HostArenas.h"
+#include "brainscape/ModeEval.h"
 #include "brainscape/SoundRevision.h"
 #include "catch.hpp"
 #include "golden/Sha256.h"
@@ -111,20 +113,32 @@ struct Rig {
   }
 };
 
-// A complete preset (companion §6.1): every leaf, `params` over the defaults.
+// A complete preset (companion §6.1): every Leaf row by ordinal, `params` over the
+// defaults; the retired rows 27 and 28 stand for their structure (RetiredRows.h).
 PresetState Complete(const Params& params) {
   PresetState s;
-  for (size_t i = 0; i < kNumParams; ++i) {
-    s.leaves[i] = {static_cast<uint32_t>(kParamTable[i].id), kParamTable[i].def};
+  for (size_t i = 0; i < kNumLeafParams; ++i) {
+    s.leaves[i] = {static_cast<uint32_t>(LeafId(i)), FindParam(LeafId(i))->def};
   }
-  s.leafCount = static_cast<uint32_t>(kNumParams);
-  for (const auto& p : params) s.leaves[static_cast<uint32_t>(p.first) - 1u].value = p.second;
+  s.leafCount = static_cast<uint32_t>(kNumLeafParams);
+  for (const auto& p : params) {
+    if (testing::IsRetiredStructure(p.first)) {
+      testing::SetRetiredStructure(&s.mode, p.first, p.second);
+      continue;
+    }
+    REQUIRE(IsLeaf(p.first));
+    s.leaves[LeafIndex(p.first)].value = p.second;
+  }
   return s;
 }
 
+// The stored leaf of `id` in a preset made by Complete.
+PresetLeaf& LeafOf(PresetState& s, ParamId id) { return s.leaves[LeafIndex(id)]; }
+
 // The start state the golden harness used before LoadPreset: Init, then every value
-// set, then Reset drains them and snaps the smoothers.
+// set, then Reset drains them and snaps the smoothers. The retired rows' structure first.
 void InitParams(Engine& e, const Params& params) {
+  REQUIRE(testing::LoadRetiredStructure(e, params));
   for (const auto& p : params) e.SetParam(p.first, p.second);
   e.Reset();
 }
@@ -161,6 +175,15 @@ Ev Spill(int64_t frame, uint32_t seq, const PresetState* preset) {
   e.seq    = seq;
   e.type   = EvType::SpilloverLoad;
   e.preset = preset;
+  return e;
+}
+Ev Macro(int64_t frame, uint32_t seq, ParamId macro, float position) {
+  Ev e;
+  e.frame = frame;
+  e.seq   = seq;
+  e.type  = EvType::MacroMove;
+  e.id    = static_cast<uint32_t>(macro);
+  e.value = position;
   return e;
 }
 
@@ -211,13 +234,23 @@ Stereo RenderStamped(Engine& e, const Stereo& in, const std::vector<Ev>& events,
 
 // What a wrapper does without engine-side events: split every block at the event frames
 // and apply the events between the parts through SetParam, SetFreeze, Trigger and
-// LoadPreset(..., Spillover), which take effect at the next part's first frame.
+// LoadPreset(..., Spillover), which take effect at the next part's first frame; a macro move
+// as SetParams of EvalMacro's leaves (the scripts here play the default macros).
 void ApplyUnstamped(Engine& e, const Ev& ev) {
+  static const ModeBlob kDefaultMode;
+  PresetLeaf            out[kMaxMacroTargets];
   switch (ev.type) {
     case EvType::SetParam: e.SetParam(static_cast<ParamId>(ev.id), ev.value); break;
     case EvType::Freeze: e.SetFreeze(ev.value != 0.f); break;
     case EvType::Trigger: e.Trigger(static_cast<Engine::TriggerSource>(ev.id), ev.value); break;
     case EvType::SpilloverLoad: e.LoadPreset(*ev.preset, LoadMode::Spillover); break;
+    case EvType::MacroMove: {
+      const size_t n = EvalMacro(kDefaultMode, static_cast<ParamId>(ev.id), ev.value, out,
+                                 kMaxMacroTargets);
+      for (size_t i = 0; i < n; ++i) e.SetParam(static_cast<ParamId>(out[i].id), out[i].value);
+      break;
+    }
+    case EvType::Expression: break;  // the default CTRL assigns nothing
   }
 }
 
@@ -264,7 +297,7 @@ const Params kBusy = {
     {ParamId::DelayMs, 100.0f},       {ParamId::Mix, 1.0f},
     {ParamId::Feedback, 0.6f},        {ParamId::GrainSizeMs, 60.0f},
     {ParamId::Overlap, 0.55f},        {ParamId::SprayMs, 50.0f},
-    {ParamId::PitchSt, 7.0f},         {ParamId::SpreadCents, 20.0f},
+    {ParamId::TransposeSt, 7.0f},         {ParamId::SpreadCents, 20.0f},
     {ParamId::ReverseProb, 0.3f},     {ParamId::Jitter, 1.0f},
     {ParamId::TriggerSens, 0.8f},     {ParamId::OnsetTrigger, 1.0f},
     {ParamId::PositionSource, 1.0f},  {ParamId::ModDepth, 0.4f},
@@ -278,16 +311,16 @@ const Params kBusy = {
 // (two at one frame), and same-frame changes whose order matters.
 std::vector<Ev> OddScript() {
   return {Param(1001, 0, ParamId::Mix, 0.7f),
-          Param(2003, 1, ParamId::PitchSt, -5.0f),
+          Param(2003, 1, ParamId::TransposeSt, -5.0f),
           Freeze(3001, 2, true),
           Param(3001, 3, ParamId::Feedback, 0.9f),
           Trig(4097, 4),
           Trig(4097, 5),
-          Param(5555, 6, ParamId::OutTrimDb, -6.0f),
-          Param(5555, 7, ParamId::OutTrimDb, 3.0f),
+          Param(5555, 6, ParamId::WetTrimDb, -6.0f),
+          Param(5555, 7, ParamId::WetTrimDb, 3.0f),
           Param(6007, 8, ParamId::FilterCutoffHz, 20000.0f),  // the filter's exact bypass
           Freeze(9001, 9, false),
-          Param(10007, 10, ParamId::PositionSource, 0.0f),
+          Macro(10007, 10, ParamId::MacroRepeats, 0.2f),  // the default macros' feedback
           Param(12011, 11, ParamId::FilterCutoffHz, 900.0f),
           Param(12011, 12, ParamId::FilterMorph, 1.5f),
           Trig(15001, 13),
@@ -342,8 +375,8 @@ TEST_CASE("an event applies from its frame; same-frame events apply in sequence 
                high));
 
   // Freeze and a parameter at one frame: both apply before the frame renders.
-  const Stereo a = render({Freeze(1501, 0, true), Param(1501, 1, ParamId::PitchSt, 12.0f)});
-  const Stereo b = render({Param(1501, 0, ParamId::PitchSt, 12.0f), Freeze(1501, 1, true)});
+  const Stereo a = render({Freeze(1501, 0, true), Param(1501, 1, ParamId::TransposeSt, 12.0f)});
+  const Stereo b = render({Param(1501, 0, ParamId::TransposeSt, 12.0f), Freeze(1501, 1, true)});
   REQUIRE(Same(a, b));
   REQUIRE(FirstDiff(none, a) >= 1501);
 
@@ -381,7 +414,7 @@ TEST_CASE("freeze events at one frame settle to one level, as the wrapper split 
   const Params      live  = {{ParamId::Mix, 1.0f}, {ParamId::DelayMs, 80.0f},
                              {ParamId::GrainSizeMs, 40.0f}, {ParamId::Overlap, 0.8f}};
   const PresetState q     = Complete({{ParamId::Mix, 1.0f}, {ParamId::DelayMs, 60.0f},
-                                      {ParamId::PitchSt, 7.0f}});
+                                      {ParamId::TransposeSt, 7.0f}});
   auto script = [&](bool pairs, int64_t releaseAt) {
     std::vector<Ev> s;
     if (pairs) {
@@ -516,7 +549,7 @@ TEST_CASE("Restart returns a running engine to the post-Init state, keeping para
     INFO(c.name);
     Params changed = c.params;
     changed.push_back({ParamId::Feedback, c.feedbackAfter});
-    changed.push_back({ParamId::PitchSt, -3.0f});
+    changed.push_back({ParamId::TransposeSt, -3.0f});
     changed.push_back({ParamId::ReverbMix, 0.45f});
 
     Stereo ref;
@@ -532,7 +565,7 @@ TEST_CASE("Restart returns a running engine to the post-Init state, keeping para
     const std::vector<Ev> before = {
         Freeze(2001, 0, true), Trig(2500, 1), Spill(12007, 2, &spill),
         Param(12007, 3, ParamId::Feedback, c.feedbackAfter),
-        Param(15001, 4, ParamId::PitchSt, -3.0f), Freeze(20001, 5, true)};
+        Param(15001, 4, ParamId::TransposeSt, -3.0f), Freeze(20001, 5, true)};
     RenderStamped(rig.engine, prefix, before, {127});
     rig.engine.SetParam(ParamId::ReverbMix, 0.45f);  // pending: Restart drains it
     for (int i = 0; i < 3; ++i) rig.engine.Trigger();  // queued: Restart drops them
@@ -544,7 +577,7 @@ TEST_CASE("Restart returns a running engine to the post-Init state, keeping para
     REQUIRE(rig.engine.EpochStart() == 0);
     REQUIRE_FALSE(rig.engine.GetFreeze());
     REQUIRE(rig.engine.ConsumeOnsetCount() == 0);
-    REQUIRE(rig.engine.GetParam(ParamId::PitchSt) == -3.0f);
+    REQUIRE(rig.engine.GetParam(ParamId::TransposeSt) == -3.0f);
     REQUIRE(Same(RenderStamped(rig.engine, input, script, {48}), ref));
   }
 }
@@ -667,7 +700,7 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
     for (const LoadMode mode : {LoadMode::Exact, LoadMode::Spillover}) {
       rig.engine.SetParam(ParamId::DelayMs, 1000.0f);
       PresetState p = Complete({});
-      p.leaves[0]   = p.leaves[--p.leafCount];  // drop DelayMs; leaves now unsorted
+      LeafOf(p, ParamId::DelayMs) = p.leaves[--p.leafCount];  // drop DelayMs; now unsorted
       LoadReport report;
       REQUIRE_FALSE(rig.engine.LoadPreset(p, mode, &report));
       REQUIRE(report.applied);
@@ -683,13 +716,13 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
     std::memcpy(&nan, &bits[0], sizeof nan);
     std::memcpy(&subnormal, &bits[1], sizeof subnormal);
     std::memcpy(&negZero, &bits[2], sizeof negZero);
-    p.leaves[static_cast<uint32_t>(ParamId::Mix) - 1u].value      = nan;
-    p.leaves[static_cast<uint32_t>(ParamId::SprayMs) - 1u].value  = subnormal;
-    p.leaves[static_cast<uint32_t>(ParamId::Feedback) - 1u].value = negZero;
-    p.leaves[static_cast<uint32_t>(ParamId::DelayMs) - 1u].value  = 9000.0f;
+    LeafOf(p, ParamId::Mix).value      = nan;
+    LeafOf(p, ParamId::SprayMs).value  = subnormal;
+    LeafOf(p, ParamId::Feedback).value = negZero;
+    LeafOf(p, ParamId::DelayMs).value  = 9000.0f;
     p.leaves[p.leafCount++] = {999u, 1.0f};
     p.leaves[p.leafCount++] = {0u, 1.0f};
-    p.leaves[p.leafCount++] = {static_cast<uint32_t>(ParamId::PitchSt), 12.0f};  // a repeat
+    p.leaves[p.leafCount++] = {static_cast<uint32_t>(ParamId::TransposeSt), 12.0f};  // a repeat
 
     LoadReport checked;
     REQUIRE_FALSE(CheckPreset(p, &checked));
@@ -707,7 +740,7 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
     REQUIRE(rig.engine.GetParam(ParamId::Mix) == FindParam(ParamId::Mix)->min);
     REQUIRE(rig.engine.GetParam(ParamId::SprayMs) == 0.0f);
     REQUIRE(rig.engine.GetParam(ParamId::DelayMs) == FindParam(ParamId::DelayMs)->max);
-    REQUIRE(rig.engine.GetParam(ParamId::PitchSt) == 0.0f);  // the first leaf counts
+    REQUIRE(rig.engine.GetParam(ParamId::TransposeSt) == 0.0f);  // the first leaf counts
     const float fb = rig.engine.GetParam(ParamId::Feedback);
     uint32_t    fbBits;
     std::memcpy(&fbBits, &fb, sizeof fbBits);
@@ -716,12 +749,12 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
   SECTION("leaves past kMaxLeaves cannot be read") {
     PresetState p = Complete({});
     p.leafCount   = PresetState::kMaxLeaves + 5u;
-    for (uint32_t i = static_cast<uint32_t>(kNumParams); i < PresetState::kMaxLeaves; ++i) {
+    for (uint32_t i = static_cast<uint32_t>(kNumLeafParams); i < PresetState::kMaxLeaves; ++i) {
       p.leaves[i] = {1000u + i, 0.0f};
     }
     LoadReport report;
     REQUIRE_FALSE(CheckPreset(p, &report));
-    REQUIRE(report.unknownIds == PresetState::kMaxLeaves - kNumParams + 5u);
+    REQUIRE(report.unknownIds == PresetState::kMaxLeaves - kNumLeafParams + 5u);
   }
   SECTION("an engine that is not initialized applies nothing") {
     Engine     idle;
@@ -739,12 +772,12 @@ TEST_CASE("LoadPreset applies defaults, then canonical leaves, and reports inexa
 // load frame itself, not from the next block.
 TEST_CASE("a Spillover load event at an odd frame equals the wrapper-side load") {
   const Stereo      input = Plucks(24000, 0x6666u);
-  const PresetState q     = Complete({{ParamId::DelayMs, 333.0f}, {ParamId::PitchSt, -12.0f},
+  const PresetState q     = Complete({{ParamId::DelayMs, 333.0f}, {ParamId::TransposeSt, -12.0f},
                                       {ParamId::Feedback, 0.3f}, {ParamId::ReverbMix, 0.7f},
                                       {ParamId::Jitter, 0.5f}, {ParamId::GrainSizeMs, 20.0f},
                                       {ParamId::Overlap, 1.0f}});
   const std::vector<Ev> script = {Freeze(3001, 0, true), Param(17777, 1, ParamId::Mix, 0.9f),
-                                  Spill(17777, 2, &q), Param(17777, 3, ParamId::OutTrimDb, -2.0f),
+                                  Spill(17777, 2, &q), Param(17777, 3, ParamId::WetTrimDb, -2.0f),
                                   Trig(19001, 4)};
   Stereo ref;
   {
@@ -754,7 +787,7 @@ TEST_CASE("a Spillover load event at an odd frame equals the wrapper-side load")
     REQUIRE(rig.engine.EpochStart() == 17777);
     REQUIRE_FALSE(rig.engine.GetFreeze());  // every load turns freeze off
     REQUIRE(rig.engine.GetParam(ParamId::Mix) == FindParam(ParamId::Mix)->def);  // the load
-    REQUIRE(rig.engine.GetParam(ParamId::OutTrimDb) == -2.0f);  // then the later event
+    REQUIRE(rig.engine.GetParam(ParamId::WetTrimDb) == -2.0f);  // then the later event
   }
   for (const auto& pattern : kPatterns) {
     INFO("block pattern starting " << pattern[0]);
@@ -1033,7 +1066,7 @@ TEST_CASE("an Exact load with its queue cleared renders what a fresh engine rend
 TEST_CASE("Restart, LoadPreset and CheckPreset own the FP control word") {
   const Stereo      input   = Plucks(9600, 0x9999u);
   const PresetState preset  = Complete(kBusy);
-  const PresetState pitched = Complete({{ParamId::PitchSt, 5.0f}});
+  const PresetState pitched = Complete({{ParamId::TransposeSt, 5.0f}});
   auto render = [&](detail::FpWord host) {
     Rig    rig(SmallConfig());
     size_t wordsLost = 0;

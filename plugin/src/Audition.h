@@ -42,6 +42,7 @@ struct AuditionOutput {
 };
 
 // Conditions `input` in place and renders it. False when the engine cannot be set up.
+// `preset` holds every leaf by ordinal (kNumLeafParams values, Params.h kLeafParams).
 bool RenderAudition(const float* preset, InputMode mode, AuditionInput& input,
                     AuditionOutput& out);
 

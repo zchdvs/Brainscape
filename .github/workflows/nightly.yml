@@ -1,0 +1,82 @@
+name: nightly
+
+# The long legs of docs/design/mode-compiler.md §10.2, too slow for every pull request and not
+# required checks:
+# - the compiler's number code, every one of the 4,278,190,080 finite floats written and read
+#   back against the committed hash, on one x86-64 and one arm64 leg (about 3.6 CPU-hours
+#   each, design §10.2; the per-pull-request sets run on every leg in parity.yml);
+# - the package decoder under libFuzzer with sanitizers, with a corpus kept from night to
+#   night (parity.yml's blob-libfuzzer runs it for 90 s per pull request).
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  number-exhaustive:
+    name: number-exhaustive (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux-x64-gcc
+            os: ubuntu-24.04
+          - leg: linux-arm64-gcc
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=ON -DCMAKE_CXX_COMPILER=g++
+      - name: Build the number check
+        run: cmake --build build --parallel 4 --target bsc_number_check
+      # The committed hash is the in-house code's; the standard library cross-checks run in
+      # the per-pull-request sets.
+      - name: The exhaustive round trip
+        run: build/compiler/tests/bsc_number_check --suite exhaustive --no-std
+
+  blob-libfuzzer:
+    name: blob-libfuzzer-nightly (linux-x64-clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (Clang, sanitizers, asserts live)
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBRAINSCAPE_BUILD_TESTS=ON -DBRAINSCAPE_BUILD_LIBFUZZER=ON
+          -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_CXX_FLAGS=-O1 -fno-omit-frame-pointer -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all"
+      - name: Build the libFuzzer harness
+        run: cmake --build build --parallel 4 --target brainscape_blob_libfuzzer
+      # Each night restores the newest corpus and saves its own under a new key.
+      - name: Restore the kept corpus
+        uses: actions/cache@v4
+        with:
+          path: corpus
+          key: blob-libfuzzer-corpus-${{ github.run_id }}
+          restore-keys: blob-libfuzzer-corpus-
+      - name: Fuzz the package decoder for 30 minutes
+        run: |
+          mkdir -p corpus crashes
+          cp dsp/tests/golden/presets/frozen/*.bsp corpus/
+          build/dsp/tests/blob/brainscape_blob_libfuzzer -max_total_time=1800 -print_final_stats=1 \
+            -artifact_prefix=crashes/ corpus
+      # Keep the corpus small: only the inputs that add coverage.
+      - name: Minimize the corpus
+        run: |
+          mkdir corpus-min
+          build/dsp/tests/blob/brainscape_blob_libfuzzer -merge=1 corpus-min corpus
+          rm -rf corpus && mv corpus-min corpus
+          echo "corpus: $(find corpus -type f | wc -l) inputs"
+      - name: Upload the reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-libfuzzer-nightly-crashes
+          path: crashes/
+          if-no-files-found: ignore

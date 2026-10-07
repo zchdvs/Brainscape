@@ -3,13 +3,7 @@
 #include <cstdlib>
 #include <string>
 
-#if __has_include(<version>)
-#include <version>
-#endif
-#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
-#include <charconv>
-#define BRAINSCAPE_HAVE_FLOAT_FROM_CHARS 1
-#endif
+#include "Number.h"  // brainscape_compiler: the exact binary32 reader (mode-compiler.md §6.5)
 
 namespace brainscape::plugin {
 
@@ -26,21 +20,13 @@ juce::AudioProcessorParameterWithIDAttributes Attributes(const ParamDisplay& m) 
       (m.flags & kParamAutomatable) != 0u);
 }
 
-// Correctly rounded decimal -> binary32 (companion §6.4). from_chars is locale-free;
-// the strtof fallback (older libc++) follows LC_NUMERIC, which JUCE leaves at "C".
-// TODO(companion §6.4): vendored fast_float once it is pinned.
+// Correctly rounded decimal -> binary32 (companion §6.4) by the compiler's exact reader
+// (mode-compiler.md §6.5): integers only, no locale and no C library, so typed values and
+// compiled ones have the same bits on every host, macOS included, where libc++ gates float
+// from_chars. Its lenient entry takes the typed forms looser than JSON (".5", "5.", "05",
+// "+25"); a magnitude past FLT_MAX is refused.
 bool ParseFloat(const std::string& s, float& out) {
-#if defined(BRAINSCAPE_HAVE_FLOAT_FROM_CHARS)
-  const char* end = s.data() + s.size();
-  const auto  res = std::from_chars(s.data(), end, out);
-  return res.ec == std::errc() && res.ptr == end;
-#else
-  char*       end = nullptr;
-  const float v   = std::strtof(s.c_str(), &end);
-  if (end == s.c_str() || *end != '\0') return false;
-  out = v;
-  return true;
-#endif
+  return bsc::ParseTypedNumber(s.data(), s.size(), &out) == bsc::NumberStatus::Ok;
 }
 
 // Splits "12.5e-1 ms" into the decimal mantissa "12.5", its exponent -1 and the suffix
@@ -78,6 +64,7 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
   shift = 0;
   switch (kind) {
     case DisplayKind::Milliseconds:
+    case DisplayKind::MsOrOff:
       if (unit == "s" || unit == "sec") shift = 3;
       return unit.empty() || unit == "ms" || shift != 0;
     case DisplayKind::Hertz:
@@ -86,6 +73,7 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
       return unit.empty() || unit == "hz" || shift != 0;
     case DisplayKind::Percent:  // the display is in percent, so bare numbers are too
     case DisplayKind::Amount:   // 0-100, so a bare number is a hundredth of the plain range
+    case DisplayKind::Signed:   // -100..+100 % of a -1..1 value
       shift = -2;
       return unit.empty() || unit == "%";
     case DisplayKind::Balance:  // not a shift: BalanceDecimal maps it
@@ -99,6 +87,9 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
     case DisplayKind::FilterMorph:
     case DisplayKind::OffOn:
     case DisplayKind::LiveMark:
+    case DisplayKind::Count:
+    case DisplayKind::ReverbMode:
+    case DisplayKind::Division:
       return unit.empty();
   }
   return false;
@@ -193,9 +184,12 @@ bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::stri
       {DisplayKind::LiveMark, "live", 0.0f}, {DisplayKind::LiveMark, "mark", 1.0f},
       {DisplayKind::FilterMorph, "lp", 0.0f}, {DisplayKind::FilterMorph, "bp", 1.0f},
       {DisplayKind::FilterMorph, "hp", 2.0f}, {DisplayKind::FilterMorph, "notch", 3.0f},
+      {DisplayKind::MsOrOff, "off", 0.0f},    {DisplayKind::Division, "off", 0.0f},
   };
-  if (m.kind == DisplayKind::FilterCutoff && t == "off") {
-    out = d.max;
+  // The cutoff's two named ends, as FormatPlain shows them: Off (the bypass, its maximum) and
+  // Kill (the wet kill, its minimum; mode-compiler.md §4.3).
+  if (m.kind == DisplayKind::FilterCutoff && (t == "off" || t == "kill")) {
+    out = t == "off" ? d.max : d.min;
     return true;
   }
   for (const Name& n : kNames) {
@@ -308,7 +302,8 @@ bool BrainscapeParam::isDiscrete() const { return (display_.flags & kParamDiscre
 bool BrainscapeParam::isBoolean() const { return display_.kind == DisplayKind::OffOn; }
 
 FreezeParam::FreezeParam(EventSink& sink)
-    : juce::AudioParameterBool(juce::ParameterID{"perf.freeze", 1}, "Freeze", false),
+    : juce::AudioParameterBool(juce::ParameterID{FindParam(ParamId::PerfFreeze)->name, 1},
+                               FindParamDisplay(ParamId::PerfFreeze)->title, false),
       sink_(sink) {}
 
 void FreezeParam::valueChanged(bool on) {

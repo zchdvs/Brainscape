@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "id": "corpus.switch_marks",
+  "name": "Switch marks",
+  "family": "none",
+  "sound_rev": 2,
+  "sound_hash": "fb40d0b39ece8d9511c227931537be44cb118b6dd9a9d47104e39ee65e6050c1",
+  "meta": {
+    "author": "",
+    "description": "Golden corpus: mode switches, onsets on marks.",
+    "tags": []
+  },
+  "global": {
+    "mix": 0.7
+  },
+  "scheduler": {
+    "sources": ["periodic", "onset", "footswitch", "midi_note"],
+    "overlap": 0.8,
+    "jitter": 0.5
+  },
+  "layers": [
+    {
+      "position": {
+        "source": "mark",
+        "base_ms": 250,
+        "spray_ms": 30
+      },
+      "size_ms": 200,
+      "window": {
+        "sustain": 0.3,
+        "skew": 0.5,
+        "smoothness": 0.7
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 0,
+        "spread_cents": 0,
+        "reverse_prob": 0
+      },
+      "pan_spread": 0.5
+    }
+  ],
+  "feedback": {
+    "amount": 0.4
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 0,
+  "trigger": {
+    "sensitivity": 0.6
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.25, 0.85],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [0, 200],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "feedback.amount",
+          "range": [0, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.9, 0.1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.3, 0.7],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [20, 2000],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.5,
+      "repeats": 0.5,
+      "shape": 0.5,
+      "time": 0.5,
+      "space": 0.5,
+      "filter": 0.5
+    }
+  }
+}
