@@ -3,6 +3,8 @@
 # the dsp/ library itself is compiled without.
 add_executable(brainscape_tests
   test_main.cpp
+  test_blob.cpp
+  blob/BlobSamples.cpp
   test_engine.cpp
   test_state.cpp
   test_boundary.cpp

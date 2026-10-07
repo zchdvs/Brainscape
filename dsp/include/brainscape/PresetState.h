@@ -1,7 +1,9 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 #include "brainscape/FpProfile.h"
+#include "brainscape/Mode.h"
 
 namespace brainscape {
 
@@ -13,21 +15,76 @@ struct PresetLeaf {
   float    value = 0.f;
 };
 
-// A decoded preset package (docs/design/determinism-profile.md §5.10, companion-app.md
-// §6.1-§6.3). Today it holds the STAT section's leaves, in ascending id order; the MODE and
-// CTRL sections join it with the mode system. Plain fixed-size data, so firmware decodes
-// into it without allocating; it is never hashed or serialized as a struct.
+// CTRL (docs/design/mode-compiler.md §3.4, §3.5, §6.2): the macro positions, pickup
+// references never re-applied at load, and the expression assignments. Outside sound_hash; a
+// package may omit it (`present` 0). The default holds one position, 0.5, per default macro.
+struct MacroPosition {  // 8 bytes
+  uint32_t macroId  = 0;     // a macro MACR defines, ascending
+  float    position = 0.0f;  // canonical, 0-1
+};
+struct ExpressionAssignment {  // 16 bytes
+  uint32_t target = 0;     // a Leaf row of a present element, or a Macro row
+  float    lo     = 0.0f;  // within the target's range; lo > hi reverses
+  float    hi     = 0.0f;
+  float    curve  = 0.0f;  // the power exponent, 1/16-16
+};
+inline constexpr uint32_t kMaxExpressions = 4;
+struct ControlState {  // 132 bytes
+  uint8_t              present    = 1;  // 0: the package has no CTRL section
+  uint8_t              macroCount = 6;  // one position per macro MACR defines
+  uint8_t              exprCount  = 0;  // 0-4
+  uint8_t              pad        = 0;
+  MacroPosition        positions[kMaxMacros] = {{69, 0.5f}, {70, 0.5f}, {71, 0.5f},
+                                                {72, 0.5f}, {73, 0.5f}, {74, 0.5f}};
+  ExpressionAssignment expressions[kMaxExpressions] = {};
+};
+
+// The stored performance state (§2.6, W2), STAT's tail: what the knobs and switches outside the
+// macros start at. Tempo is integer microseconds per quarter, so no floating point is stored.
+enum class TimeMode : uint8_t { Free, Subdivision, Tempo };
+inline constexpr uint8_t kTimeModeCount = 3;
+enum class TempoSource : uint8_t { Internal, Midi, Host };
+inline constexpr uint8_t kTempoSourceCount = 3;
+inline constexpr uint32_t kMinUsPerQuarter = 200000;   // 300 BPM
+inline constexpr uint32_t kMaxUsPerQuarter = 3000000;  // 20 BPM
+struct PerformanceState {  // 8 bytes
+  uint8_t     reverse      = 0;  // 0 or 1
+  TimeMode    timeMode     = TimeMode::Free;
+  Subdivision subdiv       = Subdivision::Quarter;
+  TempoSource tempoSource  = TempoSource::Internal;
+  uint32_t    usPerQuarter = 500000;  // 120 BPM
+};
+
+// A decoded preset package (determinism profile §5.10; mode-compiler.md §5.1): the STAT
+// section's leaves and performance state, the MODE section's structure and the CTRL section,
+// with the revision of the build that compiled it. Fixed-size data with fixed-width members,
+// so the firmware decodes into it without allocating; it is never hashed or serialized as a
+// struct. About 2.6 KiB: never a stack local in dsp/, where MSVC would probe the frame with
+// __chkstk, which the symbol audit rejects (record §2.7).
 //
-// The stored performance state of §5.10 step 4 (global reverse, tempo, subdivision) has no
-// engine counterpart yet. Freeze is performance state that is never stored: every load
-// turns it off.
+// Default-constructed, it is a leafless state of the default mode, which plays as sound
+// revision 1 does; a producer fills the leaves. Freeze is performance state that is never
+// stored: every load turns it off.
 struct PresetState {
   // The Leaf rows (Params.h kLeafParams), with room for the design's full leaf list.
   static constexpr uint32_t kMaxLeaves = 128;
 
-  uint32_t   leafCount = 0;
-  PresetLeaf leaves[kMaxLeaves];
+  uint32_t         soundRev  = 0;  // the package's sound_rev; 0 when not from a package
+  uint32_t         leafCount = 0;
+  PresetLeaf       leaves[kMaxLeaves];
+  ModeBlob         mode;
+  ControlState     control;
+  PerformanceState performance;
 };
+
+static_assert(sizeof(PresetLeaf) == 8 && sizeof(MacroPosition) == 8 &&
+                  sizeof(ExpressionAssignment) == 16 && sizeof(ControlState) == 132 &&
+                  sizeof(PerformanceState) == 8,
+              "PresetState layout");
+static_assert(offsetof(PresetState, leaves) == 8 && offsetof(PresetState, mode) == 1032 &&
+                  offsetof(PresetState, control) == 2516 &&
+                  offsetof(PresetState, performance) == 2648 && sizeof(PresetState) == 2656,
+              "PresetState layout");
 
 // Exact: Restart, then the preset, so the engine starts from the exact-restart state; not
 // real-time. Spillover: the preset over the running engine, keeping history, grains,
