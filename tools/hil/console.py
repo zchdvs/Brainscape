@@ -6,11 +6,14 @@ Sends the live image's text commands over USB serial and prints its replies read
   console.py --port auto                       # interactive: type commands, Ctrl-C to quit
   console.py --port auto list "preset 5" stats # one-shot: send each argument, print replies
 
-Commands (one per line): info | list | params | get | preset N [exact] | set NAME VALUE |
-freeze on|off | trigger | stats [reset] | dfu. NAME is a descriptor name (layer0.size_ms), a
-ParamId (GrainSizeMs) or a short alias: delay mix feedback out size density spray pitch
-spread reverse jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix
-reverbtime reverbmix cutoff res morph sens onset marks.
+Commands (one per line): info | list | params | get | preset N [exact|cut] | set NAME VALUE |
+onset on|off | marks on|off | macro NAME POS | expression POS | freeze on|off | trigger |
+stats [reset] | dfu. NAME is a descriptor name (layer0.size_ms), a ParamId (GrainSizeMs) or a
+short alias: delay mix feedback trim out size density spray pitch transpose spread reverse
+jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix reverbtime reverbmix
+cutoff res morph sens volume. Since sound revision 2 onset grains and mark positioning are mode
+structure: "onset" and "marks" load a mode (so do "set onset V" and "set marks V", V >= 0.5 on);
+macro NAME is activity, repeats, shape, time, space, filter, aux1 or aux2.
 
 Other images answer "info" too, so the console also identifies whatever is flashed.
 """
@@ -31,16 +34,25 @@ def pretty(obj):
     if kind == "stats":
         b = obj.get("budgetCycles") or 1
         return ("cpu: mean %.1f %%, peak %.1f %% of the 48-frame budget (%d / %d cycles, %d callbacks, %d over "
-                "budget); onsets %d; preset %s%s; queue refused %d" % (
+                "budget); onsets %d; mode switches %s; preset %s%s%s; queue refused %d" % (
                     100.0 * obj["meanCycles"] / b, 100.0 * obj["peakCycles"] / b, obj["meanCycles"],
-                    obj["peakCycles"], obj["callbacks"], obj["overBudget"], obj["onsets"], obj["preset"],
+                    obj["peakCycles"], obj["callbacks"], obj["overBudget"], obj["onsets"],
+                    obj.get("modeSwitches", "?"), obj["preset"], structure(obj),
                     ", frozen" if obj.get("frozen") else "", obj["queueRefused"]))
     if kind == "presets":
         lines = ["presets:"]
         for p in obj["presets"]:
-            lines.append("  %s%d  %s  (%s)" % ("*" if p["n"] == obj.get("current") else " ", p["n"], p["name"],
-                                              p["source"]))
+            lines.append("  %s%d  %s  (%s)%s" % ("*" if p["n"] == obj.get("current") else " ", p["n"], p["name"],
+                                                p["source"], structure(p)))
         return "\n".join(lines)
+    if kind == "mode":
+        return "mode: onset %s, marks %s (from %s, %s load)" % (
+            "on" if obj.get("onset") else "off", "on" if obj.get("marks") else "off", obj.get("from"),
+            obj.get("load"))
+    if kind == "macro":
+        return "%s -> %s (%s leaf/leaves set)" % (obj["name"], obj["position"], obj["leaves"])
+    if kind == "expression":
+        return "expression -> %s (%s leaf/leaves set)" % (obj["position"], obj["leaves"])
     if kind == "param":
         p = obj["param"]
         rng = " [%s .. %s, default %s] %s" % (p["min"], p["max"], p["default"], p.get("unit", "")) if "min" in p else ""
@@ -58,6 +70,12 @@ def pretty(obj):
     if kind == "rebooting":
         return "rebooting into the %s" % obj.get("to", "bootloader")
     return None
+
+
+def structure(obj):
+    """The mode structure a reply reports (sound revision 2), as text."""
+    parts = [name for name in ("onset", "marks") if obj.get(name)]
+    return "" if "onset" not in obj else ", " + ("+".join(parts) if parts else "default mode")
 
 
 def reader(port, stop):
@@ -93,8 +111,8 @@ def main():
             time.sleep(0.6)
         else:
             port.write_line("info")
-            print("connected to %s; type commands (help: list, params, preset N, set NAME VALUE, freeze on|off, "
-                  "trigger, stats), Ctrl-C to quit" % args.port)
+            print("connected to %s; type commands (help: list, params, preset N, set NAME VALUE, onset|marks on|off, "
+                  "macro NAME POS, expression POS, freeze on|off, trigger, stats), Ctrl-C to quit" % args.port)
             for line in sys.stdin:
                 if line.strip():
                     port.write_line(line.strip())

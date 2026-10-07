@@ -122,15 +122,21 @@ endfunction()
 
 # The golden harness, shared with the host and qemu builds (dsp/tests/golden): the parity
 # image renders the corpus with it, the live image takes its presets from it, the bench
-# reuses its renderer, SHA-256 and test signal plumbing.
+# reuses its renderer, SHA-256 and test signal plumbing. Since sound revision 2 the corpus's
+# structure comes from its committed packages (dsp/tests/golden/presets, mode-compiler.md
+# §10.3), which the images carry compiled in (EmbeddedPackages.h; there is no file system):
+# linking brainscape_fw_golden_packages makes the harness's LoadPackage read them.
 set(_bs_golden ${CMAKE_SOURCE_DIR}/dsp/tests/golden)
+include(${_bs_golden}/GoldenPackages.cmake)
+brainscape_golden_packages(brainscape_fw_golden_packages)
+_brainscape_fw_flags(brainscape_fw_golden_packages)
 function(_brainscape_fw_golden name engine)
   add_library(${name} STATIC
     ${_bs_golden}/Corpus.cpp ${_bs_golden}/EventScript.cpp ${_bs_golden}/Render.cpp
     ${_bs_golden}/ParityStream.cpp)
   target_include_directories(${name} PUBLIC ${_bs_golden} ${CMAKE_SOURCE_DIR}/dsp/tests
                                      ${CMAKE_SOURCE_DIR}/dsp/src)
-  target_link_libraries(${name} PUBLIC ${engine})
+  target_link_libraries(${name} PUBLIC ${engine} brainscape_fw_golden_packages)
   _brainscape_fw_flags(${name})
 endfunction()
 _brainscape_fw_golden(brainscape_fw_golden brainscape_dsp)
@@ -182,8 +188,19 @@ function(brainscape_firmware_image name)
     set(BRAINSCAPE_LD_ENGINE_CODE "ITCM")
     # With the run-time helpers it calls (64-bit division and conversions) and the
     # firmware's memcpy, memmove and memset (platform/MemFunctions.c; libDaisy's startup code
-    # is built not to call them before the copy to ITCM, cmake/LibDaisy.cmake).
-    set(BRAINSCAPE_LD_ITCM_INPUTS "*libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
+    # is built not to call them before the copy to ITCM, cmake/LibDaisy.cmake). Not the
+    # archive's members that never run in the audio path, which execute in place with the
+    # rest of the code: the package decoder, encoder and their SHA-256 (a producer decodes a
+    # package before it stages the state, mode-compiler.md §5; the golden harness hashes its
+    # output with it) and the test-signal generator (the harness's input). With them the
+    # archive no longer fits the 64 KiB at sound revision 2.
+    set(_bs_not_itcm "")
+    foreach(a libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a)
+      foreach(m Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj)
+        string(APPEND _bs_not_itcm " *${a}:${m}")
+      endforeach()
+    endforeach()
+    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
     set(BRAINSCAPE_LD_ITCM_DISCARD "*libgcc.a:*(.ARM.exidx .ARM.exidx.*)")
   elseif(ARG_ENGINE_CODE STREQUAL "XIP")
     set(BRAINSCAPE_LD_ENGINE_CODE "with the rest of the code, ${BRAINSCAPE_LD_TEXT}")
@@ -244,7 +261,7 @@ brainscape_firmware_image(brainscape_bench_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_live
-  SOURCES live/main.cpp
+  SOURCES live/main.cpp live/LivePresets.cpp
   LIBS brainscape_fw_golden
   ENGINE_CODE ITCM
   MIN_HEAP 4M)

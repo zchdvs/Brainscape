@@ -24,7 +24,8 @@
 //            hardware floor) and Init
 //   blocks   cycles per 48-frame block, nominal to pessimistic, caches warm and cold, and the
 //            pessimistic configuration under a stream of events (parameter sweeps every
-//            block, trigger bursts, freeze toggles, Spillover loads)
+//            block, trigger bursts, freeze toggles, Spillover loads that switch modes, Trails
+//            and FastCut)
 //   stages   per-stage cost by difference: the pessimistic configuration with one stage off
 //            (the engine has no per-stage counters, and none are added: they would be
 //            instrumentation inside dsp/)
@@ -34,6 +35,10 @@
 //            silence, at FZ = 0 and (hooks build) FZ = 1, with statistics for the active
 //            part and the silent tail separately and (hooks build) the blocks raising IDC or
 //            UFC; output hashes for the golden comparison
+//
+// Sound revision 2 (mode-compiler.md §4.2, §7): onset grains and mark positioning are mode
+// structure, so the configurations that use them take a corpus package's mode (kOnsetMarks)
+// instead of setting rows 27 and 28, which are retired.
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -95,6 +100,22 @@ EventQueue         g_queue;
 Engine::BlockEvent g_blockEvents[EventQueue::kCapacity];
 std::unique_ptr<PresetState> g_loadA, g_loadB;  // Spillover payloads (never modified)
 
+// The structure of the pessimistic configuration: onset-triggered grains positioned at marks,
+// the mode of a corpus package (dsp/tests/golden/presets) with the default macros and CTRL,
+// which the live image's `onset on` and `marks on` load too (firmware/live/LivePresets.h).
+constexpr const char* kOnsetMarks = "strum_marks";
+
+// A complete preset: `preset` (a package's leaves, mode and CTRL, or the defaults, with its
+// parameters over them), with the mode and CTRL of the package `structure` when given.
+std::unique_ptr<PresetState> Build(const PresetSource& preset, const char* structure) {
+  std::unique_ptr<PresetState> mode;
+  if (structure != nullptr) {
+    mode = CompletePreset(PresetSource{structure, {}});
+    if (mode == nullptr) return nullptr;
+  }
+  return CompletePreset(preset, 0, mode.get());
+}
+
 void Emit(const std::string& json) {
   Serial().WriteLine(json, UsbSerial::Mode::Block);
   Serial().Flush(2000);
@@ -121,7 +142,9 @@ const PresetCase* FindPreset(const char* vector, const char* name) {
 struct Spec {
   std::string                   config;   // what the line calls it
   std::string                   input;    // which notes
-  ParamList                     params;   // over the defaults, loaded Exact
+  PresetSource                  preset;   // loaded Exact: a corpus package or the defaults,
+                                          // with parameters over them
+  const char*                   structure = nullptr;  // a package's mode and CTRL instead
   std::vector<testsignal::Note> notes;
   uint32_t                      frames     = 0;
   bool                          cold       = false;  // clean+invalidate D and I caches per block
@@ -229,7 +252,10 @@ float Tri(uint32_t b, uint32_t period) {
 // stamped into block b of the engine timeline in (frame, seq) order. Every block: cutoff,
 // pitch and grain size sweeps (RebuildDirty and the filter coefficients every block); every
 // 250 ms a burst of four footswitch triggers 12 frames apart (manual births); every 1.5 s a
-// freeze toggle; every second a Spillover load, alternating two presets.
+// freeze toggle; every second a Spillover load, alternating two presets in two modes, so
+// each is a mode switch: the nominal preset (the default mode) with a FastCut, which fades
+// every sounding grain over 128 frames, and the pessimistic one (onset grains at marks) with
+// Trails (mode-compiler.md §7.3).
 void PushBlockEvents(uint32_t b, uint32_t* seq, Result* r) {
   const int64_t f0   = static_cast<int64_t>(b) * kBlock;
   auto          push = [&](int64_t frame, Engine::EventType type, uint32_t id, float value,
@@ -245,14 +271,17 @@ void PushBlockEvents(uint32_t b, uint32_t* seq, Result* r) {
     if (!g_queue.Push(e)) ++r->eventsRefused;
   };
   if (b % 1000u == 500u) {
-    push(f0, Engine::EventType::SpilloverLoad, 0, 0.f, (b / 1000u) % 2u == 0u ? g_loadB.get() : g_loadA.get());
+    const bool nominal = (b / 1000u) % 2u == 0u;
+    push(f0, Engine::EventType::SpilloverLoad,
+         static_cast<uint32_t>(nominal ? SwitchStyle::FastCut : SwitchStyle::Trails), 0.f,
+         nominal ? g_loadB.get() : g_loadA.get());
   }
   if (b % 1500u == 750u) push(f0, Engine::EventType::Freeze, 0, (b / 1500u) % 2u == 0u ? 1.f : 0.f, nullptr);
   const auto set = [&](ParamId id, float v) {
     push(f0, Engine::EventType::SetParam, static_cast<uint32_t>(id), Canonicalize(id, v), nullptr);
   };
   set(ParamId::FilterCutoffHz, 500.f + 7500.f * Tri(b, 2000u));
-  set(ParamId::PitchSt, -12.f + 36.f * Tri(b, 3000u));
+  set(ParamId::TransposeSt, -12.f + 36.f * Tri(b, 3000u));
   set(ParamId::GrainSizeMs, 5.f + 195.f * Tri(b, 4000u));
   if (b % 250u == 0u) {
     for (uint32_t k = 0; k < 4u; ++k) {
@@ -264,7 +293,10 @@ void PushBlockEvents(uint32_t b, uint32_t* seq, Result* r) {
 
 Result Run(const Spec& s) {
   Result r;
-  r.loaded = g_engine->LoadPreset(*CompletePreset(s.params), LoadMode::Exact);
+  {
+    const std::unique_ptr<PresetState> preset = Build(s.preset, s.structure);
+    r.loaded = preset != nullptr && g_engine->LoadPreset(*preset, LoadMode::Exact);
+  }
   g_queue.Clear();  // the Exact load started a new engine timeline at frame 0
   auto gen = std::make_unique<testsignal::Generator>();
   gen->Start(s.notes.data(), static_cast<uint32_t>(s.notes.size()));
@@ -381,16 +413,15 @@ ParamList Nominal() {
 
 // The pessimistic configuration: 64 voices at +24 st (r = 4) with full cents spread, reverse,
 // spray and jitter, feedback above unity, every post stage on (modulation at its maximum
-// rate and depth), onset-triggered grains positioned at marks.
+// rate and depth), and in the kOnsetMarks structure onset-triggered grains positioned at marks.
 ParamList Pessimistic(float grainMs) {
-  return {{P::Overlap, 1.0f},        {P::GrainSizeMs, grainMs}, {P::PitchSt, 24.0f},
+  return {{P::Overlap, 1.0f},        {P::GrainSizeMs, grainMs}, {P::TransposeSt, 24.0f},
           {P::SpreadCents, 100.0f},  {P::ReverseProb, 0.5f},    {P::SprayMs, 200.0f},
           {P::Jitter, 1.0f},         {P::PanSpread, 1.0f},      {P::Feedback, 1.05f},
           {P::ModDepth, 1.0f},       {P::ModRateHz, 10.0f},     {P::DelayMix, 0.5f},
           {P::DelayFb, 0.6f},        {P::DelayTimeMs, 350.0f},  {P::ReverbMix, 0.5f},
           {P::ReverbTime, 0.9f},     {P::FilterCutoffHz, 2000.0f}, {P::FilterRes, 0.5f},
-          {P::FilterMorph, 1.5f},    {P::OnsetTrigger, 1.0f},   {P::PositionSource, 1.0f},
-          {P::TriggerSens, 0.8f}};
+          {P::FilterMorph, 1.5f},    {P::TriggerSens, 0.8f}};
 }
 
 ParamList With(ParamList base, const ParamList& changes) {
@@ -407,11 +438,13 @@ ParamList With(ParamList base, const ParamList& changes) {
   return base;
 }
 
-Spec Make(const std::string& config, const char* vector, ParamList params, uint32_t seconds) {
+Spec Make(const std::string& config, const char* vector, PresetSource preset, uint32_t seconds,
+          const char* structure = nullptr) {
   Spec s;
-  s.config = config;
-  s.input  = vector;
-  s.params = std::move(params);
+  s.config    = config;
+  s.input     = vector;
+  s.preset    = std::move(preset);
+  s.structure = structure;
   const VectorCase* v = FindVector(vector);
   if (v != nullptr) {
     s.notes  = VectorNotes(*v);
@@ -420,9 +453,17 @@ Spec Make(const std::string& config, const char* vector, ParamList params, uint3
   return s;
 }
 
-ParamList CorpusParams(const char* vector, const char* preset) {
+// The pessimistic configuration at `grainMs`, in its structure, with `changes` over it.
+Spec MakePessimistic(const std::string& config, const char* vector, float grainMs,
+                     uint32_t seconds, const ParamList& changes = {}) {
+  return Make(config, vector, PresetSource{nullptr, With(Pessimistic(grainMs), changes)}, seconds,
+              kOnsetMarks);
+}
+
+// A corpus preset as the corpus starts it: its package (leaves, mode, CTRL) and parameters.
+PresetSource Corpus(const char* vector, const char* preset) {
   const PresetCase* p = FindPreset(vector, preset);
-  return p != nullptr ? p->params : ParamList{};
+  return p != nullptr ? PresetSource{p->package, p->params} : PresetSource{};
 }
 
 // ---- Suites --------------------------------------------------------------------------------
@@ -552,14 +593,14 @@ void StmClear(void* p, uint32_t bytes) {
 void SuiteRestart() {
   // Dirty buffers first: a Restart after rendering clears the ring, the post delay and the
   // reverb (the canonical config's 16 MiB ring and 0.75 MiB post delay in SDRAM).
-  Spec s = Make("pess_render", "onset_bursts_6s", Pessimistic(20.0f), 2);
+  Spec s = MakePessimistic("pess_render", "onset_bursts_6s", 20.0f, 2);
   Run(s);
   EmitOp("Restart", "after 2 s of rendering", Timed([] { g_engine->Restart(); }));
   EmitOp("Restart", "again, nothing rendered since (skips the clears)",
          Timed([] { g_engine->Restart(); }));
   Run(s);
   static std::unique_ptr<PresetState> preset;
-  preset = CompletePreset(Pessimistic(20.0f));
+  preset = Build(s.preset, s.structure);
   EmitOp("LoadPreset(Exact)", "after 2 s of rendering",
          Timed([] { g_engine->LoadPreset(*preset, LoadMode::Exact); }));
   Run(s);
@@ -582,19 +623,19 @@ void SuiteRestart() {
 void SuiteBlocks(bool quick) {
   const uint32_t sec = quick ? 4u : 10u;
   std::vector<Spec> specs;
-  specs.push_back(Make("default", "plucks_12s", {}, sec));
-  specs.push_back(Make("nominal", "strums_16s", Nominal(), sec));
-  specs.push_back(Make("pess_render", "onset_bursts_6s", Pessimistic(20.0f), 6));
-  specs.push_back(Make("pess_births", "onset_bursts_6s", Pessimistic(1.0f), 6));
-  Spec events = Make("pess_events: sweeps every block, triggers, freeze, loads", "strums_16s",
-                     Pessimistic(20.0f), sec);
+  specs.push_back(Make("default", "plucks_12s", PresetSource{}, sec));
+  specs.push_back(Make("nominal", "strums_16s", PresetSource{nullptr, Nominal()}, sec));
+  specs.push_back(MakePessimistic("pess_render", "onset_bursts_6s", 20.0f, 6));
+  specs.push_back(MakePessimistic("pess_births", "onset_bursts_6s", 1.0f, 6));
+  Spec events = MakePessimistic("pess_events: sweeps every block, triggers, freeze, loads", "strums_16s",
+                                20.0f, sec);
   events.events = true;
   specs.push_back(events);
-  specs.push_back(Make("corpus:tail_post_fb", "strums_16s", CorpusParams("strums_tail_123s", "tail_post_fb"), sec));
-  specs.push_back(Make("corpus:pitch_reverse_spray", "plucks_12s", CorpusParams("plucks_12s", "pitch_reverse_spray"), sec));
+  specs.push_back(Make("corpus:tail_post_fb", "strums_16s", Corpus("strums_tail_123s", "tail_post_fb"), sec));
+  specs.push_back(Make("corpus:pitch_reverse_spray", "plucks_12s", Corpus("plucks_12s", "pitch_reverse_spray"), sec));
   specs.push_back(Make("corpus:max_delay_spray_rev_up24", "plucks_12s",
-                       CorpusParams("plucks_12s", "max_delay_spray_rev_up24"), sec));
-  specs.push_back(Make("corpus:dense_1ms", "onset_bursts_6s", CorpusParams("onset_bursts_6s", "dense_1ms"), 6));
+                       Corpus("plucks_12s", "max_delay_spray_rev_up24"), sec));
+  specs.push_back(Make("corpus:dense_1ms", "onset_bursts_6s", Corpus("onset_bursts_6s", "dense_1ms"), 6));
   for (Spec& s : specs) {
     for (const bool cold : {false, true}) {
       s.cold = cold;
@@ -608,21 +649,22 @@ void SuiteStages(bool quick) {
   struct Variant {
     const char* name;
     ParamList   changes;
+    bool        onsetMarks = true;  // false: the default mode (no onset grains, no marks)
   };
-  const ParamList base = Pessimistic(20.0f);
-  const Variant   variants[] = {
+  const Variant variants[] = {
       {"all stages", {}},
       {"-modulation", {{P::ModDepth, 0.0f}}},
       {"-post delay", {{P::DelayMix, 0.0f}}},
       {"-reverb", {{P::ReverbMix, 0.0f}}},
       {"-filter", {{P::FilterCutoffHz, 20000.0f}}},
       {"-feedback", {{P::Feedback, 0.0f}}},
-      {"-onset grains and marks", {{P::OnsetTrigger, 0.0f}, {P::PositionSource, 0.0f}}},
-      {"-pitch (r = 1)", {{P::PitchSt, 0.0f}, {P::SpreadCents, 0.0f}}},
+      {"-onset grains and marks", {}, false},
+      {"-pitch (r = 1)", {{P::TransposeSt, 0.0f}, {P::SpreadCents, 0.0f}}},
       {"-grains (1 voice)", {{P::Overlap, 0.0f}}},
   };
   for (const Variant& v : variants) {
-    Spec s = Make(std::string("stages:") + v.name, "onset_bursts_6s", With(base, v.changes), sec);
+    Spec s = MakePessimistic(std::string("stages:") + v.name, "onset_bursts_6s", 20.0f, sec, v.changes);
+    if (!v.onsetMarks) s.structure = nullptr;
     Emit(ResultJson("stage", s, Run(s)));
   }
 }
@@ -643,11 +685,11 @@ void SuiteBirths(bool quick) {
   for (const Birth bt : {Birth{0.90856034f, 48u}, Birth{0.62996054f, 16u}}) {
     for (const float ms : {1.0f, 20.0f}) {
       const ParamList params = {{P::Overlap, bt.overlap}, {P::GrainSizeMs, ms}, {P::Jitter, 0.0f},
-                                {P::SprayMs, 50.0f},      {P::PitchSt, 7.0f},   {P::SpreadCents, 50.0f},
+                                {P::SprayMs, 50.0f},      {P::TransposeSt, 7.0f}, {P::SpreadCents, 50.0f},
                                 {P::ReverseProb, 0.5f},   {P::PanSpread, 1.0f}, {P::Mix, 1.0f}};
       Spec s = Make(std::string("births:") + JsonUInt(bt.voices) + " voices, " +
                         (ms == 1.0f ? "1 ms" : "20 ms"),
-                    "plucks_12s", params, sec);
+                    "plucks_12s", PresetSource{nullptr, params}, sec);
       const Result r     = Run(s);
       // Scheduler births per block x1000: at most one per frame.
       const uint32_t grainFrames = ms == 1.0f ? 48u : 960u;
@@ -670,7 +712,7 @@ void SuiteTail() {
   Spec goldenTail;
   goldenTail.config = "golden:strums_tail_123s/tail_post_fb";
   goldenTail.input  = "strums_tail_123s";
-  goldenTail.params = CorpusParams("strums_tail_123s", "tail_post_fb");
+  goldenTail.preset = Corpus("strums_tail_123s", "tail_post_fb");
   if (tailVec != nullptr) {
     goldenTail.notes          = VectorNotes(*tailVec);
     goldenTail.frames         = tailVec->frames;
@@ -680,7 +722,8 @@ void SuiteTail() {
   Spec noise;
   noise.config = "noise-tail:pessimistic, feedback 0.95";
   noise.input  = "2 s noise + 120 s silence";
-  noise.params = With(Pessimistic(20.0f), {{P::Feedback, 0.95f}});
+  noise.preset    = PresetSource{nullptr, With(Pessimistic(20.0f), {{P::Feedback, 0.95f}})};
+  noise.structure = kOnsetMarks;
   testsignal::Note n;
   n.kind    = testsignal::Kind::Noise;
   n.start   = 0;
@@ -808,8 +851,11 @@ int main() {
   const char* why = nullptr;
   if (!fw::CheckPlacement(ec, g_place, &why)) fw::Fatal(why);
   g_corpus = new std::vector<VectorCase>(BuildCorpus());
-  g_loadA  = CompletePreset(Pessimistic(20.0f));
-  g_loadB  = CompletePreset(Nominal());
+  g_loadA  = Build(PresetSource{nullptr, Pessimistic(20.0f)}, kOnsetMarks);
+  g_loadB  = Build(PresetSource{nullptr, Nominal()}, nullptr);
+  if (g_loadA == nullptr || g_loadB == nullptr || !CheckPreset(*g_loadA) || !CheckPreset(*g_loadB)) {
+    fw::Fatal("the events configuration's presets do not build (a package missing from the image?)");
+  }
   g_engine = new (g_place.engine) Engine();
   if (!g_engine->Init(ec, g_place.arenas)) fw::Fatal("Engine::Init refused the placement");
 
