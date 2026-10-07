@@ -200,9 +200,28 @@ brainscape_firmware_image(brainscape_parity
   LIBS brainscape_fw_golden
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
+# The bench in three builds: the shipping engine in ITCM (the numbers), the same engine
+# executing in place from QSPI (the code-placement A/B of profile §7.1), and the engine
+# built with the FP guard's test hooks (flushing forced on and exception flags collected:
+# the FZ = 0/1 silent-tail A/B and flag census of profile §4.2).
+brainscape_firmware_image(brainscape_bench
+  SOURCES bench/main.cpp bench/Microbench.cpp
+  LIBS brainscape_fw_golden
+  ENGINE_CODE ITCM
+  MIN_HEAP 4M)
+brainscape_firmware_image(brainscape_bench_xip
+  SOURCES bench/main.cpp bench/Microbench.cpp
+  LIBS brainscape_fw_golden
+  ENGINE_CODE XIP
+  MIN_HEAP 4M)
+brainscape_firmware_image(brainscape_bench_hooks
+  SOURCES bench/main.cpp bench/Microbench.cpp
+  LIBS brainscape_fw_golden_hooks
+  ENGINE_CODE ITCM
+  MIN_HEAP 4M)
 
 add_custom_target(brainscape_firmware ALL
-  DEPENDS brainscape_parity)
+  DEPENDS brainscape_parity brainscape_bench brainscape_bench_xip brainscape_bench_hooks)
 
 # The Daisy bootloader binary libDaisy ships, beside the images, for a BOOT_QSPI setup.
 if(BRAINSCAPE_FIRMWARE_APP_TYPE STREQUAL "BOOT_QSPI")
