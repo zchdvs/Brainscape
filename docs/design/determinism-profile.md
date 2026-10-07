@@ -1,6 +1,6 @@
 # Determinism Profile — Sample-Identical Engine Output Across Pedal and Desktop
 
-> How `brainscape::Engine` produces **bit-identical float32 output** on the Daisy Seed3 pedal
+> How `brainscape::Engine` produces **bit-identical float32 output** on the Daisy Seed pedal (any STM32H750 Seed-family module: Seed3, Seed Rev7, Seed2 DFM)
 > (Cortex-M7) and every desktop build. This document owns the numeric parity contract, the
 > numerics rules, the floating-point (FP) environment, the engine changes identity needs, and
 > verification; [companion-app.md](companion-app.md) owns product shape, JUCE build and
@@ -74,7 +74,7 @@ contract, this document states only the requirement.
 | Subnormal | A nonzero binary32 below `FLT_MIN` ≈ 1.18e-38; keeping them is IEEE *gradual underflow*. |
 | FTZ, DAZ, FZ | Modes that flush subnormals to zero: x86 FTZ (results) and DAZ (inputs) in `MXCSR`; Arm FZ in `FPSCR` (M7) or `FPCR` (AArch64). |
 | Control word | The per-thread FP mode register; on the M7, `FPDSCR` seeds `FPSCR` for each new interrupt FP context. |
-| DWT, HIL | The M7's cycle counter; hardware-in-the-loop CI on a real Seed3. |
+| DWT, HIL | The M7's cycle counter; hardware-in-the-loop CI on a real Seed-family module (the prototype is a Seed Rev7). |
 | Golden hash | The checked-in SHA-256 of a render of a fixed test vector. |
 | Oracle | A reference run of the engine under emulation whose hashes every other build must match. QEMU *user mode* (`qemu-arm`) runs one Linux-style executable by translating its instructions; *system mode* (`qemu-system-arm`) emulates a whole board, interrupts included. |
 | Sound revision; minted, published | `kSoundRevision` (§5.12). *Minted* when its golden file is created, *published* when a build carrying it first leaves the project, *internal* until then. |
@@ -87,7 +87,7 @@ contract, this document states only the requirement.
 | Pin, re-anchor | Freeze measures positions from the ring frame where it engaged, the pin; once the live head is ¾ of the ring past it, the pin jumps to the live head. |
 | Mark positioning | `POS_MARK`: grains start at the latest onset mark (the Strum modes). |
 | Feedback tamer | The filters, saturator and diffusers inside the feedback loop (`PostChain.cpp:88-104`). |
-| Abbreviations | Rosetta 2, Prism: Apple's and Microsoft's x86-64 emulators. LTO: link-time optimization. ODR: C++'s one-definition rule; COMDAT: a per-function section of which the linker keeps one copy. GOT: global offset table. SPSC: single-producer, single-consumer. SVF: state-variable filter. ULP: unit in the last place. DTCM, ITCM: the STM32H750's tightly coupled memories; SDRAM: the Seed3's 64 MiB external RAM. UART, SWD, semihosting: serial port, Arm debug port, target I/O through the debugger. PendSV, SysTick: two Cortex-M exception handlers, a software-triggered one and the system timer's. x86-64-v3: the x86-64 feature level that includes AVX2 and hardware FMA. CODEOWNERS: GitHub's file that requires named reviewers to approve changes to given paths. |
+| Abbreviations | Rosetta 2, Prism: Apple's and Microsoft's x86-64 emulators. LTO: link-time optimization. ODR: C++'s one-definition rule; COMDAT: a per-function section of which the linker keeps one copy. GOT: global offset table. SPSC: single-producer, single-consumer. SVF: state-variable filter. ULP: unit in the last place. DTCM, ITCM: the STM32H750's tightly coupled memories; SDRAM: the Seed's 64 MiB external RAM. UART, SWD, semihosting: serial port, Arm debug port, target I/O through the debugger. PendSV, SysTick: two Cortex-M exception handlers, a software-triggered one and the system timer's. x86-64-v3: the x86-64 feature level that includes AVX2 and hardware FMA. CODEOWNERS: GitHub's file that requires named reviewers to approve changes to given paths. |
 
 ## 2. The parity contract
 
@@ -523,7 +523,7 @@ still equal the golden hash (§6.4). The evidence disagreed (record §4.2). Why 
    `SoftSat`'s square flushed too, none do, §4.3).
 
 **Gating measurement.** No source gives the M7's subnormal cycle cost. Measure with DWT on a
-Seed3: (a) a dependent `vmul.f32`/`vadd.f32` chain with subnormal operands and results at
+Seed (the prototype Rev7 first): (a) a dependent `vmul.f32`/`vadd.f32` chain with subnormal operands and results at
 FZ = 0 and 1, against a normal-operand baseline; (b) firmware silent tails (2 s of noise, then
 at least 120 s of silence, through feedback presets and every post stage), recording
 worst-block cycles at FZ = 0 and 1 and the blocks whose `FPSCR` input-denormal or underflow
@@ -1011,11 +1011,16 @@ v1 it mutes live audio and reuses the live engine with the full 2²² ring (comp
 significant in 512 KiB of AXI SRAM (record §6.6). It renders generator input and reports
 hashes over UART or semihosting through SWD, needing no USB class code, though like
 every libDaisy image it links ST's SLA0044 USB code until companion §7.2's patch lands
-(`firmware-elf-audit` runs on every image). A self-hosted runner with a Seed3 and an ST-Link
+(`firmware-elf-audit` runs on every image). A self-hosted runner with a Seed-family module (a Rev7 first; every module model that ships needs its own leg) and an ST-Link
 V3 (about $60, **estimated**) flashes CI-built release firmware, compares hashes on tags and
 nightly, and runs the DWT measurements. Only silicon shows FPU errata (for example
 `VDIV`/`VSQRT` loss under lazy stacking, Arm erratum 776924 on Cortex-M4F; check the STM32H750
-and Cortex-M7 errata), cache and DMA coherency, and the real interrupt `FPDSCR`. The pedal
+and Cortex-M7 errata), cache and DMA coherency, and the real interrupt `FPDSCR`. Silicon also
+owns SDRAM retention: the 16 MiB history ring lives there, so a refresh or retention error at
+enclosure temperature would silently break identity. The HIL plan adds an SDRAM march test and
+a hot soak (the parity image rendered with the board at its rated temperature), and bring-up
+decides whether Brainscape overrides libDaisy's SDRAM refresh count
+([hardware-supply-2026-10.md](../research/hardware-supply-2026-10.md)). The pedal
 renders offline at about 1.3–3.1× realtime (**estimated** as 1 / load from §7.2's 32–41 %
 nominal and 77–78 % pessimistic load).
 

@@ -2,7 +2,7 @@
 
 > Snapshot as of **2026-10-06**.
 > Brainscape is an open-source granular delay — a spiritual successor to the Hologram
-> Microcosm — targeting a Daisy Seed3 hardware pedal **and** a JUCE desktop plugin and
+> Microcosm — targeting a Daisy Seed hardware pedal (prototyped on a Seed Rev7) **and** a JUCE desktop plugin and
 > companion app from one shared C++ DSP core. Licensed [GPLv3](../LICENSE).
 
 ---
@@ -419,6 +419,6 @@ Steps 1–4 need no hardware.
    only then do the public plugin, app and firmware ship.
 
 In parallel when ready: **clock/tempo sync and looper** feature work (rhythmic quantization
-remains the Microcosm's most-praised musical trait), and the **hardware schematic** (Seed3 + the
+remains the Microcosm's most-praised musical trait), and the **hardware schematic** (a 40-pin Seed carrier that takes a Seed3 or Rev7, starting from Daisy's open-hardware Seed3 Pedal Dev Kit and the
 Electrosmith reference stereo I/O front end, per
 [pedal-control-surface-and-io-hardware.md](research/pedal-control-surface-and-io-hardware.md)).
