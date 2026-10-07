@@ -456,8 +456,10 @@ uint64_t Mix(uint64_t& s) {  // SplitMix64
 }
 
 // The probe's generator, keyed on the index (record §2.3): 1-40 digits, e-60..e39, written
-// into a fixed buffer (at most 54 characters). Returns the length.
-size_t RandomNumber(uint64_t index, char* out) {
+// into a fixed buffer (at most 54 characters). Returns the length. snprintf gets the room
+// actually left: glibc's _FORTIFY_SOURCE=3 aborts on a declared size past the buffer's end
+// even when the text written is shorter.
+size_t RandomNumber(uint64_t index, char* out, size_t cap) {
   uint64_t s = 0x5eed000000000000ull ^ index;
   size_t   n = 0;
   if (Mix(s) & 1) out[n++] = '-';
@@ -478,7 +480,7 @@ size_t RandomNumber(uint64_t index, char* out) {
     }
   }
   const int ex = static_cast<int>(Mix(s) % 100) - 60;
-  if (Mix(s) % 4 != 0) n += static_cast<size_t>(std::snprintf(out + n, 16, "e%d", ex));
+  if (Mix(s) % 4 != 0) n += static_cast<size_t>(std::snprintf(out + n, cap - n, "e%d", ex));
   return n;
 }
 
@@ -492,7 +494,7 @@ bool RandomSet(uint64_t count, uint64_t expect) {
     uint64_t h = kFnvBasis, bad = 0, stdBad = 0, cmp = 0, rng = 0;
     for (uint64_t i = uint64_t{chunk} * kPer; i < (uint64_t{chunk} + 1) * kPer && i < count; ++i) {
       char                    str[64];
-      const size_t            len = RandomNumber(i, str);
+      const size_t            len = RandomNumber(i, str, sizeof str);
       float                   y   = 0.f;
       const bsc::NumberStatus st  = bsc::ParseJsonNumber(str, len, &y);
       h = FnvU32(h, st == bsc::NumberStatus::Ok ? BitsOf(y) : 0xFFFFFFFFu);
