@@ -24,6 +24,9 @@ enum class FpEnv : uint8_t { Clean, Hostile };
 struct RenderConfig {
   std::vector<uint32_t> blockPattern{48};  // grid from frame 0, repeated; each <= 512
   uint32_t              historyLog2 = 22;  // 2^22 is the canonical ring (profile §2.3)
+  // EngineConfig::maxBlockSize: 512 in every golden leg, 48 in the pedal's own engine (the
+  // firmware's live configuration). It sizes buffers only, so it must not change a bit.
+  uint32_t              maxBlockSize = 512;
   Delivery              delivery    = Delivery::Engine;
   // Init a new engine for every render instead of restarting one engine (Restart, by
   // way of LoadPreset(..., Exact)). Both are the exact-restart state, so both must
@@ -52,7 +55,17 @@ struct Capture {
 
 class Renderer {
  public:
+  // The engine arenas and the Engine object in caller-owned memory instead of the heap: the
+  // firmware places them as the pedal does (DTCM, AXI SRAM, SDRAM; grain-engine.md §7). Each
+  // arena holds at least PlanMemory's bytes at its alignment; `engine` holds sizeof(Engine)
+  // bytes aligned to alignof(Engine).
+  struct Placement {
+    Arenas arenas{};
+    void*  engine = nullptr;
+  };
+
   explicit Renderer(const RenderConfig& cfg);
+  Renderer(const RenderConfig& cfg, const Placement& placement);
   ~Renderer();
   Renderer(const Renderer&) = delete;
   Renderer& operator=(const Renderer&) = delete;
@@ -70,12 +83,16 @@ class Renderer {
  private:
   bool RenderIn(const VectorCase& v, const std::vector<testsignal::Note>& notes,
                 const PresetCase& p, RenderOutput* out, Capture* capture, int64_t inputStart);
+  EngineConfig MakeEngineConfig() const;
+  Engine*      NewEngine();
 
   RenderConfig                     cfg_;
   Arenas                           arenas_{};
   void*                            raw_[kNumTiers] = {};
   bool                             ok_ = false;
-  std::unique_ptr<Engine>          engine_;  // Init'd once unless freshEngine
+  Engine*                          engine_ = nullptr;  // Init'd once unless freshEngine
+  std::unique_ptr<Engine>          ownedEngine_;       // the heap engine without a Placement
+  void*                            engineStorage_ = nullptr;
   std::unique_ptr<EventQueue>      queue_;   // the engine's event transport
   std::vector<Engine::BlockEvent>  blockEvents_;
 };

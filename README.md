@@ -16,7 +16,7 @@ Two deliverables from one shared DSP core:
 | Path | Purpose |
 | --- | --- |
 | `dsp/` | Platform-agnostic C++ DSP core shared by firmware and plugin |
-| `firmware/` | Daisy Seed firmware (C++, libDaisy/DaisySP) |
+| `firmware/` | Daisy Seed firmware (C++, libDaisy); today the Rev7 bring-up images ([firmware/README.md](firmware/README.md)) |
 | `plugin/` | Desktop plugin and companion app (JUCE: VST3, AU, standalone; CLAP optional) |
 | `hardware/` | Schematics, PCB, enclosure design |
 | `docs/` | Documentation and research |
