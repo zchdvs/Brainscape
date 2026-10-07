@@ -43,10 +43,15 @@
 
 namespace {
 
-// ── The committed hashes ──────────────────────────────────────────────────────────────────
+// ── The committed hashes: PROVISIONAL ─────────────────────────────────────────────────────
 // The per-pull-request sets measured identical with MSVC 19.40, GCC 11.4 and Clang 14, the
-// exhaustive round trip with MSVC 19.40 and GCC 11.4, all on x86-64; the design asks for one
-// linux-arm64 and one macOS run before they are relied on (§10.2), which no host here offered.
+// exhaustive round trip with MSVC 19.40 and GCC 11.4, all on x86-64; the per-pull-request sets
+// also with arm-none-eabi GCC 10.3 for the Cortex-M7 (32-bit, newlib) under qemu, run serially
+// by the lane B review. The design commits them only after one linux-arm64 and one macOS run
+// (§10.2), which no host here offered, so all four are provisional until lane G's arm64 and
+// macOS legs reproduce them; that is a gate before lane A relies on the number code
+// (docs/STATUS.md, lane B's open ends). A leg that differs is a finding about the code or the
+// platform, not a reason to re-mint.
 constexpr uint64_t kRoundTrip4099     = 0x0530292719017104ull;  // the specified writer
 constexpr uint64_t kRoundTrip4099Pure = 0x0530292719017104ull;  // the probe's (record §2.3)
 constexpr uint64_t kHalfway1009       = 0x364148d9494c086bull;
@@ -566,5 +571,7 @@ int main(int argc, char** argv) {
   const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   std::printf("number check (%s, %u threads, std cross-checks %s): %s in %.1f s\n", suite.c_str(),
               g_threads, g_std ? "on" : "off", ok ? "pass" : "FAIL", s);
+  std::printf("  (the committed hashes are provisional until linux-arm64 and macOS reproduce "
+              "them, design 10.2)\n");
   return ok ? 0 : 1;
 }

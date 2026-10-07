@@ -167,29 +167,107 @@ TEST_CASE("Key extension: ext 0 is sound revision 1's key", "[blob][keys]") {
   REQUIRE(static_cast<uint32_t>(Draw::kMaxPurpose) == 31u);
 }
 
-TEST_CASE("Key extension: extended keys at one frame are pairwise distinct", "[blob][keys]") {
-  using grainmath::Hash32;
-  // Two nonzero exts can only collide at one frame if Hash32(e1) ^ Hash32(e2) is the XOR of two
-  // purposes' low bits (0-7): it never is.
-  for (uint32_t e1 = 1; e1 < 64; ++e1) {
-    for (uint32_t e2 = e1 + 1; e2 < 64; ++e2) REQUIRE((Hash32(e1) ^ Hash32(e2)) > 7u);
+TEST_CASE("Key extension: purposes from 8 on are extended whichever overload keys them",
+          "[blob][keys]") {
+  using grainmath::Draw;
+  using grainmath::DrawKey;
+  using grainmath::RandUnit;
+  // Revision 1's fold would give purpose 8 + p the key of frame f + 1's purpose p (abs·8 +
+  // purpose): the two-argument form must route the new purposes through the extension.
+  uint64_t aliases = 0, compared = 0;
+  for (int64_t f = 0; f < 4096; ++f) {
+    const int64_t frame = (int64_t{1} << 31) + f * 7919;
+    for (uint32_t p = 8; p < 32; ++p) {
+      const auto d = static_cast<Draw>(p);
+      REQUIRE(DrawKey(frame, d) == DrawKey(frame, d, 0, 0));
+      REQUIRE(Bits(RandUnit(frame, d)) == Bits(RandUnit(frame, d, 0, 0)));
+      const uint32_t next = DrawKey(frame + (p >> 3), static_cast<Draw>(p & 7u));
+      aliases += DrawKey(frame, d) == next ? 1u : 0u;
+      ++compared;
+    }
   }
-  // Every (purpose, layer, ordinal) at a frame, purposes 0-31: 512 extended keys, distinct.
-  for (const int64_t f : {int64_t{0}, int64_t{48000}, int64_t{1} << 33}) {
+  REQUIRE(compared == 4096u * 24u);
+  REQUIRE(aliases == 0u);
+  REQUIRE(DrawKey(1000, Draw::PitchSelect) != DrawKey(1001, Draw::Interval));
+  REQUIRE(Bits(RandUnit(1000, Draw::PitchSelect)) != Bits(RandUnit(1001, Draw::Interval)));
+}
+
+TEST_CASE("Key extension: the keys of one frame are pairwise distinct", "[blob][keys]") {
+  // Every (purpose, layer, ordinal) at a frame, purposes 0-31: 504 extended keys and the 8 of
+  // revision 1, distinct. The extended ones are by construction (one per-frame value XOR-ed with
+  // distinct 9-bit values, then Hash32); the revision-1 ones by chance.
+  for (const int64_t f : {int64_t{0}, int64_t{48000}, (int64_t{1} << 29) - 1, int64_t{1} << 33,
+                          (int64_t{1} << 62) + 5}) {
     std::vector<uint32_t> keys;
     for (uint32_t p = 0; p < 32; ++p) {
       for (uint32_t layer = 0; layer < 2; ++layer) {
         for (uint32_t ordinal = 0; ordinal < 8; ++ordinal) {
-          const auto d = static_cast<grainmath::Draw>(p);
-          if (grainmath::DrawKeyExtension(layer, ordinal, d) == 0u) continue;
-          keys.push_back(grainmath::DrawKey(f, d, layer, ordinal));
+          keys.push_back(grainmath::DrawKey(f, static_cast<grainmath::Draw>(p), layer, ordinal));
         }
       }
     }
-    REQUIRE(keys.size() == 32u * 16u - 8u);
+    REQUIRE(keys.size() == 32u * 16u);
     std::sort(keys.begin(), keys.end());
     REQUIRE(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
   }
+}
+
+TEST_CASE("Key extension: no two streams alias at a fixed frame offset", "[blob][keys]") {
+  using grainmath::Draw;
+  using grainmath::DrawKey;
+  using grainmath::Hash32;
+  // Draft v2's formula, Hash32(DrawKey(f, p & 7) ^ Hash32(ext)), kept the frame linear under the
+  // XOR: for exts e1 and e2, with D = Hash32(e1) ^ Hash32(e2), every draw (e1, p) at frame f
+  // equalled the draw (e2, p ^ (D & 7)) at frame f ^ (D >> 3) (lane B review). The control shows
+  // this test sees that; the extension must alias at none of those partners.
+  auto v2 = [](int64_t f, uint32_t low, uint32_t ext) {
+    return Hash32(DrawKey(f, static_cast<Draw>(low)) ^ Hash32(ext));
+  };
+  auto stream = [](int64_t f, uint32_t ext, uint32_t low) {  // ext 1-63 and its purpose
+    return DrawKey(f, static_cast<Draw>(low | ((ext >> 4) << 3)), ext & 1u, (ext >> 1) & 7u);
+  };
+  uint64_t v2Aliases = 0, aliases = 0, compared = 0;
+  for (uint32_t e1 = 1; e1 < 64; ++e1) {
+    for (uint32_t e2 = e1 + 1; e2 < 64; ++e2) {
+      const uint32_t d = Hash32(e1) ^ Hash32(e2);
+      for (uint32_t i = 0; i < 4; ++i) {
+        const int64_t f = (int64_t{1} << 26) + static_cast<int64_t>((e1 * 64 + e2) * 4 + i) * 613;
+        const int64_t g = f ^ static_cast<int64_t>(d >> 3);
+        for (uint32_t low = 0; low < 8; ++low) {
+          v2Aliases += v2(f, low, e1) == v2(g, low ^ (d & 7u), e2) ? 1u : 0u;
+          aliases += stream(f, e1, low) == stream(g, e2, low ^ (d & 7u)) ? 1u : 0u;
+          ++compared;
+        }
+      }
+    }
+  }
+  INFO(compared << " partner draws compared");
+  REQUIRE(compared == 63u * 62u / 2u * 4u * 8u);
+  REQUIRE(v2Aliases == compared);  // the control: draft v2's formula aliases every one
+  REQUIRE(aliases == 0u);
+  // A lag scan: stream pairs (extended, and extended against revision 1's) at every lag up to
+  // 2048 frames, at powers of two and at the v2 partners' distances agree on no sampled frame.
+  std::vector<int64_t> lags;
+  for (int64_t l = 1; l <= 2048; ++l) lags.push_back(l);
+  for (int k = 12; k < 40; ++k) lags.push_back(int64_t{1} << k);
+  for (uint32_t e = 2; e < 64; e += 7) lags.push_back((Hash32(1) ^ Hash32(e)) >> 3);
+  uint64_t agreements = 0, scanned = 0;
+  for (uint32_t pair = 0; pair < 48; ++pair) {
+    const uint32_t e1 = 1 + (pair * 37) % 63, e2 = 1 + (pair * 11 + 5) % 63;
+    const uint32_t l1 = pair & 7u, l2 = (pair >> 3) & 7u;
+    for (const int64_t lag : lags) {
+      for (uint32_t t = 0; t < 8; ++t) {
+        const int64_t f = (int64_t{1} << 30) + static_cast<int64_t>(t) * 104729 + pair;
+        const uint32_t k = stream(f, e1, l1);
+        agreements += k == stream(f + lag, e2, l2) ? 1u : 0u;
+        agreements += k == DrawKey(f + lag, static_cast<Draw>(l2)) ? 1u : 0u;
+        agreements += k == DrawKey(f - lag, static_cast<Draw>(l2)) ? 1u : 0u;
+        scanned += 3;
+      }
+    }
+  }
+  INFO(scanned << " lagged draws compared");
+  REQUIRE(agreements == 0u);
 }
 
 TEST_CASE("Key extension: no key aliases an r1 key at a fixed frame offset", "[blob][keys]") {
@@ -573,6 +651,28 @@ TEST_CASE("STAT rules: count, length, order, canonical values, performance", "[b
   REQUIRE(r.ok);
   REQUIRE(r.s->performance.reverse == 1u);
   REQUIRE(r.s->performance.tempoSource == TempoSource::Host);
+  // In memory, nothing past the count (as in CTRL and MACR): a stale leaf would give two states
+  // one encoding. The encoder refuses it; the decoder zeroes those slots.
+  for (const PresetLeaf stale : {PresetLeaf{200, 1.0f}, PresetLeaf{0, 1.0f}, PresetLeaf{3, 0.0f}}) {
+    auto s = CompleteState();
+    for (const uint32_t at : {s->leafCount, PresetState::kMaxLeaves - 1}) {
+      auto t        = std::make_unique<PresetState>(*s);
+      t->leaves[at] = stale;
+      ExpectValid(*t, PresetError::StatPadding, at);
+      uint8_t          out[2048];
+      uint32_t         written = 0;
+      PresetDiagnostic d;
+      REQUIRE_FALSE(EncodeStat(*t, out, sizeof out, &written, &d));
+      REQUIRE(d.error == PresetError::StatPadding);
+    }
+  }
+  {
+    const Decoded d = Decode(base);
+    REQUIRE(d.ok);
+    for (uint32_t i = d.s->leafCount; i < PresetState::kMaxLeaves; ++i) {
+      REQUIRE(blob::AllZero(&d.s->leaves[i], sizeof(PresetLeaf)));
+    }
+  }
 }
 
 // ── MODE ──────────────────────────────────────────────────────────────────────────────────
@@ -787,6 +887,8 @@ TEST_CASE("MODE rules for the vocabulary of later waves", "[blob][decode]") {
       {PresetError::ModeRange, [](ModeBlob& m) { m.routes.entries[3].amount = -2.0f; }},
       {PresetError::ModeRange, [](ModeBlob& m) { m.links.entries[0].layer = 2; }},
       {PresetError::ModeRange, [](ModeBlob& m) { m.dryDuck.attackMs = 0.05f; }},
+      {PresetError::ModeRange, [](ModeBlob& m) { m.dryDuck.releaseMs = 0.5f; }},
+      {PresetError::ModeRange, [](ModeBlob& m) { m.dryDuck.releaseMs = 5001.0f; }},
       {PresetError::ModeRange, [](ModeBlob& m) { m.layers[0].quantizeRoot = 12; }},
       {PresetError::ModeRange, [](ModeBlob& m) { m.layers[0].scaleMask = 0x1000; }},
       {PresetError::ModeRange, [](ModeBlob& m) { m.layers[0].pinRearmMs = 5.0f; }},
@@ -835,10 +937,19 @@ TEST_CASE("CTRL rules: one position per macro, canonical values, counts", "[blob
     const Bytes  b            = Package(*e);
     const size_t x            = Payload(b, kTagCtrl) + 4 + 8 * 6;
     REQUIRE(Decode(b).ok);
-    Bytes t = b;
-    Wr32(&t[x], 29);  // Reserved until W1
-    Rehash(t);
-    Expect(t, PresetError::ExpressionTarget, 29);
+    // A later wave's leaf is newer content, named; an ID that is no Leaf or Macro row is wrong.
+    const uint32_t targets[][2] = {{29, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
+                                   {30, static_cast<uint32_t>(PresetError::UnsupportedTarget)},
+                                   {77, static_cast<uint32_t>(PresetError::ExpressionTarget)},
+                                   {82, static_cast<uint32_t>(PresetError::ExpressionTarget)},
+                                   {999, static_cast<uint32_t>(PresetError::ExpressionTarget)}};
+    for (const auto& c : targets) {
+      Bytes t = b;
+      Wr32(&t[x], c[0]);
+      Wr32(&t[x + 8], Bits(1.0f));  // within every one of these rows' ranges
+      Rehash(t);
+      Expect(t, static_cast<PresetError>(c[1]), c[0]);
+    }
     Bytes r = b;
     Wr32(&r[x + 8], Bits(600.0f));
     Rehash(r);
@@ -995,10 +1106,15 @@ TEST_CASE("ValidateMode: macro targets (E8, E9) and the shape macro (E10)", "[bl
   ExpectValid(*target(6, 0.0f, 1.0f), PresetError::None);
   ExpectValid(*target(27, 0.0f, 1.0f), PresetError::None);  // a Leaf row at r1
   ExpectValid(*target(2, 0.0f, 1.0f), PresetError::TargetMix, 2);
-  ExpectValid(*target(29, 1.0f, 2.0f), PresetError::TargetNotLeaf, 29);  // Reserved until W1
+  // A later wave's leaf (a Reserved row) is unsupported, not wrong: a newer build's package.
+  ExpectValid(*target(29, 1.0f, 2.0f), PresetError::UnsupportedTarget, 29);
+  ExpectValid(*target(30, 0.0f, 800.0f), PresetError::UnsupportedTarget, 30);
+  ExpectValid(*target(80, 0.0f, 1.0f), PresetError::UnsupportedTarget, 80);
   ExpectValid(*target(69, 0.0f, 1.0f), PresetError::TargetNotLeaf, 69);  // a Macro row
+  ExpectValid(*target(77, 0.0f, 1.0f), PresetError::TargetNotLeaf, 77);  // a Performance row
   ExpectValid(*target(82, 0.0f, 1.0f), PresetError::TargetNotLeaf, 82);  // a Global row
   ExpectValid(*target(999, 0.0f, 1.0f), PresetError::TargetNotLeaf, 999);
+  ExpectValid(*target(0, 0.0f, 1.0f), PresetError::TargetNotLeaf, 0);
   ExpectValid(*target(7, 0.0f, 1.0f), PresetError::TargetDuplicate, 7);  // twice in activity
   ExpectValid(*target(6, 0.0f, 1.5f), PresetError::TargetRange, 6);
   ExpectValid(*target(6, -0.5f, 1.0f), PresetError::TargetRange, 6);
@@ -1070,9 +1186,23 @@ TEST_CASE("ValidateMode: absent elements and expression targets", "[blob][valida
   ExpectValid(*expr(75, 1.0f, 0.0f), PresetError::None);  // an undefined macro does nothing
   ExpectValid(*expr(5, 1.0f, 500.0f), PresetError::None);
   ExpectValid(*expr(5, 1.0f, 600.0f), PresetError::ExpressionRange, 5);
-  ExpectValid(*expr(29, 1.0f, 2.0f), PresetError::ExpressionTarget, 29);
-  ExpectValid(*expr(77, 0.0f, 1.0f), PresetError::ExpressionTarget, 77);
+  ExpectValid(*expr(5, 600.0f, 1.0f), PresetError::ExpressionRange, 5);  // the low end too
+  ExpectValid(*expr(29, 1.0f, 2.0f), PresetError::UnsupportedTarget, 29);  // Reserved until W1
+  ExpectValid(*expr(30, 0.0f, 800.0f), PresetError::UnsupportedTarget, 30);
+  ExpectValid(*expr(77, 0.0f, 1.0f), PresetError::ExpressionTarget, 77);  // a Performance row
+  ExpectValid(*expr(82, 0.0f, 1.0f), PresetError::ExpressionTarget, 82);  // a Global row
+  ExpectValid(*expr(999, 0.0f, 1.0f), PresetError::ExpressionTarget, 999);
   ExpectValid(*expr(0, 0.0f, 1.0f), PresetError::ExpressionTarget, 0);
+  // The curve: [1/16, 16], both ends included.
+  auto curve = [&](float c) {
+    auto s                          = expr(5, 1.0f, 500.0f);
+    s->control.expressions[0].curve = c;
+    return s;
+  };
+  ExpectValid(*curve(0.0625f), PresetError::None);
+  ExpectValid(*curve(16.0f), PresetError::None);
+  ExpectValid(*curve(16.5f), PresetError::CtrlValue, 5);
+  ExpectValid(*curve(FromBits(Bits(0.0625f) - 1u)), PresetError::CtrlValue, 5);
 }
 
 TEST_CASE("ValidateMode: steps, routes and the two-layer budget (E8, E11)", "[blob][validate]") {
@@ -1094,6 +1224,28 @@ TEST_CASE("ValidateMode: steps, routes and the two-layer budget (E8, E11)", "[bl
               PresetError::RouteEndpoint, 1, kModeFeatureAll);
   ExpectValid(*edit([](PresetState& s) { s.mode.links.entries[2].to = 2; }),
               PresetError::RouteEndpoint, 0x102, kModeFeatureAll);
+  // A route's or link's layer must exist: one layer, every endpoint on layer 0, then one on 1.
+  auto oneLayer = [&](int route, int link) {
+    return edit([&](PresetState& s) {
+      s.mode.schedule.layerCount = 1;
+      s.mode.layers[1]           = kAbsentModeLayer;
+      s.mode.layers[0].slotShare = 1.0f;
+      s.mode.pitch[1]            = PitchSet{};
+      PutLeaf(s, static_cast<uint32_t>(ParamId::L1VoiceCount), 64.0f);  // its default
+      for (uint32_t i = 0; i < s.mode.routes.count; ++i) s.mode.routes.entries[i].layer = 0;
+      for (uint32_t i = 0; i < s.mode.links.count; ++i) s.mode.links.entries[i].layer = 0;
+      if (route >= 0) s.mode.routes.entries[route].layer = 1;
+      if (link >= 0) s.mode.links.entries[link].layer = 1;
+    });
+  };
+  ExpectValid(*oneLayer(-1, -1), PresetError::None, kAnyDetail, kModeFeatureAll);
+  ExpectValid(*oneLayer(0, -1), PresetError::RouteEndpoint, 0, kModeFeatureAll);
+  ExpectValid(*oneLayer(5, -1), PresetError::RouteEndpoint, 5, kModeFeatureAll);
+  ExpectValid(*oneLayer(-1, 0), PresetError::RouteEndpoint, 0x100, kModeFeatureAll);
+  ExpectValid(*oneLayer(-1, 3), PresetError::RouteEndpoint, 0x103, kModeFeatureAll);
+  // Both layers exist in the full mode: routes and links may name layer 1.
+  ExpectValid(*edit([](PresetState& s) { s.mode.links.entries[1].layer = 1; }), PresetError::None,
+              kAnyDetail, kModeFeatureAll);
   // Slot shares sum to at most 1, exactly.
   auto shares = [&](float a, float b) {
     return edit([&](PresetState& s) {
@@ -1202,7 +1354,7 @@ TEST_CASE("Re-encoding into an existing package: pedal-side edits", "[blob][enco
 // ── Frozen fixtures and the fuzzer ────────────────────────────────────────────────────────
 
 TEST_CASE("Frozen fixtures: their bytes and verdicts", "[blob][fixtures]") {
-  REQUIRE(kFixtureCount == 12u);
+  REQUIRE(kFixtureCount == 14u);
   for (size_t i = 0; i < kFixtureCount; ++i) {
     const Fixture&    f    = kFixtures[i];
     const std::string path = std::string(BRAINSCAPE_FROZEN_FIXTURES) + "/" + f.file;
@@ -1227,14 +1379,37 @@ TEST_CASE("Mutation fuzzer, short run: every accepted package re-encodes to itse
   REQUIRE(r.reencodeMismatches == 0u);
   REQUIRE(r.accepted > 0u);
   REQUIRE(r.acceptedAll > r.accepted);
+  REQUIRE(r.structural > 0u);
+  REQUIRE(r.validatedThisBuild > 0u);
+  REQUIRE(r.validated > r.validatedThisBuild);
+  // The structural mutations reach the rules byte flips do not.
+  for (const PresetError e : {PresetError::ChunkOrder, PresetError::ChunkDefault,
+                              PresetError::SoundHash, PresetError::ControlHash,
+                              PresetError::TooLarge, PresetError::ModeTooLarge,
+                              PresetError::ModeLength, PresetError::MetaDuplicate,
+                              PresetError::SectionDuplicate}) {
+    INFO(PresetErrorName(e));
+    REQUIRE(r.histogram[static_cast<size_t>(e)] > 0u);
+  }
 }
 
 TEST_CASE("PresetErrorName names every code", "[blob]") {
   REQUIRE(std::string(PresetErrorName(PresetError::None)) == "None");
   REQUIRE(std::string(PresetErrorName(PresetError::UnsupportedFeature)) == "UnsupportedFeature");
   REQUIRE(std::string(PresetErrorName(PresetError::ExpressionRange)) == "ExpressionRange");
+  REQUIRE(std::string(PresetErrorName(PresetError::Performance)) == "Performance");
+  REQUIRE(std::string(PresetErrorName(PresetError::StatPadding)) == "StatPadding");
+  REQUIRE(std::string(PresetErrorName(PresetError::ModeLength)) == "ModeLength");
+  REQUIRE(std::string(PresetErrorName(PresetError::UnsupportedTarget)) == "UnsupportedTarget");
+  REQUIRE(std::string(PresetErrorName(PresetError::CtrlLength)) == "CtrlLength");
+  REQUIRE(std::string(PresetErrorName(PresetError::MetaDuplicate)) == "MetaDuplicate");
+  REQUIRE(std::string(PresetErrorName(PresetError::TargetNotLeaf)) == "TargetNotLeaf");
   REQUIRE(std::string(PresetErrorName(PresetError::kCount)) == "?");
+  std::vector<std::string> names;
   for (size_t e = 0; e < static_cast<size_t>(PresetError::kCount); ++e) {
-    REQUIRE(std::string(PresetErrorName(static_cast<PresetError>(e))) != "?");
+    names.push_back(PresetErrorName(static_cast<PresetError>(e)));
+    REQUIRE(names.back() != "?");
   }
+  std::sort(names.begin(), names.end());
+  REQUIRE(std::adjacent_find(names.begin(), names.end()) == names.end());
 }

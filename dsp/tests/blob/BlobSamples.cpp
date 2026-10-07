@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "../../src/blob/Blob.h"
 #include "brainscape/Sha256.h"
@@ -370,6 +371,289 @@ uint64_t Mix(uint64_t& s) {  // SplitMix64
   return z ^ (z >> 31);
 }
 
+// A section or a MODE chunk: its tag and payload.
+struct Part {
+  uint32_t tag = 0;
+  Bytes    payload;
+};
+
+// A seed's MODE, split, for splicing.
+struct SeedMode {
+  uint32_t          features = 0;
+  std::vector<Part> chunks;
+};
+
+// The sections after the header, leniently; false if they do not parse.
+bool SplitSections(const Bytes& b, std::vector<Part>* parts) {
+  parts->clear();
+  if (b.size() < kPackageHeaderBytes) return false;
+  size_t off = kPackageHeaderBytes;
+  while (off < b.size()) {
+    if (b.size() - off < 8) return false;
+    const uint32_t tag = Rd32(&b[off]), len = Rd32(&b[off + 4]);
+    off += 8;
+    if (len > b.size() - off) return false;
+    Part p;
+    p.tag = tag;
+    p.payload.assign(b.begin() + static_cast<std::ptrdiff_t>(off),
+                     b.begin() + static_cast<std::ptrdiff_t>(off + len));
+    parts->push_back(p);
+    off += len;
+    const size_t pad = (4u - (len & 3u)) & 3u;
+    if (pad > b.size() - off) return false;
+    off += pad;
+  }
+  return true;
+}
+
+// `b`'s header, then `parts` with their padding; section_count set, the hashes left to Rehash.
+Bytes JoinSections(const Bytes& b, const std::vector<Part>& parts) {
+  Bytes out(b.begin(), b.begin() + kPackageHeaderBytes);
+  for (const Part& p : parts) {
+    uint8_t h[8];
+    Wr32(h, p.tag);
+    Wr32(h + 4, static_cast<uint32_t>(p.payload.size()));
+    out.insert(out.end(), h, h + 8);
+    out.insert(out.end(), p.payload.begin(), p.payload.end());
+    out.resize(out.size() + ((4u - (p.payload.size() & 3u)) & 3u), 0);
+  }
+  Wr32(&out[24], static_cast<uint32_t>(parts.size()));
+  return out;
+}
+
+// MODE's features and chunks, leniently.
+bool SplitChunks(const Bytes& mode, uint32_t* features, std::vector<Part>* chunks) {
+  chunks->clear();
+  if (mode.size() < 8) return false;
+  *features  = Rd32(&mode[0]);
+  size_t off = 8;
+  while (off < mode.size()) {
+    if (mode.size() - off < 8) return false;
+    const uint32_t tag = Rd32(&mode[off]), len = Rd32(&mode[off + 4]);
+    off += 8;
+    if (len > mode.size() - off) return false;
+    Part p;
+    p.tag = tag;
+    p.payload.assign(mode.begin() + static_cast<std::ptrdiff_t>(off),
+                     mode.begin() + static_cast<std::ptrdiff_t>(off + len));
+    chunks->push_back(p);
+    off += len;
+  }
+  return true;
+}
+
+// MODE's payload: features, chunk_count (the number of chunks), the chunks.
+Bytes JoinChunks(uint32_t features, const std::vector<Part>& chunks) {
+  Bytes out(8);
+  Wr32(&out[0], features);
+  Wr32(&out[4], static_cast<uint32_t>(chunks.size()));
+  for (const Part& c : chunks) {
+    uint8_t h[8];
+    Wr32(h, c.tag);
+    Wr32(h + 4, static_cast<uint32_t>(c.payload.size()));
+    out.insert(out.end(), h, h + 8);
+    out.insert(out.end(), c.payload.begin(), c.payload.end());
+  }
+  return out;
+}
+
+int RankOfChunk(uint32_t tag) {
+  static const uint32_t kOrder[] = {kChunkSchd, kChunkLayr, kChunkPset, kChunkStep, kChunkMods,
+                                    kChunkRout, kChunkLink, kChunkDuck, kChunkMacr};
+  for (int i = 0; i < 9; ++i) {
+    if (kOrder[i] == tag) return i;
+  }
+  return 9;
+}
+
+// An optional chunk at its absent default, which a canonical MODE never holds (§5.3): PSET's
+// default sets, DUCK's defaults, STEP with no entries, ROUT or LINK with none, MODS all None.
+Part DefaultChunk(uint64_t which, uint32_t layers) {
+  Part c;
+  switch (which % 6) {
+    case 0:
+      c.tag = kChunkPset;
+      c.payload.assign(68u * layers, 0);
+      for (uint32_t l = 0; l < layers; ++l) {
+        c.payload[68u * l]     = 1;  // count; the entry is 0 st (bits 0)
+        c.payload[68u * l + 8] = 1;  // weight 1
+      }
+      break;
+    case 1:
+      c.tag = kChunkDuck;
+      c.payload.assign(8, 0);
+      Wr32(&c.payload[0], blob::kFDuckAtkDef);
+      Wr32(&c.payload[4], blob::kFDuckRelDef);
+      break;
+    case 2:
+      c.tag = kChunkStep;
+      c.payload.assign(260, 0);
+      break;
+    case 3:
+      c.tag = kChunkRout;
+      c.payload.assign(4, 0);
+      break;
+    case 4:
+      c.tag = kChunkLink;
+      c.payload.assign(4, 0);
+      break;
+    default:
+      c.tag = kChunkMods;
+      c.payload.assign(24, 0);
+      break;
+  }
+  return c;
+}
+
+// The structural mutations (§10.2): whole sections and chunks repeated, reordered, spliced from
+// another seed or written at their defaults, a META tag repeated, a hash broken, a package or a
+// MODE past its cap, MODE's tail cut. Lengths and counts are kept consistent, so the verdict is
+// the rule the edit breaks. Returns the hash to break after Rehash (0 none, 1 sound,
+// 2 control).
+int Structural(Bytes& m, uint64_t& s, const std::vector<SeedMode>& seedModes) {
+  std::vector<Part> sections;
+  if (!SplitSections(m, &sections) || sections.empty()) return 0;
+  const uint64_t op = Mix(s) % 12;
+  if (op == 0) {  // a section repeated somewhere
+    const Part copy = sections[static_cast<size_t>(Mix(s) % sections.size())];
+    const auto at   = static_cast<std::ptrdiff_t>(Mix(s) % (sections.size() + 1));
+    sections.insert(sections.begin() + at, copy);
+    m = JoinSections(m, sections);
+    return 0;
+  }
+  if (op == 1) {  // two adjacent sections swapped
+    if (sections.size() < 2) return 0;
+    const auto i = static_cast<size_t>(Mix(s) % (sections.size() - 1));
+    std::swap(sections[i], sections[i + 1]);
+    m = JoinSections(m, sections);
+    return 0;
+  }
+  if (op == 7) return 1 + static_cast<int>(Mix(s) % 2);  // one hash wrong, the others right
+  if (op == 8) {  // past 16 KiB: an unknown section to 16,385 bytes or a few more
+    const size_t target = kMaxPackageBytes + 1 + static_cast<size_t>(Mix(s) % 16);
+    if (m.size() + 8 >= target) return 0;
+    Part pad;
+    pad.tag = PackageTag('P', 'A', 'D', 'X');
+    pad.payload.assign(target - m.size() - 8, 0x5A);
+    sections.push_back(pad);
+    m = JoinSections(m, sections);
+    m.resize(target);  // the last section's padding trimmed: the length is what is too large
+    return 0;
+  }
+  if (op == 6) {  // a META tag repeated
+    size_t meta = 0;
+    while (meta < sections.size() && sections[meta].tag != kTagMeta) ++meta;
+    if (meta == sections.size()) return 0;
+    const Bytes& p   = sections[meta].payload;
+    size_t       off = 0;
+    for (int f = 0; f < 5; ++f) {  // id, name, family, author, description
+      if (p.size() - off < 2) return 0;
+      off += 2u + (static_cast<size_t>(p[off]) | static_cast<size_t>(p[off + 1]) << 8);
+      if (off > p.size()) return 0;
+    }
+    if (off >= p.size()) return 0;
+    const size_t       countAt = off++;
+    std::vector<Bytes> tags;
+    for (uint32_t t = 0; t < p[countAt]; ++t) {
+      if (p.size() - off < 2) return 0;
+      const size_t n = 2u + (static_cast<size_t>(p[off]) | static_cast<size_t>(p[off + 1]) << 8);
+      if (n > p.size() - off) return 0;
+      tags.emplace_back(p.begin() + static_cast<std::ptrdiff_t>(off),
+                        p.begin() + static_cast<std::ptrdiff_t>(off + n));
+      off += n;
+    }
+    if (tags.empty()) {
+      tags.push_back(Bytes{3, 0, 'd', 'u', 'p'});
+      tags.push_back(tags[0]);
+    } else if (tags.size() < kMaxTags) {
+      const Bytes copy = tags[static_cast<size_t>(Mix(s) % tags.size())];
+      const auto  at   = static_cast<std::ptrdiff_t>(Mix(s) % (tags.size() + 1));
+      tags.insert(tags.begin() + at, copy);
+    } else {
+      const auto i = static_cast<size_t>(1 + Mix(s) % (tags.size() - 1));
+      tags[i]      = tags[static_cast<size_t>(Mix(s) % i)];
+    }
+    Bytes q(p.begin(), p.begin() + static_cast<std::ptrdiff_t>(countAt));
+    q.push_back(static_cast<uint8_t>(tags.size()));
+    for (const Bytes& t : tags) q.insert(q.end(), t.begin(), t.end());
+    q.insert(q.end(), p.begin() + static_cast<std::ptrdiff_t>(off), p.end());
+    sections[meta].payload = q;
+    m = JoinSections(m, sections);
+    return 0;
+  }
+  // The rest edit MODE, the second section when the package is well formed.
+  if (sections.size() < 2) return 0;
+  Part&             mode     = sections[1];
+  uint32_t          features = 0;
+  std::vector<Part> chunks;
+  if (!SplitChunks(mode.payload, &features, &chunks) || chunks.empty()) return 0;
+  if (op == 2) {  // a chunk repeated somewhere
+    const Part copy = chunks[static_cast<size_t>(Mix(s) % chunks.size())];
+    const auto at   = static_cast<std::ptrdiff_t>(Mix(s) % (chunks.size() + 1));
+    chunks.insert(chunks.begin() + at, copy);
+    mode.payload = JoinChunks(features, chunks);
+  } else if (op == 3) {  // two adjacent chunks swapped
+    if (chunks.size() < 2) return 0;
+    const auto i = static_cast<size_t>(Mix(s) % (chunks.size() - 1));
+    std::swap(chunks[i], chunks[i + 1]);
+    mode.payload = JoinChunks(features, chunks);
+  } else if (op == 4) {  // a chunk from another seed, in place of its tag's or inserted
+    const SeedMode& other = seedModes[static_cast<size_t>(Mix(s) % seedModes.size())];
+    if (other.chunks.empty()) return 0;
+    const Part& c = other.chunks[static_cast<size_t>(Mix(s) % other.chunks.size())];
+    size_t      i = 0;
+    while (i < chunks.size() && chunks[i].tag != c.tag) ++i;
+    if (i < chunks.size()) {
+      chunks[i] = c;
+    } else {
+      const auto at = static_cast<std::ptrdiff_t>(Mix(s) % (chunks.size() + 1));
+      chunks.insert(chunks.begin() + at, c);
+    }
+    if (Mix(s) % 2 == 0) features |= other.features;  // so the splice reaches past the bits
+    mode.payload = JoinChunks(features, chunks);
+  } else if (op == 5) {  // an optional chunk at its default, in its place
+    uint32_t layers = 1;
+    if (chunks[0].tag == kChunkSchd && chunks[0].payload.size() >= 2 &&
+        chunks[0].payload[1] >= 1 && chunks[0].payload[1] <= kMaxModeLayers) {
+      layers = chunks[0].payload[1];
+    }
+    const Part c = DefaultChunk(Mix(s), layers);
+    size_t     i = 0;
+    while (i < chunks.size() && chunks[i].tag != c.tag) ++i;
+    if (i < chunks.size()) chunks.erase(chunks.begin() + static_cast<std::ptrdiff_t>(i));
+    i = 0;
+    while (i < chunks.size() && RankOfChunk(chunks[i].tag) < RankOfChunk(c.tag)) ++i;
+    chunks.insert(chunks.begin() + static_cast<std::ptrdiff_t>(i), c);
+    mode.payload = JoinChunks(features, chunks);
+  } else if (op == 9) {  // MODE past 4 KiB, the package within 16 KiB
+    if (mode.payload.size() > kMaxModeBytes) return 0;
+    const size_t grow = kMaxModeBytes + 1 + static_cast<size_t>(Mix(s) % 64) - mode.payload.size();
+    if (m.size() + grow + 8 > kMaxPackageBytes) return 0;
+    Part filler;
+    filler.tag = kChunkMacr;
+    filler.payload.assign(grow, 0);
+    chunks.push_back(filler);
+    mode.payload = JoinChunks(features, chunks);
+  } else if (op == 10) {  // 1-7 bytes after the last chunk: too short for a chunk header
+    mode.payload.resize(mode.payload.size() + 1 + static_cast<size_t>(Mix(s) % 7), 0);
+  } else {  // MODE cut short of its own header
+    mode.payload.resize(static_cast<size_t>(Mix(s) % 8));
+  }
+  m = JoinSections(m, sections);
+  return 0;
+}
+
+// One byte of the sound or control hash wrong, the package hash right.
+void BreakHash(Bytes& m, int which, uint64_t& s) {
+  if (m.size() < kPackageHeaderBytes) return;
+  m[static_cast<size_t>((which == 1 ? 32 : 64) + Mix(s) % 32)] ^=
+      static_cast<uint8_t>(1u << (Mix(s) % 8));
+  std::memset(&m[96], 0, 32);
+  uint8_t h[32];
+  Sha256Hasher::Digest(m.data(), m.size(), h);
+  std::memcpy(&m[96], h, 32);
+}
+
 }  // namespace
 
 FuzzResult Fuzz(uint64_t iterations, uint64_t seed) {
@@ -379,52 +663,75 @@ FuzzResult Fuzz(uint64_t iterations, uint64_t seed) {
       0x7F800000u, 0xFF800000u, 0x7FC00000u, 0x00000001u, 0x00800000u, 0x80000000u, 0x3F800000u,
       0x3D800000u, 0x41800000u, 69u,         76u,         77u,         128u,        2000u,
       kTagStat,    kTagMode,    kTagCtrl,    kTagMeta,    kTagJson,    kChunkPset,  kChunkMacr,
-      kChunkDuck};
+      kChunkDuck,  30u};  // 30: layer0.decay_ms, a later wave's leaf (UnsupportedTarget)
   const std::vector<Bytes> seeds = Seeds();
-  FuzzResult               r;
-  auto                     a = std::make_unique<PresetState>();
-  auto                     b = std::make_unique<PresetState>();
-  Sha256Hasher                   digest;
-  Bytes                    again(kMaxPackageBytes);
-  uint64_t                 s = seed;
-  for (uint64_t it = 0; it < iterations; ++it) {
-    Bytes          m  = seeds[static_cast<size_t>(it % seeds.size())];
-    const uint64_t nm = 1 + Mix(s) % 4;
-    for (uint64_t k = 0; k < nm; ++k) {
-      const uint64_t op = Mix(s) % 7;
-      const uint64_t sz = m.size();
-      if (op == 0 && sz > 0) {
-        m[static_cast<size_t>(Mix(s) % sz)] ^= static_cast<uint8_t>(1u << (Mix(s) % 8));
-      } else if (op == 1 && sz > 0) {
-        m[static_cast<size_t>(Mix(s) % sz)] = static_cast<uint8_t>(Mix(s));
-      } else if (op == 2 && sz >= 4) {
-        const auto     o = static_cast<size_t>(Mix(s) % (sz / 4)) * 4;
-        const uint32_t v = kInteresting[Mix(s) % (sizeof kInteresting / sizeof kInteresting[0])];
-        Wr32(&m[o], v);
-      } else if (op == 3) {
-        m.resize(static_cast<size_t>(Mix(s) % (sz + 1)));
-      } else if (op == 4) {
-        const uint64_t add = Mix(s) % 64;
-        for (uint64_t i = 0; i < add; ++i) m.push_back(static_cast<uint8_t>(Mix(s)));
-      } else if (op == 5 && sz > 8) {
-        const auto     o = static_cast<size_t>(Mix(s) % (sz - 4));
-        const uint32_t v = kInteresting[Mix(s) % (sizeof kInteresting / sizeof kInteresting[0])];
-        Wr32(&m[o], v);
-      } else if (op == 6 && sz > 16) {
-        // A small byte value at a random offset: counts, enumerations and indices.
-        m[static_cast<size_t>(Mix(s) % sz)] = static_cast<uint8_t>(Mix(s) % 18);
-      }
+  std::vector<SeedMode>    seedModes(seeds.size());
+  for (size_t i = 0; i < seeds.size(); ++i) {
+    std::vector<Part> sections;
+    if (SplitSections(seeds[i], &sections) && sections.size() >= 2) {
+      SplitChunks(sections[1].payload, &seedModes[i].features, &seedModes[i].chunks);
     }
-    if (Mix(s) % 4 != 0) Rehash(m);
+  }
+  FuzzResult   r;
+  auto         a = std::make_unique<PresetState>();
+  auto         b = std::make_unique<PresetState>();
+  Sha256Hasher digest;
+  Bytes        again(kMaxPackageBytes);
+  uint64_t     s = seed;
+  for (uint64_t it = 0; it < iterations; ++it) {
+    Bytes m = seeds[static_cast<size_t>(it % seeds.size())];
+    // One iteration in four is structural: one or two whole-part edits, then the hashes fixed
+    // (but one, when the edit breaks it). The rest mutate bytes and fix the hashes three times
+    // in four.
+    bool rehash = true;
+    int  broken = 0;
+    if (Mix(s) % 4 == 0) {
+      ++r.structural;
+      const uint64_t ns = 1 + Mix(s) % 2;
+      for (uint64_t k = 0; k < ns; ++k) {
+        const int h = Structural(m, s, seedModes);
+        if (h != 0) broken = h;
+      }
+    } else {
+      const uint64_t nm = 1 + Mix(s) % 4;
+      for (uint64_t k = 0; k < nm; ++k) {
+        const uint64_t op = Mix(s) % 7;
+        const uint64_t sz = m.size();
+        if (op == 0 && sz > 0) {
+          m[static_cast<size_t>(Mix(s) % sz)] ^= static_cast<uint8_t>(1u << (Mix(s) % 8));
+        } else if (op == 1 && sz > 0) {
+          m[static_cast<size_t>(Mix(s) % sz)] = static_cast<uint8_t>(Mix(s));
+        } else if (op == 2 && sz >= 4) {
+          const auto     o = static_cast<size_t>(Mix(s) % (sz / 4)) * 4;
+          const uint32_t v = kInteresting[Mix(s) % (sizeof kInteresting / sizeof kInteresting[0])];
+          Wr32(&m[o], v);
+        } else if (op == 3) {
+          m.resize(static_cast<size_t>(Mix(s) % (sz + 1)));
+        } else if (op == 4) {
+          const uint64_t add = Mix(s) % 64;
+          for (uint64_t i = 0; i < add; ++i) m.push_back(static_cast<uint8_t>(Mix(s)));
+        } else if (op == 5 && sz > 8) {
+          const auto     o = static_cast<size_t>(Mix(s) % (sz - 4));
+          const uint32_t v = kInteresting[Mix(s) % (sizeof kInteresting / sizeof kInteresting[0])];
+          Wr32(&m[o], v);
+        } else if (op == 6 && sz > 16) {
+          // A small byte value at a random offset: counts, enumerations and indices.
+          m[static_cast<size_t>(Mix(s) % sz)] = static_cast<uint8_t>(Mix(s) % 18);
+        }
+      }
+      rehash = Mix(s) % 4 != 0;
+    }
+    if (rehash) Rehash(m);
+    if (broken != 0) BreakHash(m, broken, s);
     // An exactly sized copy, so AddressSanitizer sees any read past the end.
     const Bytes      exact(m);
     const uint8_t*   data = exact.empty() ? nullptr : exact.data();
-    PresetDiagnostic da, db;
+    PresetDiagnostic da, db, va, vb;
     const bool okA = DecodePreset(data, exact.size(), a.get(), &da);
     const bool okB = blob::DecodePresetWith(data, exact.size(), b.get(), &db, nullptr, nullptr,
                                             kModeFeatureAll);
     ++r.histogram[static_cast<size_t>(da.error)];
-    uint8_t reencoded = 0;
+    uint8_t reencoded = 0, validated = 0;
     if (okB) {
       ++r.acceptedAll;
       // An accepted package re-encodes to its own bytes: STAT, MODE and CTRL from the state,
@@ -433,22 +740,38 @@ FuzzResult Fuzz(uint64_t iterations, uint64_t seed) {
       const bool   eq = n == exact.size() && std::memcmp(again.data(), data, n) == 0;
       if (!eq) ++r.reencodeMismatches;
       reencoded = eq ? 1 : 2;
-      PresetDiagnostic dv;
-      if (blob::ValidateModeWith(*b, kModeFeatureAll, &dv)) ++r.validated;
+      // ValidateMode with every feature: the semantic rules over the whole vocabulary.
+      validated |= 4u;
+      if (blob::ValidateModeWith(*b, kModeFeatureAll, &vb)) {
+        ++r.validated;
+        validated |= 8u;
+      }
+      ++r.validateHistogram[static_cast<size_t>(vb.error)];
     }
     if (okA) {
       // What this build accepts, every feature accepts too, as the same state.
       ++r.accepted;
       if (!okB || std::memcmp(a.get(), b.get(), sizeof(PresetState)) != 0) ++r.reencodeMismatches;
+      // ValidateMode as LoadPreset will run it at every load (§7.3), with this build's features.
+      validated |= 1u;
+      if (ValidateMode(*a, &va)) {
+        ++r.validatedThisBuild;
+        validated |= 2u;
+      }
     }
-    uint8_t record[16];
-    record[0] = static_cast<uint8_t>(da.error);
+    // Every verdict: both decodes, the re-encode, both validations, the size.
+    uint8_t record[32] = {};
+    record[0]          = static_cast<uint8_t>(da.error);
     Wr32(record + 1, da.detail);
     record[5] = static_cast<uint8_t>(db.error);
     Wr32(record + 6, db.detail);
     record[10] = reencoded;
     Wr32(record + 11, static_cast<uint32_t>(exact.size()));
-    record[15] = 0;
+    record[15] = validated;
+    record[16] = static_cast<uint8_t>(va.error);
+    Wr32(record + 17, va.detail);
+    record[21] = static_cast<uint8_t>(vb.error);
+    Wr32(record + 22, vb.detail);
     digest.Update(record, sizeof record);
     ++r.iterations;
   }

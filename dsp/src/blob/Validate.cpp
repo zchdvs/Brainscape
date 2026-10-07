@@ -267,6 +267,12 @@ bool SharesFit(uint32_t a, uint32_t b) noexcept {
 
 const ParamDescriptor* Row(uint32_t id) noexcept { return FindParam(static_cast<ParamId>(id)); }
 
+// A Reserved row is a later wave's ID: a target on it is newer content than this build plays,
+// not a corrupt one (§5.2), so it is named as unsupported, as an unknown chunk is.
+bool Reserved(const ParamDescriptor* r) noexcept {
+  return r != nullptr && r->kind == ParamKind::Reserved;
+}
+
 bool WithinRow(const ParamDescriptor& r, const float& v) noexcept {
   return InRange(BitsOf(v), BitsOf(r.min), BitsOf(r.max));
 }
@@ -302,7 +308,8 @@ bool CheckSemantics(const PresetState& s, PresetDiagnostic* d) noexcept {
   const ModeBlob&   mode = s.mode;
   const MacroTable& t    = mode.macros;
   // E8, E9: each macro's targets are distinct Leaf rows of present elements, not global.mix,
-  // with both range ends inside the target's range.
+  // with both range ends inside the target's range. A later wave's leaf (a Reserved row) is
+  // unsupported rather than wrong.
   for (uint32_t m = 0; m < t.macroCount; ++m) {
     const MacroDef& def = t.macros[m];
     for (uint32_t i = def.first; i < static_cast<uint32_t>(def.first) + def.count; ++i) {
@@ -311,6 +318,7 @@ bool CheckSemantics(const PresetState& s, PresetDiagnostic* d) noexcept {
       if (target.param == static_cast<uint32_t>(ParamId::Mix)) {
         return Fail(d, PresetError::TargetMix, target.param);
       }
+      if (Reserved(r)) return Fail(d, PresetError::UnsupportedTarget, target.param);
       if (r == nullptr || r->kind != ParamKind::Leaf) {
         return Fail(d, PresetError::TargetNotLeaf, target.param);
       }
@@ -390,8 +398,13 @@ bool CheckSemantics(const PresetState& s, PresetDiagnostic* d) noexcept {
 
 bool CheckStat(const PresetState& s, PresetDiagnostic* d) noexcept {
   if (s.leafCount > PresetState::kMaxLeaves) return Fail(d, PresetError::StatCount);
-  for (uint32_t i = 0; i < s.leafCount; ++i) {
+  for (uint32_t i = 0; i < PresetState::kMaxLeaves; ++i) {
     const PresetLeaf& leaf = s.leaves[i];
+    // Nothing past the count, as in CTRL and MACR: one state, one encoding (§5.2).
+    if (i >= s.leafCount) {
+      if (!AllZero(&leaf, sizeof leaf)) return Fail(d, PresetError::StatPadding, i);
+      continue;
+    }
     if (i > 0 && leaf.id <= s.leaves[i - 1].id) return Fail(d, PresetError::StatOrder, leaf.id);
     if (!Canonical(BitsOf(leaf.value))) return Fail(d, PresetError::StatValue, leaf.id);
   }
@@ -478,8 +491,10 @@ bool CheckControl(const ModeBlob& mode, const ControlState& c, PresetDiagnostic*
                     PresetError::CtrlValue, e.target)) {
       return Fail(d, PresetError::CtrlValue, e.target);
     }
-    // A Leaf or Macro row of this build, both ends within its range.
+    // A Leaf or Macro row of this build, both ends within its range; a later wave's leaf (a
+    // Reserved row) is unsupported rather than wrong.
     const ParamDescriptor* r = Row(e.target);
+    if (Reserved(r)) return Fail(d, PresetError::UnsupportedTarget, e.target);
     if (r == nullptr || (r->kind != ParamKind::Leaf && r->kind != ParamKind::Macro)) {
       return Fail(d, PresetError::ExpressionTarget, e.target);
     }

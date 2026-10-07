@@ -63,17 +63,24 @@ void FullMode(ModeBlob* mode, PresetState* state);
 // JSON and unknown sections; flags, no CTRL; and the full vocabulary (features this build lacks).
 std::vector<Bytes> Seeds();
 
-// The deterministic mutation fuzzer (§10.2): mutates the seeds with a SplitMix64 stream, fixes
-// the hashes three iterations in four, decodes with this build's features and with every
-// feature, and requires every accepted package to re-encode to its own bytes. The digest covers
-// every verdict, so host and M7 must agree on it.
+// The deterministic mutation fuzzer (§10.2): mutates the seeds with a SplitMix64 stream, one
+// iteration in four structurally (sections and MODE chunks repeated, reordered, spliced or at
+// their defaults, a META tag repeated, a hash broken, a package or MODE past its cap) with the
+// hashes fixed, the rest byte by byte with the hashes fixed three times in four. It decodes with
+// this build's features and with every feature, requires every accepted package to re-encode to
+// its own bytes, and runs ValidateMode on what each accepts. The digest covers every verdict,
+// the validator's included, so host and M7 must agree on all of them.
 struct FuzzResult {
   uint64_t iterations          = 0;
+  uint64_t structural          = 0;  // iterations mutated structurally
   uint64_t accepted            = 0;  // by DecodePreset
   uint64_t acceptedAll         = 0;  // with every feature
   uint64_t reencodeMismatches  = 0;
-  uint64_t validated           = 0;  // accepted and ValidateMode-clean (with every feature)
-  uint64_t histogram[static_cast<size_t>(PresetError::kCount)] = {};
+  uint64_t validated           = 0;  // accepted and ValidateMode-clean with every feature
+  uint64_t validatedThisBuild  = 0;  // accepted and ValidateMode-clean on this build
+  uint64_t histogram[static_cast<size_t>(PresetError::kCount)] = {};  // DecodePreset's verdicts
+  // ValidateMode's verdicts (every feature) on what every feature accepts.
+  uint64_t validateHistogram[static_cast<size_t>(PresetError::kCount)] = {};
   uint8_t  digest[32]          = {};
 };
 FuzzResult Fuzz(uint64_t iterations, uint64_t seed);
@@ -93,6 +100,8 @@ struct Fixture {
   bool        exactLoad;   // when accepted: CheckPreset's verdict on this build
   uint32_t    unknownSections;
   const char* why;
+  PresetError validate;        // when accepted: ValidateMode's verdict on this build
+  uint32_t    validateDetail;  // its detail
 };
 extern const Fixture kFixtures[];
 extern const size_t  kFixtureCount;

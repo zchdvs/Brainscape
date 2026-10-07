@@ -53,18 +53,34 @@ int RunFuzz(uint64_t iterations, uint64_t seed) {
   (void)s;
 #endif
   std::printf("\n");
-  std::printf("  accepted %llu (this build), %llu (every feature), %llu ValidateMode-clean\n",
+  std::printf("  %llu structural\n", static_cast<unsigned long long>(r.structural));
+  std::printf("  accepted %llu (this build), %llu (every feature)\n",
               static_cast<unsigned long long>(r.accepted),
-              static_cast<unsigned long long>(r.acceptedAll),
+              static_cast<unsigned long long>(r.acceptedAll));
+  std::printf("  ValidateMode-clean %llu (this build), %llu (every feature)\n",
+              static_cast<unsigned long long>(r.validatedThisBuild),
               static_cast<unsigned long long>(r.validated));
   std::printf("  re-encode mismatches %llu\n",
               static_cast<unsigned long long>(r.reencodeMismatches));
+  unsigned decodeCodes = 0, validateCodes = 0;
+  std::printf("  DecodePreset (this build):\n");
   for (size_t e = 0; e < static_cast<size_t>(PresetError::kCount); ++e) {
     if (r.histogram[e] != 0) {
-      std::printf("  %-20s %llu\n", PresetErrorName(static_cast<PresetError>(e)),
+      decodeCodes += e != 0 ? 1u : 0u;
+      std::printf("    %-20s %llu\n", PresetErrorName(static_cast<PresetError>(e)),
                   static_cast<unsigned long long>(r.histogram[e]));
     }
   }
+  std::printf("  ValidateMode (every feature):\n");
+  for (size_t e = 0; e < static_cast<size_t>(PresetError::kCount); ++e) {
+    if (r.validateHistogram[e] != 0) {
+      validateCodes += e != 0 ? 1u : 0u;
+      std::printf("    %-20s %llu\n", PresetErrorName(static_cast<PresetError>(e)),
+                  static_cast<unsigned long long>(r.validateHistogram[e]));
+    }
+  }
+  std::printf("  codes reached: %u by DecodePreset, %u by ValidateMode\n", decodeCodes,
+              validateCodes);
   std::printf("  verdict digest %s\n", digest.c_str());
   int rc = r.reencodeMismatches == 0 ? 0 : 1;
   if (iterations == kFuzzIterations && seed == kFuzzSeed) {

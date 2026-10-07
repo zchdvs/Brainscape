@@ -24,6 +24,8 @@ overwrite one.
 | `factory-json-stale.bsp` | decodes | the FACTORY and JSON_STALE flags and a JSON section, carried |
 | `unknown-flag.bsp` | `HeaderFlags`, bit 2 | an unassigned header flag |
 | `no-ctrl.bsp` | decodes | no CTRL section (`control.present` 0) |
+| `w1-leaf-macro-target.bsp` | decodes; `ValidateMode`: `UnsupportedTarget`, ID 30 | a macro target on `layer0.decay_ms`, a wave-1 leaf (a Reserved row here): newer content, named, not a corrupt package. Changes in the W1 pull request |
+| `w1-leaf-expression.bsp` | `UnsupportedTarget`, ID 30 | an expression assignment on the same leaf, which CTRL's rules refuse at decode, named. Changes in the W1 pull request |
 
 Lane C adds the sound-revision-2 package that must load exact, with no missing ID, on every
 later build (the `sinceRev` rule).

@@ -111,6 +111,8 @@ enum class PresetError : uint8_t {
   StatOrder,          // ids not strictly ascending. detail: the id
   StatValue,          // NaN, infinite, -0 or subnormal. detail: the id
   Performance,        // a performance field outside its enumeration or range
+  StatPadding,        // a nonzero leaf slot past the count (a state built in memory). detail:
+                      // the slot
   // MODE
   ModeLength,
   ModeTooLarge,       // over 4 KiB
@@ -127,6 +129,9 @@ enum class PresetError : uint8_t {
   MacroLayout,        // macro ids not ascending within 69-76, or `first`/`target_count` wrong
   FeatureMismatch,    // `features` is not what the content requires. detail: the difference
   UnsupportedFeature, // detail: the unknown chunk tag, or the feature bits this build lacks
+  UnsupportedTarget,  // a macro target (ValidateMode) or expression target (CTRL) on a Reserved
+                      // row: a later wave's ID, newer content rather than a corrupt one.
+                      // detail: the id
   // CTRL
   CtrlLength,
   CtrlPositions,      // not one position per defined macro, by ascending id. detail: the id
@@ -140,7 +145,8 @@ enum class PresetError : uint8_t {
   MetaDisplayName,    // for an undefined macro, or not by ascending id. detail: the id
   MetaDuplicate,      // a repeated tag
   // Semantic (ValidateMode, E8-E11)
-  TargetNotLeaf,      // E8: a macro target that is not a Leaf row. detail: the id
+  TargetNotLeaf,      // E8: a macro target that is not a Leaf row (nor a Reserved one,
+                      // UnsupportedTarget). detail: the id
   TargetMix,          // E8: global.mix as a macro target
   TargetAbsent,       // E8: a target in an absent element. detail: the id
   TargetDuplicate,    // E8: a leaf targeted twice by one macro. detail: the id
@@ -150,8 +156,8 @@ enum class PresetError : uint8_t {
   RouteEndpoint,      // E8: a route or link endpoint that does not exist
   LayerBudget,        // E11: slot shares over 1, or voice_count maxima over 64
   AbsentLeaf,         // a leaf of an absent element away from its default. detail: the id
-  ExpressionTarget,   // CTRL: not a Leaf or Macro row (or, ValidateMode, a leaf of an absent
-                      // element). detail: the id
+  ExpressionTarget,   // CTRL: not a Leaf or Macro row (nor a Reserved one, UnsupportedTarget;
+                      // or, ValidateMode, a leaf of an absent element). detail: the id
   ExpressionRange,    // CTRL: lo or hi outside the target's range. detail: the id
   kCount
 };

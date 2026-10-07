@@ -13,7 +13,7 @@
 namespace brainscape::blobtest {
 
 // Fuzz(kFuzzIterations, kFuzzSeed) on every leg, the M7 included (blob_tool).
-const char* const kFuzzDigest = "469ee35c549d6b366050d8225b93e7d091c25de43c0d2a5c2499c46e9bd84bc6";
+const char* const kFuzzDigest = "3d953af890bd42d3e8165267f674de455c13c229ca4c879a940d13bc0572244c";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
@@ -21,53 +21,80 @@ const Fixture kFixtures[] = {
      PresetError::None, 0, 1, true, 0,
      "a sound-revision-1 package: every r1 leaf, the default mode, CTRL with an expression "
      "assignment, META. Decodes on every later build (blob_format 1); loads exact at r1 (at r2 "
-     "its leaves 27 and 28 are retired IDs, so the load becomes inexact)"},
+     "its leaves 27 and 28 are retired IDs, so the load becomes inexact)",
+     PresetError::None, 0},
     {"unknown-sections.bsp",
      "4c02c56bba6a609e65fa8584a94d871a093a8b59a7d2bcd80e4117675513498d",
      PresetError::None, 0, 1, true, 2,
      "sections this build does not know, after MODE and after META: decoded, skipped, and "
-     "carried byte for byte and in place by a re-encode"},
+     "carried byte for byte and in place by a re-encode",
+     PresetError::None, 0},
     {"unknown-chunk.bsp",
      "fe1a4c28f7c3e5068e145813798b4c66fb97ab94331a522bac965842404f45fa",
      PresetError::UnsupportedFeature, PackageTag('Z', 'Z', 'Z', 'Z'), 0,
-     false, 0, "a MODE chunk this build does not know ('ZZZZ', never assigned): rejected, named"},
+     false, 0, "a MODE chunk this build does not know ('ZZZZ', never assigned): rejected, named",
+     PresetError::None, 0},
     {"unknown-feature-bit.bsp",
      "ddf04b87af1a6aa153cf003b043f555a1219e2db906ef14fde8c768a86fa5676",
      PresetError::UnsupportedFeature, 0x80000000u, 0, false, 0,
-     "feature bit 31 (never assigned): rejected, named"},
+     "feature bit 31 (never assigned): rejected, named",
+     PresetError::None, 0},
     {"future-pitch-set.bsp",
      "842aae62f3765256fcbeab2d53293862d4700b344e5524bb473d5d3f9da954b9",
      PresetError::UnsupportedFeature, kModeFeaturePitchSet, 0, false,
-     0, "a wave-1 package (the pitch set {0, +12}): rejected until W1 supports pitch sets"},
+     0, "a wave-1 package (the pitch set {0, +12}): rejected until W1 supports pitch sets",
+     PresetError::None, 0},
     {"blob-format-2.bsp",
      "d1b280ecfce08bd417da80f3bd5a469b98481913cba17078e68d9f598419e998",
      PresetError::BlobFormat, 2, 0, false, 0,
-     "a newer STAT/MODE/CTRL layout: rejected"},
+     "a newer STAT/MODE/CTRL layout: rejected",
+     PresetError::None, 0},
     {"package-format-2.bsp",
      "c30ef80120f496ad44aabba133214494a19f7b69d39452ce13b261c77377c29a",
      PresetError::PackageFormat, 2, 0, false, 0,
-     "a newer container: rejected"},
+     "a newer container: rejected",
+     PresetError::None, 0},
     {"future-sound-rev.bsp",
      "2a122ebc0f42cc8eb0ec8983d9d06653aaa86a80dc3b578888da4d558ebd3e41",
      PresetError::None, 0, 1000, true, 0,
      "compiled by a build of sound revision 1000: decodes (LoadPreset counts it as this build's "
-     "revision, §7.3)"},
+     "revision, §7.3)",
+     PresetError::None, 0},
     {"newer-schema.bsp",
      "26194969c86b733f62f0e43591301877d9c2c5bc5b4bbb966b70f18b63544325",
      PresetError::None, 0, 1, true, 0,
-     "a document schema newer than this build's: the package layer does not depend on it"},
+     "a document schema newer than this build's: the package layer does not depend on it",
+     PresetError::None, 0},
     {"factory-json-stale.bsp",
      "41fbcbbdcdd57248d246a1c3a25777e989aeaee043aeb4b06ea839bd07ebccae",
      PresetError::None, 0, 1, true, 0,
-     "FACTORY and JSON_STALE flags and a JSON section: decoded and carried"},
+     "FACTORY and JSON_STALE flags and a JSON section: decoded and carried",
+     PresetError::None, 0},
     {"unknown-flag.bsp",
      "c72f58a9dee4954d1f7eb9ddb022af937a8e401b0d9d14edd8d8ebb2696e8b3e",
      PresetError::HeaderFlags, 4, 0, false, 0,
-     "header flag bit 2 (unassigned): rejected"},
+     "header flag bit 2 (unassigned): rejected",
+     PresetError::None, 0},
     {"no-ctrl.bsp",
      "3a59c9a029c7237ad2bece0b584d1a4195b9a58b77e3568d9aea9c9094afd970",
      PresetError::None, 0, 1, true, 0,
-     "no CTRL section: decodes with control.present 0"},
+     "no CTRL section: decodes with control.present 0",
+     PresetError::None, 0},
+    {"w1-leaf-macro-target.bsp",
+     "d182b5d3056a88c4f7eec92611c5bf291484bc35e5a6b34ee29f183f16bfcfc8",
+     PresetError::None, 0, 1, true, 0,
+     "macro activity targeting layer0.decay_ms (ID 30), a wave-1 leaf and a Reserved row here: "
+     "decodes (macro targets are ValidateMode's), and ValidateMode names it UnsupportedTarget, "
+     "newer content rather than a corrupt one. Its verdict changes in the W1 pull request that "
+     "makes ID 30 a Leaf row",
+     PresetError::UnsupportedTarget, 30},
+    {"w1-leaf-expression.bsp",
+     "257656e5151674c2dc28b0f1b13d2b954d91a5db507fe3652c0fc405abc8dc7f",
+     PresetError::UnsupportedTarget, 30, 0, false, 0,
+     "an expression assignment on layer0.decay_ms (ID 30), a wave-1 leaf and a Reserved row "
+     "here: rejected as UnsupportedTarget, named, as an unknown chunk is UnsupportedFeature. Its "
+     "verdict changes in the W1 pull request that makes ID 30 a Leaf row",
+     PresetError::None, 0},
 };
 const size_t kFixtureCount = sizeof kFixtures / sizeof kFixtures[0];
 
@@ -150,6 +177,22 @@ Bytes MakeFixture(size_t index) {
     case 11:
       std::memset(static_cast<void*>(&s->control), 0, sizeof s->control);
       return R1Package(*s);
+    case 12:
+      // Activity's second target, layer0.position.spray_ms, becomes layer0.decay_ms.
+      s->mode.macros.targets[1] = MacroTarget{30, 0.0f, 800.0f, 0.0f, 1.0f, 2.0f};
+      return R1Package(*s);
+    case 13: {
+      // The encoder refuses the target, so the package is built with a Leaf row of a range
+      // that holds both ends (layer0.position.base_ms) and its target rewritten.
+      s->control.exprCount      = 2;
+      s->control.expressions[1] = ExpressionAssignment{1, 1.0f, 800.0f, 1.0f};
+      Bytes        b = R1Package(*s);
+      const size_t x = FindSection(b, kTagCtrl) + 8 + 4 + 8 * s->control.macroCount + 16;
+      if (Rd32(&b[x]) != 1u) return Bytes();
+      Wr32(&b[x], 30);
+      Rehash(b);
+      return b;
+    }
     default: return Bytes();
   }
 }
@@ -177,7 +220,13 @@ std::string CheckFixture(const Fixture& f, const Bytes& bytes) {
   LoadReport report;
   if (CheckPreset(*s, &report) != f.exactLoad) return "CheckPreset verdict differs";
   PresetDiagnostic v;
-  if (!ValidateMode(*s, &v)) return std::string("ValidateMode: ") + PresetErrorName(v.error);
+  ValidateMode(*s, &v);
+  if (v.error != f.validate || v.detail != f.validateDetail) {
+    std::snprintf(buf, sizeof buf, "ValidateMode %s/0x%08x, expected %s/0x%08x",
+                  PresetErrorName(v.error), static_cast<unsigned>(v.detail),
+                  PresetErrorName(f.validate), static_cast<unsigned>(f.validateDetail));
+    return buf;
+  }
   Bytes        again(kMaxPackageBytes);
   const size_t n = ReencodePackage(*s, bytes.data(), bytes.size(), 0, again.data(), again.size());
   if (n != bytes.size() || std::memcmp(again.data(), bytes.data(), n) != 0) {
