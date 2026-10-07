@@ -264,6 +264,17 @@ The existing `macos-latest` leg passes no contraction flag and is inferred to co
 
 ### 3.4 CI
 
+> **Update (2026-10-07, mode-compiler lane G).** `bspc-roundtrip` is built as
+> [mode-compiler.md](mode-compiler.md) §8.3 specifies, on the seven host legs of `parity.yml`
+> (Linux GCC, Clang and arm64, MSVC and MSVC AVX2, both macOS legs) rather than three OSes: every
+> committed document compiles to its committed package and `parity-summary` requires the legs'
+> manifests identical. Beside it: the compiler audit (a source ban over `compiler/src` and, on
+> the GCC and Clang legs, an import check), the package decoder's mutation fuzzer and frozen
+> fixtures on every parity leg and the emulated M7, a libFuzzer job, nightly legs, and the
+> sound-revision gate's package rule (a changed package needs a "package-change" label and a
+> named cause). `symbol-scan`, when built, is scoped to functions (mode-compiler.md §8.1). That
+> design amends this section when it is accepted (its §12.5).
+
 The existing jobs in `.github/workflows/host.yml` stay. The profile owns the parity legs (profile
 §6.2), including the full specification of `standalone-parity` and `plugin-format-parity`.
 

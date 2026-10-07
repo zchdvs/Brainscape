@@ -11,7 +11,7 @@
 > probes), the disagreements it resolves and its provenance are in
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
-> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B and A
+> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A and G
 > are built (docs/STATUS.md), and notes marked "as built" record what an implementing lane
 > decided where this document left a choice.
 
@@ -579,6 +579,10 @@ published at step 6 get hint 1; a row activated later gets its release's ordinal
 checks that it exceeds every earlier hint. Published rows are never renumbered, renamed or
 reused.
 
+As built (lane G): the manifest check and the version-hint check wait for step 6's committed
+manifest, which needs Q12 and companion Q17 settled first; until then the table may change in
+place (principle 5), so there is nothing to check against.
+
 ## 5. The compiled preset
 
 ### 5.1 Decoded types
@@ -1069,6 +1073,31 @@ clock, user, locale, hash-map order, pointer-ordered sort or floating-point arit
 
 An optional leg runs `bspc` on the emulated M7, for later on-pedal compilation.
 
+As built (lane G): `bspc-roundtrip` is a job in `.github/workflows/parity.yml` on
+`parity-host`'s seven legs. It runs the compiler's tests (`ctest -R '^compiler_'`: the number
+sets of §10.2, the JSON grammar, the property and reader-fuzz digests, `bspc roundtrip` over the
+examples and `bspc`'s command line), then `tools/ci/bspc_roundtrip.py` over every document set
+that exists: `compiler/tests/data` against its `MANIFEST`, `dsp/tests/golden/presets` (lane C;
+`frozen/` exempt) and `firmware/factory` (lane E) with a committed `.bsp` beside each `.json`
+and a `.json` beside each `.bsp`, the factory set also against its `MANIFEST`. Each leg uploads
+the combined manifest, paths prefixed with their set, and `parity-summary` requires all seven
+byte-identical. The package rule reads `soundHash` and `controlHash` (64 hex digits, as `bspc`
+prints them) from each preset entry of `golden.json` that has them, which lane C's harness
+writes, and `firmware/factory/MANIFEST` in `bspc roundtrip --write-manifest`'s format.
+"Naming the cause" is a `Package-change: <cause>` line in the pull request's description, which
+the gate requires beside the label and prints, re-running when the description is edited. A
+dropped package or a package preset turned back into a parameter list counts as a change; a
+new package, a preset that gains one and a re-stamp (`sound_rev` and package hash only) do not;
+neither a bump nor "sound-neutral" waives the label. The compiler audit is
+`tools/ci/audit_compiler.py`: the source ban runs over `compiler/src` in `parity-audits`, after
+a self-test of cases it must and must not flag (comments and string literals are skipped); it
+also bans the stream and locale headers and the other float formatters (`ecvt`, `gcvt`,
+`strfrom*`). The import check runs on the GCC and Clang `bspc-roundtrip` legs and rejects the
+same families as imports (libm, the `strto`/`wcsto`/`ato` families, `printf` and `scanf`, the
+float formatters, and `to_chars`, `from_chars`, `to_string` or string streams), after proving
+on `tools/ci/compiler_audit_selftest.cpp`'s object that it catches `strtof`, `strtod` and libm.
+The optional M7 leg is not built.
+
 ## 9. App integration
 
 ### 9.1 Library, editor and views
@@ -1134,6 +1163,16 @@ random valid states, and `bspc-roundtrip` gives cross-leg identity (§8.3).
   in-repository mutation fuzzer on every leg including the emulated M7, whose 32-bit `size_t`
   the host legs miss; host and M7 must accept and reject the same inputs, and every accepted
   input must re-encode to the same STAT, MODE and CTRL bytes with its carried sections intact.
+
+As built (lane G): the per-pull-request number sets run on the seven `bspc-roundtrip` legs; the
+nightly workflow (`.github/workflows/nightly.yml`) runs the exhaustive round trip on
+linux-x64-gcc and linux-arm64-gcc without the standard library cross-checks (the committed hash
+is the in-house code's; the per-pull-request sets keep the cross-checks), and libFuzzer for 30
+minutes from a corpus kept between nights in the Actions cache and minimized after each run.
+`blob-libfuzzer` runs 90 s per pull request with AddressSanitizer and UndefinedBehaviorSanitizer
+at `-O1` with asserts live, seeded with the frozen fixtures. Every `parity-host` leg and
+`parity-m7` run `brainscape_blob_tool --fuzz` against its committed verdict digest and
+`--fixtures`.
 
 ### 10.3 The golden corpus with modes
 

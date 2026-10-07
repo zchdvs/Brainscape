@@ -49,6 +49,9 @@ reviews' `review-engine-determinism/`, `review-product-microcosm/` and
 committed. Design §12.4 lane G copies those worth keeping into `tools/parity/modes/`, as the
 determinism work did with `tools/parity/`; the number code and the package sketch are the
 starting points of lanes A and B.
+Lane G did so (2026-10-07): the sources and run scripts, under the same directory names, are in
+[`tools/parity/modes/`](../../../tools/parity/modes/) ([`tools/parity/README.md`](../../../tools/parity/README.md),
+"Mode-compiler probes"); outputs, binaries and the manual text stayed out.
 
 ### 1.4 External sources
 

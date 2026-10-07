@@ -21,7 +21,7 @@ size and from a hostile caller floating-point environment, and CI now fails a pu
 that changes them (see [Internal sound revision 1](#internal-sound-revision-1)). A JUCE
 plugin and standalone skeleton hosts the engine through its stamped events and `LoadPreset`,
 with reproducible bounces and an offline audition render. Nothing has touched real hardware,
-and the parity, sound-revision and plugin CI workflows have not yet run on GitHub.
+and the preset jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -33,7 +33,7 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B and A are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, and the compiler with `bspc` (schema 1, canonical JSON, lint, derive), which compiles only the default structure until sound revision 2. Next: lane G's package rule, then sound revision 2 (lane C) |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A and G are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), which compiles only the default structure until sound revision 2, and their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs). Next: sound revision 2 (lane C) |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; none is committed before sound revision 2, and upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
@@ -117,7 +117,7 @@ builds, across the bump and across the review fixes (`4f4ddaa3583e46f2`).
 
 **What gates.** Check mode fails on any difference from the file: a hash, a per-second hash or
 a counter of any preset, a vector's input hash or ring sizes, or the header's revision,
-versions and engine configuration. `parity.yml` with `PARITY_HASHES_GATING` on: six host legs
+versions and engine configuration. `parity.yml` with `PARITY_HASHES_GATING` on: seven host legs
 and the emulated M7 render in check mode at 48-frame blocks, 512-frame blocks and from a
 hostile caller (the M7 also at {48, 1, 127, 32}, at a random pattern and with flushing forced
 on inside the guard, FZ; the Linux GCC leg at every block size above, two random patterns, with
@@ -133,9 +133,15 @@ without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp
 `dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
 forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
 bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
+Its package rule (mode-compiler.md §8.3, lane G) fails one that changes a committed package's
+`soundHash` or `controlHash` (a golden preset's, a factory package's in
+`firmware/factory/MANIFEST`) without the "package-change" label and a `Package-change: <cause>`
+line in its description, and counts a package preset's changed render as an engine change only
+when its package is unchanged; no package is committed yet, so it binds from sound revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
-an up-to-date branch and code-owner review (Known gaps has the caveats).
+an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
+checks are not required yet.
 
 **The gates were shown to fail.** A one-ULP change to a binary32 filter constant fails check
 on MSVC and on the emulated M7 (the feedback tamer's diffuser gain: 16 of 28 presets; a reverb
@@ -362,12 +368,18 @@ were last run before the ID table), and the emulated M7 runs
 the package fuzzer and fixtures beside the golden check; the plugin tests with MSVC, Release
 and Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
-compile-only Cortex-M7 build), `parity.yml` (six host legs and the emulated M7 checking the
+compile-only Cortex-M7 build), `parity.yml` (seven host legs and the emulated M7 checking the
 golden file, block-size, random-block, hostile-FP-environment and, on the M7, forced-flush
-perturbations, a contraction-on negative control and the static audits, all gating),
-`sound-rev.yml` (the sound-revision gate) and
-`plugin.yml` (every format on three OSes, Release and Debug). `parity.yml`, `sound-rev.yml`
-and `plugin.yml` have not yet run on GitHub.
+perturbations, a contraction-on negative control and the static audits, all gating; from lane
+G, every one of those legs and the M7 also runs the package fuzzer against its committed digest
+and the frozen fixtures, `bspc-roundtrip` runs the compiler's tests and compiles every
+committed document on the seven host legs with `parity-summary` requiring their package
+manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compiler audit runs
+its source ban in `parity-audits` and its import check on the GCC and Clang legs),
+`sound-rev.yml` (the sound-revision gate with the package rule), `nightly.yml` (the number
+code's exhaustive round trip on x86-64 and arm64, and 30 minutes of libFuzzer from a kept
+corpus) and `plugin.yml` (every format on three OSes, Release and Debug). Everything but lane
+G's additions first ran on GitHub on 2026-10-06 (Known gaps).
 
 ## How it was built (methodology)
 
@@ -401,8 +413,16 @@ records live in [docs/design/reviews/](design/reviews/).
   up-to-date branch and code-owner review; [`.github/CODEOWNERS`](../.github/CODEOWNERS)
   names @zchdvs for `dsp/` (`dsp/tests/golden/golden.json` included), `cmake/`, the root
   `CMakeLists.txt`, the arm toolchain file, `.github/workflows/` and `tools/ci/`, as profile
-  §5.12 and §6.1 require. Only collaborators can apply the "sound-neutral" label, so today
-  only the owner can waive the path trigger. Caveats: every gate runs the pull request's own
+  §5.12 and §6.1 require, and, from mode-compiler lane G, `compiler/`, `tools/bspc/` and
+  `firmware/factory/` (mode-compiler.md §8.1; the golden corpus's packages sit under `dsp/`).
+  Lane G adds eight checks for the owner to require once they have run: `bspc-roundtrip` on
+  `linux-x64-gcc`, `linux-x64-clang`, `linux-arm64-gcc`, `windows-x64-msvc`,
+  `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
+  named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
+  steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks. Only
+  collaborators can apply the "sound-neutral" label, so today only the owner can waive the
+  path trigger; the same holds for the "package-change" label, which the owner creates in the
+  repository before the first package lands. Caveats: every gate runs the pull request's own
   code (a pull request that edits the harness or a workflow can pass its own checks), so
   code-owner review of those paths is the real control; and the owner is the only code owner
   and cannot approve their own pull requests, so owner merges go through the administrator
@@ -472,10 +492,11 @@ records live in [docs/design/reviews/](design/reviews/).
   Clang 14; the exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit
   Cortex-M7 under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review), but the
   design commits them only after one linux-arm64 and one macOS run (§10.2), which no host here
-  offered. Lane G's arm64 and macOS legs reproducing them is a gate before lane A relies on the
-  number code; a leg that differs is a finding, not a reason to re-mint. The fuzzers'
-  M7 run, the libFuzzer leg and the number-check legs are not yet CI jobs (lane G), and the
-  plugin's typed-text parser now uses `Number` (lane A).
+  offered. Lane G's `bspc-roundtrip` legs run them on linux-arm64 and both macOS legs, and
+  their first GitHub run reproducing them is still the gate before the number code is relied
+  on; a leg that differs is a finding, not a reason to re-mint. The fuzzers' M7 run, the
+  libFuzzer leg and the number-check legs are CI jobs since lane G, and the plugin's typed-text
+  parser now uses `Number` (lane A).
 - **Mode compiler lane A's open ends.** The compiler admits only the default structure until
   sound revision 2 widens `kSupportedModeFeatures` (onset and mark); its tests already compile,
   decode and round-trip the whole vocabulary of every wave with the support table widened, but
@@ -494,14 +515,36 @@ records live in [docs/design/reviews/](design/reviews/).
   uncalled function, sound-neutral by construction; `editor.ratio_gen`'s keys stay open until
   the editor defines them, but its numbers and key order are canonical; documents over 1 MiB
   are refused unread (E12); `derive --solve` keeps a stored position that lands as near as
-  any; `bspc` refuses options a command does not take (exit 2). Lane G turns the compiler's
-  tests into the `bspc-roundtrip` legs (the manifest upload and `parity-summary`) and the
-  `compiler_bspc_cli` test into a leg check, adds the compiler audit
-  (the source ban must be scoped to `compiler/src`, since the tests cross-check against
-  `std::from_chars`, `to_chars` and `printf`) and CODEOWNERS for `compiler/`, `tools/bspc/` and
+  any; `bspc` refuses options a command does not take (exit 2). Lane G turned the compiler's
+  tests into the `bspc-roundtrip` legs (with the manifest upload and `parity-summary`'s
+  comparison) and `compiler_bspc_cli` into a leg check, and added the compiler audit, its
+  source ban scoped to `compiler/src` since the tests cross-check against `std::from_chars`,
+  `to_chars` and `printf`, and CODEOWNERS for `compiler/`, `tools/bspc/` and
   `firmware/factory/`. The compiler's digests, like the number code's hashes, are measured on
-  x86-64 only until lane G's arm64 and macOS legs run them. `render` waits for lane E's
+  x86-64 only until those legs first run on GitHub. `render` waits for lane E's
   `tools/audition/`.
+- **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run
+  is the gate for the number code's and the compiler's digests on arm64 and macOS (above), and
+  for `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
+  locally the new steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
+  CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
+  the owner: create the "package-change" label and require the eight new checks (above). What
+  later lanes must write for the package rule: lane C's harness puts `soundHash` and
+  `controlHash` (64 hex digits, as `bspc` prints them) in each package preset's entry of
+  `golden.json` and commits each corpus document beside its `.bsp` under
+  `dsp/tests/golden/presets/` (`frozen/` stays exempt); lane E writes
+  `firmware/factory/MANIFEST` with `bspc roundtrip --write-manifest`, paths relative to that
+  directory, beside each document and its `.bsp`. Choices the design left: the cause is named
+  on a `Package-change: <cause>` line of the description, which the gate requires and prints
+  (the workflow re-runs on edits); a dropped package or a package preset turned back into a
+  parameter list is a change, a re-stamp is not; the source ban also bans the stream and locale
+  headers and the other float formatters, and the import check rejects the same families as
+  imports (a superset of libm, `strtof` and `strtod`), each after a self-test that it can fail;
+  the nightly exhaustive round trip skips the standard library cross-checks (the committed hash
+  is the in-house code's). Not built: the parameter manifest and version-hint check (design
+  §4.5: they need step 6's frozen table, Q12 and companion Q17) and the optional `bspc` leg on
+  the emulated M7. The design's probes are kept, sources only, in
+  [`tools/parity/modes/`](../tools/parity/modes/) (`tools/parity/README.md`).
 - **Engine API still to come:** `LoadPreset` reads only the leaves of a `PresetState`; the
   mode, CTRL and the performance state it now carries (lane B), validation at load, the
   `sinceRev` rule and Trails or FastCut mode switches arrive with sound revision 2 (lane C);
@@ -561,10 +604,12 @@ Steps 1–4 need no hardware.
    §12.4 plan runs lane 0, lane B, lane A, lane G's package rule, then lane C at sound revision
    2. *Done:* lane 0, the permanent parameter-ID table with the macro IDs; lane B, the
    decoded preset with its decoder, validator, encoder, frozen fixtures and fuzzers (plus the
-   compiler's number code); and lane A, the compiler and `bspc` (schema 1, canonical JSON,
-   lint, derive), which compiles only the default structure until sound revision 2. Next: lane
-   G's package rule and CI legs (its arm64 and macOS legs must reproduce the number code's and
-   the compiler's committed hashes), then sound revision 2 (lane C).
+   compiler's number code); lane A, the compiler and `bspc` (schema 1, canonical JSON,
+   lint, derive), which compiles only the default structure until sound revision 2; and lane G,
+   the CI: the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the
+   decoder's fuzzers on every leg and the emulated M7, libFuzzer, nightly legs and the compiler
+   audit (on their first GitHub run, the arm64 and macOS legs must reproduce the number code's
+   and the compiler's committed hashes). Next: sound revision 2 (lane C).
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, `.bsp` presets and session state, and the rest of the plugin gaps above.
