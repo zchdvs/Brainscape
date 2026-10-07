@@ -829,19 +829,20 @@ The recommended law keeps dry at unity up to the middle and wet at unity from it
 `dry = min(1, 2(1 − m))`, `wet = min(1, 2m)`, exact at `m` = 0 and 1 for contract #2. It
 changes every preset with 0 < mix < 1, so it takes its own bump after r2.
 
-**Budgets.** `Engine::Impl` (6,032 of 6,656 bytes on the M7, `Engine.h:24-30`) holds the
-64-voice pool (`dsp/src/detail/Granular.h:134`), so each `Grain` byte costs 64: it grows about
-0.6–1.1 KiB in 3a (FastCut included), 1.3–1.5 KiB in W1 and 2.5 KiB in W3 before packing
-(*estimated*), all within engine §7's DTCM row. Each wave's pull request raises
-`kEngineImplBytes` under the DTCM map audit (engine §10, gate 10). `Grain` is 72 of its 128
-bytes (`Granular.h:25-38`); 3a adds 4, W1 about 20 and W3 about 40, so W3 must pack it
-(risk 4). The active mode goes in the Warm arena through `PlanMemory`.
+**Budgets.** `Engine::Impl` (6,096 of 6,656 bytes on the M7 at r1, *measured* in lane C's
+review, where `Engine.h:24-30` said 6,032) holds the 64-voice pool
+(`dsp/src/detail/Granular.h:134`), so each `Grain` byte costs 64: it grows about 0.6–1.1 KiB in
+3a (FastCut included), 1.3–1.5 KiB in W1 and 2.5 KiB in W3 before packing (*estimated*), all
+within engine §7's DTCM row. Each wave's pull request raises `kEngineImplBytes` under the
+DTCM map audit (engine §10, gate 10). `Grain` is 72 of its 128 bytes (`Granular.h:25-38`); 3a
+adds 4, W1 about 20 and W3 about 40, so W3 must pack it (risk 4). The active mode goes in the
+Warm arena through `PlanMemory`.
 
 As built (lane C, *measured*): `Grain` is 80 bytes (the 4-byte `fadeStart` and 4 of
-alignment), so `Engine::Impl` grew by 568 bytes on the M7 (512 of them the grain pool's), to
-6,600 of the raised 7,168 (`kEngineImplBytes`; x86-64: 6,752 of 7,424, from 6,168). The active
-mode and its CTRL, 1,616 bytes rounded to 16, end the Warm arena. No DTCM map audit exists yet
-to check the raise against.
+alignment), so `Engine::Impl` grew by 504 bytes on the M7, from 6,096 (the grain pool's 512,
+less 8 elsewhere), to 6,600 of the raised 7,168 (`kEngineImplBytes`; x86-64: by 512, from 6,240
+to 6,752 of 7,424). W1 and W3 budget from these. The active mode and its CTRL, 1,616 bytes
+rounded to 16, end the Warm arena. No DTCM map audit exists yet to check the raise against.
 
 ### 7.2 Parameter domains: the routing fix
 
@@ -1048,6 +1049,11 @@ bit at r2, every converted package preset included, and exactly the three item 4
 change: `automation_offgrid` (its toggles of 27 and 28 became mode switches; it also moves the
 trim below full mix), `subnormal_wet` (trim −6 dB at mix 0.5) and `post_max` (40 Hz to 41 Hz,
 from second 2). `hot_out` (trim +24 dB at mix 1) reproduces, as the arithmetic says it must.
+Lane C's review re-minted three presets r2 alone has: `automation_offgrid` loads no mode while a
+freeze is held, so its freezes hold their second as at r1 (143,974 frozen frames and 6 frozen
+onsets, r1's counts, which r2's first mint had cut to 48,007 and 1), `mode_switch` moves macros
+and the pedal after its loads, and `wet_kill` kills at mix 1. No other hash moved, and against r1
+the same three of 28 differ.
 
 ## 8. The compiler library and `bspc`
 
@@ -1275,14 +1281,14 @@ As built (lane C): `PresetCase` names its package (`package`); a script stages p
 (`SpilloverPackage`, `ExactLoadPackage`), with a switch style per load. The documents are in
 `dsp/tests/golden/presets/` with their packages and `MANIFEST`, compiled by `bspc` at r2: ten
 for the r1 presets that used 27 or 28 at their start or in a load (each holding exactly the r1
-values), the automation preset's second mode, and six for the new presets. The harness decodes
+values), the automation preset's second mode, and seven for the new presets. The harness decodes
 each package on the host and the M7 alike and records `package`, `soundHash` and `controlHash`
 per package preset in `golden.json`, which check mode compares. Corpus version 6 adds the vector
 `plucks_modes_14s` with `macro_sweep` (114 macro moves over all eight macros, the Filter macro
 through the kill, a `SetParam` and a `MacroMove` on one leaf at one frame in both orders),
 `expression` (300 pedal moves over four assignments, two on macros), `mode_switch` (six
 Spillover loads among three modes, Trails and FastCut, two FastCuts 77 frames apart, one load of
-the same mode), `wet_kill` (into and out of 40 Hz by `SetParam` and the Filter macro, lone trim
+the same mode with another CTRL), `wet_kill` (into and out of 40 Hz by `SetParam` and the Filter macro, lone trim
 and effect-volume changes while killed) and `lone_changes` (every `Leaf` row and the effect
 volume changed alone); the counters `macroMoves`, `expressionEvents`, `modeSwitches` (the
 engine's, after the render's first load) and `killedFrames`; the ablations `mode` (the default
@@ -1295,6 +1301,20 @@ bits (R1 on every leg, the M7 included). Every render starts from the device set
 `ModeBlob`; the presets themselves take it only from packages. A staged package's
 hashes are not in `golden.json`: a change to one is visible in `MANIFEST`, and its render's
 change counts as the engine's, a conservative attribution.
+
+Corpus version 7 (lane C's review) closes what that left untested. `mode_switch` moves macros and
+the pedal after its loads, one of each at a load's own frame after it (six macro moves, five
+expression events), and its switch packages each have their own macro table and CTRL (aux1 only
+in `switch_live`, aux2 and another Repeats range only in `switch_onset`, and
+`switch_marks_ctrl`, `switch_marks`'s mode with the pedal assigned: a load that is no switch but
+installs CTRL), so a load that kept the old macros or CTRL changes its render; `switch_live`
+plays at −5 st and `switch_onset` at +7 st among about 33 voices, so its FastCuts fade unity,
+Hermite and linear grains. `wet_kill` kills at mix 1, by the Filter macro and by `SetParam`, and
+the counter `mutedFrames` (output frames exactly ±0 while the input sounds) measures the kill on
+the output, which `killedFrames`, the script's cutoff target, cannot. `automation_offgrid` loads
+no mode while a freeze is held. Mutants that keep the old macro table or CTRL over a Spillover
+load, install CTRL only on a switch, drop the kill, or misplace the Hermite or linear fade by one
+frame each fail the check.
 
 ### 10.4 Engine and plugin tests
 
@@ -1317,6 +1337,13 @@ As built (lane C): `dsp/tests/test_modes.cpp` holds the load, event, wet-gain an
 sequencing" is tested as the content comparison (`ModeSwitches`, and the stale-hash load
 playing as the true one): r2 has no sequencing state, so the reset itself is W1's test. Unit
 tests whose parameter lists named 27 or 28 still do, read as structure (`RetiredRows.h`).
+After lane C's review, `test_modes.cpp` also checks that moves after a Spillover load, one at its
+frame included, evaluate on the loaded mode and CTRL, and that a load of the same mode with
+another CTRL installs it; and that macro, expression and load events, `CheckPreset` and
+`LoadPreset` give a hostile caller the clean render and its word back (on x64 also a caller with
+every exception unmasked), as `test_mode_eval.cpp` does for `EvalExpression`. The compiler's
+migrate test covers rows 27 and 28 at the 0.5 threshold's edges and at non-finite values, and the
+plugin parses `Kill`, the cutoff minimum's display text.
 
 ## 11. Step 4: the first factory modes
 

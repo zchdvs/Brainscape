@@ -37,7 +37,7 @@ mode-compiler lane G added to CI have not yet run on GitHub.
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill). Next: wave 1 (lane F), the audition tooling (lane E), the app's curation slice (lane D) |
-| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 17 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
+| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
 | Firmware bring-up (Daisy Seed3) | ⬜ Not started (CI cross-compiles `dsp/` for Cortex-M7 today) |
@@ -105,25 +105,29 @@ shared evaluator (R6). A Spillover load is Trails or FastCut, which fades the so
 over 128 frames (R7). `Engine::Impl` grew to 6,600 bytes on the M7 (budget raised to
 7,168) and 6,752 on x86-64 (7,424).
 
-**What changed in the corpus** (version 6). The revision-1 presets that set rows 27 or 28 take
+**What changed in the corpus** (version 7). The revision-1 presets that set rows 27 or 28 take
 that structure from committed packages compiled by `bspc` from documents holding exactly their
 values (`dsp/tests/golden/presets/`, with `MANIFEST`): eight start from one and `exact_load_mid`
-loads one mid-render; the automation preset's toggles of 27 and 28
-became Spillover loads between two modes in both styles; `post_max` moved from 40 Hz to 41 Hz,
+loads one mid-render; the automation preset's toggles of 27 and 28 became Spillover loads between
+two modes in both styles, none while a freeze is held; `post_max` moved from 40 Hz to 41 Hz,
 since 40 Hz now kills the wet; and a new 14 s vector holds a macro sweep, the expression pedal on
-macros and leaves, a chain of mode switches, the wet kill and one lone change per leaf, with
-counters for macro moves, expression events, mode switches and killed frames, ablations for the
-mode, the moves, the switches, FastCut and the kill, and an invariance that renders every
-parameter event among edits rebuilding every other domain. `golden.json` records each package
-preset's `soundHash` and `controlHash`, which check mode compares.
+macros and leaves, a chain of mode switches with macro and pedal moves after the loads (each
+switch package with its own macros and CTRL, the FastCuts fading unity and pitched grains), the
+wet kill (at mix 1 too, where the output shows it) and one lone change per leaf, with counters
+for macro moves, expression events, mode switches, killed frames and muted output frames,
+ablations for the mode, the moves, the switches, FastCut and the kill, and an invariance that
+renders every parameter event among edits rebuilding every other domain. `golden.json` records
+each package preset's `soundHash` and `controlHash`, which check mode compares.
 
 **What the re-mint changed, preset by preset.** Of revision 1's 28 presets, 25 reproduce
 revision 1's hashes bit for bit (every converted package preset included, and `hot_out`, whose
 +24 dB trim runs at mix 1, where wet-only and whole-output trims give the same bits), and
 exactly the three the design expects changed: `automation_offgrid` (mode switches instead of 27
-and 28, and its trim, below full mix, now wet only; from second 0), `subnormal_wet` (−6 dB trim
-at mix 0.5; from second 0) and `post_max` (41 Hz; from second 2). The five new presets have no
-earlier hash.
+and 28, none while a freeze is held, so its freezes hold as long as at revision 1; and its trim,
+below full mix, now wet only; from second 0), `subnormal_wet` (−6 dB trim at mix 0.5; from second
+0) and `post_max` (41 Hz; from second 2). The five new presets have no earlier hash. Lane C's
+review re-minted `automation_offgrid`, `mode_switch` and `wet_kill` for its corpus changes; no
+other hash moved.
 
 **Which builds agree.** In check mode against the file: MSVC 19.40 (Release SSE2 and AVX2,
 Debug), GCC 11.4 (Release and Debug), Clang 14 (Release) and the Cortex-M7 archive from
