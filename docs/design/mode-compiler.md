@@ -1077,16 +1077,29 @@ As built (lane G): `bspc-roundtrip` is a job in `.github/workflows/parity.yml` o
 `parity-host`'s seven legs. It runs the compiler's tests (`ctest -R '^compiler_'`: the number
 sets of §10.2, the JSON grammar, the property and reader-fuzz digests, `bspc roundtrip` over the
 examples and `bspc`'s command line), then `tools/ci/bspc_roundtrip.py` over every document set
-that exists: `compiler/tests/data` against its `MANIFEST`, `dsp/tests/golden/presets` (lane C;
-`frozen/` exempt) and `firmware/factory` (lane E) with a committed `.bsp` beside each `.json`
-and a `.json` beside each `.bsp`, the factory set also against its `MANIFEST`. Each leg uploads
-the combined manifest, paths prefixed with their set, and `parity-summary` requires all seven
-byte-identical. The package rule reads `soundHash` and `controlHash` (64 hex digits, as `bspc`
-prints them) from each preset entry of `golden.json` that has them, which lane C's harness
-writes, and `firmware/factory/MANIFEST` in `bspc roundtrip --write-manifest`'s format.
-"Naming the cause" is a `Package-change: <cause>` line in the pull request's description, which
-the gate requires beside the label and prints, re-running when the description is edited. A
-dropped package or a package preset turned back into a parameter list counts as a change; a
+that exists: `compiler/tests/data`, `dsp/tests/golden/presets` (lane C; `frozen/` exempt) and
+`firmware/factory` (lane E), the last two with a committed `.bsp` beside each `.json` and a
+`.json` beside each `.bsp`. Every set with documents must commit its `MANIFEST` (`bspc roundtrip
+--write-manifest`, paths relative to the set) and is checked against it, so no package changes
+without its manifest line changing; and the root `.gitattributes` must give every document and
+`MANIFEST` `text eol=lf` and every `.bsp` `binary`, which the script checks with `git
+check-attr` on every leg (canonical JSON is LF, §6.4, and Git for Windows checks text out as
+CRLF under `core.autocrlf`, so without the rule the Windows legs would reject every document). A
+self-test step first proves each of those checks can fail and that the committed rules cover all
+three sets; CODEOWNERS covers `/.gitattributes` too. Each leg uploads the combined manifest,
+paths prefixed with their set, and `parity-summary` requires all seven byte-identical. The
+package rule reads `dsp/tests/golden/presets/MANIFEST` and `firmware/factory/MANIFEST` in `bspc
+roundtrip --write-manifest`'s format, and `soundHash` and `controlHash` (64 hex digits, as
+`bspc` prints them) from each preset entry of `golden.json` that has them, which lane C's
+harness writes and its check mode must verify against the package the preset loads; the
+manifests catch a package change that `golden.json`'s entry misses (a CTRL-only change, or a
+STAT change the render does not hear), and `golden.json`'s entries tie a preset's render to its
+package. A changed render counts as its package's only when the pull request touches none of the
+path trigger's paths without a bump: with the engine changed beside the package, nothing tells
+which moved the render, so it is the hard trigger's, whatever the labels (land the two apart, or
+bump). "Naming the cause" is a `Package-change: <cause>` line in the pull request's description,
+which the gate requires beside the label and prints, re-running when the description is edited.
+A dropped package or a package preset turned back into a parameter list counts as a change; a
 new package, a preset that gains one and a re-stamp (`sound_rev` and package hash only) do not;
 neither a bump nor "sound-neutral" waives the label. The compiler audit is
 `tools/ci/audit_compiler.py`: the source ban runs over `compiler/src` in `parity-audits`, after
@@ -1094,9 +1107,9 @@ a self-test of cases it must and must not flag (comments and string literals are
 also bans the stream and locale headers and the other float formatters (`ecvt`, `gcvt`,
 `strfrom*`). The import check runs on the GCC and Clang `bspc-roundtrip` legs and rejects the
 same families as imports (libm, the `strto`/`wcsto`/`ato` families, `printf` and `scanf`, the
-float formatters, and `to_chars`, `from_chars`, `to_string` or string streams), after proving
-on `tools/ci/compiler_audit_selftest.cpp`'s object that it catches `strtof`, `strtod` and libm.
-The optional M7 leg is not built.
+float formatters, and `to_chars`, `from_chars`, `to_string` or string streams), after proving on
+`tools/ci/compiler_audit_selftest.cpp`'s object that it catches `strtof`, `strtod` and libm. The
+optional M7 leg is not built.
 
 ## 9. App integration
 

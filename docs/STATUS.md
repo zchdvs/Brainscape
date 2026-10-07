@@ -134,10 +134,12 @@ without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp
 forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
 bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
 Its package rule (mode-compiler.md §8.3, lane G) fails one that changes a committed package's
-`soundHash` or `controlHash` (a golden preset's, a factory package's in
-`firmware/factory/MANIFEST`) without the "package-change" label and a `Package-change: <cause>`
-line in its description, and counts a package preset's changed render as an engine change only
-when its package is unchanged; no package is committed yet, so it binds from sound revision 2.
+`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
+`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the
+"package-change" label and a `Package-change: <cause>` line in its description, and counts a
+package preset's changed render as an engine change unless its package changed too and the pull
+request touches no path-trigger path without a bump; no package is committed yet, so it binds
+from sound revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
 an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
@@ -373,7 +375,8 @@ golden file, block-size, random-block, hostile-FP-environment and, on the M7, fo
 perturbations, a contraction-on negative control and the static audits, all gating; from lane
 G, every one of those legs and the M7 also runs the package fuzzer against its committed digest
 and the frozen fixtures, `bspc-roundtrip` runs the compiler's tests and compiles every
-committed document on the seven host legs with `parity-summary` requiring their package
+committed document on the seven host legs, each set against its required `MANIFEST` and with
+`.gitattributes` keeping its documents LF, with `parity-summary` requiring their package
 manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compiler audit runs
 its source ban in `parity-audits` and its import check on the GCC and Clang legs),
 `sound-rev.yml` (the sound-revision gate with the package rule), `nightly.yml` (the number
@@ -413,8 +416,9 @@ records live in [docs/design/reviews/](design/reviews/).
   up-to-date branch and code-owner review; [`.github/CODEOWNERS`](../.github/CODEOWNERS)
   names @zchdvs for `dsp/` (`dsp/tests/golden/golden.json` included), `cmake/`, the root
   `CMakeLists.txt`, the arm toolchain file, `.github/workflows/` and `tools/ci/`, as profile
-  §5.12 and §6.1 require, and, from mode-compiler lane G, `compiler/`, `tools/bspc/` and
-  `firmware/factory/` (mode-compiler.md §8.1; the golden corpus's packages sit under `dsp/`).
+  §5.12 and §6.1 require, and, from mode-compiler lane G, `compiler/`, `tools/bspc/`,
+  `firmware/factory/` and the root `.gitattributes` (mode-compiler.md §8.1, §8.3; the golden
+  corpus's packages sit under `dsp/`).
   Lane G adds eight checks for the owner to require once they have run: `bspc-roundtrip` on
   `linux-x64-gcc`, `linux-x64-clang`, `linux-arm64-gcc`, `windows-x64-msvc`,
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
@@ -506,45 +510,52 @@ records live in [docs/design/reviews/](design/reviews/).
   link endpoints `grain.pitch` and the like (engine §5), and a step entry's `gain` and `prob`
   default to 1. Choices the design left to the implementation: the header's `FACTORY` flag is
   set for ids under `factory.` (a pure function of the document); a macro written without
-  `targets` keeps its default targets (per-key defaulting); `fmt` keeps a document's
-  stamp and `compile` and `stamp` compute it, so a stale stamp passes `fmt --check` but fails
-  `bspc roundtrip` and `stamp --check`; L4's "display resolution" is the display text
-  (`FormatPlain`) of the leaf against the derived value; L2 compares the smallest `base_ms` the
-  leaf and macros reach with the near guard at the largest size, transpose and spread they
-  reach; `EvalMacro` (R6) landed in `dsp/` with lane A because lint and derive need it, as an
-  uncalled function, sound-neutral by construction; `editor.ratio_gen`'s keys stay open until
-  the editor defines them, but its numbers and key order are canonical; documents over 1 MiB
-  are refused unread (E12); `derive --solve` keeps a stored position that lands as near as
-  any; `bspc` refuses options a command does not take (exit 2). Lane G turned the compiler's
-  tests into the `bspc-roundtrip` legs (with the manifest upload and `parity-summary`'s
-  comparison) and `compiler_bspc_cli` into a leg check, and added the compiler audit, its
-  source ban scoped to `compiler/src` since the tests cross-check against `std::from_chars`,
-  `to_chars` and `printf`, and CODEOWNERS for `compiler/`, `tools/bspc/` and
-  `firmware/factory/`. The compiler's digests, like the number code's hashes, are measured on
-  x86-64 only until those legs first run on GitHub. `render` waits for lane E's
-  `tools/audition/`.
-- **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run
-  is the gate for the number code's and the compiler's digests on arm64 and macOS (above), and
-  for `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
+  `targets` keeps its default targets (per-key defaulting); `fmt` keeps a document's stamp and
+  `compile` and `stamp` compute it, so a stale stamp passes `fmt --check` but fails `bspc
+  roundtrip` and `stamp --check`; L4's "display resolution" is the display text (`FormatPlain`)
+  of the leaf against the derived value; L2 compares the smallest `base_ms` the leaf and macros
+  reach with the near guard at the largest size, transpose and spread they reach; `EvalMacro`
+  (R6) landed in `dsp/` with lane A because lint and derive need it, as an uncalled function,
+  sound-neutral by construction; `editor.ratio_gen`'s keys stay open until the editor defines
+  them, but its numbers and key order are canonical; documents over 1 MiB are refused unread
+  (E12); `derive --solve` keeps a stored position that lands as near as any; `bspc` refuses
+  options a command does not take (exit 2). Lane G turned the compiler's tests into the
+  `bspc-roundtrip` legs (with the manifest upload and `parity-summary`'s comparison) and
+  `compiler_bspc_cli` into a leg check, and added the compiler audit, its source ban scoped to
+  `compiler/src` since the tests cross-check against `std::from_chars`, `to_chars` and `printf`,
+  and CODEOWNERS for `compiler/`, `tools/bspc/`, `firmware/factory/` and `.gitattributes`. The
+  compiler's digests, like the number code's hashes, are measured on x86-64 only until those
+  legs first run on GitHub. `render` waits for lane E's `tools/audition/`.
+- **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run is
+  the gate for the number code's and the compiler's digests on arm64 and macOS (above), and for
+  `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
   locally the new steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
   later lanes must write for the package rule: lane C's harness puts `soundHash` and
   `controlHash` (64 hex digits, as `bspc` prints them) in each package preset's entry of
-  `golden.json` and commits each corpus document beside its `.bsp` under
-  `dsp/tests/golden/presets/` (`frozen/` stays exempt); lane E writes
-  `firmware/factory/MANIFEST` with `bspc roundtrip --write-manifest`, paths relative to that
-  directory, beside each document and its `.bsp`. Choices the design left: the cause is named
-  on a `Package-change: <cause>` line of the description, which the gate requires and prints
-  (the workflow re-runs on edits); a dropped package or a package preset turned back into a
-  parameter list is a change, a re-stamp is not; the source ban also bans the stream and locale
-  headers and the other float formatters, and the import check rejects the same families as
-  imports (a superset of libm, `strtof` and `strtod`), each after a self-test that it can fail;
-  the nightly exhaustive round trip skips the standard library cross-checks (the committed hash
-  is the in-house code's). Not built: the parameter manifest and version-hint check (design
-  §4.5: they need step 6's frozen table, Q12 and companion Q17) and the optional `bspc` leg on
-  the emulated M7. The design's probes are kept, sources only, in
-  [`tools/parity/modes/`](../tools/parity/modes/) (`tools/parity/README.md`).
+  `golden.json`, and its check mode fails when a preset's recorded pair differs from the package
+  it loads; lane C commits each corpus document beside its `.bsp` under
+  `dsp/tests/golden/presets/` (`frozen/` stays exempt) with that directory's `MANIFEST`, and
+  lane E does the same in `firmware/factory/`. Each `MANIFEST` is written with `bspc roundtrip
+  --write-manifest MANIFEST -- <documents>` in its directory, paths relative to it;
+  `bspc_roundtrip.py` fails a set with documents and no `MANIFEST`, and fails any document or
+  `MANIFEST` that the root `.gitattributes` does not keep at LF (`text eol=lf`) or `.bsp` it
+  does not mark binary, which the committed rules already do for both directories. Choices the
+  design left: the cause is named on a `Package-change: <cause>` line of the description, which
+  the gate requires and prints (the workflow re-runs on edits); a dropped package or a package
+  preset turned back into a parameter list is a change, a re-stamp is not; an unbumped change to
+  a path-trigger path beside a package change leaves the package preset's changed render to the
+  hard trigger (land the two apart, or bump); the corpus also commits a `MANIFEST`, which the
+  gate reads beside `golden.json`'s pairs, so a package change the render does not hear still
+  needs the label; the source ban also bans the stream and locale headers and the other float
+  formatters, and the import check rejects the same families as imports (a superset of libm,
+  `strtof` and `strtod`), each after a self-test that it can fail; the nightly exhaustive round
+  trip skips the standard library cross-checks (the committed hash is the in-house code's). Not
+  built: the parameter manifest and version-hint check (design §4.5: they need step 6's frozen
+  table, Q12 and companion Q17) and the optional `bspc` leg on the emulated M7. The design's
+  probes are kept, sources only, in [`tools/parity/modes/`](../tools/parity/modes/)
+  (`tools/parity/README.md`).
 - **Engine API still to come:** `LoadPreset` reads only the leaves of a `PresetState`; the
   mode, CTRL and the performance state it now carries (lane B), validation at load, the
   `sinceRev` rule and Trails or FastCut mode switches arrive with sound revision 2 (lane C);

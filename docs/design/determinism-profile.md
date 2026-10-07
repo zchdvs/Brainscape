@@ -867,10 +867,12 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > **Update (2026-10-07, mode-compiler lane G).** The gate also holds
 > [mode-compiler.md](mode-compiler.md) §8.3's package rule: a golden preset that plays a
 > committed package records its `soundHash` and `controlHash`, and a changed render of such a
-> preset counts for the hard trigger only when those are unchanged. A changed package (there,
-> or a factory package's in `firmware/factory/MANIFEST`) needs a code-owner-approved
-> "package-change" label and a `Package-change: <cause>` line in the description, bump or not:
-> a compiler or document change alters what a document means, not what the engine plays.
+> preset is excused from the hard trigger only when those changed too and the pull request
+> touches none of this section's trigger paths without a bump. A changed package (there, or a
+> corpus or factory package's in `dsp/tests/golden/presets/MANIFEST` or
+> `firmware/factory/MANIFEST`) needs a code-owner-approved "package-change" label and a
+> `Package-change: <cause>` line in the description, bump or not: a compiler or document change
+> alters what a document means, not what the engine plays.
 > That design amends this section and §6.1 when it is accepted (its §12.5).
 
 ### 5.13 Shared deterministic test-signal generator
