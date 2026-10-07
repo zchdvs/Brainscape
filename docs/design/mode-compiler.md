@@ -12,8 +12,9 @@
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
 > `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A, G
-> and C (sound revision 2) are built (docs/STATUS.md), and notes marked "as built" record what an
-> implementing lane decided where this document left a choice.
+> and C (sound revision 2) and the Mix law (sound revision 3) are built (docs/STATUS.md), and
+> notes marked "as built" record what an implementing lane decided where this document left a
+> choice.
 
 ---
 
@@ -829,6 +830,20 @@ The recommended law keeps dry at unity up to the middle and wet at unity from it
 `dry = min(1, 2(1 − m))`, `wet = min(1, 2m)`, exact at `m` = 0 and 1 for contract #2. It
 changes every preset with 0 < mix < 1, so it takes its own bump after r2.
 
+As built (sound revision 3, 2026-10-07; Q13's provisional answer, reversible before the first
+public release): the law exactly as above, on the smoothed Mix (`dsp/src/detail/MixLaw.h`), and the
+mix keeps its two-multiply form, `dry·gd + (wet·g)·gw`. Both gains are exact in binary32: 2m is a
+power-of-two scale, above the middle 1 − m is exact (Sterbenz's lemma), and below it the minimum
+returns 1. So Mix 0 and 1 give exactly (1, 0) and (0, 1), revision 2's products, and a preset that
+stays at either end keeps its bits; the middle plays both at unity. Mix's 10 ms smoother and linear
+taper are unchanged. Tests (`dsp/tests/test_modes.cpp`): the gains against the law over every
+binary32 Mix within 2¹⁴ ulps of 0, 0.5 and 1 and one in 4,093 elsewhere (exact, dry never rising,
+wet never falling, the two never summing below 1); renders at eight Mix values equal dry·gd +
+wet·gw bit for bit, the wet being the Mix 1 render (the wet path never reads Mix), and Mix 0 is the
+dry input bit for bit; with the wet killed from the load, the dry alone plays at unity up to the
+middle, at half at 0.75 and not at all at Mix 1; a Mix move lands on the endpoints' bits. The gain
+and render cases fail under the linear crossfade. §11.1's note has the first set's re-measurement.
+
 **Budgets.** `Engine::Impl` (6,096 of 6,656 bytes on the M7 at r1, *measured* in lane C's
 review, where `Engine.h:24-30` said 6,032) holds the 64-voice pool
 (`dsp/src/detail/Granular.h:134`), so each `Grain` byte costs 64: it grows about 0.6–1.1 KiB in
@@ -1054,6 +1069,24 @@ freeze is held, so its freezes hold their second as at r1 (143,974 frozen frames
 onsets, r1's counts, which r2's first mint had cut to 48,007 and 1), `mode_switch` moves macros
 and the pedal after its loads, and `wet_kill` kills at mix 1. No other hash moved, and against r1
 the same three of 28 differ.
+
+As built (item 5, sound revision 3, 2026-10-07): of revision 2's 33 golden presets, 6 reproduce
+their hashes bit for bit, those whose Mix stays at an end or whose input is silent: `freeze_marks`,
+`freeze_retoggle_spill`, `hot_out` and `reverse_mark_aging` at Mix 1, `subnormal_dry` at 0, and
+`default_silence`. The other 27 all start at an interior Mix (the default 0.5, or 0.6–0.9 in four
+packages), so each changes from second 0; scripts also move Mix in `automation_offgrid` (through 0,
+0.25, 0.5, 0.75 and 1), `spillover_chain` (0.8), `restart_kept_params` (0.7), `wet_kill` (between
+0.5 and 1) and `lone_changes` (0.3). Their unchanged seconds are silent or at Mix 1: the last
+second of `default` and `pitch_reverse_spray`, seconds 8–19 of `fb_decay` (exact zero under both
+laws; its tail stays above 2⁻¹⁶ 0.19 s longer, its wet now 6 dB louder) and seconds 6 and 10 of
+`wet_kill`. Counters moved only where louder output reaches further (`outActiveFrames`,
+`tailActiveFrames`, `lastActiveFrame`). Corpus version 8 moves `subnormal_wet` from Mix 0.5 to
+0.75, where the law scales its dry path by 0.5 as the crossfade did at 0.5, so it keeps the scaled
+subnormal dry path it exists for. The corpus's packages and the compiler's examples were re-stamped
+(`sound_rev` 3 and the package hash; every `sound_hash` and `control_hash` is unchanged), and the
+compiler's random-document and reader-fuzz digests and the package fuzzer's verdict digest were
+re-minted for the stamp alone: built with `kSoundRevision` 2, the same tree gives revision 2's
+three digests.
 
 ## 8. The compiler library and `bspc`
 
@@ -1359,7 +1392,7 @@ under the chosen Mix law (Q13) and the pre-screen before it is rated.
 
 | Mode | Family | Microcosm analog | Character | Wet−dry dB | Needs |
 |---|---|---|---|---|---|
-| Engram | echoic | Pattern A | clean delay on the post delay's exact taps; Activity smears what enters it | not yet measured (re-authored) | now |
+| Engram | echoic | Pattern A | clean delay on the post delay's exact taps; Activity smears what enters it | +0.1 / +0.4 / −0.9 (v2, r3) | now |
 | Callback | echoic | Pattern B–D, approx. | grain tap plus exact post-delay taps | +0.2 / +0.9 / −0.7 | now |
 | Retrograde | echoic | the FWD/REV button as a mode | reverse delay in crossfaded chunks | −2.6 / −2.0 / −2.4 | now |
 | Updraft | echoic | Warp C | octave-climbing cascade | −1.8 / −2.1 / −1.4 | now |
@@ -1385,6 +1418,18 @@ are exact; Engram therefore runs its repeats on the post delay, and Q11 asks how
 grain feedback tempo-exact. Onset modes fall back to `base_ms` on soft pads; Pinhole's level
 depends on the source; and Time sweeps on grain delays splice (STATUS.md), so a mode may route
 Time to `post.delay.time_ms`, which glides (profile §5.6).
+
+As built (sound revision 3, record §2.2): the recipes re-measured under the Mix law, in the
+pre-screen's K-weighted loudness, on the probe's three scores and the Plucks, Strums and SoftNotes
+vectors. Under revision 2's crossfade every first-set recipe played 1.2–6.9 LU quieter engaged
+than bypassed on every input (all 84 renders fail "Engaged"); under the law 82 of 84 pass, from
+−0.9 to +4.9 LU, the two over +4 LU being Echolalia and Kaleido on Strums, whose wet runs about 3
+LU over the dry there and wants its trim. Peaks rise with the level: 10 of the 84 renders exceed
+−1 dBFS at stored positions (eight on SoftNotes) and three exceed 0 dBFS, where the crossfade kept
+every one at or below −4.6 dBFS; the wet trims (36 of the 84 renders have the wet more than 2 LU
+from the dry), the declared input classes and the owner's listening pass settle them. Engram v2's
+wet−dry above is that re-measurement's; Refrain's static approximation, without its W1 fields,
+plays 5.3–6.1 dB under the dry.
 
 ### 11.2 Naming
 
@@ -1512,7 +1557,9 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
     rows automatable (recommended), or (a) leaves automatable with unreported fan-out; with
     companion Q17's numeric-ID policy, before §4.5's gate.
 13. **(owner)** The Mix law (§7.1): dry at unity to the middle and wet at unity from it
-    (recommended, its own bump after r2), or today's linear crossfade.
+    (recommended, its own bump after r2), or today's linear crossfade. Provisionally answered
+    for the law, built as sound revision 3 (§7.1, §7.6 item 5); reversible before the first
+    public release.
 
 ### 12.4 Implementation plan
 

@@ -84,6 +84,13 @@ memory and CPU are budgeted here), **footswitch assignment and bypass topology**
    HOLD SAMPLER = the freeze pin — no buffer of its own
 ```
 
+> **Update (2026-10-07, sound revision 3).** MIX follows the Mix law of
+> [mode-compiler.md](mode-compiler.md) §7.1 (R3b, owner question Q13, provisionally): the dry
+> signal stays at unity up to the knob's middle and the wet is at unity from it,
+> `min(1, 2(1 − m))` and `min(1, 2m)`, instead of a linear crossfade; Mix 0 is still the dry input
+> bit for bit and Mix 1 the wet alone. That design amends this section when it is accepted (its
+> §12.5).
+
 Structural commitments, each corpus-grounded:
 
 1. **Resolve-once-at-schedule-time.** A voice never re-reads a global parameter after birth —

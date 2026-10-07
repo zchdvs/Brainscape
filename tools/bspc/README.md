@@ -50,7 +50,7 @@ errors or differences, 2 usage or I/O.
 `render` (§8.2) arrives with the audition tooling in `tools/audition/` (lane E).
 
 **What this build compiles.** Schema 1 names the whole vocabulary of the waves (§1.2); a
-field this build cannot play is error E6, naming the feature and the wave that brings it. At
+field this build cannot play is error E6, naming the feature and the wave that brings it. Since
 sound revision 2 the default structure compiles, with the onset source and mark positioning
 (rows 27 and 28 until then): no wave-1 to wave-3 fields, and the leaves of later waves only at
 their defaults. Macros, macro positions and expression assignments compile.

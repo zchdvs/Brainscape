@@ -16,7 +16,8 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 
 Every image links the engine archive `libbrainscape_dsp.a` exactly as CI's `parity-m7` job builds,
 audits and renders it under QEMU (same toolchain, flags and deterministic archive: SHA-256
-`89b73b51fe4261bf…` at sound revision 2, `4f4ddaa3583e46f2…` at revision 1; `firmware.yml` checks the two are
+`1d6fe1dc41f02fd9…` at sound revision 3, `89b73b51fe4261bf…` at revision 2, `4f4ddaa3583e46f2…` at
+revision 1; `firmware.yml` checks the two are
 byte-identical), reports that hash in its hello line, and the firmware build writes it to
 `build/fw/firmware/engine-archives.sha256` for the host tools' `--expect-archive`.
 
@@ -29,6 +30,14 @@ Spillover load, and the trim and the effect volume scale only the wet signal. Th
 in, since the Seed has no file system ([`EmbeddedPackages.h`](../dsp/tests/golden/EmbeddedPackages.h),
 generated from the committed bytes at build time): the parity image renders the corpus from
 them, and the live and bench images take their modes from them.
+
+**Sound revision 3** (the Mix law, [mode-compiler.md](../docs/design/mode-compiler.md) §7.1)
+changes only how Mix blends: the dry stays at unity up to the knob's middle and the wet is at
+unity from it, instead of a linear crossfade, so `set mix 0` is still the clean pass-through and
+`set mix 1` the wet alone. The corpus is version 8, `golden.json` re-minted for it, and its
+packages are re-stamped (their sound and control hashes unchanged). At revision 3 the five images
+build and their engine archives equal the Windows M7 oracle build's; the emulated checks of §9
+(the parity stream under `qemu-arm`, the Linux oracle build) have not been re-run yet.
 
 ## 1. What to flash, in order
 
@@ -162,7 +171,7 @@ roughly 4–9 minutes (the profile estimates 1.3–3.1× realtime); the stream c
 preset, so the tool prints the measured realtime factor too. It ends with
 
 ```text
-VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match MANIFEST (sound revision 2, whole corpus)
+VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match MANIFEST (sound revision 3, whole corpus)
 ```
 
 or `FAIL` with the first differing second of every preset that differs (exit 1). Before the
@@ -385,17 +394,17 @@ oracle build's byte for byte, and runs the static audits on the firmware build.
 
 ### Sizes (`.bin`, all flashed to QSPI at `0x90040000`)
 
-At sound revision 2 (revision 1's in brackets). The images grew by the 18 embedded corpus
-packages (77,768 bytes), the package decoder, validator and encoder, the macro evaluator and the
-engine's mode runtime.
+At sound revision 3 (revision 1's in brackets). At revision 2 the images grew by the 18 embedded
+corpus packages (77,768 bytes), the package decoder, validator and encoder, the macro evaluator and
+the engine's mode runtime; revision 3's Mix law added 40–56 bytes to each.
 
 | Image | Bytes | ITCM used (of 64 KiB) |
 | --- | --- | --- |
-| `brainscape_parity.bin` | 337,840 (223,312) | 54.0 KiB, 84.3 % (42.9 KiB) |
-| `brainscape_bench.bin` | 335,868 (220,692) | 53.8 KiB, 84.1 % (42.8 KiB) |
-| `brainscape_bench_xip.bin` | 335,704 (220,552) | 0 |
-| `brainscape_bench_hooks.bin` | 336,372 (221,068) | 54.3 KiB, 84.8 % (43.1 KiB) |
-| `brainscape_live.bin` | 376,336 (214,616) | 56.0 KiB, 87.5 % (38.9 KiB) |
+| `brainscape_parity.bin` | 337,896 (223,312) | 54.0 KiB, 84.4 % (42.9 KiB) |
+| `brainscape_bench.bin` | 335,924 (220,692) | 53.9 KiB, 84.2 % (42.8 KiB) |
+| `brainscape_bench_xip.bin` | 335,744 (220,552) | 0 |
+| `brainscape_bench_hooks.bin` | 336,428 (221,068) | 54.3 KiB, 84.9 % (43.1 KiB) |
+| `brainscape_live.bin` | 376,392 (214,616) | 56.0 KiB, 87.5 % (38.9 KiB) |
 
 The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostChain` 11.0,
 `Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`,
@@ -487,8 +496,10 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
   `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (sound revision 2: `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1: `4f4ddaa3583e46f2…`, hooks
-  `da7b4f2e9b44aef7…`), and to the M7 oracle built on Linux with the same pinned toolchain (in
+  (sound revision 3: `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`, so far against the Windows
+  oracle build; revision 2: `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
+  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1 and 2, to the M7 oracle
+  built on Linux with the same pinned toolchain (in
   Docker, whose CMake 3.22 is too old for libDaisy's, so the images themselves build on Windows).
 - The packages the images carry are the committed ones: the table is generated from
   `presets/MANIFEST` and the `.bsp` files at build time, the parity stream lists every package
