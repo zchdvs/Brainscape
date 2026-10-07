@@ -19,7 +19,16 @@ add_library(brainscape_dsp STATIC
   src/PostChain.cpp
   src/SoundRevision.cpp
   src/TestSignal.cpp
+  # The preset package (docs/design/mode-compiler.md §5, §6): integer-only and FP-free, the
+  # part of the mode system the firmware links. First its SHA-256.
+  src/blob/Sha256.cpp
 )
+# The package code holds no floating-point instruction at all on the Cortex-M7, not even a move:
+# it compares floats as integers, and GCC would otherwise spill to and copy through the FPU's
+# registers (docs/design/mode-compiler.md §5.2; the firmware links it).
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/blob/Sha256.cpp PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+endif()
 target_include_directories(brainscape_dsp
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)  # floating-point bodies stay private (§3.5)
