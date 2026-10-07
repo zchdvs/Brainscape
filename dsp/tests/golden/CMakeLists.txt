@@ -30,6 +30,8 @@ _brainscape_golden_harness(brainscape_golden_flush brainscape_dsp_fpenv_hooks go
 # The firmware parity image's stream (ParityStream.h) from the same harness, printed on the
 # host and under qemu-arm for tools/hil/parity_check.py (firmware/README.md).
 _brainscape_golden_harness(brainscape_parity_stream brainscape_dsp parity_stream_main.cpp)
+# --placement takes the parity image's arena sizes from firmware/platform/Placement.h.
+target_include_directories(brainscape_parity_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware)
 
 if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
   # Check mode (profile §6.1): every hash, per-second hash and counter must equal
@@ -68,7 +70,8 @@ if(NOT BRAINSCAPE_BUILD_M7_ORACLE)
 
   # The parity stream through tools/hil/parity_check.py (firmware/README.md): the short
   # vectors in the harness's configuration and in the pedal's (maxBlockSize 48), which must
-  # give the same bits.
+  # give the same bits, rendered as the firmware's parity image renders them (--placement:
+  # its arena sizes, Renderer(cfg, Placement), a second renderer over the same storage).
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND AND NOT BRAINSCAPE_FP_NEGATIVE_CONTROL)
     foreach(maxblock 512 48)

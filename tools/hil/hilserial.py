@@ -18,6 +18,10 @@ import time
 DAISY_VID, DAISY_PID = 0x0483, 0x5740  # libDaisy src/usbd/usbd_desc.c
 
 
+class PortGone(Exception):
+    """The serial port failed under a read or write: the device reset or was unplugged."""
+
+
 def _windows_ports():
     import winreg
 
@@ -129,14 +133,20 @@ class Port:
             raise OSError("SetCommTimeouts failed on %s" % self.name)
 
     def write_line(self, text):
-        self._f.write((text.rstrip("\r\n") + "\n").encode("ascii"))
-        self._f.flush()
+        try:
+            self._f.write((text.rstrip("\r\n") + "\n").encode("ascii"))
+            self._f.flush()
+        except OSError as e:
+            raise PortGone("%s: %s" % (self.name, e))
 
     def read_line(self, timeout=None):
         """One line without its newline, or None when `timeout` seconds pass without one."""
         deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
         while b"\n" not in self._buf:
-            chunk = self._f.read(4096)
+            try:
+                chunk = self._f.read(4096)
+            except OSError as e:
+                raise PortGone("%s: %s" % (self.name, e))
             if chunk:
                 self._buf += chunk
             elif time.monotonic() >= deadline:
@@ -151,7 +161,10 @@ class Port:
         self._buf = b""
 
     def close(self):
-        self._f.close()
+        try:
+            self._f.close()
+        except OSError:
+            pass
 
 
 class LogSource:
@@ -216,12 +229,27 @@ def describe_hello(h):
     b = h.get("build", {})
     board = h.get("board", {})
     fp = h.get("fp", {})
-    return ["device: %s image (%s), %s, %s" % (h.get("image", "?"), h.get("target", "?"),
-                                              board.get("version", "?"), b.get("appType", "?")),
-            "  firmware %s%s, libDaisy %s, %s" % (b.get("commit", "?"), " (dirty)" if b.get("dirty") else "",
-                                                  b.get("libDaisy", "?"), b.get("toolchain", "?")),
-            "  engine archive sha256 %s, sound revision %s, engine code in %s" % (
-                b.get("engineArchiveSha256", "?"), h.get("soundRevision", "?"), h.get("engineCode", "?")),
-            "  sysclk %s Hz, boot region %s, bootloader %s, FPSCR %s, FPDSCR %s" % (
-                board.get("sysclkHz", "?"), board.get("bootRegion", "?"), board.get("bootloader", "?"),
-                fp.get("fpscr", "?"), fp.get("fpdscr", "?"))]
+    cpu = h.get("cpu") or {}
+    lines = ["device: %s image (%s), %s, %s" % (h.get("image", "?"), h.get("target", "?"),
+                                               board.get("version", "?"), b.get("appType", "?")),
+             "  firmware %s%s, libDaisy %s, %s" % (b.get("commit", "?"), " (dirty)" if b.get("dirty") else "",
+                                                   b.get("libDaisy", "?"), b.get("toolchain", "?")),
+             "  engine archive sha256 %s, sound revision %s, engine code in %s" % (
+                 b.get("engineArchiveSha256", "?"), h.get("soundRevision", "?"), h.get("engineCode", "?")),
+             "  sysclk %s Hz, boot region %s, bootloader %s, FPSCR %s, FPDSCR %s" % (
+                 board.get("sysclkHz", "?"), board.get("bootRegion", "?"), board.get("bootloader", "?"),
+                 fp.get("fpscr", "?"), fp.get("fpdscr", "?"))]
+    if cpu:
+        qspi = cpu.get("qspi") or {}
+        lines.append("  I-cache %s, D-cache %s, %d MPU region(s), QSPI CR %s CCR %s, mem* in %s" % (
+            "on" if cpu.get("icache") else "OFF", "on" if cpu.get("dcache") else "OFF", len(cpu.get("mpu") or []),
+            qspi.get("cr", "?"), qspi.get("ccr", "?"), (cpu.get("memFunctions") or {}).get("in", "?")))
+    fault = h.get("lastFault")
+    if fault:
+        lines.append("  LAST FAULT before this boot: %s in %s after %s ms%s: pc %s lr %s cfsr %s hfsr %s "
+                     "mmfar %s bfar %s ipsr %s" % (
+                         fault.get("kind"), fault.get("image"), fault.get("uptimeMs"),
+                         (" (%s)" % fault["message"]) if fault.get("message") else "", fault.get("pc"),
+                         fault.get("lr"), fault.get("cfsr"), fault.get("hfsr"), fault.get("mmfar"),
+                         fault.get("bfar"), fault.get("ipsr")))
+    return lines

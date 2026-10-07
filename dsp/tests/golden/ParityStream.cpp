@@ -8,7 +8,7 @@ namespace brainscape::golden {
 
 namespace {
 
-constexpr const char* kStreamFormat = "brainscape-parity-stream/1";
+constexpr const char* kStreamFormat = "brainscape-parity-stream/2";
 
 const char* DeliveryName(Delivery d) {
   return d == Delivery::Engine ? "engine-events" : "split-at-event-frames";
@@ -53,7 +53,7 @@ uint64_t Now(const StreamOptions& o) { return o.clock != nullptr ? o.clock() : 0
 
 using Obj = JsonObj;
 
-std::string Header(Renderer& renderer, const StreamOptions& o) {
+std::string Header(Renderer& renderer, const StreamOptions& o, uint64_t seq) {
   const RenderConfig& rc = renderer.Config();
   std::string         pattern = "[";
   for (size_t i = 0; i < rc.blockPattern.size(); ++i) {
@@ -71,6 +71,7 @@ std::string Header(Renderer& renderer, const StreamOptions& o) {
   const std::string clock = Obj().Str("name", o.clockName).UInt("hz", o.clockHz).Done();
   Obj h;
   h.Str("type", "parity-begin")
+      .UInt("seq", seq)
       .Str("format", kStreamFormat)
       .Int("soundRevision", kSoundRevision)
       .Int("generatorVersion", testsignal::kVersion)
@@ -98,7 +99,9 @@ std::string Header(Renderer& renderer, const StreamOptions& o) {
 
 StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& sink) {
   StreamResult result;
-  sink.Line(Header(renderer, o));
+  uint64_t     seq     = 0;  // the stream's line numbers
+  int          vectors = 0;
+  sink.Line(Header(renderer, o, seq++));
   const uint64_t                start  = Now(o);
   const std::vector<VectorCase> corpus = BuildCorpus();
   for (const VectorCase& v : corpus) {
@@ -107,8 +110,10 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
     if (!any) continue;
 
     const std::vector<testsignal::Note> notes = VectorNotes(v);
+    ++vectors;
     sink.Line(Obj()
                   .Str("type", "vector")
+                  .UInt("seq", seq++)
                   .Str("name", v.name)
                   .Str("source", testsignal::VectorName(v.source))
                   .Int("generatorVersion", testsignal::kVersion)
@@ -137,6 +142,7 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
       }
       sink.Line(Obj()
                     .Str("type", "preset")
+                    .UInt("seq", seq++)
                     .Str("vector", v.name)
                     .Str("name", p.name)
                     .Bool("rendered", rendered)
@@ -150,7 +156,10 @@ StreamResult StreamCorpus(Renderer& renderer, const StreamOptions& o, LineSink& 
   }
   sink.Line(Obj()
                 .Str("type", "parity-end")
+                .UInt("seq", seq)
                 .Int("presets", result.presets)
+                .Int("vectors", vectors)
+                .UInt("lines", seq)
                 .Int("renderFailures", result.renderFailures)
                 .UInt("cycles", Now(o) - start)
                 .Done());

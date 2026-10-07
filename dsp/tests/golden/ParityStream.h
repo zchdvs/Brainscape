@@ -14,15 +14,17 @@
 // firmware's parity image streams it over USB serial, brainscape_parity_stream prints it on
 // the host and under qemu-arm, and tools/hil/parity_check.py compares it with golden.json.
 //
-// Format brainscape-parity-stream/1, one JSON object per line, integers and strings only:
-//   {"type":"parity-begin", ...header: the golden file's header fields, the run's
+// Format brainscape-parity-stream/2, one JSON object per line, integers and strings only:
+//   {"type":"parity-begin", "seq":0, ...header: the golden file's header fields, the run's
 //    configuration, the harness and engine toolchains, the clock, the platform...}
-//   {"type":"vector", "name", "source", "generatorVersion", "frames", "inputHash",
+//   {"type":"vector", "seq", "name", "source", "generatorVersion", "frames", "inputHash",
 //    "ringSizes", "notes"}
-//   {"type":"preset", "vector", "name", "rendered", "hash", "secondHashes", "counters",
-//    "frames", "cycles"}
-//   {"type":"parity-end", "presets", "renderFailures", "cycles"}
-// "cycles" is 0 when the clock is "none".
+//   {"type":"preset", "seq", "vector", "name", "rendered", "hash", "secondHashes",
+//    "counters", "frames", "cycles"}
+//   {"type":"parity-end", "seq", "presets", "vectors", "lines", "renderFailures", "cycles"}
+// "seq" numbers the stream's lines from 0, so a reader sees a lost line as a gap; "lines"
+// is how many came before parity-end. "cycles" is 0 when the clock is "none". (Version 1
+// had no "seq", "vectors" or "lines".)
 namespace brainscape::golden {
 
 class LineSink {

@@ -264,13 +264,15 @@ jobs:
           exit $rc
       # The Daisy Seed parity image's stream (dsp/tests/golden/ParityStream.h, firmware/
       # README.md) from the same harness code, in the live engine's configuration
-      # (maxBlockSize 48), checked by the tool the owner runs against the hardware.
+      # (maxBlockSize 48) and the image's memory placement (--placement: its arena sizes,
+      # Renderer(cfg, Placement), a second renderer over the same storage), checked by the
+      # tool the owner runs against the hardware.
       - name: Stream the corpus as the firmware parity image does, and check it
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
         run: |
           qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_parity_stream.elf --max-block 48 \
-            --tag m7-qemu --out parity-report/m7-qemu-stream.jsonl
+            --placement --tag m7-qemu --out parity-report/m7-qemu-stream.jsonl
           python3 tools/hil/parity_check.py --log parity-report/m7-qemu-stream.jsonl
       # Profile §6.4's forced-flush control with FZ set inside the guard: every vector must
       # reproduce the golden hashes but the subnormal-input one, which must change.

@@ -53,12 +53,22 @@ def pretty(obj):
         return "%s = %s (%s)" % (obj["name"], obj["value"], obj["bits"])
     if kind == "error":
         return "error: " + obj.get("message", "")
+    if kind == "resync":
+        return "(the device's USB serial dropped %s line(s) so far)" % obj.get("droppedLines")
+    if kind == "rebooting":
+        return "rebooting into the %s" % obj.get("to", "bootloader")
     return None
 
 
 def reader(port, stop):
     while not stop.is_set():
-        line = port.read_line(timeout=0.2)
+        try:
+            line = port.read_line(timeout=0.2)
+        except hilserial.PortGone:
+            print("the serial port went away (the device rebooted, reset after a fault, or was unplugged); "
+                  "reconnect and send info: its lastFault says why", flush=True)
+            stop.set()
+            return
         if line is None:
             continue
         obj = hilserial.parse(line)
@@ -88,7 +98,7 @@ def main():
             for line in sys.stdin:
                 if line.strip():
                     port.write_line(line.strip())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, hilserial.PortGone):
         pass
     finally:
         stop.set()
