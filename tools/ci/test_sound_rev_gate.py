@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Self-test of sound_rev_gate.py on synthetic pull requests (determinism profile §5.12).
+"""Self-test of sound_rev_gate.py on synthetic pull requests (determinism profile §5.12,
+and the package rule of mode-compiler.md §8.3).
 
 Builds a scratch repository holding a revision header, a golden file and a few other
 files, writes a base tree and one head tree per case (trees, not commits: the gate only
-diffs and reads them), and requires the gate's verdict for each. A case that passes when
-it should fail means the gate lost a trigger. Exit 1 on any wrong verdict.
+diffs and reads them), and requires the gate's verdict for each. The package rule's cases
+run against a second base whose golden file has a preset that plays a committed package
+and which has a factory manifest. A case that passes when it should fail means the gate
+lost a trigger. Exit 1 on any wrong verdict.
 
   test_sound_rev_gate.py
 """
@@ -25,9 +28,20 @@ def header(rev):
 
 
 def golden(rev, presets):
+    """Presets are (name, hash, secondHashes) or, for one that plays a committed package,
+    (name, hash, secondHashes, soundHash, controlHash)."""
+    def entry(p):
+        e = {"name": p[0], "hash": p[1], "secondHashes": p[2]}
+        if len(p) > 3:
+            e.update(soundHash=p[3], controlHash=p[4])
+        return e
     return json.dumps({"format": "brainscape-golden/1", "soundRevision": rev, "vectors": [
-        {"name": "plucks_12s", "presets": [{"name": n, "hash": h, "secondHashes": s} for n, h, s in presets]}]},
-        indent=2) + "\n"
+        {"name": "plucks_12s", "presets": [entry(p) for p in presets]}]}, indent=2) + "\n"
+
+
+def manifest(docs):
+    """A bspc manifest: (path, package hash, sound_hash, control_hash) per document, by path."""
+    return "".join(f"{p * 32} {s * 32} {c * 32} {d}\n" for d, p, s, c in sorted(docs))
 
 
 BASE_PRESETS = [("default", "aa" * 32, ["a0", "a1"]), ("clean_delay", "bb" * 32, ["b0", "b1"])]
@@ -92,6 +106,85 @@ CASES = [
     ("golden keyed to another revision", {GOLDEN: golden(2, BASE_PRESETS)}, "", STALE),
 ]
 
+# The package rule (mode-compiler.md §8.3). "engram" plays a committed package; the factory
+# manifest lists two packages. A case may give the pull request's description as a fifth item.
+FACTORY = "firmware/factory/MANIFEST"
+PKG = ("engram", "ee" * 32, ["e0", "e1"], "51" * 32, "c1" * 32)
+FACTORY_DOCS = [("engram.json", "a1", "51", "c1"), ("haze.json", "a2", "52", "c2")]
+PACKAGE_BASE = dict(BASE, **{
+    GOLDEN: golden(1, BASE_PRESETS + [PKG]),
+    FACTORY: manifest(FACTORY_DOCS),
+    "compiler/src/Compile.cpp": "// compile\n",
+    "dsp/tests/golden/presets/engram.json": "{}\n",
+})
+PKG_LABEL = "package-change"
+CAUSE = "Moves the macro table.\n\nPackage-change: the compiler writes MACR targets in authored order\n"
+NEEDS_LABEL = 'label the pull request "package-change"'
+NEEDS_CAUSE = "the description names no cause"
+
+
+def pkg_golden(rev=1, render="ee", sound="51", control="c1", others=BASE_PRESETS, package=True):
+    """The package base's golden file with engram's render and package hashes replaced."""
+    p = ("engram", render * 32, ["e0", "e1"] if render == "ee" else [render[0] + "0", render[0] + "1"])
+    return golden(rev, others + [p + ((sound * 32, control * 32) if package else ())])
+
+
+def factory(*changes, drop=None):
+    """The factory manifest with (path, package, sound, control) entries replaced or added."""
+    docs = {d[0]: d for d in FACTORY_DOCS}
+    docs.update({d[0]: d for d in changes})
+    docs.pop(drop, None)
+    return manifest(docs.values())
+
+
+PACKAGE_CASES = [
+    ("compiler change, every package unchanged", {"compiler/src/Compile.cpp": "// faster\n"}, "", 0),
+    ("package preset re-rendered, its package unchanged", {GOLDEN: pkg_golden(render="ff")}, "", HARD),
+    ("package preset re-rendered, its package unchanged, package-change label",
+     {GOLDEN: pkg_golden(render="ff")}, PKG_LABEL, HARD, CAUSE),
+    ("package preset's sound hash and render changed, label and cause",
+     {GOLDEN: pkg_golden(render="ff", sound="5f"), "compiler/src/Compile.cpp": "// new order\n"},
+     PKG_LABEL, 0, CAUSE),
+    ("package preset's sound hash and render changed, no label",
+     {GOLDEN: pkg_golden(render="ff", sound="5f")}, "", NEEDS_LABEL, CAUSE),
+    ("package preset's sound hash and render changed, label without a cause",
+     {GOLDEN: pkg_golden(render="ff", sound="5f")}, PKG_LABEL, NEEDS_CAUSE, "Moves the macro table.\n"),
+    ("package preset's sound hash changed, an empty cause line",
+     {GOLDEN: pkg_golden(sound="5f")}, PKG_LABEL, NEEDS_CAUSE, "Package-change:   \n"),
+    ("package preset's sound hash changed, sound-neutral instead of package-change",
+     {GOLDEN: pkg_golden(sound="5f")}, "sound-neutral", NEEDS_LABEL, CAUSE),
+    ("package preset's control hash changed alone, label and a bulleted cause",
+     {GOLDEN: pkg_golden(control="cf")}, '["docs","package-change"]', 0, "- package-change: CTRL padding\n"),
+    ("package preset's control hash changed alone, no label", {GOLDEN: pkg_golden(control="cf")}, "", NEEDS_LABEL),
+    ("package change does not excuse another preset's render",
+     {GOLDEN: pkg_golden(render="ff", sound="5f", others=[("default", "cc" * 32, ["c0", "c1"]), BASE_PRESETS[1]])},
+     PKG_LABEL, HARD, CAUSE),
+    ("package preset back to a parameter list, render changed, label and cause",
+     {GOLDEN: pkg_golden(render="ff", package=False)}, PKG_LABEL, 0, CAUSE),
+    ("package preset back to a parameter list, no label", {GOLDEN: pkg_golden(package=False)}, "", NEEDS_LABEL),
+    ("package preset dropped without a bump", {GOLDEN: golden(1, BASE_PRESETS)}, PKG_LABEL, HARD, CAUSE),
+    ("a preset gains a package", {GOLDEN: golden(1, [BASE_PRESETS[0] + ("5a" * 32, "ca" * 32), BASE_PRESETS[1], PKG])},
+     "", 0),
+    ("a new package preset", {GOLDEN: golden(1, BASE_PRESETS + [PKG, ("haze", "dd" * 32, ["d0"], "52" * 32,
+                                                                       "c2" * 32)])}, "", 0),
+    ("bump and re-mint with a package change, no label",
+     {"dsp/src/PostChain.cpp": SOUND, HEADER: header(2), GOLDEN: pkg_golden(rev=2, render="ff", sound="5f")}, "",
+     NEEDS_LABEL),
+    ("bump and re-mint with a package change, label and cause",
+     {"dsp/src/PostChain.cpp": SOUND, HEADER: header(2), GOLDEN: pkg_golden(rev=2, render="ff", sound="5f")},
+     PKG_LABEL, 0, CAUSE),
+    ("bump and re-mint, packages unchanged", {HEADER: header(2), GOLDEN: pkg_golden(rev=2, render="ff")}, "", 0),
+    ("factory package's sound_hash changed, no label", {FACTORY: factory(("haze.json", "a3", "5f", "c2"))}, "",
+     NEEDS_LABEL),
+    ("factory package's control_hash changed, label and cause", {FACTORY: factory(("haze.json", "a3", "52", "cf"))},
+     PKG_LABEL, 0, CAUSE),
+    ("factory package re-stamped (package hash only)", {FACTORY: factory(("haze.json", "a3", "52", "c2"))}, "", 0),
+    ("factory package added", {FACTORY: factory(("warp.json", "a4", "54", "c4"))}, "", 0),
+    ("factory package dropped", {FACTORY: factory(drop="haze.json")}, "", NEEDS_LABEL),
+    ("factory manifest deleted", {FACTORY: None}, "", NEEDS_LABEL),
+    ("factory manifest malformed", {FACTORY: "not a manifest line\n"}, PKG_LABEL, "is not a manifest line", CAUSE),
+]
+
 
 def git(repo, *args):
     p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
@@ -120,33 +213,40 @@ def tree(repo, files):
 
 
 def main():
-    failures = 0
-    with tempfile.TemporaryDirectory() as repo:
+    failures = total = 0
+    with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as scratch:
         git(repo, "init", "-q")
-        base = tree(repo, BASE)
-        for name, changes, labels, want in CASES:
-            files = dict(BASE)
-            for path, text in changes.items():
-                if text is None:
-                    files.pop(path, None)
-                else:
-                    files[path] = text
-            head = tree(repo, files)
-            p = subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels],
-                               cwd=repo, capture_output=True, text=True, encoding="utf-8",
-                               env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-            fails = [ln[len("- **FAIL:** "):] for ln in p.stdout.splitlines() if ln.startswith("- **FAIL:** ")]
-            if want == 0:
-                ok = p.returncode == 0 and not fails
-            else:
-                ok = p.returncode == 1 and any(want in f for f in fails)
-            failures += not ok
-            print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {p.returncode}")
-            for f in fails:
-                print(f"       {f}")
-            if not ok:
-                print(p.stdout + p.stderr)
-    print(f"{len(CASES) - failures}/{len(CASES)} cases gave the expected verdict")
+        body_file = os.path.join(scratch, "body.txt")
+        for base_files, cases in ((BASE, CASES), (PACKAGE_BASE, PACKAGE_CASES)):
+            base = tree(repo, base_files)
+            for case in cases:
+                name, changes, labels, want = case[:4]
+                with open(body_file, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(case[4] if len(case) > 4 else "")
+                files = dict(base_files)
+                for path, text in changes.items():
+                    if text is None:
+                        files.pop(path, None)
+                    else:
+                        files[path] = text
+                head = tree(repo, files)
+                p = subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels,
+                                    "--body-file", body_file],
+                                   cwd=repo, capture_output=True, text=True, encoding="utf-8",
+                                   env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                fails = [ln[len("- **FAIL:** "):] for ln in p.stdout.splitlines() if ln.startswith("- **FAIL:** ")]
+                if want == 0:
+                    ok = p.returncode == 0 and not fails
+                else:  # a FAIL line, or an input the gate refuses to read (stderr)
+                    ok = p.returncode == 1 and (any(want in f for f in fails) or want in p.stderr)
+                failures += not ok
+                total += 1
+                print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {p.returncode}")
+                for f in fails:
+                    print(f"       {f}")
+                if not ok:
+                    print(p.stdout + p.stderr)
+    print(f"{total - failures}/{total} cases gave the expected verdict")
     return 1 if failures else 0
 
 

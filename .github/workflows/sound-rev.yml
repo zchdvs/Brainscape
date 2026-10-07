@@ -6,14 +6,19 @@ name: sound-rev
 # dsp/CMakeLists.txt, the root CMakeLists.txt, cmake/BrainscapeFpProfile.cmake,
 # cmake/fp-forbidden-flags.txt or the arm toolchain file must bump it or carry the
 # "sound-neutral" label, which a code owner justifies in review.
-# Its own workflow, so adding or removing the label re-runs this job and not the parity legs.
+# The package rule (mode-compiler.md §8.3): a changed soundHash or controlHash of a committed
+# package (a golden preset's in golden.json, a factory package's in firmware/factory/MANIFEST)
+# needs the "package-change" label and a "Package-change: <cause>" line in the description,
+# which a code owner approves; a golden preset's changed render whose package changed is the
+# package's, not the engine's. Editing the description re-runs the gate.
+# Its own workflow, so adding or removing a label re-runs this job and not the parity legs.
 # The gate runs the pull request's own copy of this file and of the script, so it holds
 # only while code owners review changes to .github/workflows/ and tools/ci/ and branch
 # protection requires this check (docs/STATUS.md, Known gaps).
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 permissions:
   contents: read
@@ -29,9 +34,12 @@ jobs:
           fetch-depth: 2
       - name: Self-test the gate on synthetic pull requests
         run: python3 tools/ci/test_sound_rev_gate.py
+      # The description goes through a file: it is untrusted text, never part of a command.
       - name: Check the sound revision against the pull request
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: >
-          python3 tools/ci/sound_rev_gate.py --base HEAD^1 --head HEAD --labels "$LABELS"
-          --summary "$GITHUB_STEP_SUMMARY"
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$BODY" > "$RUNNER_TEMP/pr-body.txt"
+          python3 tools/ci/sound_rev_gate.py --base HEAD^1 --head HEAD --labels "$LABELS" \
+            --body-file "$RUNNER_TEMP/pr-body.txt" --summary "$GITHUB_STEP_SUMMARY"
