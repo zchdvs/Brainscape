@@ -1,0 +1,89 @@
+name: firmware
+
+# The Daisy Seed bring-up images (firmware/README.md), cross-built with the pinned
+# arm-none-eabi 10.3-2021.10 and -Werror, compile only: no hardware runs here. The job
+# fails when an image stops building or stops fitting its memory regions (the linker's
+# region and stack/heap checks, firmware/linker/seed_h750.ld.in), when the engine archive
+# the images link fails the static audits of determinism-profile.md §6.3, or when it
+# carries a GOT relocation. The images link ST's SLA0044 USB code through libDaisy on
+# purpose (companion-app.md §7.2): firmware-elf-audit runs in its prototype mode, which
+# lists that code and labels the images not distributable instead of failing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "firmware/**"
+      - "dsp/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - "tools/cmake/**"
+      - "tools/ci/**"
+      - "tools/hil/**"
+      - ".github/workflows/firmware.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: firmware (Daisy Seed images, compile only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache the pinned arm-none-eabi toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-gnu-toolchain
+          key: arm-gnu-toolchain-10.3-2021.10-x86_64-linux
+      - name: Install the pinned arm-none-eabi toolchain (10.3-2021.10, checksum-verified)
+        run: bash tools/ci/install_arm_toolchain.sh "$HOME/arm-gnu-toolchain"
+      # libDaisy v9.0.0 and the four submodules it builds from are fetched by archive
+      # SHA-256 at configure time (firmware/cmake/LibDaisy.cmake), never vendored.
+      - name: Configure (BOOT_QSPI, pinned libDaisy)
+        run: >
+          cmake -B build-fw -DCMAKE_TOOLCHAIN_FILE=tools/cmake/arm-none-eabi-toolchain.cmake
+          -DCMAKE_BUILD_TYPE=Release -DBRAINSCAPE_BUILD_TESTS=OFF -DBRAINSCAPE_BUILD_FIRMWARE=ON
+          -DBRAINSCAPE_WERROR=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Build every image
+        id: build
+        run: cmake --build build-fw -j "$(nproc)"
+      - name: Memory use per image
+        run: |
+          cat build-fw/firmware/*.size.txt
+          sha256sum build-fw/dsp/libbrainscape_dsp.a build-fw/dsp/libbrainscape_dsp_fpenv_hooks.a build-fw/firmware/*.bin
+      - name: Audit imported symbols of the engine archive (arm-none-eabi, no libm)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 tools/ci/audit_symbols.py --toolchain arm --nm arm-none-eabi-nm build-fw/dsp/libbrainscape_dsp.a
+      - name: Audit fused instructions (Armv7-M)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          arm-none-eabi-g++ -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -O3 -ffp-contract=fast \
+            -c tools/ci/fused_selftest.cpp -o build-fw/fused_selftest.o
+          python3 tools/ci/audit_fused.py --objdump arm-none-eabi-objdump --arch armv7 \
+            --self-test build-fw/fused_selftest.o build-fw/dsp/libbrainscape_dsp.a \
+            build-fw/dsp/libbrainscape_dsp_fpenv_hooks.a
+      - name: Audit compile flags (firmware build, libDaisy included)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 tools/ci/audit_flags.py build-fw/compile_commands.json
+      - name: firmware-elf-audit (prototype mode)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: >
+          python3 tools/ci/audit_firmware_elf.py --prototype
+          --archive build-fw/dsp/libbrainscape_dsp.a --archive build-fw/dsp/libbrainscape_dsp_fpenv_hooks.a
+          build-fw/firmware/brainscape_parity.elf build-fw/firmware/brainscape_bench.elf
+          build-fw/firmware/brainscape_bench_xip.elf build-fw/firmware/brainscape_bench_hooks.elf
+          build-fw/firmware/brainscape_live.elf
+      - name: Upload the images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-images
+          path: |
+            build-fw/firmware/*.bin
+            build-fw/firmware/*.elf
+            build-fw/firmware/*.map
+            build-fw/firmware/*.size.txt
+          if-no-files-found: warn
+          retention-days: 14

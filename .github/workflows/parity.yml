@@ -226,7 +226,7 @@ jobs:
       # brainscape_golden links libbrainscape_dsp.a, the firmware's archive.
       - name: Build the golden harness ELFs
         id: build
-        run: cmake --build build-m7 --target brainscape_golden brainscape_golden_flush
+        run: cmake --build build-m7 --target brainscape_golden brainscape_golden_flush brainscape_parity_stream
       - name: Select the harness mode
         run: |
           if [ "$PARITY_HASHES_GATING" = true ]; then echo MODE=check; else echo MODE=report; fi >> "$GITHUB_ENV"
@@ -262,6 +262,16 @@ jobs:
             --no-ablate --random-blocks 1 --tag m7-qemu --report parity-report/m7-qemu-random1.json ||
             { echo "random blocks: exit $?"; rc=1; }
           exit $rc
+      # The Daisy Seed parity image's stream (dsp/tests/golden/ParityStream.h, firmware/
+      # README.md) from the same harness code, in the live engine's configuration
+      # (maxBlockSize 48), checked by the tool the owner runs against the hardware.
+      - name: Stream the corpus as the firmware parity image does, and check it
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: ${{ env.PARITY_HASHES_GATING != 'true' }}
+        run: |
+          qemu-arm -cpu cortex-m7 build-m7/dsp/tests/golden/brainscape_parity_stream.elf --max-block 48 \
+            --tag m7-qemu --out parity-report/m7-qemu-stream.jsonl
+          python3 tools/hil/parity_check.py --log parity-report/m7-qemu-stream.jsonl
       # Profile §6.4's forced-flush control with FZ set inside the guard: every vector must
       # reproduce the golden hashes but the subnormal-input one, which must change.
       - name: Render with flushing forced on inside the guard (FZ)

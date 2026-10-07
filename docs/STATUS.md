@@ -37,7 +37,7 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed3) | ⬜ Not started (CI cross-compiles `dsp/` for Cortex-M7 today) |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built and verified off-hardware ([firmware/README.md](../firmware/README.md)): silicon parity check, DWT measurement pass, live audio, on pinned libDaisy v9.0.0; awaiting the owner's bench session |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -309,16 +309,20 @@ records live in [docs/design/reviews/](design/reviews/).
 
 ## Known gaps and deferred work
 
-- **Parity is proven on emulation, not yet on Seed3 silicon.** The first GitHub runs
-  (2026-10-06) rendered the golden corpus bit-identically on every leg: Windows x64 (MSVC,
-  MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
+- **Parity is proven on emulation, not yet on silicon.** The owner prototypes on a Daisy Seed Rev7
+  (STM32H750, PCM3060), with a custom H750 board later; the Rev7 parity, DWT bench and live-audio
+  images are built, fit their memory and pass every off-hardware check (the parity stream's code
+  matches the golden file under `qemu-arm -cpu cortex-m7`), and wait for the bench
+  ([firmware/README.md](../firmware/README.md)). They use libDaisy's ST USB code and must not be
+  distributed. The first GitHub runs (2026-10-06) rendered the golden corpus bit-identically
+  on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
   `macos-14` and AppleClang 21 on `macos-latest`) and the Cortex-M7 under QEMU 10.2.3, whose
   engine archive was byte-identical to a local build (`4f4ddaa3…`). The ARM toolchain's MD5
   passed against Arm's download and QEMU is now pinned to the commit that run recorded. The
   run's failures were all in tooling (fixed in #1; see the record there): LLVM 21 folding
   the harness's subnormal bit tests into floating-point compares under the hostile control
-  word, two symbol-audit allowlist gaps, and a Windows smoke-test path. Hardware-in-the-loop
-  on a Seed3 and the nightly legs (full-system QEMU with the interrupt `FPDSCR`, exhaustive
+  word, two symbol-audit allowlist gaps, and a Windows smoke-test path. A hardware-in-the-loop
+  runner in CI and the nightly legs (full-system QEMU with the interrupt `FPDSCR`, exhaustive
   DetMath accuracy, toolchain drift) are not built.
 - **How far the gates bind.** Branch protection on `main` requires all 23 CI checks, an
   up-to-date branch and code-owner review; [`.github/CODEOWNERS`](../.github/CODEOWNERS)
