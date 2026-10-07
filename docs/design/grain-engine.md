@@ -370,6 +370,13 @@ slow-pad onsets — we market the fallbacks and the visibility, not a solved pro
 
 ## 5. Modes as data
 
+> **Update (2026-10-07, mode-compiler lane A).** The compiler is built as
+> [mode-compiler.md](mode-compiler.md) §8 specifies: `bsc::Compile` in the top-level
+> `compiler/`, with the `bspc` tool, integer-only, storing semitones rather than ratios. The
+> validation below is that design's errors E1-E12 (the Shape map is E10) and lint L1-L9 (the
+> guard warning per pitch entry is L2); `d_min_fb` is dropped. That design amends this section
+> when it is accepted (its §12.5).
+
 A mode is a JSON document outside `dsp/` and a compiled POD **`ModeBlob`** inside it (one
 name throughout; sizeof computed from the vocabulary, reconciled against the §7 slot budget).
 The engine never parses text; `modes::Compile()` — source in `dsp/`, host-callable,

@@ -62,8 +62,10 @@ The build never copies plugins into system folders.
 4. Every engine parameter is a knob, except the two-position ones (**Onset**, **Position**),
    which are switches. Drag a knob to turn it, double-click it for the default, double-click the
    value to type one in its units (`250`, `1.2 s`, `2.5k`, `40%`, `-3 dB`, `Off`, `Mark`,
-   `LP`…). Typed values are stored exactly as typed. **Window → Skew** is centred: −100 % is
-   percussive, 0 % symmetric, +100 % a reverse swell. **Reverb → Time** is a 0–100 scale.
+   `LP`…). Typed values are stored exactly as typed, read by the preset compiler's exact
+   number reader, so a typed value has the bits a preset document with the same text compiles
+   to. **Window → Skew** is centred: −100 % is percussive, 0 % symmetric, +100 % a reverse
+   swell. **Reverb → Time** is a 0–100 scale.
    Changing **Post delay → Time** glides the delay to the new time, bending the repeats' pitch
    like tape (at most 0.5–1.5× speed) instead of clicking; **Grain delay → Time** still jumps.
 5. **FREEZE** pins the grain position (host-automatable); **TRIGGER** fires one grain, as does

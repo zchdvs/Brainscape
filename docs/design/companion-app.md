@@ -201,6 +201,13 @@ The compiler sits beside the decoder so schema and blob layout change in one pla
 grain-engine design's single shared compiler, `grain-engine.md` §5), in its own target so the
 firmware never links a text parser (§6.6).
 
+> **Update (2026-10-07, mode-compiler lane A).** As built, the compiler is the top-level
+> `compiler/` (target `brainscape_compiler`, namespace `bsc`, desktop hosts only), not
+> `dsp/src/compiler/`, so a compiler change is gated by its committed outputs and the package
+> rule rather than the sound-revision path trigger ([mode-compiler.md](mode-compiler.md) §8.1).
+> `tools/bspc/` is its command-line tool. That design amends this section when it is accepted
+> (its §12.5).
+
 ### 3.2 JUCE in the build
 
 - **Fetched only when needed:** inside `if(BRAINSCAPE_BUILD_PLUGIN)` (`CMakeLists.txt:9`,
@@ -809,6 +816,12 @@ defaulting) plus:
 | firmware semver + git hash | every release; reported in `HELLO` |
 
 ### 6.6 Compilation happens on the desktop only
+
+> **Update (2026-10-07, mode-compiler lane A).** `bspc` is built
+> ([tools/bspc/README.md](../../tools/bspc/README.md)): `compile`, `decompile`, `fmt`, `verify`,
+> `stamp`, `lint`, `diff`, `derive`, `roundtrip` and `migrate-session`
+> ([mode-compiler.md](mode-compiler.md) §8.2); `render` comes with the audition tooling. The header's `FACTORY` flag is set for ids under `factory.`, so it too
+> comes from the JSON. Amended here when that design is accepted (its §12.5).
 
 The app and **`bspc`** (`tools/bspc/`: `compile`, `decompile`, `fmt`, `verify`, `render`) compile
 JSON into STAT + MODE + CTRL and pack the `.bsp`. The firmware links only the decoder and a

@@ -1,6 +1,6 @@
 # Brainscape — Project Status
 
-> Snapshot as of **2026-10-06**.
+> Snapshot as of **2026-10-07**.
 > Brainscape is an open-source granular delay — a spiritual successor to the Hologram
 > Microcosm — targeting a Daisy Seed3 hardware pedal **and** a JUCE desktop plugin and
 > companion app from one shared C++ DSP core. Licensed [GPLv3](../LICENSE).
@@ -33,8 +33,8 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0 and B are built: the permanent parameter-ID table with the macro IDs, and the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, plus the compiler's exact number code. Next: the compiler and `bspc` (lane A), lane G's package rule, then sound revision 2 (lane C) |
-| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers; nothing compiles packages yet (lane A), and upload needs hardware |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B and A are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, and the compiler with `bspc` (schema 1, canonical JSON, lint, derive), which compiles only the default structure until sound revision 2. Next: lane G's package rule, then sound revision 2 (lane C) |
+| Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; none is committed before sound revision 2, and upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
 | Firmware bring-up (Daisy Seed3) | ⬜ Not started (CI cross-compiles `dsp/` for Cortex-M7 today) |
@@ -238,6 +238,28 @@ implementing:
   stream at a fixed frame offset; nothing draws an extended key yet. The compiler's exact binary32 reader and shortest writer
   (`compiler/src/Number.*`, design §6.5, owner question Q1: no `fast_float`) landed with it,
   with the two eight-digit exceptions and the plugin's lenient typed-text entry point.
+- **The preset compiler** ([mode-compiler.md](design/mode-compiler.md) §2, §3, §6.4, §8, lane
+  A): the library `brainscape_compiler` in `compiler/` (namespace `bsc`, desktop hosts only)
+  and its tool `bspc` in [`tools/bspc/`](../tools/bspc/README.md). A strict RFC 8259 reader
+  (UTF-8, every escape and surrogate pair, no duplicate keys, depth 16, line, column and JSON
+  pointer on every error) feeds schema 1, written once as a table in code that a reader and the
+  canonical writer both walk: every key, its order, type, range, default and the wave that
+  plays it. `Compile` runs the design's eight steps, errors E1–E12 with JSON pointers, the
+  package with its META, CTRL and the formatted, stamped JSON section, then decodes and
+  validates what it wrote and requires the same state; an empty document compiles to the
+  default mode's committed `modeHash`. It is integer-only: numbers go through the exact
+  reader, floats are compared as bit patterns, and no library number formatting is used.
+  `bspc` compiles, decompiles (rebuilding from STAT, MODE, CTRL and META when the JSON section
+  is absent or stale), formats (`fmt --check`), verifies, stamps, lints (L1–L9, `--factory`
+  making L4 and L7–L9 errors, the denylist of other makers' marks as a floor), diffs by field,
+  derives targeted leaves from macro positions and solves positions from leaves, runs the
+  round-trip checks with a hash manifest, and migrates BSWS v1 sessions. What lint and derive
+  compute in floating point is two guarded `dsp/` functions, `EvalMacro` (the design's
+  evaluator, §3.3) and `NearGuardMs` (`brainscape/ModeEval.h`), which nothing in the engine
+  calls before sound revision 2. This build supports no mode feature, so a document compiles
+  only with the default structure (any macros, positions and expression assignments
+  included); anything else is error E6 naming its wave, and later waves' leaves are accepted
+  at their defaults only. The plugin's typed text is now read by the same exact reader.
 - **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
   - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
     `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
@@ -319,18 +341,24 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (147 test cases / ~3.96M assertions in Release, 146 in Debug;
+**Suite** (`ctest`): `dsp_unit` (153 test cases / ~4.1M assertions in Release, 152 in Debug;
 two are `[!shouldfail]` cases that hold the routing of IDs 27 and 28 until sound revision 2;
-29 are the package's, `test_blob.cpp`), the forced-flush tests, the undefined-symbol audit and
-its negative control, the configure-check self-test, `golden_check` (every golden hash of sound
+29 are the package's, `test_blob.cpp`, and 6 the macro evaluator's, `test_mode_eval.cpp`), the
+forced-flush tests, the undefined-symbol audit and its negative control, the configure-check self-test, `golden_check` (every golden hash of sound
 revision 1), `golden_check_edits` (check mode fails on edited copies of the golden file), the
 corpus's forced-flush control `golden_forced_flush`, `blob_fuzz` (200,000 mutated packages, a
 quarter of them structurally, against a committed digest of every decoder and validator
 verdict that the emulated M7 reproduces) and `blob_fixtures` (the 14 frozen packages), and the compiler's `compiler_number_unit` and `compiler_number_hashes` (the
-number code's per-pull-request sets against committed hashes); a plugin build adds the wrapper
-tests (31 test cases), the editor snapshot and a hosted-VST3 check. The `dsp/` and compiler
-tests are green in Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14
-(GCC 14, and Clang 14 in Debug, were last run before the ID table), and the emulated M7 runs
+number code's per-pull-request sets against committed hashes), `compiler_unit` (23 test cases:
+the JSON grammar suite, every rule E1–E12, the canonical form, packages, decompile, verify and
+diff, lint and derive, and two committed digests that every host must reproduce, the packages
+of 400 random documents and the verdicts of a 20,000-mutant reader fuzz) and
+`compiler_roundtrip` (`bspc roundtrip` over seven example documents against their committed
+hash manifest); a plugin build adds the wrapper tests (32 test cases), the editor snapshot and
+a hosted-VST3 check. The `dsp/` and compiler
+tests are green in Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14,
+the compiler's digests and manifest identical on all three (GCC 14, and Clang 14 in Debug,
+were last run before the ID table), and the emulated M7 runs
 the package fuzzer and fixtures beside the golden check; the plugin tests with MSVC, Release
 and Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
@@ -430,6 +458,8 @@ records live in [docs/design/reviews/](design/reviews/).
   The decoder, validator and encoder objects are linked only by an image that calls them; the
   archive's `.text` and `.rodata` grow from 53,134 to 82,656 bytes on the M7 with them
   (*measured*): `Encode` 11,003, `Validate` 8,364, `Decode` 6,647, `Sha256` 2,040, `Mode` 1,468.
+  Lane A adds `ModeEval` (the macro evaluator and the pitch guard, 848 bytes; it calls DetMath),
+  which only an image calling `EvalMacro` or `NearGuardMs` links: 83,504 bytes in all.
 - **Mode compiler lane B's open ends.** MODE's vocabulary of later waves (STEP's `pos_sel`,
   modulator shapes, route and link endpoints, several ranges) is decoded and validated but
   provisional until the wave that plays it (design §1.4 principle 5); E11's fit in the memory
@@ -445,7 +475,29 @@ records live in [docs/design/reviews/](design/reviews/).
   offered. Lane G's arm64 and macOS legs reproducing them is a gate before lane A relies on the
   number code; a leg that differs is a finding, not a reason to re-mint. The fuzzers'
   M7 run, the libFuzzer leg and the number-check legs are not yet CI jobs (lane G), and the
-  plugin's typed-text parser still uses `from_chars` (lane A switches it to `Number`).
+  plugin's typed-text parser now uses `Number` (lane A).
+- **Mode compiler lane A's open ends.** The compiler admits only the default structure until
+  sound revision 2 widens `kSupportedModeFeatures` (onset and mark); its tests already compile,
+  decode and round-trip the whole vocabulary of every wave with the support table widened, but
+  later waves' vocabulary that the design leaves open stays provisional: tempo divisions are
+  accepted as `"off"` only (W2 defines them, so anything else is E6 whatever the support),
+  `quantize.scale` is a list of pitch classes, route sources are `modulator0`/`modulator1` and
+  link endpoints `grain.pitch` and the like (engine §5), and a step entry's `gain` and `prob`
+  default to 1. Choices the design left to the implementation: the header's `FACTORY` flag is
+  set for ids under `factory.` (a pure function of the document); a macro written without
+  `targets` keeps its default targets (per-key defaulting); `fmt` keeps a document's
+  stamp and `compile` and `stamp` compute it, so a stale stamp passes `fmt --check` but fails
+  `bspc roundtrip` and `stamp --check`; L4's "display resolution" is the display text
+  (`FormatPlain`) of the leaf against the derived value; L2 compares the smallest `base_ms` the
+  leaf and macros reach with the near guard at the largest size, transpose and spread they
+  reach; `EvalMacro` (R6) landed in `dsp/` with lane A because lint and derive need it, as an
+  uncalled function, sound-neutral by construction. Lane G turns the compiler's tests into the
+  `bspc-roundtrip` legs (the manifest upload and `parity-summary`), adds the compiler audit
+  (the source ban must be scoped to `compiler/src`, since the tests cross-check against
+  `std::from_chars`, `to_chars` and `printf`) and CODEOWNERS for `compiler/`, `tools/bspc/` and
+  `firmware/factory/`. The compiler's digests, like the number code's hashes, are measured on
+  x86-64 only until lane G's arm64 and macOS legs run them. `render` waits for lane E's
+  `tools/audition/`.
 - **Engine API still to come:** `LoadPreset` reads only the leaves of a `PresetState`; the
   mode, CTRL and the performance state it now carries (lane B), validation at load, the
   `sinceRev` rule and Trails or FastCut mode switches arrive with sound revision 2 (lane C);
@@ -503,11 +555,12 @@ Steps 1–4 need no hardware.
    nightly legs (profile step 11).
 3. **Mode compiler**, designed in [mode-compiler.md](design/mode-compiler.md) (draft v2), whose
    §12.4 plan runs lane 0, lane B, lane A, lane G's package rule, then lane C at sound revision
-   2. *Done:* lane 0, the permanent parameter-ID table with the macro IDs, and lane B, the
+   2. *Done:* lane 0, the permanent parameter-ID table with the macro IDs; lane B, the
    decoded preset with its decoder, validator, encoder, frozen fixtures and fuzzers (plus the
-   compiler's number code). Next: the compiler and `bspc` (lane A, whose reliance on the number
-   code waits for lane G's arm64 and macOS legs to reproduce its provisional hashes), lane G's
-   package rule, then sound revision 2 (lane C).
+   compiler's number code); and lane A, the compiler and `bspc` (schema 1, canonical JSON,
+   lint, derive), which compiles only the default structure until sound revision 2. Next: lane
+   G's package rule and CI legs (its arm64 and macOS legs must reproduce the number code's and
+   the compiler's committed hashes), then sound revision 2 (lane C).
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, `.bsp` presets and session state, and the rest of the plugin gaps above.

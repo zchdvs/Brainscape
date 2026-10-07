@@ -11,7 +11,9 @@
 > probes), the disagreements it resolves and its provenance are in
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
-> `main` `42773a2`. Status: **draft v2**, revised after review (record §6), not implemented.
+> `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B and A
+> are built (docs/STATUS.md), and notes marked "as built" record what an implementing lane
+> decided where this document left a choice.
 
 ---
 
@@ -166,9 +168,11 @@ post delay, whose taps are exact (§11.1).
 - **Strings.** `id`: `[a-z0-9._-]`, 1–48 bytes, stable once released; `name`: 1–32 bytes
   of UTF-8; `display_name`: 1–16 bytes.
 - **Derived fields.** `sound_rev` and `sound_hash` are written by `bspc stamp` and ignored
-  as input (§8.2). **Editor-only data** lives under `editor` (schema 1 defines
-  `editor.ratio_gen`, engine §5's pitch-set generator, and `editor.detached`, the targeted
-  leaves not derived from positions, §3.5): validated, kept, never compiled.
+  as input (§8.2). As built: `fmt` keeps them as written; `compile` stamps the JSON section
+  and `stamp` the document with this build's revision and the computed hash. **Editor-only
+  data** lives under `editor` (schema 1 defines `editor.ratio_gen`, engine §5's pitch-set
+  generator, and `editor.detached`, the targeted leaves not derived from positions, §3.5):
+  validated, kept, never compiled.
 
 ### 2.3 Top level, scheduler, output and post
 
@@ -281,6 +285,14 @@ the last note (record §2.2); L7 a macro targets a Shift-secondary leaf (§3.1);
 overridden Filter or Space macro breaks the universal endpoints (§3.1); L9 a product string
 (`name`, `display_name`, META, tags) matches the denylist of other makers' marks (§11.2).
 
+As built (lane A): L2 compares the smallest `base_ms` the leaf and macro targets reach with
+the near guard at the largest size, transpose and spread they reach, per pitch entry, through
+`dsp/`'s `NearGuardMs`; L4's display resolution is the display text, `FormatPlain`, of the
+leaf against the derived value; L5's free-running sources are `periodic` and `clock`; L8 wants
+a Filter target on `post.filter.cutoff_hz` from its minimum to its maximum, and every Space
+target on `post.delay.mix` or `post.reverb.mix` starting at 0; L9 matches whole words of the
+id, name, author, description, tags and display names, case-insensitively.
+
 Engine §3's `d_min_fb` guard is dropped: it prevents a comb at the guard-margin period inside
 the feedback loop, but feedback re-enters the ring through a fixed 512-frame FIFO
 (`dsp/include/brainscape/Engine.h:16-22`), so every loop is at least 10.67 ms long
@@ -331,7 +343,9 @@ which `Compile` fills in and the formatter writes, so every preset plays from th
 | aux1, aux2 | none |
 
 Step 4 tunes the defaults. Display names go to META, not MODE (§6.2), so renaming a knob
-keeps `sound_hash`.
+keeps `sound_hash`. As built: a macro written without `targets` keeps these (per-key
+defaulting, §2.2), so `{"id": "space", "display_name": "Room"}` only renames Space; `[]`
+empties it.
 
 ### 3.3 The evaluator
 
@@ -363,6 +377,10 @@ linear target skips it. The result is monotonic with exact endpoints, *measured*
 exponents 1.5 and 3.0 (record §2.6). The output is never rounded to a grid. `curve` is one
 power exponent, as engine §6 folds in the research's `lin|exp|log` and `curve_amount`
 (preset-parameter-and-patch-format.md §4.2): below 1 is the "log" shape, above 1 the "exp".
+
+As built: `EvalMacro` landed in `dsp/` with lane A (`brainscape/ModeEval.h`), beside
+`NearGuardMs` for lint L2, because lint and `derive` need it before R6; nothing in the engine
+calls it until R6, so it is sound-neutral by construction. 848 bytes on the M7 (*measured*).
 
 **Cost on the M7:** about 538 cycles (1.1 µs) per curved target (*estimated* with LLVM 14's
 `llvm-mca` Cortex-M7 model): an 8-target move is about 0.9 % of a 48-frame block, paid only
@@ -633,7 +651,7 @@ A 128-byte header, then sections; at most 16,384 bytes in all.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `magic` | 4 bytes | `BSPK` |
-| 4, 6 | `package_format`, `flags` | u16, u16 | 1; bit 0 `FACTORY`, bit 1 `JSON_STALE` (companion §6.9), others 0 |
+| 4, 6 | `package_format`, `flags` | u16, u16 | 1; bit 0 `FACTORY` (as built: the compiler sets it for ids under `factory.`), bit 1 `JSON_STALE` (companion §6.9), others 0 |
 | 8 | `sound_rev` | u32 | revision of the build that compiled or stamped it, never 0 |
 | 12, 16 | `blob_format`, `schema_version` | u32, u32 | 1, 1 |
 | 20, 24, 28 | `total_bytes`, `section_count`, reserved | u32 × 3 | reserved is 0 |
@@ -1003,6 +1021,13 @@ are deterministic across hosts (profile §3.9).
 | `derive [--solve]` | rewrite each targeted leaf as `EvalMacro` at its position, or each position from its leaf (§3.5) |
 | `render [--metrics]` | the shared render (companion §4.9) with an input and an event script; WAV, recipe, hashes, §11.3's metrics |
 | `migrate-session` | a `BSWS` v1 session to a preset document (§4.4) |
+
+As built (lane A): `bspc roundtrip` runs §8.3's checks with a sorted hash manifest
+(`--expect`), and `bspc version` prints the build's constants; `render` arrives with lane E.
+Later waves' vocabulary that this document leaves open is provisional: tempo divisions are
+`"off"` only until W2 defines them, `quantize.scale` lists pitch classes, route sources are
+`modulator0`/`modulator1`, link endpoints `grain.pitch`-style names (engine §5), a step's
+`gain` and `prob` default to 1, and `modulatorN.x` leaves live at `modulators[N].x`.
 
 ### 8.3 Determinism and its gate
 
