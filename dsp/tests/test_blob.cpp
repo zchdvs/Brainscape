@@ -1,7 +1,7 @@
 // The compiled preset and the .bsp package (docs/design/mode-compiler.md §5, §6; lane B): the
 // SHA-256 core, the random-number key extension (§7.5, R8), the default mode, the encoder's
-// one-encoding rule, every rule of the decoder and validator (§5.3) with its error code, and a
-// short run of the mutation fuzzer (§10.2).
+// one-encoding rule, every rule of the decoder and validator (§5.3) with its error code, the
+// frozen fixtures (§10.3) and a short run of the mutation fuzzer (§10.2).
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -1199,7 +1199,26 @@ TEST_CASE("Re-encoding into an existing package: pedal-side edits", "[blob][enco
   REQUIRE(d.error == PresetError::MetaDisplayName);
 }
 
-// ── The fuzzer ────────────────────────────────────────────────────────────────────────────
+// ── Frozen fixtures and the fuzzer ────────────────────────────────────────────────────────
+
+TEST_CASE("Frozen fixtures: their bytes and verdicts", "[blob][fixtures]") {
+  REQUIRE(kFixtureCount == 12u);
+  for (size_t i = 0; i < kFixtureCount; ++i) {
+    const Fixture&    f    = kFixtures[i];
+    const std::string path = std::string(BRAINSCAPE_FROZEN_FIXTURES) + "/" + f.file;
+    FILE*             in   = std::fopen(path.c_str(), "rb");
+    INFO(f.file);
+    REQUIRE(in != nullptr);
+    Bytes   bytes;
+    uint8_t buf[4096];
+    size_t  n;
+    while ((n = std::fread(buf, 1, sizeof buf, in)) > 0) bytes.insert(bytes.end(), buf, buf + n);
+    std::fclose(in);
+    REQUIRE(CheckFixture(f, bytes) == "");
+    // The fixture is still what its recipe builds (a changed encoder would differ here first).
+    REQUIRE(MakeFixture(i) == bytes);
+  }
+}
 
 TEST_CASE("Mutation fuzzer, short run: every accepted package re-encodes to itself",
           "[blob][fuzz]") {

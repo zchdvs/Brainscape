@@ -5,6 +5,7 @@ add_executable(brainscape_tests
   test_main.cpp
   test_blob.cpp
   blob/BlobSamples.cpp
+  blob/Fixtures.cpp
   test_engine.cpp
   test_state.cpp
   test_boundary.cpp
@@ -17,6 +18,9 @@ target_link_libraries(brainscape_tests PRIVATE brainscape_dsp)
 # The engine's private headers: the unit tests exercise its internals directly.
 target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor
                                                     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+# The frozen package fixtures (docs/design/mode-compiler.md §10.3), read by test_blob.cpp.
+target_compile_definitions(brainscape_tests PRIVATE
+  BRAINSCAPE_FROZEN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets/frozen")
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()
@@ -106,3 +110,4 @@ add_test(NAME dsp_fp_profile_check
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/FpProfileCheck.cmake)
 
 add_subdirectory(golden)
+add_subdirectory(blob)
