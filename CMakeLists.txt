@@ -38,6 +38,12 @@ endif()
 
 add_subdirectory(dsp)
 
+# The desktop-only preset compiler (docs/design/mode-compiler.md §8.1): hosts only, never in a
+# cross build for the pedal.
+if(NOT CMAKE_CROSSCOMPILING)
+  add_subdirectory(compiler)
+endif()
+
 if(BRAINSCAPE_BUILD_FIRMWARE)
   message(STATUS "brainscape: firmware/ build not yet implemented — lands with hardware bring-up")
 endif()
