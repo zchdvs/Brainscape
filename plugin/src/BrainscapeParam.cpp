@@ -3,13 +3,7 @@
 #include <cstdlib>
 #include <string>
 
-#if __has_include(<version>)
-#include <version>
-#endif
-#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
-#include <charconv>
-#define BRAINSCAPE_HAVE_FLOAT_FROM_CHARS 1
-#endif
+#include "Number.h"  // brainscape_compiler: the exact binary32 reader (mode-compiler.md §6.5)
 
 namespace brainscape::plugin {
 
@@ -26,21 +20,13 @@ juce::AudioProcessorParameterWithIDAttributes Attributes(const ParamDisplay& m) 
       (m.flags & kParamAutomatable) != 0u);
 }
 
-// Correctly rounded decimal -> binary32 (companion §6.4). from_chars is locale-free;
-// the strtof fallback (older libc++) follows LC_NUMERIC, which JUCE leaves at "C".
-// TODO(companion §6.4): vendored fast_float once it is pinned.
+// Correctly rounded decimal -> binary32 (companion §6.4) by the compiler's exact reader
+// (mode-compiler.md §6.5): integers only, no locale and no C library, so typed values and
+// compiled ones have the same bits on every host, macOS included, where libc++ gates float
+// from_chars. Its lenient entry takes the typed forms looser than JSON (".5", "5.", "05",
+// "+25"); a magnitude past FLT_MAX is refused.
 bool ParseFloat(const std::string& s, float& out) {
-#if defined(BRAINSCAPE_HAVE_FLOAT_FROM_CHARS)
-  const char* end = s.data() + s.size();
-  const auto  res = std::from_chars(s.data(), end, out);
-  return res.ec == std::errc() && res.ptr == end;
-#else
-  char*       end = nullptr;
-  const float v   = std::strtof(s.c_str(), &end);
-  if (end == s.c_str() || *end != '\0') return false;
-  out = v;
-  return true;
-#endif
+  return bsc::ParseTypedNumber(s.data(), s.size(), &out) == bsc::NumberStatus::Ok;
 }
 
 // Splits "12.5e-1 ms" into the decimal mantissa "12.5", its exponent -1 and the suffix

@@ -620,6 +620,35 @@ TEST_CASE("the plain slider attachment edits and shows exact values") {
   REQUIRE_FALSE(delay.Refresh());
 }
 
+TEST_CASE("typed text is read by the compiler's exact reader, typed forms included") {
+  // mode-compiler.md §6.5, §10.4: text looser than JSON, with JSON's exact rounding.
+  float v = 0.f;
+  REQUIRE(ParsePlainText(ParamId::DelayMs, ".5 s", v));
+  REQUIRE(v == 500.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "5. ms", v));
+  REQUIRE(v == 5.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "05", v));
+  REQUIRE(v == 5.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "+25", v));
+  REQUIRE(v == 25.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "0.5e3", v));
+  REQUIRE(v == 500.0f);
+  REQUIRE(ParsePlainText(ParamId::DelayMs, "-.5", v));  // canonicalized: the minimum
+  REQUIRE(v == 1.0f);
+  REQUIRE(ParsePlainText(ParamId::Mix, "55%", v));
+  REQUIRE(Bits(v) == 0x3F0CCCCDu);  // the bits canonical JSON writes as 0.55
+  REQUIRE(ParsePlainText(ParamId::TransposeSt, "7.02 st", v));
+  REQUIRE(Bits(v) == Bits(7.02f));
+  // At a binary32 midpoint, ties go to even, as the compiler reads them: 1 + 2^-24.
+  REQUIRE(ParsePlainText(ParamId::GrainSizeMs, "1.000000059604644775390625", v));
+  REQUIRE(Bits(v) == 0x3F800000u);
+  REQUIRE(ParsePlainText(ParamId::GrainSizeMs, "1.000000059604644775390626", v));
+  REQUIRE(Bits(v) == 0x3F800001u);
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, ".", v));
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "1..5", v));
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelayMs, "4e38 ms", v));  // past FLT_MAX
+}
+
 TEST_CASE("session state round-trips bit for bit") {
   BrainscapeProcessor a;
   uint32_t            seed = 42u;
