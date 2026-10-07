@@ -414,6 +414,38 @@ PresetCase MidiGate() {
   return p;
 }
 
+// ── Sound revision 5: wave 1's pitch sets (mode-compiler.md §7.5 R10). ──────────────────────
+
+// A cycled set (presets/pitchset_cycle.json: {0 twice, +12, -12} by `cycle`, the free-running
+// scheduler at overlap 0.6) with the transpose leaf moved over it alone, and footswitch triggers
+// taking their turn in the cycle.
+PresetCase PitchCycle() {
+  PresetCase p = PackagePreset("pitch_cycle", "pitchset_cycle");
+  Script&    s = p.script;
+  s.Param(S(3) + 211, P::TransposeSt, -5.0f);
+  s.Trigger(S(5) + 7);
+  s.Trigger(S(5) + 7);
+  s.Param(S(7) + 97, P::TransposeSt, 7.0f);
+  s.Param(S(9) + 1, P::TransposeSt, 0.0f);
+  p.require   = {{C::Events, 5, 5}, {C::Triggers, 2, 2}, {C::OffGridEvents, 5}, {C::Births, 500}};
+  p.ablate    = {Feature::PitchSet, Feature::Pitch, Feature::Triggers};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A weighted random set (presets/pitchset_random.json: {0: 3, -12: 1, +7: 2} by `random`,
+// periodic and onsets, reverse 0.2) switched to the cycled mode and back, Trails then FastCut:
+// each switch resets the cycle, and the random draws restart with the load's epoch.
+PresetCase PitchRandom() {
+  PresetCase p = PackagePreset("pitch_random", "pitchset_random");
+  Script&    s = p.script;
+  s.SpilloverPackage(S(4) + 77, "pitchset_cycle");
+  s.SpilloverPackage(S(7) + 501, "pitchset_random", SwitchStyle::FastCut);
+  p.require = {{C::Loads, 2, 2}, {C::ModeSwitches, 2, 2}, {C::Onsets, 10}, {C::Births, 500}};
+  p.ablate  = {Feature::PitchSet, Feature::PitchSelect, Feature::ModeSwitch, Feature::Reverse};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -474,6 +506,8 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::Sources: return "sources";
     case Feature::Burst: return "burst";
     case Feature::Intermittency: return "intermittency";
+    case Feature::PitchSet: return "pitchSet";
+    case Feature::PitchSelect: return "pitchSelect";
   }
   return "unknown";
 }
@@ -561,6 +595,8 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::Sources: out.strip |= kStripSources; break;
     case Feature::Burst: neutral(P::BurstCount, 1.0f); break;
     case Feature::Intermittency: neutral(P::Intermittency, 0.0f); break;
+    case Feature::PitchSet: out.strip |= kStripPitchSet; break;
+    case Feature::PitchSelect: out.strip |= kStripPitchSelect; break;
   }
   return out;
 }
@@ -975,6 +1011,8 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(BurstSpaced());
     v.presets.push_back(IntermittentCloud());
     v.presets.push_back(MidiGate());
+    v.presets.push_back(PitchCycle());   // sound revision 5 on: pitch sets
+    v.presets.push_back(PitchRandom());
     corpus.push_back(std::move(v));
   }
 

@@ -233,11 +233,12 @@ const Params kBusy = {{ParamId::Mix, 0.8f},        {ParamId::Feedback, 0.4f},
 TEST_CASE("an invalid mode or CTRL applies nothing, by any kind of load", "[modes]") {
   const Stereo input = Plucks(9600);
   const auto   good  = Complete(kBusy);
-  // A mode this build cannot play (a pitch set, W1), and a CTRL that does not match MACR.
+  // A mode this build cannot play (a mark walk, W2; until sound revision 5 this case was a
+  // pitch set), and a CTRL that does not match MACR.
   auto unsupported = Complete({{ParamId::Mix, 0.1f}});
-  unsupported->mode.pitch[0].count      = 2;
-  unsupported->mode.pitch[0].entries[1] = PitchEntry{12.0f, 1, 0};
-  unsupported->mode.features            = RequiredModeFeatures(unsupported->mode);
+  unsupported->mode.layers[0].markWalk = MarkWalk::Cascade;
+  unsupported->mode.features           = RequiredModeFeatures(unsupported->mode);
+  REQUIRE((unsupported->mode.features & ~kSupportedModeFeatures) == kModeFeatureMarkWalk);
   auto mismatched                       = Complete({{ParamId::Mix, 0.1f}});
   mismatched->control.macroCount        = 5;
   mismatched->control.positions[5]      = MacroPosition{};

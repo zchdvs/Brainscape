@@ -135,6 +135,18 @@ std::string RandomDocument(Rng& r, uint32_t index) {
     }
     Set(root, "scheduler.sources", std::move(set));
   }
+  // Pitch sets (sound revision 5): 1-8 entries, a weight of 1-16 or none (1), either selection.
+  if (r.Chance(30)) {
+    json::Value set = json::Value::Array();
+    for (uint32_t i = 0, n = 1 + r.Below(8); i < n; ++i) {
+      json::Value e = json::Value::Object();
+      e.Add("st", NumValue(RandomValue(r, Bits(-24.0f), Bits(24.0f))));
+      if (r.Chance(50)) e.Add("weight", Num(Dec(1 + r.Below(16)).c_str()));
+      set.Push(std::move(e));
+    }
+    Set(root, "layers[0].pitch.set", std::move(set));
+    if (r.Chance(50)) Set(root, "layers[0].pitch.select", Str(r.Chance(50) ? "random" : "cycle"));
+  }
   // Macros: a random subset, 0-4 targets each, within 32 targets with the defaults.
   json::Value list       = json::Value::Array();
   uint32_t    total      = 0;
@@ -222,12 +234,13 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 // header's sound_rev, STAT without the retired rows 27 and 28, onset and mark compiled. Re-minted
 // at sound revision 3 for the header's sound_rev alone: built with kSoundRevision 2, the same
 // tree gives revision 2's digests. Re-minted at sound revision 4: the header's sound_rev, STAT
-// with leaves 57-59 (the random documents draw them too), random source subsets.
+// with leaves 57-59 (the random documents draw them too), random source subsets. Re-minted at
+// sound revision 5: the header's sound_rev, random pitch sets (now supported).
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "18ba6c584e87a7734bc425b0b49b2b2c3f8aa9676b5cc4c3441d74ce84564f4d";
+    "d80729f17703f520ef904ef499a37ccf5a18b37e4e10110538891e4caa7c718d";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "334852c79bc3bbd0951efd5069f162fa13a0a205a4e6aac594887c3a4127ddd2";
+const char* const  kFuzzDigest = "363717bde69dacb06bf37233eab85250667e01529bd1067e0fe0ee95a0b16f49";
 
 }  // namespace
 

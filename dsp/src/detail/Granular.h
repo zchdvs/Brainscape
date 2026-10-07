@@ -22,6 +22,7 @@ inline constexpr uint32_t kBlockWriteAheadFrames = 512;
 // A FastCut load's fade, in frames (Engine.cpp checks it equals kFastCutFrames), and a grain's
 // fadeStart while it is not fading.
 inline constexpr uint32_t kGranularFastCutFrames = 128;
+inline constexpr uint32_t kGranularMaxPitch      = 8;  // a pitch set's entries (Mode.h's cap)
 inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
@@ -53,8 +54,15 @@ struct GranularParams {
   float    targetVoices;     // effective target: min(kMaxGrains*overlap^3, totalFrames),
                              // since the 1-frame interval floor caps sustainable voices
   float    jitter;           // 0 = periodic, 1 = Poisson inter-arrival
-  float    ratioBase;        // the pitch set's entry plus layer0.pitch.transpose_st
-                             // (semitones; the set is {0} until W1)
+  // Layer 0's pitch set (mode-compiler.md §7.5, R10; sound revision 5): each entry's
+  // semitones plus layer0.pitch.transpose_st, before detune and the ±24 st clamp; the weights
+  // and their sum; the selection. The default set {0: 1} gives 0 + transpose, which is the
+  // transpose bit for bit (sound revision 1's pitch).
+  float    pitchSt[kGranularMaxPitch];
+  uint16_t pitchWeight[kGranularMaxPitch];  // 1-16
+  uint32_t pitchCount;                      // 1-8
+  uint32_t pitchWeightSum;
+  bool     pitchRandom;                     // `random` selection, else `cycle`
   float    spreadCents;
   float    reverseProb;
   float    sustain, skew, smoothness;
@@ -125,10 +133,12 @@ class GranularCore {
   }
 
   // The sequencing state a load of a different mode resets and a load of the same mode keeps
-  // (mode-compiler.md §7.3): the bursts in progress.
+  // (mode-compiler.md §7.3): the bursts in progress (sound revision 4) and the pitch cycle's
+  // position (5).
   void ResetSequencing() noexcept {
     burstCount_ = 0;
     burstDue_   = kNoBurstDue;
+    pitchCycle_ = grainmath::PitchCycle{};
   }
 
   // Counts since Init (Engine::Stats); Reset and Restart keep them.
@@ -193,6 +203,9 @@ class GranularCore {
                  uint32_t liveFrame, uint32_t* renderedTo, uint32_t n, int64_t absSample,
                  float* wetL, float* wetR) noexcept;
   void AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept;
+  // The pitch-set entry a birth plays (mode-compiler.md §7.5, R10): the next of the cycle, or a
+  // weighted draw at the birth's key.
+  uint32_t PickPitch(const GranularParams& p, int64_t drawKey) noexcept;
   void UpdateBurstDue() noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
@@ -219,6 +232,7 @@ class GranularCore {
   Burst          bursts_[kMaxBursts]{};   // in progress, oldest first
   uint32_t       burstCount_ = 0;
   int64_t        burstDue_   = kNoBurstDue;  // the earliest `next` among them
+  grainmath::PitchCycle pitchCycle_;  // `cycle` selection's position, over every birth
   GranularStats  stats_;
 };
 

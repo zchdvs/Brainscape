@@ -42,6 +42,8 @@ enum Strip : uint8_t {
   kStripMode    = 1u << 2,  // the default mode and CTRL (Mode.h, PresetState.h); leaves kept
   kKeepMode     = 1u << 3,  // every load keeps the starting preset's mode and CTRL
   kStripSources = 1u << 4,  // the default sources join scheduler.sources (sound revision 4)
+  kStripPitchSet    = 1u << 5,  // layer 0 plays the default set {0: 1} by `cycle` (revision 5)
+  kStripPitchSelect = 1u << 6,  // layer 0's `random` selection becomes `cycle` (revision 5)
 };
 
 // A restart at `frame`, before the events stamped there: Engine::Restart, which keeps the

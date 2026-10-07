@@ -39,7 +39,10 @@ namespace brainscape::golden {
 // sources, bursts at spacing 0 and 120 ms, intermittency on triggers and periodic births); the
 // births, burstBirths and skips counters; the sources, burst and intermittency ablations; MIDI
 // triggers in scripts.
-inline constexpr uint32_t kCorpusVersion = 9;
+// 10 (sound revision 5, wave 1's pitch sets, R10): pitch_cycle (a cycled set under transpose
+// moves) and pitch_random (a weighted random set, mode switches to and from a cycled one) in
+// plucks_wave1_12s; the pitchSet and pitchSelect ablations.
+inline constexpr uint32_t kCorpusVersion = 10;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -95,12 +98,14 @@ const char* CounterName(Counter) noexcept;
 // preset's mode; FastCut makes every FastCut load Trails; WetKill moves every cutoff at 40 Hz,
 // the kill, to 41 Hz. Wave 1 (sound revision 4): Sources gives every loaded mode the default
 // sources back (periodic, footswitch and midi_note, beside its own), Burst sets
-// scheduler.burst.count to 1 and Intermittency scheduler.intermittency to 0.
+// scheduler.burst.count to 1 and Intermittency scheduler.intermittency to 0. Sound revision 5:
+// PitchSet gives every loaded mode the default set {0: 1} by `cycle`, PitchSelect makes its
+// `random` selection `cycle`.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
-  Sources, Burst, Intermittency,
+  Sources, Burst, Intermittency, PitchSet, PitchSelect,
 };
 const char* FeatureName(Feature) noexcept;
 

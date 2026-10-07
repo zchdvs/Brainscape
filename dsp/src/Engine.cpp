@@ -180,6 +180,7 @@ static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
+static_assert(kMaxPitchEntries == detail::kGranularMaxPitch, "a pitch set's cap differs");
 static_assert(kFastCutFrames == detail::kGranularFastCutFrames, "public and core fades differ");
 
 // Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
@@ -738,7 +739,8 @@ void Engine::Impl::InstallMode(const PresetState& preset) noexcept {
     ++modeSwitches_;
     // A different mode resets the sequencing state a load of the same mode keeps (design
     // §7.3): the pitch-cycle index, bursts, the step position and modulator phases, which the
-    // waves that build them reset here (since sound revision 4, the bursts in progress).
+    // waves that build them reset here (the bursts in progress since sound revision 4, the
+    // pitch cycle's position since 5).
     // Scheduler phase, marks, grains and due triggers always carry over.
     granular_.ResetSequencing();
   }
@@ -837,11 +839,23 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   gp_.targetVoices = target;
 
   gp_.jitter      = get(ParamId::Jitter);
-  // The pitch (design §7.5): the pitch set's entry, then the transpose leaf (ID 8) as an offset
-  // over it; detune is added at birth. Sound revision 2 plays only the default set {0: 1} (sets
-  // are W1's, R10), whose entry 0 + t is t exactly for every canonical t, as revision 1 read it.
-  const ModeBlob& mode = mode_->mode;
-  gp_.ratioBase   = mode.pitch[0].entries[0].st + get(ParamId::TransposeSt);
+  // The pitch (design §7.5, R10; sound revision 5): layer 0's pitch set, each entry plus the
+  // transpose leaf (ID 8) as an offset over it, picked at birth by `cycle` or `random`; detune
+  // and the ±24 st clamp follow at birth. The validated mode's set has 1-8 entries of weight
+  // 1-16. The default set {0: 1}'s 0 + t is t exactly for every canonical t, so it plays sound
+  // revision 1's pitch.
+  const ModeBlob& mode      = mode_->mode;
+  const PitchSet& set       = mode.pitch[0];
+  const float     transpose = get(ParamId::TransposeSt);
+  assert(set.count >= 1u && set.count <= detail::kGranularMaxPitch);
+  gp_.pitchCount     = set.count;
+  gp_.pitchWeightSum = 0;
+  for (uint32_t i = 0; i < set.count; ++i) {
+    gp_.pitchSt[i]     = set.entries[i].st + transpose;
+    gp_.pitchWeight[i] = set.entries[i].weight;
+    gp_.pitchWeightSum += set.entries[i].weight;
+  }
+  gp_.pitchRandom = mode.layers[0].pitchSelect == PitchSelect::Random;
   gp_.spreadCents = get(ParamId::SpreadCents);
   gp_.reverseProb = get(ParamId::ReverseProb);
   gp_.sustain      = get(ParamId::WindowSustain);
@@ -876,11 +890,20 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // and its jitter term had the wrong sign: at unity rate a grain's output is
   // independent of its birth time, so timing jitter decorrelates nothing
   // (review findings, all measured).
-  const float ratio        = grainmath::SemitonesToRatio(gp_.ratioBase);
+  // The pitch term takes the set's largest |ratio - 1| (design §7.5), each entry clamped as a
+  // grain clamps it; for the one-entry default set that is revision 1's term.
+  float pitchSpan = 0.f;
+  for (uint32_t i = 0; i < gp_.pitchCount; ++i) {
+    float st = gp_.pitchSt[i];
+    if (st > 24.f) st = 24.f;
+    if (st < -24.f) st = -24.f;
+    const float d = detmath::Abs(grainmath::SemitonesToRatio(st) - 1.0f);
+    if (d > pitchSpan) pitchSpan = d;
+  }
   const float kDecorrFrames = static_cast<float>(0.003 * sr);  // ~3 ms of divergence = full
   auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
   float decorr = 0.f;
-  decorr += clamp01(detmath::Abs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
+  decorr += clamp01(pitchSpan * static_cast<float>(total) / kDecorrFrames);
   decorr += clamp01(get(ParamId::SprayMs) * (1.0f / 30.0f));  // ms-based: rate-independent
   decorr += clamp01(detmath::Abs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
                     static_cast<float>(total) / kDecorrFrames);

@@ -22,8 +22,10 @@ namespace brainscape {
 // linear crossfade; Mix 0 and 1 keep revision 2's bits. 4: wave 1's trigger sources, bursts and
 // intermittency (mode-compiler.md §7.5 R9): the free-running scheduler only with `periodic`,
 // footswitch and MIDI triggers only when the mode lists them, scheduler.burst and
-// scheduler.intermittency as leaves 57-59; the default mode keeps revision 3's bits.
-inline constexpr uint32_t kSoundRevision = 4;
+// scheduler.intermittency as leaves 57-59; the default mode keeps revision 3's bits. 5: wave 1's
+// pitch sets (mode-compiler.md §7.5 R10): layer 0 plays its set's entries, by `cycle` or
+// `random`, plus the transpose leaf; the default set {0: 1} keeps revision 4's bits.
+inline constexpr uint32_t kSoundRevision = 5;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

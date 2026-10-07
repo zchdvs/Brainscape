@@ -17,8 +17,9 @@ namespace brainscape::blobtest {
 // revision 2: onset and mark became supported, and the samples no longer target rows 27 and 28.
 // Re-minted at sound revision 3 for the samples' soundRev alone (kSoundRevision): built with
 // kSoundRevision 2, the same tree gives revision 2's digest. Re-minted at sound revision 4: the
-// samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read.
-const char* const kFuzzDigest = "513dd9382808368b670b96abe45800cd059993f6c1b3f368eb4eb81ca686ae00";
+// samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read; and
+// at 5 for the same two (pitch sets).
+const char* const kFuzzDigest = "5322523ab4447f9c4bcc95bd681c1e24a0d9d5b100c0f12ea04dbd2c0da46de2";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
@@ -47,8 +48,10 @@ const Fixture kFixtures[] = {
      PresetError::None, 0},
     {"future-pitch-set.bsp",
      "842aae62f3765256fcbeab2d53293862d4700b344e5524bb473d5d3f9da954b9",
-     PresetError::UnsupportedFeature, kModeFeaturePitchSet, 0, false,
-     0, "a wave-1 package (the pitch set {0, +12}): rejected until W1 supports pitch sets",
+     PresetError::None, 0, 1, false, 0,
+     "a wave-1 package (the pitch set {0, +12}): rejected as UnsupportedFeature until sound "
+     "revision 5 played pitch sets (mode-compiler.md §7.5 R10); since then it decodes and "
+     "validates, and loads inexact as the revision-1 package it was built from",
      PresetError::None, 0},
     {"blob-format-2.bsp",
      "d1b280ecfce08bd417da80f3bd5a469b98481913cba17078e68d9f598419e998",

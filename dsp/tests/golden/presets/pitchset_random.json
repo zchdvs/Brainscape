@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "id": "corpus.freeze_marks",
-  "name": "Freeze marks",
+  "id": "corpus.pitchset_random",
+  "name": "Pitch set random",
   "family": "none",
   "sound_rev": 5,
-  "sound_hash": "5ace50b730a79e01aed5725ea5c19b1981c1be8a3f5427ebfef6d4de9c9b1b43",
+  "sound_hash": "b3608127fb79f63c5a70b76004e46d5e67e1e94858608c93610cb8f99b4a2912",
   "meta": {
     "author": "",
-    "description": "Golden corpus: freeze with marks newer than the pin.",
+    "description": "Golden corpus: a weighted random pitch set {0: 3, -12: 1, +7: 2} from the free-running scheduler and onsets, with reverse grains (sound revision 5).",
     "tags": []
   },
   "global": {
-    "mix": 1
+    "mix": 0.7
   },
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.55,
-    "jitter": 1,
+    "overlap": 0.5,
+    "jitter": 0.7,
     "intermittency": 0,
     "burst": {
       "count": 1,
@@ -26,33 +26,41 @@
   "layers": [
     {
       "position": {
-        "source": "mark",
-        "base_ms": 100,
-        "spray_ms": 50
+        "source": "live",
+        "base_ms": 300,
+        "spray_ms": 60
       },
-      "size_ms": 60,
+      "size_ms": 110,
       "window": {
-        "sustain": 0.3,
+        "sustain": 0.2,
         "skew": 0.5,
-        "smoothness": 0.7
+        "smoothness": 1
       },
       "pitch": {
         "set": [
           {
             "st": 0,
+            "weight": 3
+          },
+          {
+            "st": -12,
             "weight": 1
+          },
+          {
+            "st": 7,
+            "weight": 2
           }
         ],
-        "select": "cycle",
-        "transpose_st": 7,
-        "spread_cents": 20,
-        "reverse_prob": 0.3
+        "select": "random",
+        "transpose_st": 0,
+        "spread_cents": 10,
+        "reverse_prob": 0.2
       },
-      "pan_spread": 0.5
+      "pan_spread": 0.8
     }
   ],
   "feedback": {
-    "amount": 0
+    "amount": 0.2
   },
   "post": {
     "mod": {
@@ -76,7 +84,7 @@
   },
   "wet_trim_db": 0,
   "trigger": {
-    "sensitivity": 0.8
+    "sensitivity": 0.6
   },
   "macros": [
     {

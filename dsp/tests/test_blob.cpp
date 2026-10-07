@@ -749,8 +749,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
   const Bytes base = Base();
   const size_t mode = Payload(base, kTagMode);
   // Every feature bit, declared: this build names the ones it lacks; one it plays (onset and
-  // mark since sound revision 2, source selection since 4) the content does not require,
-  // FeatureMismatch.
+  // mark since sound revision 2, source selection since 4, pitch sets since 5) the content does
+  // not require, FeatureMismatch.
   for (uint32_t bit = 0; bit < 32; ++bit) {
     Bytes b = base;
     Wr32(&b[mode], 1u << bit);
@@ -761,7 +761,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
            1u << bit);
   }
   REQUIRE(kSupportedModeFeatures ==
-          (kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources));
+          (kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources |
+           kModeFeaturePitchSet));
   // Content that needs a feature the package does not declare: FeatureMismatch, named.
   auto s = CompleteState();
   FullMode(&s->mode, s.get());
@@ -812,7 +813,7 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
     t->mode.features = k.feature;
     ExpectValid(*t, PresetError::None, kAnyDetail, kModeFeatureAll);
     if ((k.feature & kSupportedModeFeatures) != 0u) {
-      ExpectValid(*t, PresetError::None);  // onset and mark (r2), source selection (r4)
+      ExpectValid(*t, PresetError::None);  // onset and mark (r2), sources (r4), pitch sets (r5)
     } else {
       ExpectValid(*t, PresetError::UnsupportedFeature, k.feature);
     }

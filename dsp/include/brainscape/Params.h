@@ -29,8 +29,9 @@ enum class ParamId : uint32_t {
   Overlap        = 6,   // scheduler.overlap — target voices = kMaxGrains * overlap^3
   SprayMs        = 7,   // layer0.position.spray_ms
   TransposeSt    = 8,   // layer0.pitch.transpose_st (was layer0.pitch.st; ±24 st = the
-                        // design's r_max = 4 ratio ceiling): from W1 an offset over the pitch
-                        // set, which with the default set {0} is today's pitch bit for bit
+                        // design's r_max = 4 ratio ceiling): since sound revision 5 an offset
+                        // over the pitch set, which with the default set {0} is revision 1's
+                        // pitch bit for bit
   SpreadCents    = 9,   // layer0.pitch.spread_cents
   ReverseProb    = 10,  // layer0.pitch.reverse_prob
   Jitter         = 11,  // scheduler.jitter — synchronous <-> asynchronous morph

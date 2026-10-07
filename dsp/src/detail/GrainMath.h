@@ -38,7 +38,7 @@ enum class Draw : uint32_t {
   // Purposes from 8 on are keyed through the extension below (mode-compiler.md §7.5), which
   // carries purpose >> 3, whichever DrawKey overload is called. Named now, drawn by the waves
   // that build them.
-  PitchSelect   = 8,   // W1: a pitch-set entry under `random` selection
+  PitchSelect   = 8,   // W1 (r5): a pitch-set entry under `random` selection (RandBits24)
   Intermittency = 9,   // W1 (r4): a skipped birth or trigger, ordinal per kind (Granular.h)
   StepShuffle   = 10,  // W2: the step order's shuffle
   StepProb      = 11,  // W2: a step's probability
@@ -111,6 +111,46 @@ inline float RandUnit(int64_t absSample, Draw purpose, uint32_t layer,
                       uint32_t ordinal) noexcept {
   return static_cast<float>(Hash32(DrawKey(absSample, purpose, layer, ordinal)) >> 8) *
          (1.0f / 16777216.0f);
+}
+
+// The draw's top 24 bits, as an integer: what RandUnit scales to [0, 1).
+inline uint32_t RandBits24(int64_t absSample, Draw purpose) noexcept {
+  return Hash32(DrawKey(absSample, purpose)) >> 8;
+}
+
+// ── Pitch sets (mode-compiler.md §7.5, R10) ──────────────────────────────────────────────
+// A layer's set holds 1-8 entries, each with a weight of 1-16. Integer-only selection.
+
+// `cycle` steps through the entries in order, each `weight` times: the state is the entry and
+// how often it has played. Reduced modulo the set on every pick, so no state reads past a set
+// (the design's "every index is reduced modulo its table's size on any load", §7.3).
+struct PitchCycle {
+  uint32_t entry  = 0;
+  uint32_t played = 0;
+};
+inline uint32_t NextCycleEntry(PitchCycle* c, const uint16_t* weights, uint32_t count) noexcept {
+  if (c->entry >= count) {
+    c->entry %= count;
+    c->played = 0;
+  }
+  const uint32_t e = c->entry;
+  if (++c->played >= weights[e]) {
+    c->played = 0;
+    c->entry  = e + 1u < count ? e + 1u : 0u;
+  }
+  return e;
+}
+
+// `random` picks entry i with probability weight_i / sum, from a 24-bit uniform u24: the entry
+// whose cumulative weights hold floor(u24 * sum / 2^24).
+inline uint32_t RandomEntry(uint32_t u24, const uint16_t* weights, uint32_t count,
+                            uint32_t sum) noexcept {
+  uint32_t t = static_cast<uint32_t>((static_cast<uint64_t>(u24) * sum) >> 24);
+  for (uint32_t i = 0; i + 1u < count; ++i) {
+    if (t < weights[i]) return i;
+    t -= weights[i];
+  }
+  return count - 1u;
 }
 
 inline float SemitonesToRatio(float st) noexcept {

@@ -279,8 +279,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", kModeFeaturePitchSet, "W1"},
-      {"layers[0].pitch.select", R"("random")", kModeFeaturePitchSet, "W1"},
       {"scheduler.sources", R"(["periodic", "clock", "footswitch", "midi_note"])",
        kModeFeatureClock, "W2"},
       {"scheduler.subdiv", R"("2x")", kModeFeatureClock, "W2"},
@@ -384,6 +382,53 @@ TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
   RoundTrip(leaves);
   Refused(With("scheduler.burst.count", Num("17")), "E4", "/scheduler/burst/count");
   Refused(With("scheduler.burst.spacing_ms", Num("501")), "E4", "/scheduler/burst/spacing_ms");
+
+  // Pitch sets (sound revision 5, §7.5 R10): 1-8 entries of st -24..24 and weight 1-16 (default
+  // 1), `cycle` or `random`, in the authored order; the default set alone compiles to no PSET.
+  struct SetCase {
+    const char* set;
+    const char* select;
+    uint8_t     count;
+    float       st[3];
+    uint16_t    weight[3];
+    uint32_t    feature;
+  };
+  const SetCase sets[] = {
+      {R"([{"st": 0}, {"st": 7, "weight": 3}])", "cycle", 2, {0.0f, 7.0f}, {1, 3},
+       kModeFeaturePitchSet},
+      {R"([{"st": 12, "weight": 2}, {"st": 0}, {"st": -12, "weight": 16}])", "random", 3,
+       {12.0f, 0.0f, -12.0f}, {2, 1, 16}, kModeFeaturePitchSet},
+      {R"([{"st": 0, "weight": 1}])", "random", 1, {0.0f}, {1}, kModeFeaturePitchSet},
+      {R"([{"st": -24}])", "cycle", 1, {-24.0f}, {1}, kModeFeaturePitchSet},
+      {R"([{"st": 0}])", "cycle", 1, {0.0f}, {1}, 0},
+  };
+  for (const SetCase& c : sets) {
+    INFO("layers[0].pitch.set = " << c.set << ", select " << c.select);
+    const std::string    text = With("layers[0].pitch.set", Parse(c.set),
+                                     With("layers[0].pitch.select", Str(c.select)));
+    const CompileResult  rs   = Ok(text);
+    const DecodedPackage ps   = DecodePackage(rs.package.data(), rs.package.size());
+    REQUIRE(ps.ok);
+    const PitchSet& set = ps.state->mode.pitch[0];
+    REQUIRE(set.count == c.count);
+    for (uint32_t i = 0; i < c.count; ++i) {
+      REQUIRE(set.entries[i].st == c.st[i]);
+      REQUIRE(set.entries[i].weight == c.weight[i]);
+    }
+    REQUIRE((ps.state->mode.layers[0].pitchSelect == PitchSelect::Random) ==
+            (std::string(c.select) == "random"));
+    REQUIRE(ps.state->mode.features == c.feature);
+    RoundTrip(text);
+  }
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 24.5}])")), "E4", "/layers/0/pitch/set/0/st");
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 0, "weight": 17}])")), "E4",
+          "/layers/0/pitch/set/0/weight");
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 0, "weight": 1.5}])")), "E3",
+          "/layers/0/pitch/set/0/weight");
+  Refused(With("layers[0].pitch.set",
+               Parse(R"([{"st": 0}, {"st": 1}, {"st": 2}, {"st": 3}, {"st": 4}, {"st": 5},
+                        {"st": 6}, {"st": 7}, {"st": 8}])")),
+          "E7", "/layers/0/pitch/set");
 }
 
 TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {

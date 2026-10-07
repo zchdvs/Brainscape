@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "id": "corpus.freeze_marks",
-  "name": "Freeze marks",
+  "id": "corpus.pitchset_cycle",
+  "name": "Pitch set cycle",
   "family": "none",
   "sound_rev": 5,
-  "sound_hash": "5ace50b730a79e01aed5725ea5c19b1981c1be8a3f5427ebfef6d4de9c9b1b43",
+  "sound_hash": "9b4668a74c24c73abc6884af5dfa52237cc17e88586326d164306cc6a0c63344",
   "meta": {
     "author": "",
-    "description": "Golden corpus: freeze with marks newer than the pin.",
+    "description": "Golden corpus: a cycled pitch set {0 twice, +12, -12} under the transpose leaf, from the free-running scheduler and the footswitch (sound revision 5).",
     "tags": []
   },
   "global": {
-    "mix": 1
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.55,
-    "jitter": 1,
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.6,
+    "jitter": 0.4,
     "intermittency": 0,
     "burst": {
       "count": 1,
@@ -26,33 +26,41 @@
   "layers": [
     {
       "position": {
-        "source": "mark",
-        "base_ms": 100,
-        "spray_ms": 50
+        "source": "live",
+        "base_ms": 220,
+        "spray_ms": 40
       },
-      "size_ms": 60,
+      "size_ms": 140,
       "window": {
         "sustain": 0.3,
-        "skew": 0.5,
-        "smoothness": 0.7
+        "skew": 0.4,
+        "smoothness": 0.8
       },
       "pitch": {
         "set": [
           {
             "st": 0,
+            "weight": 2
+          },
+          {
+            "st": 12,
+            "weight": 1
+          },
+          {
+            "st": -12,
             "weight": 1
           }
         ],
         "select": "cycle",
-        "transpose_st": 7,
-        "spread_cents": 20,
-        "reverse_prob": 0.3
+        "transpose_st": 0,
+        "spread_cents": 5,
+        "reverse_prob": 0
       },
-      "pan_spread": 0.5
+      "pan_spread": 0.7
     }
   ],
   "feedback": {
-    "amount": 0
+    "amount": 0.25
   },
   "post": {
     "mod": {
@@ -76,7 +84,7 @@
   },
   "wet_trim_db": 0,
   "trigger": {
-    "sensitivity": 0.8
+    "sensitivity": 0.5
   },
   "macros": [
     {

@@ -67,9 +67,10 @@ inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every 
 
 // The features this build plays: sound revision 2's onset source and mark positioning (§7.6
 // item 4, the structure rows 27 and 28 retired into), and wave 1's source selection (sound
-// revision 4, §7.5 R9). Each wave-1 feature widens it in its own pull request.
+// revision 4, §7.5 R9) and pitch sets (5, R10). Each wave-1 feature widens it in its own pull
+// request.
 inline constexpr uint32_t kSupportedModeFeatures =
-    kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources;
+    kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources | kModeFeaturePitchSet;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
@@ -124,7 +125,7 @@ struct ModeLayer {  // LAYR entry, 36 bytes: 13 enumerations and a pad, a mask, 
   uint8_t        markIndex       = 0;  // W2: 0-15
   MarkWalk       markWalk        = MarkWalk::None;
   PinRearm       pinRearm        = PinRearm::Off;
-  PitchSelect    pitchSelect     = PitchSelect::Cycle;  // W1
+  PitchSelect    pitchSelect     = PitchSelect::Cycle;  // W1 (r5)
   QuantizeMode   quantize        = QuantizeMode::Off;   // W3
   uint8_t        quantizeRoot    = 0;                   // W3: 0-11
   ModifierOp     modifier[2]     = {ModifierOp::None, ModifierOp::None};  // W3, distinct ops
@@ -147,7 +148,7 @@ inline constexpr ModeLayer kAbsentModeLayer = {PositionSource::Live, 0, SprayLaw
                                                SvfBand::Lowpass, CutoffSource::Fixed, 0, 0,
                                                0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
-// ── PSET: pitch sets (W1) ─────────────────────────────────────────────────────────────────
+// ── PSET: pitch sets (W1, sound revision 5) ───────────────────────────────────────────────
 struct PitchEntry {  // 8 bytes
   float    st     = 0.0f;  // -24..24 st, added to the transpose leaf (§7.5)
   uint16_t weight = 0;     // 1-16

@@ -97,8 +97,9 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   uint32_t total = p.totalFrames >= 1u ? p.totalFrames : 1u;
   const int64_t drawKey = birthAbs - drawEpoch_;
 
-  // Resolve everything once (design §3): pitch -> ratio -> signed increment.
-  float st = p.ratioBase;
+  // Resolve everything once (design §3): pitch -> ratio -> signed increment. The pitch is the
+  // set's entry plus the transpose leaf, then detune, then the clamp (mode-compiler.md §7.5).
+  float st = p.pitchSt[PickPitch(p, drawKey)];
   if (p.spreadCents > 0.f) {
     st += (RandUnit(drawKey, Draw::Detune) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
   }
@@ -211,6 +212,16 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     g.gainR = 1.0f;
   }
   g.active = true;
+}
+
+uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey) noexcept {
+  // `random`: the birth's own draw (purpose 8, R8's extended key), so births at one frame share
+  // it as they share every draw; `cycle`: every birth advances it, from any source.
+  if (p.pitchRandom) {
+    return grainmath::RandomEntry(grainmath::RandBits24(drawKey, Draw::PitchSelect), p.pitchWeight,
+                                  p.pitchCount, p.pitchWeightSum);
+  }
+  return grainmath::NextCycleEntry(&pitchCycle_, p.pitchWeight, p.pitchCount);
 }
 
 template <bool kFade>

@@ -1,5 +1,6 @@
 // Wave 1 of the mode runtime (docs/design/mode-compiler.md §7.5, §10.3, §10.4), one feature and
-// one sound revision at a time: trigger sources, bursts and intermittency (R9, sound revision 4).
+// one sound revision at a time: trigger sources, bursts and intermittency (R9, sound revision 4);
+// pitch sets (R10, 5).
 // Each feature's cases run block-split invariance (contract #1) and the level contract (#3).
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include "brainscape/Mode.h"
 #include "brainscape/Preset.h"
 #include "catch.hpp"
+#include "detail/GrainMath.h"
 
 using namespace brainscape;
 
@@ -97,6 +99,28 @@ std::unique_ptr<PresetState> Preset(const Params& params, uint8_t sources = kDef
   }
   s->mode.schedule.sources = sources;
   s->mode.features         = RequiredModeFeatures(s->mode);
+  REQUIRE(ComputeModeHash(s->mode, &s->mode.modeHash));
+  PresetDiagnostic d;
+  REQUIRE(ValidateMode(*s, &d));
+  return s;
+}
+
+// `s` with layer 0 playing `set` by `select` (its mode re-hashed and validated).
+struct SetEntry {
+  float    st;
+  uint16_t weight;
+};
+std::unique_ptr<PresetState> WithSet(std::unique_ptr<PresetState> s, const std::vector<SetEntry>& set,
+                                     PitchSelect select = PitchSelect::Cycle) {
+  REQUIRE(!set.empty());
+  REQUIRE(set.size() <= kMaxPitchEntries);
+  s->mode.pitch[0]       = PitchSet{};
+  s->mode.pitch[0].count = static_cast<uint8_t>(set.size());
+  for (size_t i = 0; i < set.size(); ++i) {
+    s->mode.pitch[0].entries[i] = PitchEntry{set[i].st, set[i].weight, 0};
+  }
+  s->mode.layers[0].pitchSelect = select;
+  s->mode.features              = RequiredModeFeatures(s->mode);
   REQUIRE(ComputeModeHash(s->mode, &s->mode.modeHash));
   PresetDiagnostic d;
   REQUIRE(ValidateMode(*s, &d));
@@ -462,4 +486,198 @@ TEST_CASE("R9: a burst keeps the level of one grain (contract #3)", "[wave1]") {
     REQUIRE(one > 0.05);
     CHECK(std::fabs(20.0 * std::log10(level / one)) < 0.5);
   }
+}
+
+// ── Pitch sets (R10, sound revision 5) ──────────────────────────────────────────────────────
+
+TEST_CASE("R10: `cycle` plays the entries in order, each weight times", "[wave1]") {
+  using grainmath::NextCycleEntry;
+  using grainmath::PitchCycle;
+  const uint16_t        w[3] = {2, 1, 3};
+  PitchCycle            c;
+  std::vector<uint32_t> got;
+  for (int i = 0; i < 13; ++i) got.push_back(NextCycleEntry(&c, w, 3));
+  CHECK(got == std::vector<uint32_t>{0, 0, 1, 2, 2, 2, 0, 0, 1, 2, 2, 2, 0});
+  // One entry of weight 1, the default set: always entry 0, and the state never moves.
+  const uint16_t one[1] = {1};
+  PitchCycle     d;
+  for (int i = 0; i < 5; ++i) CHECK(NextCycleEntry(&d, one, 1) == 0u);
+  CHECK(d.entry == 0u);
+  CHECK(d.played == 0u);
+  // A state past a smaller set is reduced modulo it, from that entry's first play.
+  PitchCycle e{5, 1};
+  CHECK(NextCycleEntry(&e, w, 3) == 2u);  // 5 mod 3
+  CHECK(NextCycleEntry(&e, w, 3) == 2u);
+  CHECK(NextCycleEntry(&e, w, 3) == 2u);
+  CHECK(NextCycleEntry(&e, w, 3) == 0u);
+}
+
+TEST_CASE("R10: `random` picks entries in proportion to their weights, in integers", "[wave1]") {
+  using grainmath::RandomEntry;
+  // The entry whose cumulative weights hold floor(u24 * sum / 2^24): exact at the boundaries.
+  const uint16_t w2[2] = {1, 3};
+  CHECK(RandomEntry(0u, w2, 2, 4) == 0u);
+  CHECK(RandomEntry((1u << 22) - 1u, w2, 2, 4) == 0u);
+  CHECK(RandomEntry(1u << 22, w2, 2, 4) == 1u);
+  CHECK(RandomEntry((1u << 24) - 1u, w2, 2, 4) == 1u);
+  // Over every 24-bit value, entry i takes its share of 2^24 to within one value.
+  const uint16_t w[4]     = {3, 1, 16, 7};
+  const uint32_t sum      = 27;
+  uint32_t       count[4] = {};
+  for (uint32_t u = 0; u < (1u << 24); ++u) ++count[RandomEntry(u, w, 4, sum)];
+  for (int i = 0; i < 4; ++i) {
+    const double share = static_cast<double>(w[i]) * 16777216.0 / sum;
+    INFO("entry " << i << ": " << count[i] << " of 2^24, share " << share);
+    CHECK(std::fabs(static_cast<double>(count[i]) - share) <= 1.0);
+  }
+  // One entry: always it.
+  const uint16_t one[1] = {9};
+  CHECK(RandomEntry((1u << 24) - 1u, one, 1, 9) == 0u);
+  // The engine's draw is purpose 8's extended key (R8), never a purpose-0-7 key of its frame.
+  for (int64_t abs : {int64_t{0}, int64_t{1}, int64_t{48000}, int64_t{1} << 33}) {
+    for (uint32_t p = 0; p < 8; ++p) {
+      CHECK(grainmath::DrawKey(abs, grainmath::Draw::PitchSelect) !=
+            grainmath::DrawKey(abs, static_cast<grainmath::Draw>(p)));
+    }
+  }
+}
+
+TEST_CASE("R10: one-entry sets and the default set play the transpose bit for bit", "[wave1]") {
+  // entry + transpose is the pitch: {7} at 0, {3} at +4 and {0} at +7 all give 7 st exactly,
+  // under either selection, and a set of equal entries is that one pitch.
+  const Stereo in   = Plucks(28800);
+  const Params base = {{ParamId::SprayMs, 25.0f},    {ParamId::SpreadCents, 15.0f},
+                       {ParamId::Jitter, 0.5f},      {ParamId::ReverseProb, 0.3f},
+                       {ParamId::TriggerSens, 0.6f}, {ParamId::BurstCount, 2.0f}};
+  auto with = [&](float transpose) {
+    Params p = base;
+    p.emplace_back(ParamId::TransposeSt, transpose);
+    return p;
+  };
+  const uint8_t         sources = kDefaultSources | kSourceOnset;
+  const std::vector<Ev> events  = {Trig(5001, 0, TS::Footswitch), Trig(5001, 1, TS::MidiNote)};
+  const Stereo          ref     = RenderFrom(*Preset(with(7.0f), sources), in, events);
+  CHECK(Same(RenderFrom(*WithSet(Preset(with(0.0f), sources), {{7.0f, 1}}), in, events), ref));
+  CHECK(Same(RenderFrom(*WithSet(Preset(with(4.0f), sources), {{3.0f, 4}}), in, events), ref));
+  CHECK(Same(RenderFrom(*WithSet(Preset(with(0.0f), sources), {{7.0f, 2}, {7.0f, 5}, {7.0f, 1}}),
+                        in, events),
+             ref));
+  CHECK(Same(RenderFrom(*WithSet(Preset(with(0.0f), sources), {{7.0f, 2}, {7.0f, 5}},
+                                 PitchSelect::Random),
+                        in, events),
+             ref));
+  // A set of two pitches plays something else.
+  CHECK_FALSE(Same(
+      RenderFrom(*WithSet(Preset(with(0.0f), sources), {{7.0f, 1}, {0.0f, 1}}), in, events), ref));
+}
+
+TEST_CASE("R10: the set, its order, its weights and the selection each change the sound",
+          "[wave1]") {
+  const Stereo in    = Plucks(19200);
+  const Params base  = {{ParamId::SprayMs, 10.0f}, {ParamId::Jitter, 0.3f}, {ParamId::Overlap, 0.6f}};
+  const Stereo zero  = RenderFrom(*Preset(base), in, {});
+  const Stereo up    = RenderFrom(*WithSet(Preset(base), {{12.0f, 1}}), in, {});
+  const Stereo both  = RenderFrom(*WithSet(Preset(base), {{0.0f, 1}, {12.0f, 1}}), in, {});
+  const Stereo flip  = RenderFrom(*WithSet(Preset(base), {{12.0f, 1}, {0.0f, 1}}), in, {});
+  const Stereo heavy = RenderFrom(*WithSet(Preset(base), {{0.0f, 3}, {12.0f, 1}}), in, {});
+  const Stereo rnd =
+      RenderFrom(*WithSet(Preset(base), {{0.0f, 1}, {12.0f, 1}}, PitchSelect::Random), in, {});
+  const Stereo* all[] = {&zero, &up, &both, &flip, &heavy, &rnd};
+  for (size_t i = 0; i < 6; ++i) {
+    for (size_t j = 0; j < i; ++j) {
+      INFO("renders " << j << " and " << i);
+      CHECK_FALSE(Same(*all[i], *all[j]));
+    }
+  }
+}
+
+TEST_CASE("R10: a load of another mode restarts the cycle, of the same mode keeps it",
+          "[wave1]") {
+  // One periodic voice at a time (overlap 0), 100 ms grains abutting: births at 0, 4800 and
+  // 9600, so a load at 2400 lands after one birth, with the cycle's +12 next. Reverse grains
+  // (reverse_prob 1) make every set's normalization the same, so only the pitch differs.
+  const Stereo in   = Sine(14400);
+  const Params base = {{ParamId::Overlap, 0.0f},     {ParamId::Jitter, 0.0f},
+                       {ParamId::SprayMs, 0.0f},     {ParamId::GrainSizeMs, 100.0f},
+                       {ParamId::ReverseProb, 1.0f}, {ParamId::DelayMs, 20.0f},
+                       {ParamId::Mix, 1.0f}};
+  const std::vector<SetEntry> set = {{0.0f, 1}, {12.0f, 1}};
+  const auto a = WithSet(Preset(base), set);
+  // Other modes: the same set, or the set {0}, with a source no event uses left out.
+  const uint8_t others = kSourcePeriodic | kSourceFootswitch;
+  const auto    b      = WithSet(Preset(base, others), set);
+  const auto    zero   = Preset(base, others);
+  CHECK(Track(*a, in, {}).births == Frames{0, 4800, 9600});
+  const Stereo keep  = RenderFrom(*a, in, {Load(2400, 0, a.get())});
+  const Stereo reset = RenderFrom(*a, in, {Load(2400, 0, b.get())});
+  const Stereo flat  = RenderFrom(*a, in, {Load(2400, 0, zero.get())});
+  // Reset, the birth at 4800 plays the cycle's first entry, 0 st, as the set {0} does; the
+  // kept cycle plays +12 there. From 9600 the reset cycle plays +12 and the set {0} 0 st.
+  auto sameFrom = [](const Stereo& x, const Stereo& y, size_t from, size_t to) {
+    for (size_t i = from; i < to; ++i) {
+      if (x.l[i] != y.l[i] || x.r[i] != y.r[i]) return false;
+    }
+    return true;
+  };
+  CHECK(sameFrom(keep, reset, 0, 4800));
+  CHECK(sameFrom(reset, flat, 0, 9600));
+  CHECK_FALSE(sameFrom(keep, flat, 4800, 9600));
+  CHECK_FALSE(sameFrom(reset, flat, 9600, 14400));
+  // An Exact load restarts the cycle too: from the load on, the render is a fresh one's.
+  Rig rig;
+  REQUIRE(rig.engine.LoadPreset(*a, LoadMode::Exact));
+  Render(rig.engine, Sine(2400), {});  // one birth: +12 next
+  REQUIRE(rig.engine.LoadPreset(*a, LoadMode::Exact));
+  CHECK(Same(Render(rig.engine, in, {}), RenderFrom(*a, in, {})));
+}
+
+TEST_CASE("R10: pitch sets are block-split invariant (contract #1)", "[wave1]") {
+  const Stereo in     = Plucks(28800);
+  const Params params = {{ParamId::TriggerSens, 0.6f}, {ParamId::BurstCount, 3.0f},
+                         {ParamId::SprayMs, 30.0f},    {ParamId::Jitter, 0.6f},
+                         {ParamId::Overlap, 0.5f},     {ParamId::Mix, 0.8f}};
+  const uint8_t sources = kDefaultSources | kSourceOnset;
+  const auto    cyc = WithSet(Preset(params, sources), {{0.0f, 2}, {12.0f, 1}, {-7.0f, 3}});
+  const auto    rnd = WithSet(Preset(params, sources), {{0.0f, 5}, {-12.0f, 2}, {19.0f, 1}},
+                              PitchSelect::Random);
+  const std::vector<Ev> events = {
+      Trig(777, 0, TS::Footswitch),          Set(3001, 0, ParamId::TransposeSt, -5.0f),
+      Load(6007, 0, rnd.get()),              Trig(6007, 1, TS::MidiNote),
+      Set(9999, 0, ParamId::TransposeSt, 9.0f), Load(14001, 0, cyc.get()),
+      Load(17003, 0, cyc.get()),             Trig(20011, 0, TS::Footswitch)};
+  const Stereo ref = RenderFrom(*cyc, in, events, {48});
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{1}, {512}, {37, 5, 300, 1}, {64, 3}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    CHECK(Same(RenderFrom(*cyc, in, events, pattern), ref));
+  }
+}
+
+TEST_CASE("R10: a pitch set keeps the level across the overlap sweep (contract #3)", "[wave1]") {
+  // Two steady tones, spray 30 ms (decorrelated positions): the set {0, +12, -12} plays within
+  // 1.5 dB of the set {0} at every overlap, and within 1.5 dB of itself across the sweep.
+  Stereo in = Sine(48000, 0.3f);
+  for (size_t i = 0; i < in.l.size(); ++i) {
+    const float v = 0.3f * static_cast<float>(std::sin(0.0431969 * static_cast<double>(i)));
+    in.l[i] += v;
+    in.r[i] += v;
+  }
+  auto level = [&](const std::vector<SetEntry>& set, float overlap) {
+    const Params p = {{ParamId::Overlap, overlap}, {ParamId::SprayMs, 30.0f},
+                      {ParamId::GrainSizeMs, 60.0f}, {ParamId::Mix, 1.0f},
+                      {ParamId::PanSpread, 0.0f}};
+    const Stereo out = RenderFrom(*WithSet(Preset(p), set), in, {});
+    return 20.0 * std::log10(Rms(out.l, 24000, 48000));
+  };
+  const std::vector<SetEntry> three = {{0.0f, 1}, {12.0f, 1}, {-12.0f, 1}};
+  double lo = 1e9, hi = -1e9;
+  for (const float overlap : {0.3f, 0.5f, 0.75f, 1.0f}) {
+    const double set = level(three, overlap), unison = level({{0.0f, 1}}, overlap);
+    INFO("overlap " << overlap << ": set " << set << " dB, {0} " << unison << " dB");
+    CHECK(std::fabs(set - unison) < 1.5);
+    lo = std::min(lo, set);
+    hi = std::max(hi, set);
+  }
+  INFO("the set across the sweep: " << lo << " to " << hi << " dB");
+  CHECK(hi - lo < 1.5);
 }

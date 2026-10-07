@@ -3,7 +3,7 @@
   "id": "corpus.switch_live",
   "name": "Switch live",
   "family": "none",
-  "sound_rev": 4,
+  "sound_rev": 5,
   "sound_hash": "c0d013dfee3121af01b107db716caf1fd9b9db17f7ebd94f94701599c6b053bc",
   "meta": {
     "author": "",
