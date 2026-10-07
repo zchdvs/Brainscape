@@ -491,8 +491,12 @@ records live in [docs/design/reviews/](design/reviews/).
   (`FormatPlain`) of the leaf against the derived value; L2 compares the smallest `base_ms` the
   leaf and macros reach with the near guard at the largest size, transpose and spread they
   reach; `EvalMacro` (R6) landed in `dsp/` with lane A because lint and derive need it, as an
-  uncalled function, sound-neutral by construction. Lane G turns the compiler's tests into the
-  `bspc-roundtrip` legs (the manifest upload and `parity-summary`), adds the compiler audit
+  uncalled function, sound-neutral by construction; `editor.ratio_gen`'s keys stay open until
+  the editor defines them, but its numbers and key order are canonical; documents over 1 MiB
+  are refused unread (E12); `derive --solve` keeps a stored position that lands as near as
+  any; `bspc` refuses options a command does not take (exit 2). Lane G turns the compiler's
+  tests into the `bspc-roundtrip` legs (the manifest upload and `parity-summary`) and the
+  `compiler_bspc_cli` test into a leg check, adds the compiler audit
   (the source ban must be scoped to `compiler/src`, since the tests cross-check against
   `std::from_chars`, `to_chars` and `printf`) and CODEOWNERS for `compiler/`, `tools/bspc/` and
   `firmware/factory/`. The compiler's digests, like the number code's hashes, are measured on

@@ -172,7 +172,9 @@ post delay, whose taps are exact (§11.1).
   and `stamp` the document with this build's revision and the computed hash. **Editor-only
   data** lives under `editor` (schema 1 defines `editor.ratio_gen`, engine §5's pitch-set
   generator, and `editor.detached`, the targeted leaves not derived from positions, §3.5):
-  validated, kept, never compiled.
+  validated, kept, never compiled. As built: `editor.ratio_gen`'s keys stay open until the
+  editor defines them, but it is in canonical form like the rest: its numbers are read as
+  binary32 (overflow is E4) and written as canonical text, its object members sorted by key.
 
 ### 2.3 Top level, scheduler, output and post
 
@@ -285,13 +287,16 @@ the last note (record §2.2); L7 a macro targets a Shift-secondary leaf (§3.1);
 overridden Filter or Space macro breaks the universal endpoints (§3.1); L9 a product string
 (`name`, `display_name`, META, tags) matches the denylist of other makers' marks (§11.2).
 
-As built (lane A): L2 compares the smallest `base_ms` the leaf and macro targets reach with
-the near guard at the largest size, transpose and spread they reach, per pitch entry, through
-`dsp/`'s `NearGuardMs`; L4's display resolution is the display text, `FormatPlain`, of the
-leaf against the derived value; L5's free-running sources are `periodic` and `clock`; L8 wants
-a Filter target on `post.filter.cutoff_hz` from its minimum to its maximum, and every Space
-target on `post.delay.mix` or `post.reverb.mix` starting at 0; L9 matches whole words of the
-id, name, author, description, tags and display names, case-insensitively.
+As built (lane A): a document's text over 1 MiB is refused before parsing (E12), and the
+reader's duplicate-key check and column count are linear. L2 compares the smallest `base_ms`
+the leaf and macro targets reach with the near guard at the largest size, transpose and spread
+they reach, per pitch entry, through `dsp/`'s `NearGuardMs`; L4's display resolution is the
+display text, `FormatPlain`, of the leaf against the derived value, and L4 names leaves as
+schema 1 does (`layer0.position.spray_ms`, the form `editor.detached` takes); L5's
+free-running sources are `periodic` and `clock`; L8 wants a Filter target on
+`post.filter.cutoff_hz` from its minimum to its maximum, and every Space target on
+`post.delay.mix` or `post.reverb.mix` starting at 0; L9 matches whole words of the id, name,
+author, description, tags and display names, case-insensitively.
 
 Engine §3's `d_min_fb` guard is dropped: it prevents a comb at the guard-margin period inside
 the feedback loop, but feedback re-enters the ring through a fixed 512-frame FIFO
@@ -423,6 +428,12 @@ so the leaf is derived, not typed:
 - **The compiler only checks**: L4 flags a leaf further than its display resolution from the
   derived value, or an omitted position (compiled as 0.5); both are errors for factory
   packages.
+
+As built (lane A): "solve position" compares distances exactly; of the positions that land
+equally near the leaf it keeps the stored one, so a derived document solves back to itself
+byte for byte (`EvalMacro` is flat over runs of positions, and 0.49999997 often gives what 0.5
+gives), and otherwise takes the smallest, also past either end of the range. `derive` logs
+each leaf's net change once, and says when the stamp has gone stale.
 
 ### 3.6 What hosts see
 
@@ -1023,7 +1034,12 @@ are deterministic across hosts (profile §3.9).
 | `migrate-session` | a `BSWS` v1 session to a preset document (§4.4) |
 
 As built (lane A): `bspc roundtrip` runs §8.3's checks with a sorted hash manifest
-(`--expect`), and `bspc version` prints the build's constants; `render` arrives with lane E.
+(`--expect`, which names each document whose hashes differ), and `bspc version` prints the
+build's constants; `render` arrives with lane E. Each command takes only its own options:
+anything else exits 2 before a file is touched, so a misspelled `--check` or `--factory` in CI
+fails instead of passing or rewriting. `diff` compares what plays and controls the sound
+before the id, name, META and display names, and the header flags (FACTORY follows from the
+id) after them. On Windows `bspc` runs with UTF-8 as its code page, so any file name opens.
 Later waves' vocabulary that this document leaves open is provisional: tempo divisions are
 `"off"` only until W2 defines them, `quantize.scale` lists pitch classes, route sources are
 `modulator0`/`modulator1`, link endpoints `grain.pitch`-style names (engine §5), a step's
