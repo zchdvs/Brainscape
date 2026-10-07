@@ -743,6 +743,13 @@ and display functions whose results reach the engine (`PlainFromNormalized`,
 engine entry point", "The denormal decision: gradual underflow everywhere" and "Guard
 rewrite").
 
+> **Update (2026-10-07, mode-compiler lane B).** As built, the key is sound revision 1's
+> `(sample, purpose)` for purposes 0–7, layer 0 and ordinal 0, and a 6-bit extension (layer,
+> same-frame ordinal, purpose >> 3) re-hashes it through `Hash32` when nonzero
+> (`dsp/src/detail/GrainMath.h`; [mode-compiler.md](mode-compiler.md) §7.5, R8), so no revision 1
+> key changes and no extended key aliases another frame's. Amended here when that design is
+> accepted (its §12.5).
+
 **Counter-based RNG, fully specified** (review finding — "absolute sample index" alone is
 ambiguous and collides): a Philox/Squares-class counter PRNG keyed on the tuple
 `(engine_sample_counter, layer_index, burst_ordinal, draw_purpose)`, where

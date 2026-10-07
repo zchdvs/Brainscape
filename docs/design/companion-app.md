@@ -750,6 +750,13 @@ calibration (§4.8), and the DAW session snapshot (§6.9).
 
 ### 6.3 The `.bsp` package
 
+> **Update (2026-10-07, mode-compiler lane B).** The package is built as
+> [mode-compiler.md](mode-compiler.md) §5–§6 specifies, in `dsp/src/blob/` behind
+> `brainscape/Preset.h`: a 128-byte header that adds `control_hash`, MODE as tagged chunks (a new
+> chunk is an `UnsupportedFeature`, not a `blob_format` bump), CTRL and META with their own rules,
+> and `DecodePreset`, `ValidateMode` and the encoder, integer-only (no floating-point instruction
+> on the M7). That design amends this section when it is accepted (its §12.5).
+
 A fixed header then tag-length-value sections; integers little-endian, floats as raw binary32
 bits, nothing `memcpy`'d from a struct.
 
@@ -771,6 +778,11 @@ explicit zeroed padding, `static_assert` on `sizeof`/`offsetof` in both builds; 
 and the M7 (*measured* [parity-v1]). Hashes cover serialized bytes, never structs.
 
 ### 6.4 Canonical JSON
+
+> **Update (2026-10-07, mode-compiler lane B).** The numbers are written and read by in-house
+> integer code (`compiler/src/Number.*`, mode-compiler.md §6.5; no vendored `fast_float`, owner
+> question Q1 provisionally), and the two values below are written with eight digits,
+> `±7.0385307e-26`, not nine (mode-compiler.md §6.4). Amended here when that design is accepted.
 
 The JSON is what people read, edit and keep in git. It follows the mode schema rules
 (`grain-engine.md` §5: `schema_version`, stable names never reused, plain units, per-key

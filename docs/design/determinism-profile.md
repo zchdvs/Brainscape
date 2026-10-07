@@ -777,6 +777,12 @@ renders diverged permanently (**measured** [preset]). `SaveState` stores it (con
 > step 1 applies the defaults of the `Leaf` rows only, step 2 counts an id that is not a `Leaf`
 > row as unknown, and `Global` rows (device settings) keep their values across every load and
 > `Restart`.
+>
+> **Update (2026-10-07, mode-compiler lane B).** `PresetState` is now the whole decoded
+> package (mode-compiler.md §5.1): `soundRev`, the leaves, the `ModeBlob`, CTRL and the stored
+> performance state, from `DecodePreset`. Until sound revision 2 (lane C) `LoadPreset` still
+> reads only the leaves; validating the mode at load (step 0), the `sinceRev` rule and the
+> mode's structure arrive with it (mode-compiler.md §7.3).
 
 Add `bool Engine::LoadPreset(const PresetState&, LoadMode)`, with `LoadMode` `Exact` or
 `Spillover` and `PresetState` the decoded package (companion §6.3). The firmware and every
