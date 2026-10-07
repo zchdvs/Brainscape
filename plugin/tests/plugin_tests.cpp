@@ -732,22 +732,32 @@ TEST_CASE("session state round-trips bit for bit") {
     REQUIRE(Bits(partial.plain[0]) == Bits(st.plain[0]));
     REQUIRE(partial.plain[1] == FindParam(LeafId(1))->def);
   }
-  // This build writes IDs 1-26 in order, its Leaf rows. Sessions saved at sound revision 1 hold
-  // IDs 1-28: 27 and 28 retired into mode structure at sound revision 2, which the plugin does
-  // not load yet (session v2 migrates them, mode-compiler.md §4.4, lane D), so they are unknown
-  // and every other value decodes unchanged. Rows of other kinds in a session (a macro, the
-  // effect volume, a Reserved row) are unknown too.
+  // This build writes its Leaf rows in ascending order: IDs 1-26 and the wave-1 leaves the
+  // sound revisions since 4 made Leaf rows (mode-compiler.md §7.5). Sessions saved at sound
+  // revision 1 hold IDs 1-28: 27 and 28 retired into mode structure at sound revision 2, which
+  // the plugin does not load yet (session v2 migrates them, mode-compiler.md §4.4, lane D), so
+  // they are unknown, the wave-1 leaves they lack are missing (their defaults), and every other
+  // value decodes unchanged. Rows of other kinds in a session (a macro, the effect volume, a
+  // Reserved row) are unknown too.
   SECTION("v1 sessions of sound revision 1 decode; 27, 28 and other kinds are unknown") {
     WrapperState st{};
     REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
-    REQUIRE(kNumLeafParams == 26u);
+    uint32_t r1Leaves = 0;  // sound revision 1's rows that are still leaves: IDs 1-26
+    for (size_t i = 0; i < kNumLeafParams; ++i) {
+      if (FindParam(LeafId(i))->sinceRev == 1u) {
+        REQUIRE(static_cast<uint32_t>(LeafId(i)) == i + 1u);
+        ++r1Leaves;
+      }
+    }
+    REQUIRE(r1Leaves == 26u);
     const auto put = [](std::vector<uint8_t>* out, uint32_t u) {
       for (int k = 0; k < 4; ++k) out->push_back(static_cast<uint8_t>(u >> (8 * k)));
     };
-    std::vector<uint8_t> v2 = {'B', 'S', 'W', 'S', 1, 0, 0, 0, 26, 0, 0, 0};
-    for (uint32_t id = 1; id <= 26; ++id) {
-      put(&v2, id);
-      put(&v2, Bits(st.plain[id - 1u]));
+    std::vector<uint8_t> v2 = {'B', 'S', 'W', 'S', 1, 0, 0, 0,
+                               static_cast<uint8_t>(kNumLeafParams), 0, 0, 0};
+    for (size_t i = 0; i < kNumLeafParams; ++i) {
+      put(&v2, static_cast<uint32_t>(LeafId(i)));
+      put(&v2, Bits(st.plain[i]));
     }
     std::vector<uint8_t> now;
     EncodeState(st, now);
@@ -763,13 +773,21 @@ TEST_CASE("session state round-trips bit for bit") {
     WrapperState old{};
     REQUIRE(DecodeState(v1.data(), v1.size(), old));
     REQUIRE(old.unknownIds == 2u);
-    REQUIRE(old.missingIds == 0u);
-    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(old.plain[i]) == Bits(st.plain[i]));
+    REQUIRE(old.missingIds == kNumLeafParams - r1Leaves);
+    // Sound revision 1's leaves decode unchanged; the later leaves take their defaults.
+    const auto sameOrDefault = [&](const WrapperState& got) {
+      for (size_t i = 0; i < kNumLeafParams; ++i) {
+        const ParamDescriptor& d = *FindParam(LeafId(i));
+        INFO(d.name);
+        REQUIRE(Bits(got.plain[i]) == (d.sinceRev == 1u ? Bits(st.plain[i]) : Bits(d.def)));
+      }
+    };
+    sameOrDefault(old);
 
     std::vector<uint8_t> extra(v1.begin(), v1.begin() + 12 + 8 * 28);
     extra[8] = 31;  // three more leaves, of other kinds
-    put(&extra, static_cast<uint32_t>(ParamId::VoiceCount));  // Reserved
-    put(&extra, Bits(8.0f));
+    put(&extra, static_cast<uint32_t>(ParamId::LevelDb));  // Reserved (W3)
+    put(&extra, Bits(-3.0f));
     put(&extra, static_cast<uint32_t>(ParamId::MacroTime));  // Macro
     put(&extra, Bits(0.25f));
     put(&extra, static_cast<uint32_t>(ParamId::EffectVolumeDb));  // Global
@@ -778,8 +796,8 @@ TEST_CASE("session state round-trips bit for bit") {
     WrapperState mixed{};
     REQUIRE(DecodeState(extra.data(), extra.size(), mixed));
     REQUIRE(mixed.unknownIds == 5u);
-    REQUIRE(mixed.missingIds == 0u);
-    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(mixed.plain[i]) == Bits(st.plain[i]));
+    REQUIRE(mixed.missingIds == kNumLeafParams - r1Leaves);
+    sameOrDefault(mixed);
   }
 }
 
@@ -1084,7 +1102,7 @@ TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds ch
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(d.id), v});
     ref.push_back(RefParam(0, d.id, v));
   }
-  for (const ParamId other : {ParamId::VoiceCount, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
+  for (const ParamId other : {ParamId::LevelDb, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
     REQUIRE_FALSE(IsLeaf(other));
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(other), FindParam(other)->min});
   }

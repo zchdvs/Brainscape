@@ -19,8 +19,11 @@ namespace brainscape {
 // mode and CTRL, macro and expression events, Trails and FastCut mode switches. 3: the Mix law
 // (mode-compiler.md §7.1 R3b, §7.6 item 5; owner question Q13, provisional): dry at unity up
 // to the middle and wet at unity from it, min(1, 2(1 − m)) and min(1, 2m), instead of the
-// linear crossfade; Mix 0 and 1 keep revision 2's bits.
-inline constexpr uint32_t kSoundRevision = 3;
+// linear crossfade; Mix 0 and 1 keep revision 2's bits. 4: wave 1's trigger sources, bursts and
+// intermittency (mode-compiler.md §7.5 R9): the free-running scheduler only with `periodic`,
+// footswitch and MIDI triggers only when the mode lists them, scheduler.burst and
+// scheduler.intermittency as leaves 57-59; the default mode keeps revision 3's bits.
+inline constexpr uint32_t kSoundRevision = 4;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

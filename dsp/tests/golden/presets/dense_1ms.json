@@ -3,8 +3,8 @@
   "id": "corpus.dense_1ms",
   "name": "Dense 1 ms",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "86436eed9433714115f81fd6f9480a1705b93298052de47423b2ff2befeb70e3",
+  "sound_rev": 4,
+  "sound_hash": "027fa4f5b619947ac173088395d931850116126a16b9ca6919b98bba3c13a3f8",
   "meta": {
     "author": "",
     "description": "Golden corpus: 1 ms grains at the maximum birth rate.",
@@ -16,7 +16,12 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 1,
-    "jitter": 1
+    "jitter": 1,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {

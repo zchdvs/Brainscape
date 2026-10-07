@@ -3,8 +3,8 @@
   "id": "corpus.expression",
   "name": "Expression",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "4b0545a6b86aa63c87ff5445db8059cfd66e9eb9d160086e4a8fa1a17919bde9",
+  "sound_rev": 4,
+  "sound_hash": "f0686283ff727145eaa175e54f1340eead7704578a7bcb8dcff9f7961105e787",
   "meta": {
     "author": "",
     "description": "Golden corpus: the expression pedal on macros and leaves.",
@@ -16,7 +16,12 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.55,
-    "jitter": 0.3
+    "jitter": 0.3,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {

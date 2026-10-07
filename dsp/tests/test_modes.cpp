@@ -265,13 +265,23 @@ TEST_CASE("an invalid mode or CTRL applies nothing, by any kind of load", "[mode
 TEST_CASE("a load's missing and unknown leaves, sinceRev and performance state", "[modes]") {
   // A leafless state is never exact: soundRev 0 (not from a package) and a revision above this
   // build's both count as this build's, at which every Leaf row exists (§7.3 step 2).
+  // A revision counts the rows that existed at it: a revision-1 package lacks wave 1's leaves
+  // without missing them.
   for (const uint32_t rev : {0u, 1u, kSoundRevision, 1000u}) {
     auto empty      = std::make_unique<PresetState>();
     empty->soundRev = rev;
+    const uint32_t at = rev == 0u || rev > kSoundRevision ? kSoundRevision : rev;
+    uint32_t       existed = 0;
+    for (size_t i = 0; i < kNumLeafParams; ++i) existed += FindParam(LeafId(i))->sinceRev <= at ? 1u : 0u;
     LoadReport report;
     CHECK_FALSE(CheckPreset(*empty, &report));
-    CHECK(report.missingIds == kNumLeafParams);  // every row's sinceRev is 1
+    CHECK(report.missingIds == existed);
     CHECK_FALSE(report.invalidMode);
+  }
+  {
+    uint32_t r1 = 0;
+    for (size_t i = 0; i < kNumLeafParams; ++i) r1 += FindParam(LeafId(i))->sinceRev == 1u ? 1u : 0u;
+    CHECK(r1 == 26u);  // sound revision 1's rows but the retired 27 and 28
   }
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     CHECK(FindParam(LeafId(i))->sinceRev >= 1u);

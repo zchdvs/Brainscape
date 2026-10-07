@@ -3,8 +3,8 @@
   "id": "corpus.lone_busy",
   "name": "Lone busy",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "b22991277d733aff2f969876ec28c209cd01c04d0fc2037a1dc181c60a680409",
+  "sound_rev": 4,
+  "sound_hash": "7cc9565ce8ce919edaba8a18f8ed642ee9e5d6be860185487a3641bbc67925f8",
   "meta": {
     "author": "",
     "description": "Golden corpus: a busy state in which a change to any leaf is audible.",
@@ -16,7 +16,12 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.5,
-    "jitter": 0.3
+    "jitter": 0.3,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {

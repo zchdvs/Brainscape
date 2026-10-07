@@ -62,12 +62,34 @@ struct GranularParams {
   // From the active mode's structure (mode-compiler.md §7.3), not from leaves since sound
   // revision 2 retired rows 27 and 28 into it:
   bool     onsetTrigger;     // `onset` in scheduler.sources, OR'd with the free-running
-                             // scheduler: each detected onset fires a grain (oldest-steal —
+                             // scheduler: each detected onset fires a burst (oldest-steal —
                              // explicit triggers never drop, design §4)
   bool     posFromMark;      // layer 0's position.source is `mark`: grains read from the most
                              // recent onset mark (the Strum family's mechanism) instead of
                              // the live position
+  // Trigger sources and the scheduler's modifiers (mode-compiler.md §7.5, R9; sound revision 4):
+  bool     periodic;         // `periodic` in scheduler.sources: the free-running scheduler runs,
+                             // with its one-voice floor; without it only triggers give births
+  float    intermittency;    // scheduler.intermittency: a draw below it skips a periodic birth
+                             // (which still consumes its interval) or a whole trigger
+  uint32_t burstCount;       // scheduler.burst.count, read as an integer (1-16): grains a
+                             // trigger births
+  uint32_t burstSpacing;     // frames between a burst's grains: max(1, round(spacing_ms * 48))
 };
+
+// What the scheduler has done (Engine::Stats): counts since Init, kept by Reset and Restart.
+struct GranularStats {
+  uint64_t births      = 0;  // grains born, from every source
+  uint64_t burstBirths = 0;  // ... of them a burst's second and later grains
+  uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
+};
+
+// The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
+// extension): a periodic birth, an onset and a manual trigger can each be decided at one frame,
+// and their draws must not be one draw.
+inline constexpr uint32_t kOrdinalPeriodic = 0;
+inline constexpr uint32_t kOrdinalOnset    = 1;
+inline constexpr uint32_t kOrdinalManual   = 2;
 
 // External trigger events for one block, collected by the Engine (onset detector,
 // manual/MIDI triggers). Offsets are block-relative sample indices, ascending.
@@ -99,7 +121,19 @@ class GranularCore {
     // initial 0 leaves a -1 residual in the phasor and every subsequent birth
     // lands one sample early — which breaks exact grain abutment.
     intervalRemaining_ = 1.0f;
+    ResetSequencing();
   }
+
+  // The sequencing state a load of a different mode resets and a load of the same mode keeps
+  // (mode-compiler.md §7.3): the bursts in progress.
+  void ResetSequencing() noexcept {
+    burstCount_ = 0;
+    burstDue_   = kNoBurstDue;
+  }
+
+  // Counts since Init (Engine::Stats); Reset and Restart keep them.
+  const GranularStats& Stats() const noexcept { return stats_; }
+  void                 ClearStats() noexcept { stats_ = GranularStats{}; }
 
   // A FastCut load at absolute frame `abs` (mode-compiler.md §7.3): every grain still sounding
   // there that is not already fading starts a linear fade to zero over kFastCutFrames from
@@ -128,6 +162,17 @@ class GranularCore {
   };
   static constexpr uint32_t kMaxMarks = 16;
 
+  // A trigger's burst in progress (mode-compiler.md §7.5): its second and later grains.
+  struct Burst {
+    int64_t  next;       // absolute frame its next grain is due
+    uint32_t spacing;    // frames between its grains
+    uint32_t remaining;  // grains still to fire
+  };
+  // Bursts kept at once; a trigger past them drops the oldest. They overlap only when triggers
+  // come faster than a burst lasts, (count - 1) * spacing frames (7.5 s at most).
+  static constexpr uint32_t kMaxBursts  = 8;
+  static constexpr int64_t  kNoBurstDue = INT64_MAX;
+
   // anchorFrame: the position reference (the pin while frozen).
   // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
@@ -137,6 +182,18 @@ class GranularCore {
   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
                     uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
                     int64_t absSample, float* wetL, float* wetR) noexcept;
+  // A trigger (an onset or a manual trigger, `ordinal` saying which) at birthAbs: skipped by
+  // intermittency, or its burst's first grain now and the rest queued. True when it fired.
+  bool FireTrigger(const GranularParams& p, uint32_t ordinal, int64_t birthAbs,
+                   uint32_t anchorFrame, uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
+                   int64_t absSample, float* wetL, float* wetR) noexcept;
+  // The oldest due burst's next grain: at most one a frame, and none at a frame a trigger
+  // already fired at, so no two of the frame's births share the frame's draws.
+  void FireBurst(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
+                 uint32_t liveFrame, uint32_t* renderedTo, uint32_t n, int64_t absSample,
+                 float* wetL, float* wetR) noexcept;
+  void AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept;
+  void UpdateBurstDue() noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
@@ -159,6 +216,10 @@ class GranularCore {
   Mark           marks_[kMaxMarks]{};  // recent onset marks (ring of kMaxMarks)
   uint32_t       markHead_  = 0;
   uint32_t       markCount_ = 0;
+  Burst          bursts_[kMaxBursts]{};   // in progress, oldest first
+  uint32_t       burstCount_ = 0;
+  int64_t        burstDue_   = kNoBurstDue;  // the earliest `next` among them
+  GranularStats  stats_;
 };
 
 }  // namespace brainscape::detail

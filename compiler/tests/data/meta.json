@@ -3,8 +3,8 @@
   "id": "example.meta-text_1",
   "name": "Ωmega ✓ 32 bytes of name, ok?",
   "family": "misfire",
-  "sound_rev": 3,
-  "sound_hash": "3ab1aa253a0c3d4442d2c89273b5eccedec0c5d14c23acc44287bdb265dcc2a0",
+  "sound_rev": 4,
+  "sound_hash": "bf4c44dcbda8b7830d045aed2c3a0ef4418e2523f01a5c7ab81b463b24f1792e",
   "meta": {
     "author": "Zach & co. — ✓",
     "description": "Ünïcödé \"quotes\" and \\backslashes\\ / slashes; 🎸 guitar; tabs are not allowed. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -16,7 +16,12 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.55,
-    "jitter": 0.2
+    "jitter": 0.2,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {

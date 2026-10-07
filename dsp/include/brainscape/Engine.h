@@ -137,7 +137,11 @@ class Engine {
                   SwitchStyle style = SwitchStyle::Trails) noexcept;
 
   // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
-  // the guaranteed-working fallback when onset detection can't hear the source.
+  // the guaranteed-working fallback when onset detection can't hear the source. Since sound
+  // revision 4 a trigger fires only if the mode playing when it is due lists its source
+  // (scheduler.sources, mode-compiler.md §7.5): MidiNote needs `midi_note`, Footswitch
+  // `footswitch`. Sidechain, which schema 1 has no source for (the sidechain input is deferred),
+  // and any other id count as Footswitch.
   enum class TriggerSource : uint8_t { Footswitch = 0, MidiNote = 1, Sidechain = 2 };
 
   // Frame-stamped events (determinism profile §5.11): (absolute frame, sequence number,
@@ -231,13 +235,14 @@ class Engine {
   void SetFreeze(bool on) noexcept;
   bool GetFreeze() const noexcept;
 
-  // Any thread; lock-free. Fires a grain (oldest-steal; a surplus beyond one
-  // block's frames carries to the next block — explicit triggers never drop).
-  // Triggers due at one frame fire on consecutive frames, one birth per frame.
-  // src and velocity are not yet read (source routing and velocity land with the
-  // mode system); sampleOffset is ignored (a Trigger event carries the offset). A
-  // SIDECHAIN audio input is not yet expressible through ProcessContext at all
-  // (reserved, like tempoBpm).
+  // Any thread; lock-free. Fires a burst of scheduler.burst.count grains (oldest-steal; a
+  // surplus beyond one block's frames carries to the next block — explicit triggers never
+  // drop). Triggers due at one frame fire on consecutive frames, one trigger per frame, each
+  // only if the mode playing at its frame lists its source (TriggerSource) and intermittency
+  // does not skip it (mode-compiler.md §7.5); a trigger whose source the mode leaves out is
+  // dropped at the first frame it is due. velocity is not yet read (W2); sampleOffset is
+  // ignored (a Trigger event carries the offset). A SIDECHAIN audio input is not yet
+  // expressible through ProcessContext at all (reserved, like tempoBpm).
   void Trigger(TriggerSource src = TriggerSource::Footswitch, float velocity = 1.f,
                uint32_t sampleOffset = 0) noexcept;
 
@@ -265,6 +270,17 @@ class Engine {
   // that sequence (W1's pitch cycle, W2's steps) keep across a load of the same mode; sound
   // revision 2 has none yet.
   uint32_t ModeSwitches() const noexcept;
+
+  // What the grain scheduler has done, for tests and the audition metrics (mode-compiler.md
+  // §10.3, §11.3): counts since Init, which Reset, Restart and loads keep, so a caller reads
+  // the difference over a render.
+  struct GrainStats {
+    uint64_t births      = 0;  // grains born, from every source
+    uint64_t burstBirths = 0;  // of them, bursts' second and later grains (§7.5)
+    uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
+  };
+  // Audio thread only (plain 64-bit counts, as SampleCounter).
+  GrainStats Stats() const noexcept;
 
   // Dry path is never block-delayed (design §2.5).
   uint32_t LatencySamples() const noexcept { return 0; }

@@ -335,6 +335,85 @@ PresetCase LoneChanges() {
   return p;
 }
 
+// ── Sound revision 4: wave 1's trigger sources, bursts and intermittency (mode-compiler.md
+// §7.5 R9). Events off the 48-frame grid.
+using TS = Engine::TriggerSource;
+
+// Onsets alone (presets/sources_onset.json: sources ["onset"]): no free-running births, so every
+// grain is an onset's, and the footswitch and MIDI triggers the script sends are dropped.
+PresetCase OnsetOnly() {
+  PresetCase p = PackagePreset("onset_only", "sources_onset");
+  p.script.Trigger(S(3) + 333, TS::Footswitch);
+  p.script.Trigger(S(6) + 17, TS::MidiNote);
+  p.require = {{C::Onsets, 10}, {C::Births, 10, 30}, {C::Triggers, 2, 2}, {C::OffGridEvents, 2}};
+  p.ablate  = {Feature::Sources, Feature::OnsetTrigger};
+  return p;
+}
+
+// Phasing copies of the newest onset (presets/burst_marks.json, the Strum B sketch: onsets alone
+// on marks, a burst of 6 at spacing 0, so on consecutive frames, spray 4 ms).
+PresetCase OnsetBurst() {
+  PresetCase p = PackagePreset("onset_burst", "burst_marks");
+  p.require    = {{C::Onsets, 10}, {C::BurstBirths, 50}};
+  p.ablate     = {Feature::Burst, Feature::MarkPosition};
+  return p;
+}
+
+// Spaced bursts from onsets and the footswitch, with intermittency skipping whole triggers
+// (presets/burst_spaced.json: sources ["onset", "footswitch"], bursts of 4 every 120 ms,
+// intermittency 0.3). MIDI triggers are dropped; a load of another mode (sources_onset) late in
+// the render resets the bursts in progress.
+PresetCase BurstSpaced() {
+  PresetCase p = PackagePreset("burst_spaced", "burst_spaced");
+  Script&    s = p.script;
+  s.Trigger(S(1) + 77, TS::Footswitch);
+  s.Trigger(S(2) + 33, TS::MidiNote);
+  s.Trigger(S(3) + 501, TS::Footswitch);
+  s.Trigger(S(5) + 13, TS::Footswitch);
+  s.Trigger(S(6) + 47, TS::MidiNote);
+  s.Trigger(S(7) + 999, TS::Footswitch);
+  s.SpilloverPackage(S(9) + 123, "sources_onset");
+  p.require   = {{C::Onsets, 10},      {C::Triggers, 6, 6}, {C::BurstBirths, 20},
+                 {C::Skips, 3},        {C::Loads, 1, 1},    {C::ModeSwitches, 1, 1},
+                 {C::OffGridEvents, 7}};
+  p.ablate    = {Feature::Burst, Feature::Intermittency, Feature::Sources, Feature::Triggers};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Intermittency on the free-running scheduler (the default mode): about half the periodic births
+// skipped, each still consuming its interval.
+PresetCase IntermittentCloud() {
+  PresetCase p = Preset("intermittent_cloud",
+      {{P::Intermittency, 0.5f}, {P::Overlap, 0.75f}, {P::Jitter, 0.6f}, {P::SprayMs, 80.0f},
+       {P::GrainSizeMs, 70.0f}, {P::DelayMs, 220.0f}, {P::PanSpread, 0.8f}, {P::Feedback, 0.3f}});
+  p.require = {{C::Skips, 500}, {C::Births, 500}};
+  p.ablate  = {Feature::Intermittency};
+  return p;
+}
+
+// MIDI notes trigger, the footswitch does not (presets/sources_midi.json: sources ["periodic",
+// "midi_note"], one free-running voice, bursts of 3 every 40 ms); the burst count and spacing
+// change alone mid-render, and AmongEdits renders each change among edits of every other domain.
+PresetCase MidiGate() {
+  PresetCase p = PackagePreset("midi_gate", "sources_midi");
+  Script&    s = p.script;
+  s.Trigger(S(1) + 5, TS::MidiNote);
+  s.Trigger(S(2) + 77, TS::MidiNote);
+  s.Trigger(S(3) + 17, TS::Footswitch);
+  s.Trigger(S(4) + 301, TS::MidiNote);
+  s.Trigger(S(5) + 3, TS::Footswitch);
+  s.Param(S(5) + 1001, P::BurstCount, 5.0f);
+  s.Trigger(S(6) + 11, TS::MidiNote);
+  s.Param(S(6) + 333, P::BurstSpacingMs, 0.0f);
+  s.Trigger(S(7) + 444, TS::Footswitch);
+  s.Trigger(S(8) + 999, TS::MidiNote);
+  p.require   = {{C::Triggers, 8, 8}, {C::BurstBirths, 10}, {C::OffGridEvents, 10}};
+  p.ablate    = {Feature::Sources, Feature::Triggers, Feature::Burst};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -362,6 +441,9 @@ const char* CounterName(Counter c) noexcept {
     case C::ModeSwitches: return "modeSwitches";
     case C::KilledFrames: return "killedFrames";
     case C::MutedFrames: return "mutedFrames";
+    case C::Births: return "births";
+    case C::BurstBirths: return "burstBirths";
+    case C::Skips: return "skips";
     case C::kCount: break;
   }
   return "unknown";
@@ -389,6 +471,9 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::ModeSwitch: return "modeSwitch";
     case Feature::FastCut: return "fastCut";
     case Feature::WetKill: return "wetKill";
+    case Feature::Sources: return "sources";
+    case Feature::Burst: return "burst";
+    case Feature::Intermittency: return "intermittency";
   }
   return "unknown";
 }
@@ -473,6 +558,9 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
         }
       }
       break;
+    case Feature::Sources: out.strip |= kStripSources; break;
+    case Feature::Burst: neutral(P::BurstCount, 1.0f); break;
+    case Feature::Intermittency: neutral(P::Intermittency, 0.0f); break;
   }
   return out;
 }
@@ -877,6 +965,16 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(ModeSwitchChain());
     v.presets.push_back(WetKillCase());
     v.presets.push_back(LoneChanges());
+    corpus.push_back(std::move(v));
+  }
+
+  {  // Wave 1 (sound revision 4 on): trigger sources, bursts, intermittency.
+    VectorCase v{"plucks_wave1_12s", Vector::Plucks, Frames(10), Frames(12), false, {}};
+    v.presets.push_back(OnsetOnly());
+    v.presets.push_back(OnsetBurst());
+    v.presets.push_back(BurstSpaced());
+    v.presets.push_back(IntermittentCloud());
+    v.presets.push_back(MidiGate());
     corpus.push_back(std::move(v));
   }
 

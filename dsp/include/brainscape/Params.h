@@ -88,9 +88,10 @@ enum class ParamId : uint32_t {
   L1CrushBits       = 55,  // layer1.crush.bits
   L1CrushDownsample = 56,  // layer1.crush.downsample
   // ── Scheduler, layers, dry duck, post (W1: 57-59; W2: 60, 63; W3: 61, 62, 64) ───────
+  // Leaves since sound revision 4 (mode-compiler.md §7.5, R9): 57-59.
   Intermittency  = 57,  // scheduler.intermittency: probability a birth or trigger is skipped
   BurstCount     = 58,  // scheduler.burst.count: grains per trigger, integer
-  BurstSpacingMs = 59,  // scheduler.burst.spacing_ms
+  BurstSpacingMs = 59,  // scheduler.burst.spacing_ms: between a burst's grains (0: a frame)
   StepCount      = 60,  // scheduler.steps.count, integer
   LayerMix       = 61,  // layer_mix
   DryDuckDepth   = 62,  // dry_duck.depth
@@ -235,9 +236,9 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::L1SvfRes,           "layer1.svf.res",               0.0f,    1.0f,     0.1f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::L1CrushBits,        "layer1.crush.bits",            1.0f,    16.0f,    16.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::L1CrushDownsample,  "layer1.crush.downsample",      1.0f,    32.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::Intermittency,      "scheduler.intermittency",      0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::BurstCount,         "scheduler.burst.count",        1.0f,    16.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::BurstSpacingMs,     "scheduler.burst.spacing_ms",   0.0f,    500.0f,   0.0f,     "ms", ParamKind::Reserved,    kDomainGranular,               0},
+    {ParamId::Intermittency,      "scheduler.intermittency",      0.0f,    1.0f,     0.0f,     "",   ParamKind::Leaf,        kDomainGranular,               4},
+    {ParamId::BurstCount,         "scheduler.burst.count",        1.0f,    16.0f,    1.0f,     "",   ParamKind::Leaf,        kDomainGranular,               4},
+    {ParamId::BurstSpacingMs,     "scheduler.burst.spacing_ms",   0.0f,    500.0f,   0.0f,     "ms", ParamKind::Leaf,        kDomainGranular,               4},
     {ParamId::StepCount,          "scheduler.steps.count",        1.0f,    16.0f,    16.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::LayerMix,           "layer_mix",                    0.0f,    1.0f,     0.5f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::DryDuckDepth,       "dry_duck.depth",               0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainMix,                    0},

@@ -348,6 +348,58 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
   }
   ScheduleGrain(slot, p, birthAbs, anchorFrame, liveFrame);
   order_[orderCount_++] = static_cast<uint8_t>(slot);
+  ++stats_.births;
+}
+
+bool GranularCore::FireTrigger(const GranularParams& p, uint32_t ordinal, int64_t birthAbs,
+                               uint32_t anchorFrame, uint32_t liveFrame, uint32_t* renderedTo,
+                               uint32_t n, int64_t absSample, float* wetL, float* wetR) noexcept {
+  // Intermittency skips the whole trigger, its burst included (mode-compiler.md §7.5).
+  if (p.intermittency > 0.f &&
+      RandUnit(birthAbs - drawEpoch_, Draw::Intermittency, 0u, ordinal) < p.intermittency) {
+    ++stats_.skips;
+    return false;
+  }
+  FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR);
+  if (p.burstCount > 1u) AddBurst(birthAbs + p.burstSpacing, p.burstSpacing, p.burstCount - 1u);
+  return true;
+}
+
+void GranularCore::AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept {
+  if (burstCount_ == kMaxBursts) {  // the oldest gives way
+    for (uint32_t i = 1; i < burstCount_; ++i) bursts_[i - 1] = bursts_[i];
+    --burstCount_;
+  }
+  bursts_[burstCount_++] = Burst{next, spacing, remaining};
+  UpdateBurstDue();
+}
+
+void GranularCore::UpdateBurstDue() noexcept {
+  burstDue_ = kNoBurstDue;
+  for (uint32_t i = 0; i < burstCount_; ++i) {
+    if (bursts_[i].next < burstDue_) burstDue_ = bursts_[i].next;
+  }
+}
+
+void GranularCore::FireBurst(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
+                             uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
+                             int64_t absSample, float* wetL, float* wetR) noexcept {
+  for (uint32_t i = 0; i < burstCount_; ++i) {
+    Burst& b = bursts_[i];
+    if (b.next > birthAbs) continue;
+    // Each grain with its own frame's draws; a deferred grain keeps the spacing from where it
+    // fired.
+    FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR);
+    ++stats_.burstBirths;
+    if (--b.remaining == 0u) {
+      for (uint32_t k = i + 1u; k < burstCount_; ++k) bursts_[k - 1u] = bursts_[k];
+      --burstCount_;
+    } else {
+      b.next = birthAbs + b.spacing;
+    }
+    break;
+  }
+  UpdateBurstDue();
 }
 
 void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int64_t absSample,
@@ -400,23 +452,36 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     // scheduler/onset births, breaking order_'s ascending-birth invariant that
     // both the canonical summation order and oldest-steal rely on (review
     // finding). The Engine splits its block at every trigger event, so the block
-    // starts at the trigger's frame.
+    // starts at the trigger's frame, and it passes only the triggers whose source the
+    // mode lists (mode-compiler.md §7.5).
+    bool fired = false;  // a trigger's grain was born at this frame
     if (n < ev.manualCount) {
-      FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
+      fired = FireTrigger(p, kOrdinalManual, abs, anchor, live, &renderedTo, n, absSample, wetL,
+                          wetR);
     }
 
-    // Onset events: record the mark always (POS_MARK feeds on it); fire a grain
+    // Onset events: record the mark always (POS_MARK feeds on it); fire a burst
     // only when the ONSET trigger source is enabled (OR'd with the free-running
     // scheduler, design §4).
     while (evIdx < ev.onsetCount && ev.onsetOffset[evIdx] == n) {
       marks_[markHead_] = {abs, ev.onsetMarkFrame[evIdx]};
       markHead_         = (markHead_ + 1u) % kMaxMarks;
       if (markCount_ < kMaxMarks) ++markCount_;
-      if (p.onsetTrigger) {
-        FireExternal(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
+      if (p.onsetTrigger &&
+          FireTrigger(p, kOrdinalOnset, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR)) {
+        fired = true;
       }
       ++evIdx;
     }
+
+    // A burst's next grain, unless a trigger fired at this frame: it waits for the next.
+    if (burstCount_ != 0u && abs >= burstDue_ && !fired) {
+      FireBurst(p, abs, anchor, live, &renderedTo, n, absSample, wetL, wetR);
+    }
+
+    // Without `periodic` the free-running scheduler does not run (mode-compiler.md §7.5): its
+    // phase holds until a mode with it is loaded.
+    if (!p.periodic) continue;
 
     intervalRemaining_ -= 1.0f;
     if (intervalRemaining_ > 0.0f) continue;
@@ -443,12 +508,19 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     if (allowed < 1u) allowed = 1u;
 
     if (sounding < allowed && slot != kGranularMaxGrains) {
-      // Flush the span up to this birth so a reused slot's tail is emitted first.
-      RenderSpan(renderedTo, n, absSample, wetL, wetR);
-      renderedTo = n;
+      // Intermittency (mode-compiler.md §7.5): a skipped birth still consumes its interval.
+      if (p.intermittency > 0.f &&
+          RandUnit(abs - drawEpoch, Draw::Intermittency, 0u, kOrdinalPeriodic) < p.intermittency) {
+        ++stats_.skips;
+      } else {
+        // Flush the span up to this birth so a reused slot's tail is emitted first.
+        RenderSpan(renderedTo, n, absSample, wetL, wetR);
+        renderedTo = n;
 
-      ScheduleGrain(slot, p, abs, anchor, live);
-      order_[orderCount_++] = static_cast<uint8_t>(slot);
+        ScheduleGrain(slot, p, abs, anchor, live);
+        order_[orderCount_++] = static_cast<uint8_t>(slot);
+        ++stats_.births;
+      }
 
       // Next inter-arrival: deterministic spacing morphing to an exponential
       // (Poisson) draw — Roads' synchronous<->asynchronous axis (design §4).

@@ -126,6 +126,15 @@ std::string RandomDocument(Rng& r, uint32_t index) {
     if (!r.Chance(60)) continue;
     Set(root, LeafPath(d->name), NumValue(RandomValue(r, Bits(d->min), Bits(d->max))));
   }
+  // Wave 1's structure as it lands: source selection (sound revision 4), any subset.
+  if (r.Chance(30)) {
+    static const char* const sources[] = {"periodic", "onset", "footswitch", "midi_note"};
+    json::Value              set       = json::Value::Array();
+    for (const char* s : sources) {
+      if (r.Chance(50)) set.Push(Str(s));
+    }
+    Set(root, "scheduler.sources", std::move(set));
+  }
   // Macros: a random subset, 0-4 targets each, within 32 targets with the defaults.
   json::Value list       = json::Value::Array();
   uint32_t    total      = 0;
@@ -212,12 +221,13 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 // or verdicts change on purpose (the package rule, §8.3). Re-minted at sound revision 2: the
 // header's sound_rev, STAT without the retired rows 27 and 28, onset and mark compiled. Re-minted
 // at sound revision 3 for the header's sound_rev alone: built with kSoundRevision 2, the same
-// tree gives revision 2's digests.
+// tree gives revision 2's digests. Re-minted at sound revision 4: the header's sound_rev, STAT
+// with leaves 57-59 (the random documents draw them too), random source subsets.
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "b5adfa2711341f21d649a7c72e34c4ea878f90dd8de7629259233eae65f4ff49";
+    "18ba6c584e87a7734bc425b0b49b2b2c3f8aa9676b5cc4c3441d74ce84564f4d";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "f5c5d14d782b3dee4807ae6cbdf82de4960644596f390e5e884e0c648c2c0576";
+const char* const  kFuzzDigest = "334852c79bc3bbd0951efd5069f162fa13a0a205a4e6aac594887c3a4127ddd2";
 
 }  // namespace
 

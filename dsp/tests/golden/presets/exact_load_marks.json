@@ -3,8 +3,8 @@
   "id": "corpus.exact_load_marks",
   "name": "Exact load marks",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "2a380de84b5a8c2661804df023c22bbf974285d74eb072bed220d1e01cc8f60d",
+  "sound_rev": 4,
+  "sound_hash": "3b2b098d3e57f6642571f56a87502cc43fc99db920a43d6a32af2d80f685e684",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Exact load mid-render.",
@@ -16,7 +16,12 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.9,
-    "jitter": 1
+    "jitter": 1,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {

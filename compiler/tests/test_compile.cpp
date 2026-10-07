@@ -279,7 +279,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"scheduler.sources", R"(["periodic", "footswitch"])", kModeFeatureSources, "W1"},
       {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", kModeFeaturePitchSet, "W1"},
       {"layers[0].pitch.select", R"("random")", kModeFeaturePitchSet, "W1"},
       {"scheduler.sources", R"(["periodic", "clock", "footswitch", "midi_note"])",
@@ -339,6 +338,52 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
   Refused(With("layers[0].position.base_sync", Str("1/4")), "E6", "/layers/0/position/base_sync",
           AllFeatures());
   Ok(With("layers[0].position.base_sync", Str("off")));
+}
+
+TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
+  using namespace brainscape;
+  // Source selection (sound revision 4, §7.5 R9): any subset of the sources this build plays,
+  // the empty set included (lint L5 says it is silent until triggered).
+  struct Case {
+    const char* json;
+    uint8_t     sources;
+    uint32_t    feature;
+  };
+  const Case cases[] = {
+      {R"(["onset"])", kSourceOnset, kModeFeatureOnset | kModeFeatureSources},
+      {R"(["periodic", "footswitch"])", kSourcePeriodic | kSourceFootswitch, kModeFeatureSources},
+      {R"(["midi_note", "periodic"])", kSourcePeriodic | kSourceMidiNote, kModeFeatureSources},
+      {R"([])", 0, kModeFeatureSources},
+  };
+  for (const Case& c : cases) {
+    INFO("scheduler.sources = " << c.json);
+    const std::string    text = With("scheduler.sources", Parse(c.json));
+    const CompileResult  r    = Ok(text);
+    const DecodedPackage p    = DecodePackage(r.package.data(), r.package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.schedule.sources == c.sources);
+    REQUIRE(p.state->mode.features == c.feature);
+    RoundTrip(text);
+  }
+  // The burst and intermittency leaves (57-59) take any value in range, and STAT holds them.
+  const std::string leaves =
+      With("scheduler.intermittency", Num("0.25"),
+           With("scheduler.burst.count", Num("6"), With("scheduler.burst.spacing_ms", Num("12.5"))));
+  const CompileResult  r = Ok(leaves);
+  const DecodedPackage p = DecodePackage(r.package.data(), r.package.size());
+  REQUIRE(p.ok);
+  auto leaf = [&](ParamId id) {
+    for (uint32_t i = 0; i < p.state->leafCount; ++i) {
+      if (p.state->leaves[i].id == static_cast<uint32_t>(id)) return p.state->leaves[i].value;
+    }
+    return -1.0f;
+  };
+  REQUIRE(leaf(ParamId::Intermittency) == 0.25f);
+  REQUIRE(leaf(ParamId::BurstCount) == 6.0f);
+  REQUIRE(leaf(ParamId::BurstSpacingMs) == 12.5f);
+  RoundTrip(leaves);
+  Refused(With("scheduler.burst.count", Num("17")), "E4", "/scheduler/burst/count");
+  Refused(With("scheduler.burst.spacing_ms", Num("501")), "E4", "/scheduler/burst/spacing_ms");
 }
 
 TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {

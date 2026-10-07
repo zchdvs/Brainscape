@@ -11,7 +11,7 @@ onset on|off | marks on|off | macro NAME POS | expression POS | freeze on|off | 
 stats [reset] | dfu. NAME is a descriptor name (layer0.size_ms), a ParamId (GrainSizeMs) or a
 short alias: delay mix feedback trim out size density spray pitch transpose spread reverse
 jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix reverbtime reverbmix
-cutoff res morph sens volume. Since sound revision 2 onset grains and mark positioning are mode
+cutoff res morph sens skip burst spacing volume. Since sound revision 2 onset grains and mark positioning are mode
 structure: "onset" and "marks" load a mode (so do "set onset V" and "set marks V", V >= 0.5 on);
 macro NAME is activity, repeats, shape, time, space, filter, aux1 or aux2.
 

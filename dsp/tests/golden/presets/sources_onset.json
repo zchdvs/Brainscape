@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "id": "factory.engram",
-  "name": "Engram",
-  "family": "echoic",
+  "id": "corpus.sources_onset",
+  "name": "Sources onset",
+  "family": "none",
   "sound_rev": 4,
-  "sound_hash": "01549422625c4c2d544fdadc274e0abbea1f30a5f1598afb773238e143ca4bef",
+  "sound_hash": "b46a5611b31fa512ba0c4faf9c329f68eb1c501d2b98b20ef242a15cabb5b1f4",
   "meta": {
     "author": "",
-    "description": "",
+    "description": "Golden corpus: onsets alone trigger (sound revision 4): no free-running births; footswitch and MIDI triggers are dropped.",
     "tags": []
   },
   "global": {
-    "mix": 0.35
+    "mix": 0.5
   },
   "scheduler": {
-    "sources": ["periodic", "footswitch", "midi_note"],
-    "overlap": 0,
-    "jitter": 0,
+    "sources": ["onset"],
+    "overlap": 0.55,
+    "jitter": 0.2,
     "intermittency": 0,
     "burst": {
       "count": 1,
@@ -27,14 +27,14 @@
     {
       "position": {
         "source": "live",
-        "base_ms": 1,
-        "spray_ms": 0
+        "base_ms": 180,
+        "spray_ms": 15
       },
-      "size_ms": 100,
+      "size_ms": 120,
       "window": {
-        "sustain": 1,
-        "skew": 0.5,
-        "smoothness": 0
+        "sustain": 0.4,
+        "skew": 0.3,
+        "smoothness": 0.7
       },
       "pitch": {
         "set": [
@@ -45,28 +45,28 @@
         ],
         "select": "cycle",
         "transpose_st": 0,
-        "spread_cents": 0,
-        "reverse_prob": 0
+        "spread_cents": 10,
+        "reverse_prob": 0.2
       },
-      "pan_spread": 0
+      "pan_spread": 0.6
     }
   ],
   "feedback": {
-    "amount": 0
+    "amount": 0.3
   },
   "post": {
     "mod": {
-      "rate_hz": 0.6,
-      "depth": 0.05
+      "rate_hz": 0.4,
+      "depth": 0
     },
     "delay": {
-      "time_ms": 405,
-      "fb": 0.45,
-      "mix": 1
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
     },
     "reverb": {
-      "time": 0.4,
-      "mix": 0.12
+      "time": 0.5,
+      "mix": 0
     },
     "filter": {
       "cutoff_hz": 20000,
@@ -76,30 +76,23 @@
   },
   "wet_trim_db": 0,
   "trigger": {
-    "sensitivity": 0.5
+    "sensitivity": 0.6
   },
   "macros": [
     {
       "id": "activity",
-      "display_name": "Smear",
       "targets": [
         {
           "param": "scheduler.overlap",
-          "range": [0, 0.45],
+          "range": [0.25, 0.85],
           "in_range": [0, 1],
-          "curve": 2
+          "curve": 1
         },
         {
           "param": "layer0.position.spray_ms",
-          "range": [0, 40],
+          "range": [0, 200],
           "in_range": [0, 1],
           "curve": 2
-        },
-        {
-          "param": "scheduler.jitter",
-          "range": [0, 0.5],
-          "in_range": [0, 1],
-          "curve": 1
         }
       ]
     },
@@ -107,7 +100,7 @@
       "id": "repeats",
       "targets": [
         {
-          "param": "post.delay.fb",
+          "param": "feedback.amount",
           "range": [0, 0.9],
           "in_range": [0, 1],
           "curve": 1
@@ -116,17 +109,16 @@
     },
     {
       "id": "shape",
-      "display_name": "Contour",
       "targets": [
         {
           "param": "layer0.window.sustain",
-          "range": [1, 0.25],
+          "range": [0.9, 0.1],
           "in_range": [0, 1],
           "curve": 1
         },
         {
-          "param": "layer0.window.smoothness",
-          "range": [0, 1],
+          "param": "layer0.window.skew",
+          "range": [0.3, 0.7],
           "in_range": [0, 1],
           "curve": 1
         }
@@ -136,8 +128,8 @@
       "id": "time",
       "targets": [
         {
-          "param": "post.delay.time_ms",
-          "range": [40, 1500],
+          "param": "layer0.position.base_ms",
+          "range": [20, 2000],
           "in_range": [0, 1],
           "curve": 2
         }
@@ -147,8 +139,14 @@
       "id": "space",
       "targets": [
         {
-          "param": "post.reverb.mix",
+          "param": "post.delay.mix",
           "range": [0, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
           "in_range": [0, 1],
           "curve": 1
         }
@@ -168,12 +166,12 @@
   ],
   "controls": {
     "macro_positions": {
-      "activity": 0,
+      "activity": 0.5,
       "repeats": 0.5,
-      "shape": 0,
+      "shape": 0.5,
       "time": 0.5,
-      "space": 0.24,
-      "filter": 1
+      "space": 0.5,
+      "filter": 0.5
     }
   }
 }

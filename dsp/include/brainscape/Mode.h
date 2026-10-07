@@ -66,17 +66,18 @@ inline constexpr uint32_t kModeFeatureDryDuck      = 1u << 19;  // W3: dry-duck 
 inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every defined bit
 
 // The features this build plays: sound revision 2's onset source and mark positioning (§7.6
-// item 4, the structure rows 27 and 28 retired into). Each wave-1 feature widens it in its own
-// pull request.
-inline constexpr uint32_t kSupportedModeFeatures = kModeFeatureOnset | kModeFeatureMarkPosition;
+// item 4, the structure rows 27 and 28 retired into), and wave 1's source selection (sound
+// revision 4, §7.5 R9). Each wave-1 feature widens it in its own pull request.
+inline constexpr uint32_t kSupportedModeFeatures =
+    kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
-inline constexpr uint8_t kSourcePeriodic   = 1u << 0;  // the free-running scheduler
+inline constexpr uint8_t kSourcePeriodic   = 1u << 0;  // the free-running scheduler (left out: r4)
 inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2
-inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2): a grain per detected onset (a burst, W1)
-inline constexpr uint8_t kSourceFootswitch = 1u << 3;
-inline constexpr uint8_t kSourceMidiNote   = 1u << 4;
+inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2): a burst per detected onset (r4)
+inline constexpr uint8_t kSourceFootswitch = 1u << 3;  // footswitch triggers fire (left out: r4)
+inline constexpr uint8_t kSourceMidiNote   = 1u << 4;  // MIDI-note triggers fire (left out: r4)
 inline constexpr uint8_t kSourceAll        = 0x1Fu;
 // Sound revision 1's sources: the scheduler runs, and footswitch and MIDI notes trigger.
 inline constexpr uint8_t kDefaultSources = kSourcePeriodic | kSourceFootswitch | kSourceMidiNote;

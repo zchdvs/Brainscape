@@ -39,7 +39,7 @@ enum class Draw : uint32_t {
   // carries purpose >> 3, whichever DrawKey overload is called. Named now, drawn by the waves
   // that build them.
   PitchSelect   = 8,   // W1: a pitch-set entry under `random` selection
-  Intermittency = 9,   // W1: a skipped birth or trigger
+  Intermittency = 9,   // W1 (r4): a skipped birth or trigger, ordinal per kind (Granular.h)
   StepShuffle   = 10,  // W2: the step order's shuffle
   StepProb      = 11,  // W2: a step's probability
   MarkWalk      = 12,  // W2: the mark walk

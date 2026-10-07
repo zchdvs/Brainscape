@@ -425,7 +425,7 @@ TEST_CASE("The largest MODE is 1,528 bytes, every chunk at its cap", "[blob]") {
   const Decoded r = Decode(b, kModeFeatureAll);
   REQUIRE(r.ok);
   REQUIRE(std::memcmp(&s->mode, &r.s->mode, sizeof(ModeBlob)) == 0);
-  // This build plays only onset and mark of it, and says which features it lacks.
+  // This build plays only kSupportedModeFeatures of it, and says which features it lacks.
   Expect(b, PresetError::UnsupportedFeature, s->mode.features & ~kSupportedModeFeatures);
   ExpectValid(*s, PresetError::UnsupportedFeature, s->mode.features & ~kSupportedModeFeatures);
 }
@@ -749,7 +749,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
   const Bytes base = Base();
   const size_t mode = Payload(base, kTagMode);
   // Every feature bit, declared: this build names the ones it lacks; one it plays (onset and
-  // mark since sound revision 2) the content does not require, FeatureMismatch.
+  // mark since sound revision 2, source selection since 4) the content does not require,
+  // FeatureMismatch.
   for (uint32_t bit = 0; bit < 32; ++bit) {
     Bytes b = base;
     Wr32(&b[mode], 1u << bit);
@@ -759,7 +760,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
                                                         : PresetError::UnsupportedFeature,
            1u << bit);
   }
-  REQUIRE(kSupportedModeFeatures == (kModeFeatureOnset | kModeFeatureMarkPosition));
+  REQUIRE(kSupportedModeFeatures ==
+          (kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources));
   // Content that needs a feature the package does not declare: FeatureMismatch, named.
   auto s = CompleteState();
   FullMode(&s->mode, s.get());
@@ -810,7 +812,7 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
     t->mode.features = k.feature;
     ExpectValid(*t, PresetError::None, kAnyDetail, kModeFeatureAll);
     if ((k.feature & kSupportedModeFeatures) != 0u) {
-      ExpectValid(*t, PresetError::None);  // sound revision 2's: onset and mark
+      ExpectValid(*t, PresetError::None);  // onset and mark (r2), source selection (r4)
     } else {
       ExpectValid(*t, PresetError::UnsupportedFeature, k.feature);
     }
