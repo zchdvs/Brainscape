@@ -38,10 +38,11 @@ endif()
 
 add_subdirectory(dsp)
 
-# The desktop-only preset compiler (docs/design/mode-compiler.md §8.1): hosts only, never in a
-# cross build for the pedal.
+# The desktop-only preset compiler and its tool, bspc (docs/design/mode-compiler.md §8.1):
+# hosts only, never in a cross build for the pedal.
 if(NOT CMAKE_CROSSCOMPILING)
   add_subdirectory(compiler)
+  add_subdirectory(tools/bspc)
 endif()
 
 if(BRAINSCAPE_BUILD_FIRMWARE)
