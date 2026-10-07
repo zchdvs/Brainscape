@@ -176,6 +176,7 @@ get_filename_component(_bs_tool_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
 find_program(BRAINSCAPE_ARM_SIZE arm-none-eabi-size HINTS ${_bs_tool_dir} REQUIRED)
 find_program(BRAINSCAPE_ARM_OBJCOPY arm-none-eabi-objcopy HINTS ${_bs_tool_dir} REQUIRED)
 find_program(BRAINSCAPE_ARM_OBJDUMP arm-none-eabi-objdump HINTS ${_bs_tool_dir} REQUIRED)
+find_program(BRAINSCAPE_ARM_READELF arm-none-eabi-readelf HINTS ${_bs_tool_dir} REQUIRED)
 
 # One firmware image: an ELF, the .bin the web programmer flashes, a .hex, a map file, and
 # a memory-region report. ENGINE_CODE ITCM places the engine archive's code and constants in
@@ -194,13 +195,26 @@ function(brainscape_firmware_image name)
     # package before it stages the state, mode-compiler.md §5; the golden harness hashes its
     # output with it) and the test-signal generator (the harness's input). With them the
     # archive no longer fits the 64 KiB at sound revision 2.
+    set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj)
     set(_bs_not_itcm "")
     foreach(a libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a)
-      foreach(m Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj)
+      foreach(m IN LISTS _bs_not_itcm_members)
         string(APPEND _bs_not_itcm " *${a}:${m}")
       endforeach()
     endforeach()
-    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
+    # The engine's C++17 inline constexpr tables (Params.h, Mode.h) are COMDAT sections that
+    # every object using them carries, and the linker keeps the first copy it reads: often a
+    # golden-harness object's (Corpus.cpp, Render.cpp), which the per-archive patterns would
+    # leave in QSPI. Named here without a file, the kept copy goes to ITCM whichever object
+    # supplied it. cmake/ItcmCheck.cmake fails the build when a COMDAT section of the archive's
+    # ITCM members (a new table, a template instantiation) lands anywhere else.
+    set(_bs_engine_comdat
+      .rodata._ZN10brainscape11kParamTableE
+      .rodata._ZN10brainscape11kLeafParamsE
+      .rodata._ZN10brainscape13params_detail12kLeafOrdinalE
+      .rodata._ZN10brainscape16kDefaultModeHashE)
+    list(JOIN _bs_engine_comdat " " _bs_engine_comdat)
+    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *(${_bs_engine_comdat}) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
     set(BRAINSCAPE_LD_ITCM_DISCARD "*libgcc.a:*(.ARM.exidx .ARM.exidx.*)")
   elseif(ARG_ENGINE_CODE STREQUAL "XIP")
     set(BRAINSCAPE_LD_ENGINE_CODE "with the rest of the code, ${BRAINSCAPE_LD_TEXT}")
@@ -234,6 +248,15 @@ function(brainscape_firmware_image name)
     BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/${name}.bin ${CMAKE_CURRENT_BINARY_DIR}/${name}.hex
                ${CMAKE_CURRENT_BINARY_DIR}/${name}.map ${CMAKE_CURRENT_BINARY_DIR}/${name}.size.txt
     VERBATIM)
+  if(ARG_ENGINE_CODE STREQUAL "ITCM")
+    list(JOIN _bs_not_itcm_members "," _bs_not_itcm_arg)
+    add_custom_command(TARGET ${name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -DELF=$<TARGET_FILE:${name}> -DREADELF=${BRAINSCAPE_ARM_READELF}
+              -DARCHIVE=$<TARGET_FILE:brainscape_dsp> -DHOOKS_ARCHIVE=$<TARGET_FILE:brainscape_dsp_fpenv_hooks>
+              -DNOT_ITCM=${_bs_not_itcm_arg}
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ItcmCheck.cmake
+      VERBATIM)
+  endif()
 endfunction()
 
 brainscape_firmware_image(brainscape_parity

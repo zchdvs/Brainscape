@@ -43,7 +43,11 @@ ITCM at boot, as profile §7.1 asks for the inner loops; everything else execute
 behind the 16 KiB I-cache. That excludes the engine archive's members that never run in the audio
 path: the package decoder, encoder and SHA-256 (a producer decodes a package before it stages the
 state) and the test-signal generator (the harness's input). At sound revision 2 the archive's
-linked code would not fit the 64 KiB with them (the parity image needed 76,871 bytes).
+linked code would not fit the 64 KiB with them (the parity image needed 76,871 bytes). The
+engine's shared tables (C++17 inline variables such as `kParamTable`) go to ITCM whichever object
+supplied the copy the linker kept, which is often a golden-harness object's, not the archive's
+(`_bs_engine_comdat` in [`CMakeLists.txt`](CMakeLists.txt), checked by
+[`cmake/ItcmCheck.cmake`](cmake/ItcmCheck.cmake)).
 
 **Two DFU devices.** In DFU mode the Seed shows up as one of two USB devices with the same ID
 (`0483:DF11`), and the web page's device picker tells them apart by name:
@@ -363,7 +367,14 @@ nothing that runs before the preinit hook has filled ITCM — libDaisy's `Reset_
 `__libc_init_array`, the hook itself and the SysTick path the Daisy bootloader leaves running — may
 call into ITCM. libDaisy's startup file is compiled with `-fno-tree-loop-distribute-patterns` for
 that ([`cmake/LibDaisy.cmake`](cmake/LibDaisy.cmake)): otherwise GCC turns its `.data` and `.bss`
-loops into calls to `memcpy` and `memset`, which an ITCM image keeps in ITCM.
+loops into calls to `memcpy` and `memset`, which an ITCM image keeps in ITCM. An ITCM image is
+also checked for the engine's COMDAT sections ([`cmake/ItcmCheck.cmake`](cmake/ItcmCheck.cmake)):
+an inline table such as `kParamTable`, or a template instantiation, is carried by every object
+that uses it, and the linker keeps the first copy it reads, often a golden-harness object's,
+which the per-archive patterns of the linker script would leave in QSPI beside the ITCM code
+that reads it. The linker script names the engine's tables so that the kept copy goes to ITCM,
+and the check fails the build when any COMDAT section of the archive's ITCM members lands
+elsewhere (it flags the four tables when they are not named, as a negative control).
 
 The configure step downloads the pinned libDaisy (below) into the build tree;
 `-DFETCHCONTENT_SOURCE_DIR_LIBDAISY=<checkout>` builds offline from a libDaisy checkout at that
@@ -380,14 +391,16 @@ engine's mode runtime.
 
 | Image | Bytes | ITCM used (of 64 KiB) |
 | --- | --- | --- |
-| `brainscape_parity.bin` | 337,840 (223,312) | 51.4 KiB, 80.3 % (42.9 KiB) |
-| `brainscape_bench.bin` | 335,868 (220,692) | 51.3 KiB, 80.1 % (42.8 KiB) |
+| `brainscape_parity.bin` | 337,840 (223,312) | 54.0 KiB, 84.3 % (42.9 KiB) |
+| `brainscape_bench.bin` | 335,868 (220,692) | 53.8 KiB, 84.1 % (42.8 KiB) |
 | `brainscape_bench_xip.bin` | 335,704 (220,552) | 0 |
-| `brainscape_bench_hooks.bin` | 336,372 (221,068) | 51.8 KiB, 80.9 % (43.1 KiB) |
-| `brainscape_live.bin` | 376,352 (214,616) | 55.7 KiB, 87.0 % (38.9 KiB) |
+| `brainscape_bench_hooks.bin` | 336,372 (221,068) | 54.3 KiB, 84.8 % (43.1 KiB) |
+| `brainscape_live.bin` | 376,336 (214,616) | 56.0 KiB, 87.5 % (38.9 KiB) |
 
 The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostChain` 11.0,
-`Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`),
+`Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`,
+and the shared tables `kParamTable`, `kLeafParams`, `kLeafOrdinal` and `kDefaultModeHash`,
+2.5 KiB, that the parity and bench images would otherwise take from a harness object in QSPI),
 libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetParam`,
 `ModeSwitches` and the rest of what the console reads) and has about 8 KiB left: a wave that grows the
 engine past that moves `Validate` (it runs once per load) out of ITCM next, or places the engine
@@ -398,7 +411,7 @@ by function rather than by object.
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
 | QSPI flash `0x90040000` | the image: vector table, code, constants (the 18 corpus packages among them, 76 KiB), initial data, ITCM's load image | 330 KiB |
-| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 51 KiB of 64 |
+| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 54 KiB of 64 |
 | DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (an 8 KiB slot; `sizeof(Engine)` is 7,168 bytes at sound revision 2, `kEngineImplBytes`), the main stack (32 KiB reserved at the top, linker-checked) | 34 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
@@ -469,7 +482,10 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
 ## 9. Verified without hardware
 
 - All five images build with `-Werror` and fit their regions, and pass the boot-path check
-  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control). The engine
+  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control); the four
+  ITCM images pass `ItcmCheck.cmake` (6 of 6 COMDAT sections in ITCM), and no word in their
+  `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
+  `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
   (sound revision 2: `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1: `4f4ddaa3583e46f2…`, hooks
   `da7b4f2e9b44aef7…`), and to the M7 oracle built on Linux with the same pinned toolchain (in

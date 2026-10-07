@@ -527,7 +527,8 @@ records live in [docs/design/reviews/](design/reviews/).
   table row (82 rows now, 26 of them leaves), set the retired rows 27 and 28, and the parity image
   could not read the corpus's packages, the engine archive's linked code overflowed the 64 KiB
   ITCM (76,871 bytes in the parity image), and `sizeof(Engine)` (7,424 bytes on x86-64)
-  outgrew the 7 KiB slot that `brainscape_parity_stream --placement` mirrors. As adapted:
+  outgrew the 7 KiB slot that `brainscape_parity_stream --placement` mirrors (the merge commit
+  raises the slot to 8 KiB, so the host build and its tests pass at every commit). As adapted:
   - **Packages compiled in.** The Seed has no file system, so every image (and
     `brainscape_parity_stream`, which renders as the parity image does) links the corpus's 18
     committed packages as a table generated at build time from `presets/MANIFEST` and the `.bsp`
@@ -551,10 +552,14 @@ records live in [docs/design/reviews/](design/reviews/).
   - **The bench** takes onset grains at marks from `strum_marks`'s mode, and its event stream's
     loads are mode switches, alternately FastCut and Trails.
   - **ITCM** holds the engine's code and constants, not the package decoder, encoder, SHA-256 or
-    test-signal generator, which never run in the audio path: parity 51.4 KiB, bench 51.3, hooks
-    51.8, live 55.7 of 64 (about 8 KiB left in the live image, which a wave that grows the
-    engine must budget). The engine slot is 8 KiB (`sizeof(Engine)` 7,168 bytes on the M7); the
-    136 KiB Warm arena holds `PlanMemory`'s 131,296 bytes at both block sizes.
+    test-signal generator, which never run in the audio path: parity 54.0 KiB, bench 53.8, hooks
+    54.3, live 56.0 of 64 (about 8 KiB left in the live image, which a wave that grows the
+    engine must budget). The constants include the shared tables (C++17 inline variables:
+    `kParamTable`, `kLeafParams`, `kLeafOrdinal`, `kDefaultModeHash`), which the linker would
+    otherwise take from a golden-harness object and leave in QSPI;
+    `firmware/cmake/ItcmCheck.cmake` fails the build when any COMDAT section of the engine's ITCM
+    members lands outside ITCM. The engine slot is 8 KiB (`sizeof(Engine)` 7,168 bytes on the
+    M7); the 136 KiB Warm arena holds `PlanMemory`'s 131,296 bytes at both block sizes.
   - **Verified** (firmware/README.md §9): all five images build with `-Werror` and fit; their
     engine archives equal the M7 oracle's, Windows and Linux builds alike (`89b73b51…`, hooks
     `71a38352…`); the parity stream in the image's placement under `qemu-arm -cpu cortex-m7`
