@@ -23,8 +23,9 @@ a pull request that changes them (see [Internal sound revision 2](#internal-soun
 and [1](#internal-sound-revision-1)). A JUCE
 plugin and standalone skeleton hosts the engine through its stamped events and `LoadPreset`,
 with reproducible bounces and an offline audition render; it plays the default mode (loading
-packages is lane D's). Nothing has touched real hardware, and the preset jobs that
-mode-compiler lane G added to CI have not yet run on GitHub.
+packages is lane D's). The Daisy Seed Rev7 bring-up images (parity, bench, live) build at sound
+revision 2 and carry the corpus's packages. Nothing has touched real hardware, and the preset
+jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -40,7 +41,7 @@ mode-compiler lane G added to CI have not yet run on GitHub.
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built and verified off-hardware ([firmware/README.md](../firmware/README.md)): silicon parity check, DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset; awaiting the owner's bench session |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 2 and verified off-hardware ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-2 corpus from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset; awaiting the owner's bench session |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -472,8 +473,9 @@ records live in [docs/design/reviews/](design/reviews/).
 
 - **Parity is proven on emulation, not yet on silicon.** The owner prototypes on a Daisy Seed Rev7
   (STM32H750, PCM3060), with a custom H750 board later; the Rev7 parity, DWT bench and live-audio
-  images are built, fit their memory and pass every off-hardware check (the parity stream's code
-  matches the golden file under `qemu-arm -cpu cortex-m7` in the parity image's own memory placement), and wait for the bench
+  images are built at sound revision 2, fit their memory and pass every off-hardware check (the
+  parity stream's code matches the revision-2 golden file and the packages' `MANIFEST` under
+  `qemu-arm -cpu cortex-m7` in the parity image's own memory placement), and wait for the bench
   ([firmware/README.md](../firmware/README.md)). They use libDaisy's ST USB code and must not be
   distributed. The first GitHub runs (2026-10-06) rendered the golden corpus bit-identically
   on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
@@ -519,49 +521,51 @@ records live in [docs/design/reviews/](design/reviews/).
   (§6.4); the Rosetta 2 and Prism host legs (§6.2); and a mint job: revision 1 was minted
   locally, and its pull request must pass every x86 leg and the emulated M7 against the
   committed file in one CI run, the deviation §6.1 records.
-- **Merging the Rev7 bring-up branch needs an integration fix that git does not flag.**
-  `kNumParams` now counts all 82 table rows, and `firmware/live/main.cpp` on
-  `claude/rev7-bringup` assumes one row per leaf: it asserts that its 28 `kIdNames` cover
-  `kNumParams` and indexes them while looping over `kParamTable`. The two branches merge without
-  a textual conflict, and the live image then fails to compile (`static assertion failed: one
-  name per parameter`, *measured*); raising the assert alone would read past `kIdNames` for
-  rows 29–82 and list macro and reserved rows. Whichever branch lands second makes four edits
-  there: the assert compares with `kNumLeafParams`; `FindByName` and the `params`/`get` command
-  loop `i < kNumLeafParams` over `*FindParam(LeafId(i))`; and `ParamJson` indexes
-  `kIdNames[LeafIndex(d.id)]`. With them the merged tree's live, parity and bench images compile
-  (arm-none-eabi-g++ 10.3, syntax only, stub board headers, 0 warnings with `-Wall -Wextra`).
-  The `OutTrimDb` and `PitchSt` aliases keep rev7's other spellings (bench, probes) compiling.
-  The table also grows the engine archive's code and constants, which the Rev7 images copy into
-  the 64 KiB ITCM, from 47,001 to 53,134 bytes of `.text` and `.rodata` on the M7
-  (`Engine.cpp` +3,079, `ParamDisplay.cpp` +3,054; *measured*), for that branch's size table.
-- **Sound revision 2 adds more for that merge** (lane C), none a textual conflict. Rows 27 and 28
-  are Retired: `kNumLeafParams` is 26, so the live image's 28 `kIdNames` and its `onset` and
-  `marks` commands (a `SetParam` on either is now a no-op) and the bench's preset lists that set
-  `OnsetTrigger` and `PositionSource` lose them silently, though the enumerators still compile;
-  onset triggering and mark positioning need a mode (`ModeBlob::schedule.sources`,
-  `layers[0].source`) in the `PresetState` the image loads, and its golden hashes are revision
-  2's. `Engine::Impl` grows to 6,600 bytes on the M7 (`kEngineImplBytes` 7,168), for the
-  DTCM placement, and `PlanMemory`'s Warm tier grows by the active mode's 1,616 bytes, which an
-  image sizing its AXI arena from `PlanMemory` follows. `Engine::LoadPreset` takes an optional
-  fourth argument and `EventType` gains `MacroMove` and `Expression`, so a `switch` over the
-  event types there wants two more cases. The archive's `.text` and `.rodata` on the M7 are
-  86,100 bytes (*measured*; 83,504 before), with `Engine.cpp` 14,034 bytes of code and the
-  package objects still free of floating-point instructions.
-- **Lane B adds two more things for that merge to weigh, neither a textual conflict.**
-  `PresetState` grows from 1,032 to 2,656 bytes and its default is no longer all zero (it holds
-  the default mode), so the live image's ten global `PresetState`s (`g_presets[8]`,
-  `g_staged[2]`) move from `.bss` to `.data`: 16,240 more bytes of SRAM and 26,560 bytes of
-  load image in flash or QSPI (*calculated*); storage left uninitialized and filled at boot
-  (the image assigns every slot there anyway) avoids the load image. And `golden::Sha256` is now
-  a subclass of the engine library's `brainscape::Sha256Hasher`, so the bench image, which hashes
-  with it, links `Sha256.cpp`'s object (2,040 bytes of M7 code, into ITCM with the rest of the
-  archive's linked objects); its include and spelling are unchanged, and naming the core
-  `Sha256Hasher` keeps code that opens both namespaces, as the bench image does, unambiguous.
-  The decoder, validator and encoder objects are linked only by an image that calls them; the
-  archive's `.text` and `.rodata` grow from 53,134 to 82,656 bytes on the M7 with them
-  (*measured*): `Encode` 11,003, `Validate` 8,364, `Decode` 6,647, `Sha256` 2,040, `Mode` 1,468.
-  Lane A adds `ModeEval` (the macro evaluator and the pitch guard, 848 bytes; it calls DetMath),
-  which only an image calling `EvalMacro` or `NearGuardMs` links: 83,504 bytes in all.
+- **The Rev7 bring-up is folded in at sound revision 2** (2026-10-07: `claude/rev7-bringup`, PR
+  #4, merged into the mode-compiler branch, then adapted). The two branches merged with one
+  textual conflict (README's firmware row) but did not build: the live image assumed one name per
+  table row (82 rows now, 26 of them leaves), set the retired rows 27 and 28, and the parity image
+  could not read the corpus's packages, the engine archive's linked code overflowed the 64 KiB
+  ITCM (76,871 bytes in the parity image), and `sizeof(Engine)` (7,424 bytes on x86-64)
+  outgrew the 7 KiB slot that `brainscape_parity_stream --placement` mirrors. As adapted:
+  - **Packages compiled in.** The Seed has no file system, so every image (and
+    `brainscape_parity_stream`, which renders as the parity image does) links the corpus's 18
+    committed packages as a table generated at build time from `presets/MANIFEST` and the `.bsp`
+    files (`dsp/tests/golden/EmbeddedPackages.h`, `GoldenPackages.cmake`); the harness's
+    `LoadPackage` reads it when linked. The parity image renders the revision-2 corpus (14
+    vectors, 33 presets, 709 s) from them.
+  - **The parity stream, format 3.** Before the vectors it lists every package the corpus loads,
+    as the program decoded it, and a preset that starts from a package names it with its sound
+    and control hashes; `tools/hil/parity_check.py` requires the packages to equal `MANIFEST`'s
+    hash for hash and the preset fields to equal `golden.json`'s (the package rule), checks the
+    package count against `parity-end`, and compares `mutedFrames` and the other new counters
+    with the rest. A revision-1 image's stream (format 2) is refused.
+  - **The live image** selects modes instead of parameters: `onset on|off` and `marks on|off`
+    (and `set onset|marks V`, ≥ 0.5 on, as sessions migrate) Spillover-load the current leaves
+    with the mode of a corpus package that differs from the default mode in exactly that
+    structure (`lone_busy`, `reverse_mark_aging`, `strum_marks`, checked at boot); its presets
+    take their package's mode; `preset N cut` is a FastCut switch; `macro NAME POS` and
+    `expression POS` send events 4 and 5; `set` reaches the 26 leaves and the effect volume
+    (ID 82) through a table checked at compile time against `kLeafParams`. Its presets and
+    structures are a host ctest, `firmware_live_presets`.
+  - **The bench** takes onset grains at marks from `strum_marks`'s mode, and its event stream's
+    loads are mode switches, alternately FastCut and Trails.
+  - **ITCM** holds the engine's code and constants, not the package decoder, encoder, SHA-256 or
+    test-signal generator, which never run in the audio path: parity 51.4 KiB, bench 51.3, hooks
+    51.8, live 55.7 of 64 (about 8 KiB left in the live image, which a wave that grows the
+    engine must budget). The engine slot is 8 KiB (`sizeof(Engine)` 7,168 bytes on the M7); the
+    136 KiB Warm arena holds `PlanMemory`'s 131,296 bytes at both block sizes.
+  - **Verified** (firmware/README.md §9): all five images build with `-Werror` and fit; their
+    engine archives equal the M7 oracle's, Windows and Linux builds alike (`89b73b51…`, hooks
+    `71a38352…`); the parity stream in the image's placement under `qemu-arm -cpu cortex-m7`
+    matches `golden.json` and `MANIFEST` on the whole corpus at `maxBlockSize` 48 and 512 and on
+    the quick set from a hostile caller; the static audits report 0 on the firmware build (256
+    translation units); `parity_check.py` passes the intact stream and gives the intended verdict
+    on 14 damaged revision-2 streams. Still needs the board: everything in firmware/README.md §6.
+  - The firmware now spells IDs 4 and 8 `WetTrimDb` and `TransposeSt`; the old `OutTrimDb` and
+    `PitchSt` in `Params.h`, kept for this merge, remain only for the `tools/parity/bugcheck`
+    probes. The live image's 16 `PresetState`s (2,656 bytes each) sit in `.data`, since their
+    default is not zero, so their 41.5 KiB load image is in QSPI and copied at boot.
 - **Mode compiler lane B's open ends.** MODE's vocabulary of later waves (STEP's `pos_sel`,
   modulator shapes, route and link endpoints, several ranges) is decoded and validated but
   provisional until the wave that plays it (design §1.4 principle 5); E11's fit in the memory
