@@ -33,7 +33,7 @@ and the parity, sound-revision and plugin CI workflows have not yet run on GitHu
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | ⬜ Not started — needs its own design doc |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); its first lane, the permanent parameter-ID table with the macro IDs, is built. Next: the decoded preset and its validator (lane B), then the compiler |
 | Preset package + upload to the pedal | 📐 Designed (in companion-app.md) — after the mode compiler / needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
@@ -190,11 +190,23 @@ implementing:
   mechanism); ONSET as an OR'd trigger source with oldest-steal allocation; an
   external `Trigger()` fallback that never drops; and a counted onset indicator for
   the trigger LED. End-to-end onset→grain latency: **5.3 ms** (measured).
-- **28 permanent-ID plain-value parameters.** They do not yet match the design's leaf list
-  exactly; reconciling them gates the first public plugin release (companion-app.md,
-  "Identities to freeze before the first public release"). Tapers, step counts and display
-  text live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a pedal pot and a plugin
-  knob at the same position give the same plain bits.
+- **The permanent parameter-ID table** ([mode-compiler.md](design/mode-compiler.md) §4): 82
+  rows, each with a kind, a domain bitmask (what a change rebuilds) and the sound revision that
+  made it a leaf. IDs 1–28 keep their numbers (4 is now `wet_trim_db` and 8
+  `layer0.pitch.transpose_st`) and are the 28 Leaf rows the engine plays; 29–68 are Reserved
+  under their final names until wave 1 or wave 3 builds them; 69–76 are the eight macros, 77
+  and 78 the freeze and expression performance controls, 79–81 Reserved, and 82 the effect
+  volume, a Global device setting that the engine stores and every load and `Restart` keeps
+  (nothing reads it before sound revision 2). `SetParam` stores only Leaf and Global rows,
+  `LoadPreset` reads only Leaf rows (any other id is unknown and makes the load inexact), and
+  a change reaches the rebuilds its domain names, except IDs 27 and 28, which keep revision 1's
+  routing (Known gaps). Tapers, step counts, display text, groups and host flags for every
+  row, Reserved ones included, live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a
+  pedal pot and a plugin knob at the same position give the same plain bits. The recommended
+  host model is applied provisionally (owner question Q12): only Mix, the macros, the effect
+  volume and the performance rows are host-automatable. Every consumer, the golden harness and
+  the plugin included, iterates the Leaf rows, and the plugin's 32-bit touched mask is a
+  per-leaf set.
 - **The determinism profile's engine side** ([determinism-profile.md](design/determinism-profile.md)):
   - a build profile (`cmake/BrainscapeFpProfile.cmake`: contraction off, no fast-math, no
     `errno` square roots) that `brainscape_dsp` passes on PUBLIC, tripwire headers, and a
@@ -276,14 +288,16 @@ implementing:
   levels), hiss and steady tones fire nothing, held-distorted sustain chatter is
   bounded, mid-stream `Reset()` fires nothing.
 
-**Suite** (`ctest`): `dsp_unit` (106 test cases / ~2.61M assertions in Release, 105 in Debug),
+**Suite** (`ctest`): `dsp_unit` (118 test cases / ~3.76M assertions in Release, 117 in Debug;
+two are `[!shouldfail]` cases that hold the routing of IDs 27 and 28 until sound revision 2),
 the forced-flush tests, the undefined-symbol audit and its negative control, the
 configure-check self-test, `golden_check` (every golden hash of sound revision 1),
 `golden_check_edits` (check mode fails on edited copies of the golden file) and the corpus's
-forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (29
+forced-flush control `golden_forced_flush`; a plugin build adds the wrapper tests (30
 test cases), the editor snapshot and a hosted-VST3 check. The `dsp/` tests are green in
-Release and Debug with MSVC 19.40, GCC 11 and 14 and Clang 14; the plugin tests with MSVC
-(Linux and macOS plugin builds are left to CI).
+Release and Debug with MSVC 19.40 and GCC 11 and in Release with Clang 14 (GCC 14, and Clang
+14 in Debug, were last run before the ID table); the plugin tests with MSVC, Release and
+Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
 compile-only Cortex-M7 build), `parity.yml` (six host legs and the emulated M7 checking the
 golden file, block-size, random-block, hostile-FP-environment and, on the M7, forced-flush
@@ -345,18 +359,28 @@ records live in [docs/design/reviews/](design/reviews/).
   (§6.4); the Rosetta 2 and Prism host legs (§6.2); and a mint job: revision 1 was minted
   locally, and its pull request must pass every x86 leg and the emulated M7 against the
   committed file in one CI run, the deviation §6.1 records.
+- **A lone change to ID 27 or 28 is lost** (mode-compiler.md §7.2, record §2.1): revision 1
+  routes both to the post rebuild, which does not read them, so turning the onset trigger or
+  the mark position source on or off alone, by an event, a Spillover load or a plugin knob,
+  takes effect only at the next granular change. Routing them by their domain changes output
+  for such a change, so the fix lands with sound revision 2, which retires both rows into mode
+  structure (design §7.6); the routing-fixed build reproduces every golden hash of revision 1,
+  since no golden preset changes either alone. Two `[!shouldfail]` tests hold the bug until
+  then.
 - **Engine API still to come:** `PresetState` holds the STAT leaves only (the mode blob,
   macros and the stored performance state arrive with the mode system, and the `.bsp`
-  decoder with the package format); tap/tempo, mode-switch, macro and expression events;
+  decoder with the package format); tap/tempo, mode-switch, macro and expression events (the
+  macro and performance rows exist, without their events);
   `SaveState`/`LoadState` (which will carry the epoch). Smaller items: automating `DelayMs`
   still splices clean delays (the grain engine's glide, below), input above 0 dBFS
   hard-clips in the int16 ring, and a trigger's source and velocity are carried but unread.
 - **Plugin skeleton gaps:** the resampled 48 kHz mode (other host rates run the engine
   natively), the wrapper bypass with crossfade, the pedal-faithful live input option
   (`ConditionInput24`; the audition render applies it), event scripts in the audition, MIDI CC
-  mapping, pluginval in CI, CLAP and LV2, `.bsp` session state, and the freeze of parameter
-  IDs and tapers. The In/Out level controls are wrapper code outside the guard and never part
-  of a preset.
+  mapping, pluginval in CI, CLAP and LV2, `.bsp` session state, the macro, performance and
+  effect-volume parameters with the host model's reporting (mode-compiler.md §9.2), and the
+  freeze of parameter IDs and tapers (the table exists; step 6 freezes it). The In/Out level
+  controls are wrapper code outside the guard and never part of a preset.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs
@@ -397,8 +421,11 @@ Steps 1–4 need no hardware.
    branch protection makes them required on `main`; every leg, AArch64 included, matched the
    golden file on its first GitHub run. Remaining: the rest of step 10 (Known gaps) and the
    nightly legs (profile step 11).
-3. **Mode compiler** (own design doc first), parameter-ID reconciliation and macro IDs, and
-   the `.bsp` preset package with its desktop compiler.
+3. **Mode compiler**, designed in [mode-compiler.md](design/mode-compiler.md) (draft v2), whose
+   §12.4 plan runs lane 0, lane B, lane A, lane G's package rule, then lane C at sound revision
+   2. *Done:* lane 0, the permanent parameter-ID table with the macro IDs. Next: the decoded
+   preset and its validator (lane B), the compiler and `bspc` (lane A), and the `.bsp` preset
+   package.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, `.bsp` presets and session state, and the rest of the plugin gaps above.

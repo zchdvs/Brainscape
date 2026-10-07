@@ -171,7 +171,13 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   resampled 48 kHz mode (companion §4.2) is still to come.
 - **Nothing here is a release.** Parameter IDs, names and tapers are provisional until the
   companion §5.7 gate; do not rely on them in DAW projects. The tapers are power curves
-  (`dsp/src/ParamDisplay.cpp`) pending that decision.
+  (`dsp/src/ParamDisplay.cpp`). The parameters are the Leaf rows of the permanent ID table
+  (`dsp/include/brainscape/Params.h`, docs/design/mode-compiler.md §4), keyed on their names:
+  `wet_trim_db` and `layer0.pitch.transpose_st` replaced `out_trim_db` and `layer0.pitch.st`,
+  so automation lanes saved on the old names are lost (§4.4). Following the recommended host
+  model (§3.6, owner question Q12), provisionally, only **Mix** and **Freeze** are
+  host-automatable: the other engine parameters are registered but not automatable, because the
+  macro knobs that will drive them arrive with the macro work.
 - **Session state is a provisional binary v1** (exact plain values plus the input mode, levels
   and the restart option); `.bsp` packages, the preset library and the device link are not
   built, and the audition renders no event script yet.
