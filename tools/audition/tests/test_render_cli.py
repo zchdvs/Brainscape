@@ -97,6 +97,13 @@ class RenderCliTest(unittest.TestCase):
             f.write('{"format": "x"}')
         rc, text = self.bspc("--declarations", bad, self.engram)
         self.assertEqual(rc, 2, text)
+        for declare in ('{"class": "drone"}', '{"self_oscillating": "yes"}', '{"needs_attacks": 1}'):
+            with open(bad, "w") as f:
+                f.write('{"format": "brainscape-ratings/1", "presets": {"factory.engram": {"declare": %s}}}'
+                        % declare)
+            rc, text = self.bspc("--declarations", bad, self.engram)
+            self.assertEqual(rc, 2, (declare, text))
+            self.assertIn("declare.", text)
         rc, text = self.bspc(self.engram, self.engram)
         self.assertEqual(rc, 2, text)  # one id twice
 

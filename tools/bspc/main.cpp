@@ -654,9 +654,12 @@ bool ReadDeclarations(const std::string& path,
     ErrLine(path + ":" + bsc::Dec(e.line) + ":" + bsc::Dec(e.column) + ": " + e.message);
     return false;
   }
+  const bsc::json::Value* format  = root.Find("format");
   const bsc::json::Value* presets = root.Find("presets");
-  if (presets == nullptr || presets->type != bsc::json::Type::Object) {
-    ErrLine(path + ": no \"presets\" object");
+  if (format == nullptr || format->type != bsc::json::Type::String ||
+      format->text != "brainscape-ratings/1" || presets == nullptr ||
+      presets->type != bsc::json::Type::Object) {
+    ErrLine(path + ": not a brainscape-ratings/1 log (tools/audition/ratings.py init)");
     return false;
   }
   for (const bsc::json::Member& m : presets->members) {
@@ -670,8 +673,16 @@ bool ReadDeclarations(const std::string& path,
       }
       decl.inputClass = c->text == "pad" ? bsa::InputClass::Pad : bsa::InputClass::Attack;
     }
-    if (const bsc::json::Value* v = d->Find("self_oscillating")) decl.selfOscillating = v->boolean;
-    if (const bsc::json::Value* v = d->Find("needs_attacks")) decl.needsAttacks = v->boolean;
+    for (const auto& flag : {std::make_pair("self_oscillating", &decl.selfOscillating),
+                             std::make_pair("needs_attacks", &decl.needsAttacks)}) {
+      const bsc::json::Value* v = d->Find(flag.first);
+      if (v == nullptr) continue;
+      if (v->type != bsc::json::Type::Bool) {
+        ErrLine(path + ": " + m.key + ": declare." + flag.first + " is true or false");
+        return false;
+      }
+      *flag.second = v->boolean;
+    }
     out->emplace_back(m.key, decl);
   }
   return true;
