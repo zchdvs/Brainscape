@@ -559,7 +559,8 @@ draft v1.
     package lacking a new leaf would load as inexact. *Resolution:* profile §5.12 wins; a
     `sinceRev` column keeps older packages exact (design §7.3, §7.6).
 12. **The compiler's location against the sound-revision gate.** Companion §3.1 puts it under
-    `dsp/src/compiler`, which the gate's path trigger covers (`tools/ci/sound_rev_gate.py:29-34`).
+    `dsp/src/compiler`, which the gate's path trigger covers (`TRIGGER_DIRS` in
+    `tools/ci/sound_rev_gate.py`).
     *Resolution:* a top-level `compiler/`, gated by `bspc-roundtrip`, the package rule and
     CODEOWNERS (item 27); namespace `bsc`, with the symbol scan scoped to functions (design
     §8.1).

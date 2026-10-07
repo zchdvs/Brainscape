@@ -14,12 +14,18 @@ name: sound-rev
 # changed is the package's, not the engine's, unless the pull request also touches the path
 # trigger's paths without a bump. Editing the description re-runs the gate.
 # Sound revisions are checked per commit: each revision is one commit that raises
-# kSoundRevision by exactly one and mints its golden file; a pull request may carry several
-# consecutive revisions. The gate walks every commit between the merge commit's first parent
-# and the merge commit and fails a commit that lowers the revision or raises it by more than
-# one, a revision two commits introduce, one the base already has, a gap in the numbers and a
-# revision no commit minted. The walk needs the whole history (fetch-depth: 0); on a shallow
-# clone or a missing object the gate fails rather than pass.
+# kSoundRevision by exactly one, and its golden file is minted at that revision, by that commit
+# or a later one before the next bump; a pull request may carry several consecutive revisions.
+# The gate walks every commit between the merge commit's first parent and the merge commit and
+# fails a commit that lowers the revision or raises it by more than one, a revision two commits
+# introduce, one the base already has, a gap in the numbers and a revision no commit at that
+# revision minted. It checks a lower revision's golden file by its key, not by rendering it:
+# parity and host render the head's, so each revision commit is pushed and passes them as the
+# pull request's head before the next one. The walk needs the whole history (fetch-depth: 0);
+# on a shallow clone or a missing object the gate fails rather than pass. The rule holds on
+# main only for pull requests merged with a merge commit: a squash merge of one that carries
+# r2 and r3 lands one commit that raises the revision by two, which no check reads
+# (docs/STATUS.md, Known gaps).
 # Its own workflow, so adding or removing a label re-runs this job and not the parity legs.
 # The gate runs the pull request's own copy of this file and of the script, so it holds
 # only while code owners review changes to .github/workflows/ and tools/ci/ and branch

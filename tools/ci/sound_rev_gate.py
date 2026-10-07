@@ -26,16 +26,26 @@ request's own commits and the merge commit, not those already in the base), and 
     what a document means, not what the engine plays for a package, so it needs visibility,
     not a bump; a bump does not waive it, and "sound-neutral" does not either;
   * the sound-revision rule, per commit: each revision is one commit that raises
-    kSoundRevision by exactly one and mints its golden file; a pull request may carry several
-    consecutive revisions. A commit's revision is the header's kSoundRevision (0 without the
-    header); a commit fails when it is below the highest of its parents' (it went down) or more
-    than one above it (it skipped a number), and introduces its revision when it is exactly one
-    above (a merge commit may, when it resolves two lines by bumping). The revisions introduced
-    above the base's must be the base's + 1 to the head's, each introduced by one commit (two
-    are two different sounds sharing a number), and each minted: some commit of the pull
-    request, the bump or a later one, writes golden.json keyed to it. A commit that introduces
-    a revision the base already has (a parallel line claimed its number) fails: renumber on top
-    of the base. The head going below the base fails too;
+    kSoundRevision by exactly one, and its golden file is minted at that revision, by that
+    commit or a later one before the next bump; a pull request may carry several consecutive
+    revisions. A commit's revision is the header's one `kSoundRevision = N;` outside comments,
+    and a header that does not read that way stops the gate at any commit it reads, so the
+    commit must be rewritten. A commit without the header keeps the highest of its parents'
+    revisions (0 before the header existed), so the commit that restores it is checked against
+    the revision before it went. A commit fails when its revision is below the highest of its
+    parents' (it went down) or more than one above it (it skipped a number), and introduces its
+    revision when it is exactly one above (a merge commit may, when it resolves two lines by
+    bumping). The revisions introduced above the base's must be the base's + 1 to the head's,
+    each introduced by one commit (two are two different sounds sharing a number), and each
+    minted: a commit of the pull request at that revision writes golden.json keyed to it. The
+    harness's --mode mint keys the file to the kSoundRevision it was built with, so a file
+    keyed to another revision than its own commit's (written before the bump, after the next
+    one, or on a line without the revision) mints nothing. A commit that introduces a revision
+    the base already has (a parallel line claimed its number) fails: renumber on top of the
+    base. The head going below the base fails too. A golden file below the head's revision is
+    checked by its key and the commit that wrote it, not rendered: parity.yml and host.yml
+    render the head's, so each revision commit is pushed and passes them as the pull request's
+    head before the next revision's commit is pushed;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
 
@@ -45,6 +55,12 @@ and so does a re-stamped package (sound_rev and package hash only).
 The walk needs the whole history between base and head: in a shallow clone (actions/checkout
 fetches one commit unless told fetch-depth: 0), or when a commit or file it reads is missing,
 the gate fails and asks for the full history. It never passes on a history it cannot read.
+The rule holds on main only when pull requests land as merge commits: a squash merge of one
+that carries r2 and r3 lands a single commit that raises the revision by two.
+
+Commit subjects, the head's golden.json, labels and the description are the pull request's
+text: the report prints every control character in a line as a space, so none of them can start
+a line of its own (a line starting "::" is a workflow command to the Actions runner).
 
   sound_rev_gate.py --base REV [--head REV] [--labels JSON_OR_COMMA_LIST]
                     [--body-file FILE] [--summary FILE]
@@ -62,6 +78,11 @@ TRIGGER_FILES = ("CMakeLists.txt", "dsp/CMakeLists.txt", "cmake/BrainscapeFpProf
                  "cmake/fp-forbidden-flags.txt", "tools/cmake/arm-none-eabi-toolchain.cmake")
 NEUTRAL_LABEL = "sound-neutral"
 REVISION = re.compile(r"\bkSoundRevision\s*=\s*(\d+)\s*;")
+REVISION_NAME = re.compile(r"\bkSoundRevision\b")
+COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+# Control characters and the Unicode line breaks: printed as they are, a carriage return in a
+# commit subject would start a line of its own.
+CONTROL = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]+")
 # The package rule (mode-compiler.md §8.3). bspc's manifest format: package hash, sound_hash,
 # control_hash and path per line (`bspc roundtrip --write-manifest`). bspc_roundtrip.py
 # requires each set's MANIFEST and that it matches the set's committed packages, so a package
@@ -123,12 +144,20 @@ def show(rev, path):
 
 
 def revision(rev):
+    """kSoundRevision at a revision, or None when the header does not exist there.
+
+    The header must name it once outside comments, as `kSoundRevision = N;`: a comment, or a
+    second definition the preprocessor may pick, would otherwise decide the number at commits
+    no compiler or harness checks.
+    """
     text = show(rev, REVISION_HEADER)
     if text is None:
         return None
-    m = REVISION.search(text)
-    if m is None:
-        sys.exit(f"sound_rev_gate: no kSoundRevision in {REVISION_HEADER} at {rev}")
+    code = COMMENT.sub(" ", text)
+    m = REVISION.search(code)
+    if m is None or len(REVISION_NAME.findall(code)) != 1:
+        sys.exit(f"sound_rev_gate: {REVISION_HEADER} at {describe(rev)} does not name kSoundRevision once "
+                 f"outside comments, as `kSoundRevision = N;`")
     return int(m.group(1))
 
 
@@ -153,10 +182,13 @@ def keyed(text):
 
 def history(base, head):
     """The commits of base..head, parents first, as (commit, its kSoundRevision, the highest of
-    its parents', the revision of the golden file it writes or None).
+    its parents', the revision it mints or None), and notes on commits that remove the header.
 
-    A commit writes golden.json when its file differs from every parent's, so a merge that keeps
-    one side's file writes nothing. Fails closed on a shallow clone or a commit it cannot read.
+    A commit without the header keeps the highest of its parents' revisions; a parent in the
+    base without it counts as 0. A commit writes golden.json when its file differs from every
+    parent's, so a merge that keeps one side's file writes nothing, and mints only when the file
+    it writes is keyed to its own revision. Fails closed on a shallow clone or a commit it
+    cannot read.
     """
     if git("rev-parse", "--is-shallow-repository").stdout.strip() != "false":
         sys.exit(f"sound_rev_gate: the repository is a shallow clone, so the pull request's commits "
@@ -164,28 +196,40 @@ def history(base, head):
     p = git("rev-list", "--topo-order", "--reverse", "--parents", f"{base}..{head}", check=False)
     if p.returncode != 0:
         unread(f"the commits of {base}..{head}", p)
-    states = {}
+    states, walked = {}, {}
 
     def state(commit):
-        """(kSoundRevision, 0 without the header; golden.json's object id or None)."""
+        """(kSoundRevision, None without the header; golden.json's object id or None)."""
         if commit not in states:
-            states[commit] = (revision(commit) or 0, blob_id(commit, GOLDEN))
+            states[commit] = (revision(commit), blob_id(commit, GOLDEN))
         return states[commit]
 
-    out = []
+    def rev_of(commit):
+        """A walked commit's revision as resolved below; one of the base's, its header's or 0."""
+        return walked[commit] if commit in walked else state(commit)[0] or 0
+
+    out, notes = [], []
     for line in p.stdout.splitlines():
         commit, *parents = line.split()
         rev, gold = state(commit)
-        prev = max((state(c)[0] for c in parents), default=0)
+        prev = max((rev_of(c) for c in parents), default=0)
+        if rev is None:
+            rev = prev
+            if any(state(c)[0] is not None for c in parents):
+                notes.append(f"{REVISION_HEADER} is gone at {describe(commit)}, so that commit counts as its "
+                             f"parents' revision, {prev}.")
+        walked[commit] = rev
         writes = gold is not None and all(state(c)[1] != gold for c in parents)
-        out.append((commit, rev, prev, keyed(blob(gold)) if writes else None))
-    return out
+        key = keyed(blob(gold)) if writes else None
+        out.append((commit, rev, prev, key if key == rev else None))
+    return out, notes
 
 
 def describe(commit):
-    """A commit as its `short hash` and subject."""
+    """A commit as its `short hash` and subject, with any control character in the subject (the
+    pull request's text) as a space."""
     if commit not in SUBJECTS:
-        SUBJECTS[commit] = git("log", "-1", "--format=`%h` %s", commit).stdout.strip()
+        SUBJECTS[commit] = CONTROL.sub(" ", git("log", "-1", "--format=`%h` %s", commit).stdout).strip()
     return SUBJECTS[commit]
 
 
@@ -193,7 +237,7 @@ def revision_failures(commits, base_rev, head_rev):
     """The sound-revision rule over the walked commits.
 
     Returns (failures, {revision: the commits that introduce it}, {revision: the commits that
-    write golden.json keyed to it}).
+    mint it, at that revision}).
     """
     failures, introduced, mints = [], {}, {}
     for commit, rev, prev, minted in commits:
@@ -226,9 +270,9 @@ def revision_failures(commits, base_rev, head_rev):
                          f"(kSoundRevision {base_rev} there): a parallel line claimed it; renumber the pull "
                          f"request's revisions on top of the base's, from {base_rev + 1}." for c in cs]
         if r not in mints:
-            failures.append(f"Sound revision {r} never minted its golden file: no commit of the pull request "
-                            f"writes {GOLDEN} keyed to it; mint it at that revision with brainscape_golden "
-                            f"--mode mint.")
+            failures.append(f"Sound revision {r} never minted its golden file: no commit of the pull request at "
+                            f"that revision writes {GOLDEN} keyed to it; mint it at that revision with "
+                            f"brainscape_golden --mode mint.")
     return failures, introduced, mints
 
 
@@ -353,7 +397,7 @@ def main():
     ap.add_argument("--summary", help="also append the Markdown to this file ($GITHUB_STEP_SUMMARY)")
     args = ap.parse_args()
 
-    commits = history(args.base, args.head)
+    commits, notes = history(args.base, args.head)
     paths = [p for p in git("diff", "--name-only", "--no-renames", args.base, args.head).stdout.splitlines() if p]
     touched = triggers(paths)
     labels = parse_labels(args.labels)
@@ -374,7 +418,11 @@ def main():
     withheld = golden_changes(base_golden, head_golden, packaged)[1] if engine_unbumped else []
 
     failures, introduced, mints = revision_failures(commits, base_rev, head_rev)
-    notes = []
+    unrendered = [f"r{r}" for r in sorted(introduced) if r < head_rev]
+    if unrendered:
+        notes.append(f"The golden file of {', '.join(unrendered)} is checked here by its key and the commit that "
+                     f"wrote it, not rendered: parity and host render r{head_rev}'s. Each revision commit must have "
+                     f"passed them as the pull request's head (profile §5.12).")
     if changed and not bumped:
         failures.append(f"{len(changed)} golden hash(es) changed without a kSoundRevision bump (hard "
                         f"trigger, profile §5.12; no label overrides it)."
@@ -427,7 +475,10 @@ def main():
     lines += [f"- {n}" for n in notes]
     lines += [f"- **FAIL:** {f}" for f in failures]
     lines.append("" if failures else "PASS")
-    text = "\n".join(lines) + "\n"
+    # Subjects, the head's golden.json, labels and the description's cause are the pull request's
+    # text: no control character in them may start a line of its own (a "::" line is a workflow
+    # command).
+    text = "\n".join(CONTROL.sub(" ", line) for line in lines) + "\n"
     print(text)
     if args.summary:
         with open(args.summary, "a", encoding="utf-8") as fh:

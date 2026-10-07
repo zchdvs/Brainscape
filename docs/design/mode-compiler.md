@@ -1106,9 +1106,9 @@ dsp/src/blob/      DecodePreset, ValidateMode, SHA-256: the only part the firmwa
 ```
 
 Companion §3.1 put the compiler under `dsp/src/compiler`, where every compiler pull request
-would need the "sound-neutral" label (`tools/ci/sound_rev_gate.py:29-34`), although a
-compiler change alters package bytes, not the engine's output for a package, which is what
-`kSoundRevision` certifies (profile §5.12). At the top level it is gated by its committed
+would need the "sound-neutral" label (`TRIGGER_DIRS` in `tools/ci/sound_rev_gate.py`),
+although a compiler change alters package bytes, not the engine's output for a package, which
+is what `kSoundRevision` certifies (profile §5.12). At the top level it is gated by its committed
 outputs and the package rule (§8.3), with CODEOWNERS entries for `/compiler/`, `/tools/bspc/`
 and `/firmware/factory/`. Namespace `bsc` keeps compiler functions out of `brainscape::`;
 companion §3.4's `symbol-scan` rule is scoped to functions, because the `inline constexpr`
