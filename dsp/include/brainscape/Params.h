@@ -22,9 +22,8 @@ enum class ParamId : uint32_t {
   DelayMs        = 1,   // layer0.position.base_ms — grain position behind the write head
   Mix            = 2,   // global wet/dry, linear crossfade (grain-delay-theory.md §3.11)
   Feedback       = 3,   // feedback.amount (the taming chain lands with the post chain)
-  WetTrimDb      = 4,   // wet_trim_db (was out_trim_db): the mode's level match. It still
-                        // trims the whole output; r2 makes it wet only (mode-compiler.md
-                        // §7.1 R3)
+  WetTrimDb      = 4,   // wet_trim_db (was out_trim_db): the mode's level match, on the wet
+                        // signal only, after the post chain (mode-compiler.md §7.1 R3)
   GrainSizeMs    = 5,   // layer0.size_ms
   Overlap        = 6,   // scheduler.overlap — target voices = kMaxGrains * overlap^3
   SprayMs        = 7,   // layer0.position.spray_ms
@@ -46,15 +45,17 @@ enum class ParamId : uint32_t {
   ReverbTime     = 21,  // post.reverb.time
   ReverbMix      = 22,  // post.reverb.mix — 0 is exactly transparent
   FilterCutoffHz = 23,  // post.filter.cutoff_hz — at max the stage is EXACTLY bypassed
-                        // (design §2.6 endpoint semantics: Filter fully CW = bypass); r2
-                        // makes the minimum the wet kill (mode-compiler.md §7.2)
+                        // (design §2.6 endpoint semantics: Filter fully CW = bypass); at
+                        // min the wet is killed (mode-compiler.md §7.2)
   FilterRes      = 24,  // post.filter.res
   FilterMorph    = 25,  // post.filter.morph — 0..3 continuous LP -> BP -> HP -> Notch
   TriggerSens    = 26,  // trigger.sensitivity — onset-detector threshold (1 = hair trigger)
-  OnsetTrigger   = 27,  // scheduler.onset_trigger — >=0.5 fires a grain per onset (OR'd).
-                        // Retires at r2 into `onset` in scheduler.sources
-  PositionSource = 28,  // layer0.position.source — >=0.5 = POS_MARK (most recent onset).
-                        // Retires at r2 into layers[0].position.source
+  // Retired at sound revision 2 into mode structure (mode-compiler.md §4.2, R2b): the onset
+  // trigger is `onset` in scheduler.sources (ModeSchedule::sources), mark positioning a layer's
+  // position.source (ModeLayer::source). The ids are never reused; the rows keep only them.
+  // A SetParam on either is a no-op and a preset leaf naming either is unknown.
+  OnsetTrigger   = 27,  // was scheduler.onset_trigger
+  PositionSource = 28,  // was layer0.position.source
   // ── Layer 0 (W1: 29-31; W3: 32-37) ───────────────────────────────────────────────
   Repeat          = 29,  // layer0.position.repeat: passes over one region, integer
   DecayMs         = 30,  // layer0.decay_ms: 60 dB fall as the position ages, 0 = off
@@ -141,16 +142,16 @@ enum class ParamKind : uint8_t { Leaf, Macro, Performance, Global, Reserved, Ret
 
 // What a change to a row rebuilds (design §4.1, §7.2): a bitmask, since one value can feed
 // more than one rebuild (the filter cutoff is Post | Wet). A Reserved row carries the domain
-// it will have. Macro and Performance rows act through events and have none. Data until
-// sound revision 2: the engine dispatches on it with R1 (§7.1) and keeps revision 1's routing
-// by ID until then.
+// it will have. Macro and Performance rows act through events and have none. Since sound
+// revision 2 the engine dispatches every change on it (R1, §7.1): a change marks each domain
+// of its row, and each marked domain rebuilds once before the next frame renders.
 enum ParamDomain : uint8_t {
   kDomainNone     = 0,
   kDomainGranular = 1u << 0,  // the scheduler and voice parameters
   kDomainPost     = 1u << 1,  // the post chain
   kDomainMix      = 1u << 2,  // the wet/dry mix
   kDomainFeedback = 1u << 3,  // the feedback gain and its taming chain
-  kDomainWet      = 1u << 4,  // the wet gain: trim, effect volume and the cutoff kill (r2)
+  kDomainWet      = 1u << 4,  // the wet gain: trim, effect volume and the cutoff kill
   kDomainDetector = 1u << 5,  // the onset detector's threshold
 };
 inline constexpr uint8_t kAllParamDomains = 0x3Fu;
@@ -203,8 +204,8 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::FilterRes,          "post.filter.res",              0.0f,    1.0f,     0.1f,     "",   ParamKind::Leaf,        kDomainPost,                   1},
     {ParamId::FilterMorph,        "post.filter.morph",            0.0f,    3.0f,     0.0f,     "",   ParamKind::Leaf,        kDomainPost,                   1},
     {ParamId::TriggerSens,        "trigger.sensitivity",          0.0f,    1.0f,     0.5f,     "",   ParamKind::Leaf,        kDomainDetector,               1},
-    {ParamId::OnsetTrigger,       "scheduler.onset_trigger",      0.0f,    1.0f,     0.0f,     "",   ParamKind::Leaf,        kDomainGranular,               1},
-    {ParamId::PositionSource,     "layer0.position.source",       0.0f,    1.0f,     0.0f,     "",   ParamKind::Leaf,        kDomainGranular,               1},
+    {ParamId::OnsetTrigger,       nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
+    {ParamId::PositionSource,     nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
     {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},

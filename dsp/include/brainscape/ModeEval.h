@@ -14,8 +14,8 @@ namespace brainscape {
 // duration (determinism profile §4.1), so a result never depends on the caller's environment
 // and every conforming build gives the same bits. The compiler does no floating-point
 // arithmetic of its own (§1.4 principle 3): its lint and derive passes call these instead.
-// Nothing in Engine::Process calls them before sound revision 2, which sends MacroMove events
-// through EvalMacro (§7.1 R6).
+// The engine's MacroMove and Expression events (§7.4, R6) run the same evaluators inside its
+// own guard, so a fan-out the app or the compiler derives is the one the engine plays.
 
 // The macro evaluator (§3.3): the value of each target of `macro` (a Macro row, 69-76) that
 // `mode` defines, at `position`, written to out[0..n) as {param, value} in the targets' list
@@ -29,6 +29,16 @@ namespace brainscape {
 // mode that passes ValidateMode; a target on an unknown row is skipped.
 size_t EvalMacro(const ModeBlob& mode, ParamId macro, float position, PresetLeaf* out,
                  size_t cap) noexcept;
+
+// The expression pedal's fan-out (§3.4): `position` canonicalized as perf.expression's value
+// (to [0, 1]), then each of CTRL's assignments in order, mapped as a macro target with in_range
+// [0, 1] through the assignment's lo, hi and curve: a Leaf target gets that value, a Macro target
+// that position, and its targets are written as EvalMacro writes them. Writes {param, value} to
+// out[0..n) in application order and returns n, at most `cap` (4 assignments of at most 8
+// targets each fit in 32). Nothing without CTRL or assignments. For a state that passes
+// ValidateMode.
+size_t EvalExpression(const ModeBlob& mode, const ControlState& control, float position,
+                      PresetLeaf* out, size_t cap) noexcept;
 
 // The near write-head guard of a forward grain, in milliseconds without the guard margin
 // (engine §3; mode-compiler.md §2.7 lint L2): size_ms * (r - 1), where r is the ratio of the

@@ -373,8 +373,9 @@ bool CheckSemantics(const PresetState& s, PresetDiagnostic* d) noexcept {
       return Fail(d, PresetError::LayerBudget, 1);
     }
   }
-  // The leaves of absent elements hold their defaults (§2.2).
-  for (uint32_t i = 0; i < s.leafCount; ++i) {
+  // The leaves of absent elements hold their defaults (§2.2). Bounded by the array too: a
+  // load's step 0 checks the structure of a state whose STAT CheckStat has not seen.
+  for (uint32_t i = 0; i < s.leafCount && i < PresetState::kMaxLeaves; ++i) {
     const PresetLeaf& leaf = s.leaves[i];
     if (ElementPresent(mode, leaf.id)) continue;
     const ParamDescriptor* r = Row(leaf.id);
@@ -508,6 +509,12 @@ bool CheckControl(const ModeBlob& mode, const ControlState& c, PresetDiagnostic*
 bool ValidateModeWith(const PresetState& s, uint32_t supported, PresetDiagnostic* d) noexcept {
   if (d != nullptr) *d = PresetDiagnostic{};
   return CheckStat(s, d) && CheckMode(s.mode, supported, d) && CheckControl(s.mode, s.control, d) &&
+         CheckSemantics(s, d);
+}
+
+bool ValidateStructure(const PresetState& s, uint32_t supported, PresetDiagnostic* d) noexcept {
+  if (d != nullptr) *d = PresetDiagnostic{};
+  return CheckMode(s.mode, supported, d) && CheckControl(s.mode, s.control, d) &&
          CheckSemantics(s, d);
 }
 

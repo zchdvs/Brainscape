@@ -47,7 +47,7 @@ TEST_CASE("every descriptor has display metadata in table order") {
 
 TEST_CASE("taper endpoints are exactly min and max, and the taper is monotonic") {
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     CHECK(Bits(PlainFromNormalized(d.id, 0.0f)) == Bits(Canonicalize(d.id, d.min)));
     CHECK(Bits(PlainFromNormalized(d.id, 1.0f)) == Bits(d.max));
     float prev = PlainFromNormalized(d.id, 0.0f);
@@ -64,7 +64,7 @@ TEST_CASE("taper endpoints are exactly min and max, and the taper is monotonic")
 
 TEST_CASE("normalised view inverts the taper closely and keeps defaults in range") {
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     const ParamDisplay* m = FindParamDisplay(d.id);
     const float nd        = NormalizedFromPlain(d.id, d.def);
     CHECK(nd >= 0.0f);
@@ -100,11 +100,14 @@ TEST_CASE("canonicalization uses bit tests: non-finite to min, subnormal and -0 
 }
 
 TEST_CASE("discrete parameters snap to their positions") {
-  CHECK(PlainFromNormalized(ParamId::OnsetTrigger, 0.49f) == 0.0f);
-  CHECK(PlainFromNormalized(ParamId::OnsetTrigger, 0.5f) == 1.0f);
-  CHECK(PlainFromNormalized(ParamId::PositionSource, 1.0f) == 1.0f);
-  CHECK(NormalizedFromPlain(ParamId::PositionSource, 0.7f) == 1.0f);
-  CHECK(NormalizedFromPlain(ParamId::PositionSource, 0.2f) == 0.0f);
+  CHECK(PlainFromNormalized(ParamId::PerfFreeze, 0.49f) == 0.0f);
+  CHECK(PlainFromNormalized(ParamId::PerfFreeze, 0.5f) == 1.0f);
+  CHECK(PlainFromNormalized(ParamId::ReverbMode, 1.0f) == 3.0f);
+  CHECK(NormalizedFromPlain(ParamId::PerfFreeze, 0.7f) == 1.0f);
+  CHECK(NormalizedFromPlain(ParamId::PerfFreeze, 0.2f) == 0.0f);
+  // The retired rows keep their display rows, never registered (§4.1).
+  CHECK((FindParamDisplay(ParamId::OnsetTrigger)->flags & kParamAutomatable) == 0u);
+  CHECK((FindParamDisplay(ParamId::PositionSource)->flags & kParamAutomatable) == 0u);
 }
 
 TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)") {
@@ -125,8 +128,8 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
   CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
   CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
   CHECK(Format(ParamId::WetTrimDb, -3.0f) == "-3.0 dB");
-  // wet_trim_db trims the whole output until r2 makes it wet only (§7.1 R3).
-  CHECK(std::string(FindParamDisplay(ParamId::WetTrimDb)->title) == "Output trim");
+  // wet_trim_db trims the wet signal only since r2 (§7.1 R3).
+  CHECK(std::string(FindParamDisplay(ParamId::WetTrimDb)->title) == "Wet trim");
   CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::L1DelayMs)->group)) == "Layer 2");
   CHECK(std::string(GroupTitle(FindParamDisplay(ParamId::EffectVolumeDb)->group)) == "Device");
   CHECK(std::string(FindParamDisplay(ParamId::L1TransposeSt)->title) == "Layer 2 transpose");
@@ -135,13 +138,13 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
 // Host model (b), provisionally (mode-compiler.md §3.6, Q12): macros, Mix, the effect volume
 // and the performance rows are automatable; the other leaves are registered but not. Lane D
 // applies it in the plugin with the macro parameters (§12.4); until then sound revision 1's
-// leaves, IDs 1-28, stay automatable.
+// leaves, IDs 1-26 (27 and 28 retired at r2), stay automatable.
 TEST_CASE("host automation follows the host model") {
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
     const auto raw         = static_cast<uint32_t>(d.id);
-    const bool want        = raw <= 28u || (raw >= 69u && raw <= 80u) ||
+    const bool want        = raw <= 26u || (raw >= 69u && raw <= 80u) ||
                       d.id == ParamId::EffectVolumeDb;
     CHECK(automatable == want);
   }
@@ -156,11 +159,12 @@ TEST_CASE("display text carries units and the named endpoints") {
   CHECK(Format(ParamId::TransposeSt, 0.0f) == "0.00 st");
   CHECK(Format(ParamId::FilterCutoffHz, 20000.0f) == "Off");
   CHECK(Format(ParamId::FilterCutoffHz, 2500.0f) == "2.50 kHz");
+  CHECK(Format(ParamId::FilterCutoffHz, 40.0f) == "Kill");  // the wet kill (§4.3)
+  CHECK(Format(ParamId::FilterCutoffHz, 41.0f) == "41.0 Hz");
   CHECK(Format(ParamId::FilterMorph, 1.0f) == "BP");
   CHECK(Format(ParamId::FilterMorph, 0.4f) == "LP>BP 40%");
   CHECK(Format(ParamId::FilterMorph, 3.0f) == "Notch");
-  CHECK(Format(ParamId::OnsetTrigger, 1.0f) == "On");
-  CHECK(Format(ParamId::PositionSource, 0.0f) == "Live");
+  CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
   CHECK(Format(ParamId::WindowSkew, 0.5f) == "0%");  // centred: symmetric window
   CHECK(Format(ParamId::WindowSkew, 0.25f) == "-50%");
   CHECK(Format(ParamId::WindowSkew, 1.0f) == "+100%");
@@ -206,7 +210,8 @@ std::string RefFormat(ParamId id, float plain) {
   switch (m.kind) {
     case DisplayKind::Milliseconds: return RefMs(v);
     case DisplayKind::Hertz: return RefHz(v);
-    case DisplayKind::FilterCutoff: return v >= d.max - 0.5f ? "Off" : RefHz(v);
+    case DisplayKind::FilterCutoff:
+      return v >= d.max - 0.5f ? "Off" : v <= d.min ? "Kill" : RefHz(v);  // the wet kill
     case DisplayKind::Percent: {
       const double pc = static_cast<double>(v) * 100.0;
       return RefFixed(pc < 10.0 ? "%.1f%%" : "%.0f%%", pc);
@@ -276,7 +281,7 @@ TEST_CASE("display text matches a correctly rounding printf, ties included") {
         ++compared;
         if (want != buf) {
           ++differ;
-          if (differ <= 10) UNSCOPED_INFO(d.name << " " << v << ": '" << buf << "' vs printf '" << want << "'");
+          if (differ <= 10) UNSCOPED_INFO((d.name != nullptr ? d.name : "(retired)") << " " << v << ": '" << buf << "' vs printf '" << want << "'");
         }
       }
     }
@@ -295,7 +300,7 @@ TEST_CASE("taper and display functions own the FP environment") {
     in.push_back(FromBits(u));
   }
   for (const ParamDescriptor& d : kParamTable) {
-    INFO(d.name);
+    INFO((d.name != nullptr ? d.name : "(retired)"));
     std::vector<float> plainClean(in.size()), plainHostile(in.size());
     std::vector<float> normClean(in.size()), normHostile(in.size());
     for (size_t i = 0; i < in.size(); ++i) {

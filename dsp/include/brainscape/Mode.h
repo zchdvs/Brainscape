@@ -65,15 +65,16 @@ inline constexpr uint32_t kModeFeatureLinks        = 1u << 18;  // W3: links bet
 inline constexpr uint32_t kModeFeatureDryDuck      = 1u << 19;  // W3: dry-duck envelope times
 inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every defined bit
 
-// The features this build plays: none until sound revision 2 adds onset and mark (§7.6 item
-// 3), so a package loads only with the default structure (and any macros).
-inline constexpr uint32_t kSupportedModeFeatures = 0u;
+// The features this build plays: sound revision 2's onset source and mark positioning (§7.6
+// item 4, the structure rows 27 and 28 retired into). Each wave-1 feature widens it in its own
+// pull request.
+inline constexpr uint32_t kSupportedModeFeatures = kModeFeatureOnset | kModeFeatureMarkPosition;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
 inline constexpr uint8_t kSourcePeriodic   = 1u << 0;  // the free-running scheduler
 inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2
-inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2)
+inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2): a grain per detected onset (a burst, W1)
 inline constexpr uint8_t kSourceFootswitch = 1u << 3;
 inline constexpr uint8_t kSourceMidiNote   = 1u << 4;
 inline constexpr uint8_t kSourceAll        = 0x1Fu;

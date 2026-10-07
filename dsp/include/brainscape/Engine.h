@@ -21,12 +21,18 @@ inline constexpr uint32_t kMaxGrains = 64;
 // two __aeabi_uldivmod calls per sample on Cortex-M7).
 inline constexpr uint32_t kFeedbackDelayFrames = 512;
 
+// A FastCut mode switch (docs/design/mode-compiler.md §7.3) fades every grain sounding at the
+// load frame linearly to zero over this many frames (2.67 ms at 48 kHz), so the cut does not
+// click. A shared build constant, like the FIFO above.
+inline constexpr uint32_t kFastCutFrames = 128;
+
 // Opaque storage for the engine state (docs/design/determinism-profile.md §3.5): no
 // floating-point code may live in a public header, where a consumer's flags would
 // compile it, yet the Engine must not allocate and must fit DTCM on the pedal. Sized
-// per pointer width (measured 6,032 B on the M7, 6,168 B on x86-64, plus headroom);
-// Engine.cpp static_asserts the fit.
-inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 6656 : 6912;
+// per pointer width (measured 6,600 B on the M7 and 6,752 B on x86-64 at sound revision 2,
+// plus headroom; each wave raises it, mode-compiler.md §7.1); Engine.cpp static_asserts the
+// fit. The active mode lives in the Warm arena, not here (§7.3).
+inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 7168 : 7424;
 inline constexpr size_t kEngineImplAlign = 16;
 
 struct EngineConfig {
@@ -105,19 +111,30 @@ class Engine {
   void Restart() noexcept;
 
   // Applies a decoded preset in the fixed order of determinism profile §5.10, with the
-  // per-kind rules of docs/design/mode-compiler.md §4.1 and §7.3: every Leaf row's
-  // default; every stored leaf, canonicalized, in ascending id order (an id that is not a
-  // Leaf row is unknown and ignored); freeze off; Global rows (device settings) keep their
-  // values; then for Exact a Restart (Process stopped, the event queue cleared; non-RT unless
-  // the engine has rendered nothing since its buffers were cleared, see Restart), for
-  // Spillover the random-number epoch restarted at the load frame, keeping history,
-  // grains, scheduler phase and smoothers. A direct Spillover call applies at the next
-  // Process call's first frame and must not race Process (audio thread between blocks, or
-  // Process stopped); a live load is a SpilloverLoad event instead, applied as one change
-  // at its frame, never as per-parameter stores. Returns true when the load applied and
-  // was exact (*report says why not).
-  bool LoadPreset(const PresetState& preset, LoadMode mode,
-                  LoadReport* report = nullptr) noexcept;
+  // per-kind rules and steps of docs/design/mode-compiler.md §4.1 and §7.3:
+  //   0. the mode and CTRL must pass ValidateMode's structural and semantic rules (Preset.h;
+  //      the leaves are step 2's), else nothing is applied and the report says invalidMode;
+  //   1. every Leaf row's default; Global rows (device settings) keep their values;
+  //   2. every stored leaf, canonicalized, in ascending id order. An id is unknown and
+  //      ignored unless its row is a Leaf this build plays (sinceRev <= kSoundRevision); a
+  //      Leaf row the preset lacks is missing only if it existed at the preset's soundRev (0
+  //      or above this build's counts as this build's);
+  //   3. the mode and CTRL's expression assignments become the active ones (the engine
+  //      compares the new mode with the active one by content, never by modeHash), and every
+  //      parameter domain rebuilds;
+  //   4. the stored performance state (fields this build cannot play yet count as
+  //      unsupported); freeze off;
+  //   5. for Exact a Restart (Process stopped, the event queue cleared; non-RT unless the
+  //      engine has rendered nothing since its buffers were cleared, see Restart); for
+  //      Spillover the random-number epoch restarted at the load frame, keeping history,
+  //      scheduler phase and smoothers, and the grains sounding then as `style` says (Trails
+  //      or FastCut).
+  // A direct Spillover call applies at the next Process call's first frame and must not race
+  // Process (audio thread between blocks, or Process stopped); a live load is a SpilloverLoad
+  // event instead, applied as one change at its frame, never as per-parameter stores.
+  // Returns true when the load applied and was exact (*report says why not).
+  bool LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report = nullptr,
+                  SwitchStyle style = SwitchStyle::Trails) noexcept;
 
   // External trigger sources (design §4/§9): footswitch, MIDI note, sidechain —
   // the guaranteed-working fallback when onset detection can't hear the source.
@@ -135,8 +152,17 @@ class Engine {
                         // Leaf and Global rows only, as SetParam
     Freeze        = 1,  // value: nonzero engages, zero releases
     Trigger       = 2,  // id: TriggerSource; value: velocity (not yet read)
-    SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies. Its
-                        // freeze-off is immediate, so a Freeze after it at its frame pins anew
+    SpilloverLoad = 3,  // preset: a staged PresetState, read when the event applies; id: its
+                        // SwitchStyle (0 Trails, 1 FastCut). A mode change is such a load
+                        // (mode-compiler.md §7.3). Its freeze-off is immediate, so a Freeze
+                        // after it at its frame pins anew. An invalid mode applies nothing
+    MacroMove     = 4,  // id: a Macro row (69-76); value: the position, canonicalized to
+                        // [0, 1]. The active mode's targets of that macro, through EvalMacro
+                        // (ModeEval.h), apply in list order as SetParam events would; a macro
+                        // the mode leaves undefined does nothing (mode-compiler.md §3.4)
+    Expression    = 5,  // id: 0; value: the pedal position, canonicalized to [0, 1]. The
+                        // active CTRL's assignments apply in order through EvalExpression: a
+                        // leaf is set, a macro moves. Without assignments it does nothing
   };
   // A stamped event, as producers, scripts and the transport (EventQueue.h) carry it.
   struct Event {
@@ -146,7 +172,7 @@ class Engine {
     uint32_t           id     = 0;
     float              value  = 0.f;
     const PresetState* preset = nullptr;  // SpilloverLoad: valid until the event is retired
-                                          // (EventQueue::Retired)
+                                          // (EventQueue::Retired); copied when it applies
   };
   // The same event, stamped with its offset in the block that Process renders.
   struct BlockEvent {
@@ -172,7 +198,8 @@ class Engine {
     // oversized block, null buffers) still applies its events, after its frames.
     const BlockEvent* events    = nullptr;
     uint32_t          numEvents = 0;
-    // Reserved for the CLOCK trigger source (design §4) — not yet read by the engine.
+    // Never read by the engine (mode-compiler.md §7.4): per-block fields would make output
+    // depend on the block grid, so a wrapper turns host tempo and transport into events (W2).
     double   tempoBpm       = 120.0;
     int64_t  timelinePos    = 0;
     bool     transportPlaying = false;
@@ -232,6 +259,12 @@ class Engine {
   // draw (design §9), the ring-write dither included, is keyed on SampleCounter() minus
   // this frame. Init and Restart set it to 0, a Spillover load to its load frame.
   int64_t EpochStart() const noexcept;
+  // Audio thread only. The loads since Init, Exact or Spillover, whose mode differed from the
+  // active one by content (mode-compiler.md §7.3: the engine compares the two word for word
+  // and never trusts modeHash). Each such load resets the sequencing state, which the waves
+  // that sequence (W1's pitch cycle, W2's steps) keep across a load of the same mode; sound
+  // revision 2 has none yet.
+  uint32_t ModeSwitches() const noexcept;
 
   // Dry path is never block-delayed (design §2.5).
   uint32_t LatencySamples() const noexcept { return 0; }

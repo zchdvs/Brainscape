@@ -8,6 +8,7 @@
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "catch.hpp"
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
@@ -81,6 +82,7 @@ RenderResult Render(const EngineConfig& cfg, const std::vector<float>& input,
   REQUIRE(arenas.ok());
   Engine engine;
   REQUIRE(engine.Init(cfg, arenas.get()));
+  REQUIRE(testing::LoadRetiredStructure(engine, params));  // the onset source, marks
   for (auto& p : params) engine.SetParam(p.first, p.second);
   if (primeParams) engine.Reset();  // drains pending + snaps smoothers
 
@@ -207,11 +209,15 @@ TEST_CASE("PlanMemory sizes all three tiers") {
               detail::PostChain::BulkFloats(cfg.sampleRate) * sizeof(float));
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
+  // The Warm tier ends with the active mode and its CTRL (mode-compiler.md §7.3), rounded up to
+  // 16 bytes.
+  const size_t activeMode = (sizeof(ModeBlob) + sizeof(ControlState) + 15u) & ~size_t{15};
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] ==
           (512u * 2u + detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
            detail::PostChain::WarmFloats(cfg.sampleRate) +
            detail::OnsetDetector::WarmFloats()) *
-              sizeof(float));
+                  sizeof(float) +
+              activeMode);
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
 }
 
@@ -1365,6 +1371,7 @@ struct LiveEngine {
       : arenas(PlanMemory(cfg)) {
     REQUIRE(arenas.ok());
     REQUIRE(engine.Init(cfg, arenas.get()));
+    REQUIRE(testing::LoadRetiredStructure(engine, params));  // the onset source, marks
     for (auto& p : params) engine.SetParam(p.first, p.second);
     engine.Reset();
   }

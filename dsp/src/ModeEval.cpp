@@ -6,10 +6,12 @@
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
 #include "detail/GrainMath.h"
+#include "detail/ModeEvalBody.h"
 
-// The macro evaluator and the pitch guard (docs/design/mode-compiler.md §3.3, §2.7), as engine
-// entry points: each guard owns the FP control word and does no floating-point arithmetic of
-// its own; the work sits in BRAINSCAPE_FP_BODY functions (detail/FpEnvGuard.h).
+// The macro and expression evaluators and the pitch guard (docs/design/mode-compiler.md §3.3,
+// §3.4, §2.7), as engine entry points: each guard owns the FP control word and does no
+// floating-point arithmetic of its own; the work sits in BRAINSCAPE_FP_BODY functions
+// (detail/FpEnvGuard.h), which the engine's MacroMove and Expression events call directly.
 namespace brainscape {
 
 namespace {
@@ -52,11 +54,30 @@ inline float TargetValue(const MacroTarget& t, const ParamDescriptor& row, float
   return detail::CanonicalValue(row, v);
 }
 
+BRAINSCAPE_FP_BODY float NearGuardMsBody(float sizeMs, float entrySt, float transposeSt,
+                                         float spreadCents) noexcept {
+  // As a grain's birth composes its pitch (§7.5), with the largest detune spread draws.
+  const float base   = entrySt + transposeSt;
+  const float detune = spreadCents * 0.01f;
+  float       st     = base + detune;
+  if (st > 24.0f) st = 24.0f;
+  if (st < -24.0f) st = -24.0f;
+  const float ratio = grainmath::SemitonesToRatio(st);
+  if (!(ratio > 1.0f)) return 0.0f;
+  const double excess = static_cast<double>(ratio) - 1.0;
+  const double guard  = static_cast<double>(sizeMs) * excess;
+  return static_cast<float>(guard);
+}
+
+}  // namespace
+
+namespace detail {
+
 BRAINSCAPE_FP_BODY size_t EvalMacroBody(const ModeBlob& mode, ParamId macro, float position,
                                         PresetLeaf* out, size_t cap) noexcept {
   const ParamDescriptor* row = FindParam(macro);
   if (row == nullptr || row->kind != ParamKind::Macro) return 0;
-  const float       m = detail::CanonicalValue(*row, position);
+  const float       m = CanonicalValue(*row, position);
   const MacroTable& t = mode.macros;
   for (uint32_t k = 0; k < t.macroCount && k < kMaxMacros; ++k) {
     const MacroDef& def = t.macros[k];
@@ -77,28 +98,47 @@ BRAINSCAPE_FP_BODY size_t EvalMacroBody(const ModeBlob& mode, ParamId macro, flo
   return 0;
 }
 
-BRAINSCAPE_FP_BODY float NearGuardMsBody(float sizeMs, float entrySt, float transposeSt,
-                                         float spreadCents) noexcept {
-  // As a grain's birth composes its pitch (§7.5), with the largest detune spread draws.
-  const float base   = entrySt + transposeSt;
-  const float detune = spreadCents * 0.01f;
-  float       st     = base + detune;
-  if (st > 24.0f) st = 24.0f;
-  if (st < -24.0f) st = -24.0f;
-  const float ratio = grainmath::SemitonesToRatio(st);
-  if (!(ratio > 1.0f)) return 0.0f;
-  const double excess = static_cast<double>(ratio) - 1.0;
-  const double guard  = static_cast<double>(sizeMs) * excess;
-  return static_cast<float>(guard);
+// Each assignment maps the canonical pedal position through its own range and curve, as a
+// macro target with in_range [0, 1] (§3.4): onto a leaf, which is written, or onto a macro's
+// position, whose targets are then written as a MacroMove would write them.
+BRAINSCAPE_FP_BODY size_t EvalExpressionBody(const ModeBlob& mode, const ControlState& control,
+                                             float position, PresetLeaf* out,
+                                             size_t cap) noexcept {
+  if (control.present == 0u) return 0;
+  const ParamDescriptor* pedal = FindParam(ParamId::PerfExpression);
+  const float            m     = CanonicalValue(*pedal, position);
+  size_t                 n     = 0;
+  for (uint32_t k = 0; k < control.exprCount && k < kMaxExpressions && n < cap; ++k) {
+    const ExpressionAssignment& a   = control.expressions[k];
+    const ParamDescriptor*      row = FindParam(static_cast<ParamId>(a.target));
+    if (row == nullptr) continue;
+    const MacroTarget mapped{a.target, a.lo, a.hi, 0.0f, 1.0f, a.curve};
+    const float       v = TargetValue(mapped, *row, m);
+    if (row->kind == ParamKind::Leaf) {
+      out[n].id    = a.target;
+      out[n].value = v;
+      ++n;
+    } else if (row->kind == ParamKind::Macro) {
+      n += EvalMacroBody(mode, row->id, v, out + n, cap - n);
+    }
+  }
+  return n;
 }
 
-}  // namespace
+}  // namespace detail
 
 size_t EvalMacro(const ModeBlob& mode, ParamId macro, float position, PresetLeaf* out,
                  size_t cap) noexcept {
   if (out == nullptr || cap == 0) return 0;
   const detail::FpEnvGuard guard;
-  return EvalMacroBody(mode, macro, position, out, cap);
+  return detail::EvalMacroBody(mode, macro, position, out, cap);
+}
+
+size_t EvalExpression(const ModeBlob& mode, const ControlState& control, float position,
+                      PresetLeaf* out, size_t cap) noexcept {
+  if (out == nullptr || cap == 0) return 0;
+  const detail::FpEnvGuard guard;
+  return detail::EvalExpressionBody(mode, control, position, out, cap);
 }
 
 float NearGuardMs(float sizeMs, float entrySt, float transposeSt, float spreadCents) noexcept {

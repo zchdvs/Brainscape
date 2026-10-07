@@ -10,9 +10,10 @@ supports, a retired leaf) is updated in the pull request that changes it, saying
 never change. `brainscape_blob_tool --write-fixtures DIR` shows how each was made and refuses to
 overwrite one.
 
-| File | Verdict at sound revision 1 | What it pins |
+| File | Verdict at sound revision 2 | What it pins |
 |---|---|---|
-| `r1-default-mode.bsp` | decodes, loads exact | a revision-1 package: every r1 leaf, the default mode, CTRL with an expression assignment, META. At r2 it still decodes, but its leaves 27 and 28 are retired IDs, so the load is inexact |
+| `r1-default-mode.bsp` | decodes, loads inexact | a revision-1 package: every r1 leaf, the default mode, CTRL with an expression assignment, META. It loaded exact at r1; since r2 retired IDs 27 and 28 into mode structure, its leaves for them are unknown, so the load is inexact (so is every fixture below built from it) |
+| `r2-onset-marks.bsp` | decodes, loads exact | a revision-2 package: every r2 leaf (IDs 1-26), onsets on marks, the default macros with Space on the reverb only, CTRL with expression assignments on a macro and a leaf, META. Loads exact, with no missing ID, on every later build: a leaf a later revision adds has a later `sinceRev` and is not missing from it (§7.3) |
 | `unknown-sections.bsp` | decodes | two sections this build does not know, after MODE and after META: skipped, and carried byte for byte and in place by a re-encode |
 | `unknown-chunk.bsp` | `UnsupportedFeature`, `ZZZZ` | a MODE chunk this build does not know is refused and named, never skipped |
 | `unknown-feature-bit.bsp` | `UnsupportedFeature`, bit 31 | a feature bit no build assigns |
@@ -27,5 +28,5 @@ overwrite one.
 | `w1-leaf-macro-target.bsp` | decodes; `ValidateMode`: `UnsupportedTarget`, ID 30 | a macro target on `layer0.decay_ms`, a wave-1 leaf (a Reserved row here): newer content, named, not a corrupt package. Changes in the W1 pull request |
 | `w1-leaf-expression.bsp` | `UnsupportedTarget`, ID 30 | an expression assignment on the same leaf, which CTRL's rules refuse at decode, named. Changes in the W1 pull request |
 
-Lane C adds the sound-revision-2 package that must load exact, with no missing ID, on every
-later build (the `sinceRev` rule).
+The recipes in `Fixtures.cpp` spell out each revision's leaves rather than reading the build's
+table, so `--write-fixtures` and the `[fixtures]` test keep rebuilding the committed bytes.

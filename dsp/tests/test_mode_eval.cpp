@@ -1,6 +1,6 @@
 // The macro evaluator and the pitch guard (docs/design/mode-compiler.md §3.3, §2.7 L2): the
-// guarded floating-point functions the compiler's lint and derive passes call, and that
-// sound revision 2's MacroMove events will.
+// guarded floating-point functions the compiler's lint and derive passes call, and whose bodies
+// the engine's MacroMove and Expression events run (sound revision 2); with EvalExpression.
 #include <cstring>
 #include <memory>
 
@@ -165,4 +165,46 @@ TEST_CASE("NearGuardMs: size * (r - 1) for the highest pitch, 0 at or below unis
   REQUIRE(fifth > 44.8f);
   REQUIRE(fifth < 44.9f);
   REQUIRE(NearGuardMs(90.0f, 7.0f, 0.0f, 10.0f) > fifth);  // detune reaches higher
+}
+
+TEST_CASE("EvalExpression: CTRL's assignments in order, a leaf or a macro's targets", "[modeeval]") {
+  const auto   mode = std::make_unique<ModeBlob>();  // the default macros (§3.2)
+  ControlState ctrl;                                 // six positions, no assignments
+  PresetLeaf   out[kMaxExpressions * kMaxMacroTargets];
+  // Without assignments, or without CTRL, the pedal does nothing (§3.4).
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 0u);
+  ctrl.exprCount      = 3;
+  ctrl.expressions[0] = ExpressionAssignment{static_cast<uint32_t>(ParamId::ReverbMix), 0.0f, 0.8f, 1.0f};
+  ctrl.expressions[1] = ExpressionAssignment{static_cast<uint32_t>(ParamId::MacroFilter), 1.0f, 0.0f, 1.0f};
+  ctrl.expressions[2] = ExpressionAssignment{static_cast<uint32_t>(ParamId::DelayMs), 20.0f, 2000.0f, 2.0f};
+  REQUIRE(EvalExpression(*mode, ctrl, 0.0f, out, 32) == 3u);
+  REQUIRE(out[0].id == static_cast<uint32_t>(ParamId::ReverbMix));
+  REQUIRE(Bits(out[0].value) == Bits(0.0f));
+  // The filter macro at position 1 (the assignment reversed): its target, the cutoff, at max.
+  REQUIRE(out[1].id == static_cast<uint32_t>(ParamId::FilterCutoffHz));
+  REQUIRE(Bits(out[1].value) == Bits(20000.0f));
+  REQUIRE(out[2].id == static_cast<uint32_t>(ParamId::DelayMs));
+  REQUIRE(Bits(out[2].value) == Bits(20.0f));
+  REQUIRE(EvalExpression(*mode, ctrl, 1.0f, out, 32) == 3u);
+  REQUIRE(Bits(out[0].value) == Bits(0.8f));
+  REQUIRE(Bits(out[1].value) == Bits(40.0f));  // the filter macro at 0: the kill
+  REQUIRE(Bits(out[2].value) == Bits(2000.0f));
+  // At 0.5 each maps as a macro target with in_range [0, 1] would: EvalMacro's numbers.
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 3u);
+  REQUIRE(Bits(out[2].value) == Bits(515.0f));  // 20 + 1980 * 0.25
+  PresetLeaf viaMacro[kMaxMacroTargets];
+  REQUIRE(EvalMacro(*mode, ParamId::MacroFilter, 0.5f, viaMacro, kMaxMacroTargets) == 1u);
+  REQUIRE(Bits(out[1].value) == Bits(viaMacro[0].value));
+  // The position is canonicalized as perf.expression's value; the cap holds.
+  REQUIRE(EvalExpression(*mode, ctrl, FromBits(0x7FC00000u), out, 32) == 3u);  // NaN: 0
+  REQUIRE(Bits(out[0].value) == Bits(0.0f));
+  REQUIRE(EvalExpression(*mode, ctrl, 2.0f, out, 32) == 3u);
+  REQUIRE(Bits(out[0].value) == Bits(0.8f));
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 2) == 2u);
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, nullptr, 32) == 0u);
+  // A macro the mode leaves undefined moves nothing.
+  ctrl.expressions[1].target = static_cast<uint32_t>(ParamId::MacroAux1);
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 2u);
+  ctrl.present = 0;
+  REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 0u);
 }

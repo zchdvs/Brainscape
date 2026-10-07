@@ -9,23 +9,26 @@
 // The committed files under dsp/tests/golden/presets/frozen/ are the reference: their bytes are
 // pinned by SHA-256 here and never re-stamped. A verdict that a later build changes on purpose
 // (a feature becoming supported, sound revision 2 retiring IDs 27 and 28) is updated in the pull
-// request that changes it, with the reason in `why`.
+// request that changes it, with the reason in `why`. The recipes below are frozen too: they spell
+// out each revision's leaves rather than reading this build's table.
 namespace brainscape::blobtest {
 
-// Fuzz(kFuzzIterations, kFuzzSeed) on every leg, the M7 included (blob_tool).
-const char* const kFuzzDigest = "3d953af890bd42d3e8165267f674de455c13c229ca4c879a940d13bc0572244c";
+// Fuzz(kFuzzIterations, kFuzzSeed) on every leg, the M7 included (blob_tool). Re-minted at sound
+// revision 2: onset and mark became supported, and the samples no longer target rows 27 and 28.
+const char* const kFuzzDigest = "a7b2f799ea6f57862bc296696e8b0e604882115ccfb503f29e3f44d768366135";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
      "058d6f9eb2a5be5fbfe1cda38d3a422fce9c4d6ae72eef2619ccd5d12e444494",
-     PresetError::None, 0, 1, true, 0,
+     PresetError::None, 0, 1, false, 0,
      "a sound-revision-1 package: every r1 leaf, the default mode, CTRL with an expression "
-     "assignment, META. Decodes on every later build (blob_format 1); loads exact at r1 (at r2 "
-     "its leaves 27 and 28 are retired IDs, so the load becomes inexact)",
+     "assignment, META. Decodes on every later build (blob_format 1); loaded exact at r1, and "
+     "since r2 retired IDs 27 and 28 its leaves for them are unknown, so the load is inexact "
+     "(every fixture built from it below too)",
      PresetError::None, 0},
     {"unknown-sections.bsp",
      "4c02c56bba6a609e65fa8584a94d871a093a8b59a7d2bcd80e4117675513498d",
-     PresetError::None, 0, 1, true, 2,
+     PresetError::None, 0, 1, false, 2,
      "sections this build does not know, after MODE and after META: decoded, skipped, and "
      "carried byte for byte and in place by a re-encode",
      PresetError::None, 0},
@@ -56,18 +59,18 @@ const Fixture kFixtures[] = {
      PresetError::None, 0},
     {"future-sound-rev.bsp",
      "2a122ebc0f42cc8eb0ec8983d9d06653aaa86a80dc3b578888da4d558ebd3e41",
-     PresetError::None, 0, 1000, true, 0,
+     PresetError::None, 0, 1000, false, 0,
      "compiled by a build of sound revision 1000: decodes (LoadPreset counts it as this build's "
      "revision, §7.3)",
      PresetError::None, 0},
     {"newer-schema.bsp",
      "26194969c86b733f62f0e43591301877d9c2c5bc5b4bbb966b70f18b63544325",
-     PresetError::None, 0, 1, true, 0,
+     PresetError::None, 0, 1, false, 0,
      "a document schema newer than this build's: the package layer does not depend on it",
      PresetError::None, 0},
     {"factory-json-stale.bsp",
      "41fbcbbdcdd57248d246a1c3a25777e989aeaee043aeb4b06ea839bd07ebccae",
-     PresetError::None, 0, 1, true, 0,
+     PresetError::None, 0, 1, false, 0,
      "FACTORY and JSON_STALE flags and a JSON section: decoded and carried",
      PresetError::None, 0},
     {"unknown-flag.bsp",
@@ -77,12 +80,12 @@ const Fixture kFixtures[] = {
      PresetError::None, 0},
     {"no-ctrl.bsp",
      "3a59c9a029c7237ad2bece0b584d1a4195b9a58b77e3568d9aea9c9094afd970",
-     PresetError::None, 0, 1, true, 0,
+     PresetError::None, 0, 1, false, 0,
      "no CTRL section: decodes with control.present 0",
      PresetError::None, 0},
     {"w1-leaf-macro-target.bsp",
      "d182b5d3056a88c4f7eec92611c5bf291484bc35e5a6b34ee29f183f16bfcfc8",
-     PresetError::None, 0, 1, true, 0,
+     PresetError::None, 0, 1, false, 0,
      "macro activity targeting layer0.decay_ms (ID 30), a wave-1 leaf and a Reserved row here: "
      "decodes (macro targets are ValidateMode's), and ValidateMode names it UnsupportedTarget, "
      "newer content rather than a corrupt one. Its verdict changes in the W1 pull request that "
@@ -95,13 +98,27 @@ const Fixture kFixtures[] = {
      "here: rejected as UnsupportedTarget, named, as an unknown chunk is UnsupportedFeature. Its "
      "verdict changes in the W1 pull request that makes ID 30 a Leaf row",
      PresetError::None, 0},
+    {"r2-onset-marks.bsp",
+     "42e1ac2002e3abf42a83531c3f8c8652075417fa7855a3da20c394df3e030d74",
+     PresetError::None, 0, 2, true, 0,
+     "a sound-revision-2 package: every r2 leaf, onsets on marks, custom macros, CTRL with "
+     "expression assignments on a macro and a leaf, META. Loads exact, with no missing ID, on "
+     "every later build: a leaf a later revision adds is not missing from it (sinceRev, §7.3)",
+     PresetError::None, 0},
 };
 const size_t kFixtureCount = sizeof kFixtures / sizeof kFixtures[0];
 
 namespace {
 
+// Sound revision 1's leaves, ids 1-28 at their r1 defaults (27 and 28 were Leaf rows then).
 std::unique_ptr<PresetState> R1State() {
-  auto s = CompleteState();
+  static const float kR1Defaults[28] = {250.0f, 0.5f,   0.0f,  0.0f,   90.0f,    0.55f, 20.0f,
+                                        0.0f,   0.0f,   0.0f,  0.2f,   0.3f,     0.5f,  0.7f,
+                                        0.5f,   0.4f,   0.0f,  350.0f, 0.3f,     0.0f,  0.5f,
+                                        0.0f,   20000.0f, 0.1f, 0.0f,  0.5f,     0.0f,  0.0f};
+  auto s      = std::make_unique<PresetState>();
+  s->soundRev = 1;
+  for (uint32_t id = 1; id <= 28; ++id) s->leaves[s->leafCount++] = {id, kR1Defaults[id - 1]};
   SetLeaf(*s, ParamId::Mix, 0.35f);
   SetLeaf(*s, ParamId::Feedback, 0.4f);
   SetLeaf(*s, ParamId::DelayTimeMs, 405.0f);
@@ -115,6 +132,38 @@ Bytes R1Package(const PresetState& s, const Bytes* json = nullptr, uint16_t flag
                 uint32_t schema = kSchemaVersion) {
   const Bytes meta = MetaFor(s.mode, "fixture.r1", "Frozen r1", PresetFamily::Echoic, 1, 1);
   return Package(s, &meta, json, flags, schema);
+}
+
+// Sound revision 2's package: ids 1-26 (27 and 28 retired) at r2's defaults with a few set, the
+// onset source on marks, the default macros with Space on the reverb only, two expression
+// assignments (a macro, a leaf).
+std::unique_ptr<PresetState> R2State() {
+  static const float kR2Defaults[26] = {250.0f, 0.5f,   0.0f,  0.0f,   90.0f,  0.55f,  20.0f,
+                                        0.0f,   0.0f,   0.0f,  0.2f,   0.3f,   0.5f,   0.7f,
+                                        0.5f,   0.4f,   0.0f,  350.0f, 0.3f,   0.0f,   0.5f,
+                                        0.0f,   20000.0f, 0.1f, 0.0f,  0.5f};
+  auto s      = std::make_unique<PresetState>();
+  s->soundRev = 2;
+  for (uint32_t id = 1; id <= 26; ++id) s->leaves[s->leafCount++] = {id, kR2Defaults[id - 1]};
+  SetLeaf(*s, ParamId::Mix, 0.4f);
+  SetLeaf(*s, ParamId::Feedback, 0.45f);
+  SetLeaf(*s, ParamId::TriggerSens, 0.6f);
+  SetLeaf(*s, ParamId::ReverbMix, 0.25f);
+  s->mode.schedule.sources = static_cast<uint8_t>(s->mode.schedule.sources | kSourceOnset);
+  s->mode.layers[0].source = PositionSource::Mark;
+  // Space (macro 73, targets 6 and 7) on post.reverb.mix alone: target 6 removed.
+  MacroTable& t = s->mode.macros;
+  for (uint32_t i = 6; i + 1 < t.targetCount; ++i) t.targets[i] = t.targets[i + 1];
+  t.targets[--t.targetCount] = MacroTarget{};
+  t.macros[4].count          = 1;
+  t.macros[5].first          = 7;
+  s->mode.features           = RequiredModeFeatures(s->mode);
+  ComputeModeHash(s->mode, &s->mode.modeHash);
+  s->control.positions[4].position = 0.25f;
+  s->control.exprCount      = 2;
+  s->control.expressions[0] = ExpressionAssignment{72, 0.2f, 0.8f, 2.0f};
+  s->control.expressions[1] = ExpressionAssignment{2, 0.0f, 1.0f, 1.0f};
+  return s;
 }
 
 }  // namespace
@@ -192,6 +241,11 @@ Bytes MakeFixture(size_t index) {
       Wr32(&b[x], 30);
       Rehash(b);
       return b;
+    }
+    case 14: {
+      const auto  r2   = R2State();
+      const Bytes meta = MetaFor(r2->mode, "fixture.r2", "Frozen r2", PresetFamily::Reverie, 1, 1);
+      return Package(*r2, &meta);
     }
     default: return Bytes();
   }

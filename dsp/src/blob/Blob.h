@@ -115,6 +115,10 @@ bool CheckControl(const ModeBlob& mode, const ControlState& control,
                   PresetDiagnostic* d) noexcept;
 // ValidateMode with another feature set: tests reach the vocabulary this build cannot play.
 bool ValidateModeWith(const PresetState& state, uint32_t supported, PresetDiagnostic* d) noexcept;
+// A load's step 0 (mode-compiler.md §7.3): ValidateMode's rules on the mode and CTRL, the
+// structural and the semantic ones, without STAT's. The leaves are the load's step 2, which
+// canonicalizes them and counts unknown, duplicate and changed ones instead of refusing them.
+bool ValidateStructure(const PresetState& state, uint32_t supported, PresetDiagnostic* d) noexcept;
 // Whether the element that holds leaf `id` exists in `mode` (§1.3): the second layer, a
 // layer's SVF or crush, a modulator, the step table. Every other leaf's element always exists.
 bool ElementPresent(const ModeBlob& mode, uint32_t id) noexcept;

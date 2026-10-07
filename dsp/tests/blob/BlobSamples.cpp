@@ -259,9 +259,10 @@ void FullMode(ModeBlob* mode, PresetState* state) {
     m.links.entries[i] = Route{i, static_cast<uint8_t>(i + 1), 0, 0, 0.25f};
   }
   m.dryDuck = DryDuck{10.0f, 120.0f};
-  // 8 macros of 4 targets: Leaf rows of this build, not global.mix, distinct within a macro.
-  static const uint32_t kLeaves[] = {1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                                     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
+  // 8 macros of 4 targets: Leaf rows of this build, not global.mix, distinct within a macro
+  // (27 and 28 are Retired since sound revision 2).
+  static const uint32_t kLeaves[] = {1,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
+                                     15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26};
   MacroTable& t = m.macros;
   t             = MacroTable{};
   t.macroCount  = 8;

@@ -11,6 +11,7 @@ add_executable(brainscape_tests
   test_boundary.cpp
   test_detmath.cpp
   test_mode_eval.cpp
+  test_modes.cpp
   test_param_display.cpp
   test_params.cpp
   test_testsignal.cpp

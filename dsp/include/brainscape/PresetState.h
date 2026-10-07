@@ -92,24 +92,36 @@ static_assert(offsetof(PresetState, leaves) == 8 && offsetof(PresetState, mode) 
 // (determinism profile §5.9, §5.10; companion-app.md §6.7).
 enum class LoadMode : uint8_t { Exact = 0, Spillover = 1 };
 
-// How faithfully a preset loads (determinism profile §5.10 step 2). A load that is not exact
-// still applies, but what the engine plays is not what the package stores, so the app shows
-// no identity label for it.
+// What a Spillover load does to the grains already sounding (docs/design/mode-compiler.md
+// §7.3), the SpilloverLoad event's id: Trails lets them finish as they were resolved at birth;
+// FastCut fades each linearly to zero over kFastCutFrames (Engine.h), so a mode switch cuts
+// the old mode without a click. An Exact load restarts, so it has no grains to keep.
+enum class SwitchStyle : uint8_t { Trails = 0, FastCut = 1 };
+
+// How faithfully a preset loads (determinism profile §5.10 step 2; mode-compiler.md §7.3). A
+// load that is not exact still applies, unless its mode is invalid, but what the engine plays is
+// not what the package stores, so the app shows no identity label for it.
 struct LoadReport {
-  bool     applied       = false;  // false when the engine was not initialized
-  bool     exact         = false;  // every count below is 0
-  uint32_t unknownIds    = 0;      // leaves naming an id that is not a Leaf row of this build
-                                   // (mode-compiler.md §4.1), or past kMaxLeaves
-  uint32_t missingIds    = 0;      // this build's Leaf rows without a leaf: they load their
-                                   // default
+  bool     applied       = false;  // false when the engine was not initialized, or the mode
+                                   // is invalid
+  bool     exact         = false;  // the mode is valid and every count below is 0
+  bool     invalidMode   = false;  // ValidateMode's structural and semantic rules on the
+                                   // ModeBlob and CTRL failed (Preset.h): nothing is applied
+  uint32_t unknownIds    = 0;      // leaves naming an id that is not a Leaf row this build
+                                   // plays (mode-compiler.md §4.1, sinceRev), or past
+                                   // kMaxLeaves
+  uint32_t missingIds    = 0;      // this build's Leaf rows without a leaf, among those that
+                                   // existed at the package's revision: they load their default
   uint32_t duplicateIds  = 0;      // repeated ids: the first leaf counts
   uint32_t changedValues = 0;      // values canonicalization changed (NaN, ±inf, -0,
                                    // subnormals, out of range): packages hold canonical values
+  uint32_t unsupported   = 0;      // stored performance fields away from their defaults, which
+                                   // this build cannot play yet (W2): they load as the defaults
 };
 
 // The checks of a load without loading (the report's `applied` stays false), for a producer
-// that stages a Spillover event. Inside the FP environment guard, as canonicalization is.
-// Returns report.exact.
+// that stages a Spillover event: the mode's validation and every count of LoadReport. Inside
+// the FP environment guard, as canonicalization is. Returns report.exact.
 bool CheckPreset(const PresetState& preset, LoadReport* report = nullptr) noexcept;
 
 }  // namespace brainscape

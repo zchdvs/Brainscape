@@ -394,7 +394,7 @@ TEST_CASE("A decoded package re-encodes to its own bytes", "[blob]") {
     REQUIRE(mine.ok == (i != 3u));  // the full vocabulary needs features this build lacks
     if (i == 3u) {
       REQUIRE(mine.d.error == PresetError::UnsupportedFeature);
-      REQUIRE(mine.d.detail == all.s->mode.features);
+      REQUIRE(mine.d.detail == (all.s->mode.features & ~kSupportedModeFeatures));
     }
     Bytes        again(kMaxPackageBytes);
     const size_t n = ReencodePackage(*all.s, b.data(), b.size(), 0, again.data(), again.size());
@@ -425,9 +425,9 @@ TEST_CASE("The largest MODE is 1,528 bytes, every chunk at its cap", "[blob]") {
   const Decoded r = Decode(b, kModeFeatureAll);
   REQUIRE(r.ok);
   REQUIRE(std::memcmp(&s->mode, &r.s->mode, sizeof(ModeBlob)) == 0);
-  // This build plays none of it, and says which features it lacks.
-  Expect(b, PresetError::UnsupportedFeature, s->mode.features);
-  ExpectValid(*s, PresetError::UnsupportedFeature, s->mode.features);
+  // This build plays only onset and mark of it, and says which features it lacks.
+  Expect(b, PresetError::UnsupportedFeature, s->mode.features & ~kSupportedModeFeatures);
+  ExpectValid(*s, PresetError::UnsupportedFeature, s->mode.features & ~kSupportedModeFeatures);
 }
 
 TEST_CASE("Hashes: sound_hash is STAT and MODE, control_hash CTRL, modeHash MODE", "[blob]") {
@@ -748,13 +748,18 @@ TEST_CASE("MODE rules: chunks, their order, lengths and counts", "[blob][decode]
 TEST_CASE("MODE rules: features declared, required and supported", "[blob][decode]") {
   const Bytes base = Base();
   const size_t mode = Payload(base, kTagMode);
-  // Every feature bit, declared: this build names the ones it lacks.
+  // Every feature bit, declared: this build names the ones it lacks; one it plays (onset and
+  // mark since sound revision 2) the content does not require, FeatureMismatch.
   for (uint32_t bit = 0; bit < 32; ++bit) {
     Bytes b = base;
     Wr32(&b[mode], 1u << bit);
     Rehash(b);
-    Expect(b, PresetError::UnsupportedFeature, 1u << bit);
+    Expect(b,
+           (kSupportedModeFeatures & (1u << bit)) != 0u ? PresetError::FeatureMismatch
+                                                        : PresetError::UnsupportedFeature,
+           1u << bit);
   }
+  REQUIRE(kSupportedModeFeatures == (kModeFeatureOnset | kModeFeatureMarkPosition));
   // Content that needs a feature the package does not declare: FeatureMismatch, named.
   auto s = CompleteState();
   FullMode(&s->mode, s.get());
@@ -804,7 +809,11 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
     ExpectValid(*t, PresetError::FeatureMismatch, k.feature, kModeFeatureAll);
     t->mode.features = k.feature;
     ExpectValid(*t, PresetError::None, kAnyDetail, kModeFeatureAll);
-    ExpectValid(*t, PresetError::UnsupportedFeature, k.feature);
+    if ((k.feature & kSupportedModeFeatures) != 0u) {
+      ExpectValid(*t, PresetError::None);  // sound revision 2's: onset and mark
+    } else {
+      ExpectValid(*t, PresetError::UnsupportedFeature, k.feature);
+    }
   }
 }
 
@@ -1104,7 +1113,10 @@ TEST_CASE("ValidateMode: macro targets (E8, E9) and the shape macro (E10)", "[bl
     return s;
   };
   ExpectValid(*target(6, 0.0f, 1.0f), PresetError::None);
-  ExpectValid(*target(27, 0.0f, 1.0f), PresetError::None);  // a Leaf row at r1
+  ExpectValid(*target(26, 0.0f, 1.0f), PresetError::None);
+  // Retired at r2 into structure: no longer a leaf, and not a later wave's either.
+  ExpectValid(*target(27, 0.0f, 1.0f), PresetError::TargetNotLeaf, 27);
+  ExpectValid(*target(28, 0.0f, 1.0f), PresetError::TargetNotLeaf, 28);
   ExpectValid(*target(2, 0.0f, 1.0f), PresetError::TargetMix, 2);
   // A later wave's leaf (a Reserved row) is unsupported, not wrong: a newer build's package.
   ExpectValid(*target(29, 1.0f, 2.0f), PresetError::UnsupportedTarget, 29);
@@ -1354,7 +1366,7 @@ TEST_CASE("Re-encoding into an existing package: pedal-side edits", "[blob][enco
 // ── Frozen fixtures and the fuzzer ────────────────────────────────────────────────────────
 
 TEST_CASE("Frozen fixtures: their bytes and verdicts", "[blob][fixtures]") {
-  REQUIRE(kFixtureCount == 14u);
+  REQUIRE(kFixtureCount == 15u);
   for (size_t i = 0; i < kFixtureCount; ++i) {
     const Fixture&    f    = kFixtures[i];
     const std::string path = std::string(BRAINSCAPE_FROZEN_FIXTURES) + "/" + f.file;

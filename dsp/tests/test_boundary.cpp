@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "brainscape/InputCondition.h"
@@ -116,6 +117,8 @@ Stereo RenderEvents(const Stereo& input, const std::vector<std::pair<ParamId, fl
     if (detail::ReadFpControl() != host) ++wordsLost;
   };
   call([&] { ok = engine.Init(cfg, arenas.get()); });
+  REQUIRE(ok);
+  call([&] { ok = testing::LoadRetiredStructure(engine, preset); });  // the onset source, marks
   REQUIRE(ok);
   auto setParam = [&](ParamId id, float v) {
     if (canonicalizeFirst) v = Canonicalize(id, v);

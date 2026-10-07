@@ -13,9 +13,11 @@
 #include <vector>
 
 #include "FpEnvTestUtil.h"
+#include "RetiredRows.h"
 #include "brainscape/Engine.h"
 #include "brainscape/EventQueue.h"
 #include "brainscape/HostArenas.h"
+#include "brainscape/ModeEval.h"
 #include "brainscape/SoundRevision.h"
 #include "catch.hpp"
 #include "golden/Sha256.h"
@@ -112,7 +114,7 @@ struct Rig {
 };
 
 // A complete preset (companion §6.1): every Leaf row by ordinal, `params` over the
-// defaults.
+// defaults; the retired rows 27 and 28 stand for their structure (RetiredRows.h).
 PresetState Complete(const Params& params) {
   PresetState s;
   for (size_t i = 0; i < kNumLeafParams; ++i) {
@@ -120,6 +122,10 @@ PresetState Complete(const Params& params) {
   }
   s.leafCount = static_cast<uint32_t>(kNumLeafParams);
   for (const auto& p : params) {
+    if (testing::IsRetiredStructure(p.first)) {
+      testing::SetRetiredStructure(&s.mode, p.first, p.second);
+      continue;
+    }
     REQUIRE(IsLeaf(p.first));
     s.leaves[LeafIndex(p.first)].value = p.second;
   }
@@ -130,8 +136,9 @@ PresetState Complete(const Params& params) {
 PresetLeaf& LeafOf(PresetState& s, ParamId id) { return s.leaves[LeafIndex(id)]; }
 
 // The start state the golden harness used before LoadPreset: Init, then every value
-// set, then Reset drains them and snaps the smoothers.
+// set, then Reset drains them and snaps the smoothers. The retired rows' structure first.
 void InitParams(Engine& e, const Params& params) {
+  REQUIRE(testing::LoadRetiredStructure(e, params));
   for (const auto& p : params) e.SetParam(p.first, p.second);
   e.Reset();
 }
@@ -168,6 +175,15 @@ Ev Spill(int64_t frame, uint32_t seq, const PresetState* preset) {
   e.seq    = seq;
   e.type   = EvType::SpilloverLoad;
   e.preset = preset;
+  return e;
+}
+Ev Macro(int64_t frame, uint32_t seq, ParamId macro, float position) {
+  Ev e;
+  e.frame = frame;
+  e.seq   = seq;
+  e.type  = EvType::MacroMove;
+  e.id    = static_cast<uint32_t>(macro);
+  e.value = position;
   return e;
 }
 
@@ -218,13 +234,23 @@ Stereo RenderStamped(Engine& e, const Stereo& in, const std::vector<Ev>& events,
 
 // What a wrapper does without engine-side events: split every block at the event frames
 // and apply the events between the parts through SetParam, SetFreeze, Trigger and
-// LoadPreset(..., Spillover), which take effect at the next part's first frame.
+// LoadPreset(..., Spillover), which take effect at the next part's first frame; a macro move
+// as SetParams of EvalMacro's leaves (the scripts here play the default macros).
 void ApplyUnstamped(Engine& e, const Ev& ev) {
+  static const ModeBlob kDefaultMode;
+  PresetLeaf            out[kMaxMacroTargets];
   switch (ev.type) {
     case EvType::SetParam: e.SetParam(static_cast<ParamId>(ev.id), ev.value); break;
     case EvType::Freeze: e.SetFreeze(ev.value != 0.f); break;
     case EvType::Trigger: e.Trigger(static_cast<Engine::TriggerSource>(ev.id), ev.value); break;
     case EvType::SpilloverLoad: e.LoadPreset(*ev.preset, LoadMode::Spillover); break;
+    case EvType::MacroMove: {
+      const size_t n = EvalMacro(kDefaultMode, static_cast<ParamId>(ev.id), ev.value, out,
+                                 kMaxMacroTargets);
+      for (size_t i = 0; i < n; ++i) e.SetParam(static_cast<ParamId>(out[i].id), out[i].value);
+      break;
+    }
+    case EvType::Expression: break;  // the default CTRL assigns nothing
   }
 }
 
@@ -294,7 +320,7 @@ std::vector<Ev> OddScript() {
           Param(5555, 7, ParamId::WetTrimDb, 3.0f),
           Param(6007, 8, ParamId::FilterCutoffHz, 20000.0f),  // the filter's exact bypass
           Freeze(9001, 9, false),
-          Param(10007, 10, ParamId::PositionSource, 0.0f),
+          Macro(10007, 10, ParamId::MacroRepeats, 0.2f),  // the default macros' feedback
           Param(12011, 11, ParamId::FilterCutoffHz, 900.0f),
           Param(12011, 12, ParamId::FilterMorph, 1.5f),
           Trig(15001, 13),

@@ -23,7 +23,8 @@ namespace {
 // Host model (b) (ParamDisplay.h, mode-compiler.md §3.6, Q12): only macros, Mix, the effect
 // volume and the performance rows are automatable; Reserved rows carry the flags their
 // final kind will have. Sound revision 1's leaves keep kAuto until lane D registers the
-// macro parameters that take their automation over (§12.4), and then take kLeaf.
+// macro parameters that take their automation over (§12.4), and then take kLeaf. Retired
+// rows (27 and 28 since sound revision 2) keep a display row but are never registered.
 constexpr uint16_t kLeaf     = 0;
 constexpr uint16_t kLeafStep = kParamDiscrete;
 constexpr uint16_t kAuto     = kParamAutomatable;
@@ -37,7 +38,7 @@ constexpr ParamDisplay kDisplayTable[] = {
     {ParamId::DelayMs,             G::GrainDelay,  "Delay time",                   "Time",     T::Quartic, K::Milliseconds, 0,  kAuto},
     {ParamId::Mix,                 G::GrainDelay,  "Mix",                          "Mix",      T::Linear,  K::Percent,      0,  kAuto},
     {ParamId::Feedback,            G::GrainDelay,  "Feedback",                     "Feedback", T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::WetTrimDb,           G::GrainDelay,  "Output trim",                  "Trim",     T::Linear,  K::Decibels,     0,  kAuto},
+    {ParamId::WetTrimDb,           G::GrainDelay,  "Wet trim",                     "Trim",     T::Linear,  K::Decibels,     0,  kAuto},
     {ParamId::GrainSizeMs,         G::Grains,      "Grain size",                   "Size",     T::Quartic, K::Milliseconds, 0,  kAuto},
     {ParamId::Overlap,             G::Grains,      "Grain overlap",                "Overlap",  T::Linear,  K::Percent,      0,  kAuto},
     {ParamId::SprayMs,             G::Grains,      "Grain spray",                  "Spray",    T::Quartic, K::Milliseconds, 0,  kAuto},
@@ -60,8 +61,8 @@ constexpr ParamDisplay kDisplayTable[] = {
     {ParamId::FilterRes,           G::Filter,      "Filter resonance",             "Reso",     T::Linear,  K::Percent,      0,  kAuto},
     {ParamId::FilterMorph,         G::Filter,      "Filter morph",                 "Morph",    T::Linear,  K::FilterMorph,  0,  kAuto},
     {ParamId::TriggerSens,         G::Triggers,    "Trigger sensitivity",          "Sense",    T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::OnsetTrigger,        G::Triggers,    "Onset trigger",                "Onset",    T::Linear,  K::OffOn,        2,  kAutoStep},
-    {ParamId::PositionSource,      G::Triggers,    "Position source",              "Position", T::Linear,  K::LiveMark,     2,  kAutoStep},
+    {ParamId::OnsetTrigger,        G::Triggers,    "Onset trigger (retired)",      "Onset",    T::Linear,  K::OffOn,        2,  kLeafStep},
+    {ParamId::PositionSource,      G::Triggers,    "Position source (retired)",    "Position", T::Linear,  K::LiveMark,     2,  kLeafStep},
     {ParamId::Repeat,              G::Grains,      "Repeat passes",                "Repeat",   T::Linear,  K::Count,        16, kLeafStep},
     {ParamId::DecayMs,             G::Grains,      "Grain decay",                  "Decay",    T::Quartic, K::MsOrOff,      0,  kLeaf},
     {ParamId::VoiceCount,          G::Grains,      "Voice count",                  "Voices",   T::Linear,  K::Count,        64, kLeafStep},
@@ -371,9 +372,12 @@ BRAINSCAPE_FP_BODY size_t FormatPlainBody(ParamId id, float plain, char* out,
       FormatHz(&t, v);
       break;
     case DisplayKind::FilterCutoff:
-      // The engine bypasses the stage at max - 0.5 Hz (Engine.cpp, RebuildPostParams).
+      // The engine bypasses the stage at max - 0.5 Hz (Engine.cpp, RebuildPostParams) and kills
+      // the wet signal at the minimum (WetGainTarget, mode-compiler.md §4.3).
       if (v >= d->max - 0.5f) {
         t.Put("Off");
+      } else if (!(v > d->min)) {
+        t.Put("Kill");
       } else {
         FormatHz(&t, v);
       }

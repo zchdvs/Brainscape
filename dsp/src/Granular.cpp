@@ -193,6 +193,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.unity      = (inc == static_cast<int64_t>(1) << 32);
   g.total      = total;
   g.rendered   = 0;
+  g.fadeStart  = kNoFade;
   g.endAbs     = birthAbs + total;
   g.env        = grainmath::MakeEnv(static_cast<float>(total), p.sustain, p.skew);
   g.smoothness = p.smoothness;
@@ -210,6 +211,64 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     g.gainR = 1.0f;
   }
   g.active = true;
+}
+
+template <bool kFade>
+void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept {
+  uint64_t pos   = g.pos;
+  float    env_i = static_cast<float>(g.rendered);
+  const float gl = g.gainL, gr = g.gainR, sm = g.smoothness;
+  // A FastCut's fade (mode-compiler.md §7.3): 1 at fadeStart, then down by 1/128 a frame;
+  // the grain ends where it would reach 0. Exact multiples of 2^-7, so no rounding.
+  uint32_t       idx     = g.rendered;
+  const uint32_t fadeEnd = kFade ? g.fadeStart + kGranularFastCutFrames : 0u;
+  constexpr float kFadeStep = 1.0f / static_cast<float>(kGranularFastCutFrames);
+#ifndef NDEBUG
+  const bool fits = GrainFitsRing(g, mask_ + 1u);
+#endif
+
+  // Tier / unity / envelope morph resolved per grain, hoisted out of the
+  // per-sample loop as three inner-loop variants (design §3). Without a fade each
+  // computes exactly what it did before FastCut existed.
+  if (g.unity) {
+    for (uint32_t n = s; n < e; ++n) {
+      const auto  f   = static_cast<uint32_t>(pos >> 32) & mask_;
+      assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n, mask_));
+      float env = EnvMorphed(g.env, env_i, sm, lut_);
+      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
+      wetL[n] += static_cast<float>(ring_[2u * f]) * kInvScale * env * gl;
+      wetR[n] += static_cast<float>(ring_[2u * f + 1u]) * kInvScale * env * gr;
+      pos += static_cast<uint64_t>(g.inc);
+      env_i += 1.0f;
+      ++idx;
+    }
+  } else if (g.tier == 0) {
+    for (uint32_t n = s; n < e; ++n) {
+      assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32) - 1u, 4u,
+                                            blockRingStart_ + n, mask_));
+      float env = EnvMorphed(g.env, env_i, sm, lut_);
+      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
+      wetL[n] += ReadHermite(ring_, mask_, pos, 0) * env * gl;
+      wetR[n] += ReadHermite(ring_, mask_, pos, 1) * env * gr;
+      pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
+      env_i += 1.0f;
+      ++idx;
+    }
+  } else {
+    for (uint32_t n = s; n < e; ++n) {
+      assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32), 2u,
+                                            blockRingStart_ + n, mask_));
+      float env = EnvMorphed(g.env, env_i, sm, lut_);
+      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
+      wetL[n] += ReadLinear(ring_, mask_, pos, 0) * env * gl;
+      wetR[n] += ReadLinear(ring_, mask_, pos, 1) * env * gr;
+      pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
+      env_i += 1.0f;
+      ++idx;
+    }
+  }
+  g.pos = pos;
+  g.rendered += e - s;
 }
 
 void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
@@ -232,54 +291,36 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
         s + remaining < to ? s + remaining : to;
 
     if (s < endN) {
-      uint64_t pos   = g.pos;
-      float    env_i = static_cast<float>(g.rendered);
-      const float gl = g.gainL, gr = g.gainR, sm = g.smoothness;
-#ifndef NDEBUG
-      const bool fits = GrainFitsRing(g, mask_ + 1u);
-#endif
-
-      // Tier / unity / envelope morph resolved per grain, hoisted out of the
-      // per-sample loop as three inner-loop variants (design §3).
-      if (g.unity) {
-        for (uint32_t n = s; n < endN; ++n) {
-          const auto  f   = static_cast<uint32_t>(pos >> 32) & mask_;
-          assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n, mask_));
-          const float env = EnvMorphed(g.env, env_i, sm, lut_);
-          wetL[n] += static_cast<float>(ring_[2u * f]) * kInvScale * env * gl;
-          wetR[n] += static_cast<float>(ring_[2u * f + 1u]) * kInvScale * env * gr;
-          pos += static_cast<uint64_t>(g.inc);
-          env_i += 1.0f;
-        }
-      } else if (g.tier == 0) {
-        for (uint32_t n = s; n < endN; ++n) {
-          assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32) - 1u, 4u,
-                                                blockRingStart_ + n, mask_));
-          const float env = EnvMorphed(g.env, env_i, sm, lut_);
-          wetL[n] += ReadHermite(ring_, mask_, pos, 0) * env * gl;
-          wetR[n] += ReadHermite(ring_, mask_, pos, 1) * env * gr;
-          pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
-          env_i += 1.0f;
-        }
-      } else {
-        for (uint32_t n = s; n < endN; ++n) {
-          assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32), 2u,
-                                                blockRingStart_ + n, mask_));
-          const float env = EnvMorphed(g.env, env_i, sm, lut_);
-          wetL[n] += ReadLinear(ring_, mask_, pos, 0) * env * gl;
-          wetR[n] += ReadLinear(ring_, mask_, pos, 1) * env * gr;
-          pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
-          env_i += 1.0f;
-        }
+      // A grain a FastCut load cut renders its frames before fadeStart as any other, then
+      // the rest with the fade; the split is at an absolute frame, so it is block-invariant.
+      uint32_t fadeN = endN;
+      if (g.fadeStart != kNoFade) {
+        const int64_t at = birthAbs + g.fadeStart - absSample;
+        fadeN = at <= static_cast<int64_t>(s) ? s : (at < endN ? static_cast<uint32_t>(at) : endN);
       }
-      g.pos = pos;
-      g.rendered += endN - s;
+      if (s < fadeN) RenderRun<false>(g, s, fadeN, wetL, wetR);
+      if (fadeN < endN) RenderRun<true>(g, fadeN, endN, wetL, wetR);
       if (g.rendered >= g.total) g.active = false;
     }
 
     if (g.active) order_[w++] = slot;  // compact retired grains out of the list
   }
   orderCount_ = w;
+}
+
+void GranularCore::FastCut(int64_t abs) noexcept {
+  for (uint32_t oi = 0; oi < orderCount_; ++oi) {
+    Grain& g = grains_[order_[oi]];
+    if (!g.active || g.endAbs <= abs || g.fadeStart != kNoFade) continue;
+    const int64_t birthAbs = g.endAbs - g.total;
+    if (abs < birthAbs) continue;  // not born yet: grains are born before the frame that cuts
+    const auto at = static_cast<uint32_t>(abs - birthAbs);  // < total, since endAbs > abs
+    g.fadeStart   = at;
+    if (g.total - at > kGranularFastCutFrames) {
+      g.total  = at + kGranularFastCutFrames;  // the grain ends with its fade, freeing its voice
+      g.endAbs = birthAbs + g.total;
+    }
+  }
 }
 
 void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
