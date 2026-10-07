@@ -47,7 +47,11 @@ int RunFuzz(uint64_t iterations, uint64_t seed) {
   std::printf("blob fuzz: %llu iterations (seed %llu)",
               static_cast<unsigned long long>(r.iterations),
               static_cast<unsigned long long>(seed));
-  if (s >= 0.0) std::printf(" in %.1f s", s);  // the M7 harness has no clock
+#if !defined(__arm__)  // the M7 harness under qemu-arm has no clock
+  std::printf(" in %.1f s", s);
+#else
+  (void)s;
+#endif
   std::printf("\n");
   std::printf("  accepted %llu (this build), %llu (every feature), %llu ValidateMode-clean\n",
               static_cast<unsigned long long>(r.accepted),
