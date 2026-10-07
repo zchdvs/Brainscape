@@ -586,7 +586,9 @@ frames above 4 KiB, which the symbol audit rejects (*measured*, record §2.7).
   chunked layout before this is cited as measured.
 - **Additive evolution**: an older decoder rejects an unknown MODE chunk as
   `UnsupportedFeature`, naming it, so a new chunk does not bump `blob_format`; a changed layout
-  does, and after step 6 the firmware keeps older decoders (companion §6.5).
+  does, and after step 6 the firmware keeps older decoders (companion §6.5). A macro or
+  expression target on a later wave's leaf (a `Reserved` row of the older build) is
+  `UnsupportedTarget`, named, not a corrupt target (added when lane B was built).
 - **No floating point, allocation or C library beyond `memcpy` and `memset`**: the probe's M7
   decoder and validator had no floating-point instruction in 4,775 bytes (*measured*). Byte
   comparisons are loops, since `memcmp` is not on the symbol allowlist.
@@ -905,12 +907,19 @@ beyond it are refused and triggers steal the oldest. The free-running target bec
 
 **Random-number keys (R8).** Today's key is `abs·8 + purpose`, all 8 purposes used, folded
 to 32 bits as `lo ^ hi` (`GrainMath.h:26-48`). A 6-bit `ext` packs the layer (1 bit), a
-same-frame ordinal (3 bits) and `purpose >> 3` (2 bits): `k32 = Fold(abs·8 + (purpose & 7))`,
-then, if `ext` ≠ 0, `k32 = Hash32(k32 ^ Hash32(ext))`. With `ext` = 0 every r1 key is
-unchanged. XOR-ing `ext << 56` before the fold would alias every layer-1 draw with the layer-0
-draw 2²¹ frames away (*measured*, record §2.8); since `Hash32` is a bijection, extended keys
-within a frame are pairwise distinct and meet an r1 key only by chance (2⁻³² per pair), never
-at a fixed offset. New purposes start at 8 (pitch select, intermittency, step shuffle, step
+same-frame ordinal (3 bits) and `purpose >> 3` (2 bits). With `ext` = 0 the key is r1's,
+`Fold(abs·8 + purpose)`, so every r1 key is unchanged; otherwise the frame is hashed before the
+extension is mixed in: `k32 = Hash32(Hash32(Fold(abs·8)) ^ ((ext << 3) | (purpose & 7)))`. The
+504 extended keys of a frame are pairwise distinct (one value XOR-ed with distinct 9-bit
+values, then the bijection `Hash32`), and keys of two frames meet only by chance (2⁻²³ per
+pair of frames), never at a fixed offset. Both simpler forms alias deterministically: XOR-ing
+`ext << 56` before the fold aliases every layer-1 draw with the layer-0 draw 2²¹ frames away
+(*measured*, record §2.8), and this draft's first formula, `Hash32(Fold(abs·8 + (purpose & 7))
+^ Hash32(ext))`, leaves the frame linear under the XOR, so every draw of one `ext` equalled a
+draw of another at frame `abs ^ (D >> 3)`, `D = Hash32(ext) ^ Hash32(ext')`, some within 2¹⁸
+frames (*measured*, lane B review; amended when lane B was built). A purpose from 8 on goes
+through the extension whichever overload keys it, since r1's fold would give it the next
+frame's key. New purposes start at 8 (pitch select, intermittency, step shuffle, step
 probability, mark walk, random cutoff). Re-keying everything would change every jittered
 golden hash and blunt §7.6's check of the r2 re-mint.
 
@@ -1118,7 +1127,8 @@ Each W1 feature adds unit tests and contracts #1 and #3 over its cases.
   no leaves is inexact; an invalid `ModeBlob` is not applied; a Spillover load of a different
   mode carrying a stale `modeHash` resets sequencing.
 - **Defaults and keys**: the default `ModeBlob`'s hash (§5.1); no key aliasing at ±2²¹ and
-  ±2²⁵ frames (§7.5).
+  ±2²⁵ frames, between two extended streams at their XOR partners, or between a purpose from 8
+  on and the next frame's key (§7.5).
 - **Plugin**: typed text `.5 s`, `5. ms`, `05` and `+25`; a per-leaf touched set replacing the
   32-bit mask (`plugin/src/PluginProcessor.cpp:24`); the release checklist's host recording
   test (§3.6).
