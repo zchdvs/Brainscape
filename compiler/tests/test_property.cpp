@@ -41,9 +41,11 @@ uint32_t RandomValue(Rng& r, uint32_t lo, uint32_t hi) {
     case 1:
       return hi;
     case 2: {
-      // A short decimal, read exactly.
-      const std::string text =
-          DecSigned(static_cast<int64_t>(r.Below(20001)) - 10000) + "e-" + Dec(r.Below(4));
+      // A short decimal, read exactly. One draw per statement: the order in which a
+      // compiler evaluates the operands of + is unspecified (Clang and GCC differ).
+      const int64_t     mantissa = static_cast<int64_t>(r.Below(20001)) - 10000;
+      const uint32_t    exponent = r.Below(4);
+      const std::string text     = DecSigned(mantissa) + "e-" + Dec(exponent);
       float f = 0.0f;
       ParseJsonNumber(text.data(), text.size(), &f);
       const uint32_t b = Bits(f);
@@ -210,9 +212,9 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 // or verdicts change on purpose (the package rule, §8.3).
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "d88e527fbc15b356dc63c424f2f3f466fe39c7df9d92b41291e7f88ec0f34b77";
+    "ff5ade932ce1c3f5fd2e9adb8579a468f865cf8d590c71b4241f3a0b6d7baa62";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "dd4159740cb786f822f4bd2b4f1ec0f88932001722ab32b6b292ae92fb0adf23";
+const char* const  kFuzzDigest = "e933b4c460eacf30cf86435190d7ce0d809de45ce502abd025b783357d22b508";
 
 }  // namespace
 
@@ -287,9 +289,13 @@ TEST_CASE("property: the reader fuzz's accepted documents are fixed points", "[p
         case 2:
           m.erase(at, 1 + r.Below(4));
           break;
-        case 3:
-          m.insert(at, m.substr(r.Below(static_cast<uint32_t>(m.size())), 1 + r.Below(12)));
+        case 3: {
+          // One draw per statement (argument order is unspecified).
+          const size_t from = r.Below(static_cast<uint32_t>(m.size()));
+          const size_t span = 1 + r.Below(12);
+          m.insert(at, m.substr(from, span));
           break;
+        }
         default:
           if (m[at] >= '0' && m[at] <= '9') m[at] = static_cast<char>('0' + r.Below(10));
           break;
