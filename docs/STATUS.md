@@ -25,8 +25,9 @@ emulation reproduced too; at revision 3 that leg is only partly run); CI fails a
 that changes them (see [Internal sound revision 3](#internal-sound-revision-3),
 [2](#internal-sound-revision-2) and [1](#internal-sound-revision-1)). A JUCE
 plugin and standalone skeleton hosts the engine through its stamped events and `LoadPreset`,
-with reproducible bounces and an offline audition render; it plays the default mode (loading
-packages is lane D's). The Daisy Seed Rev7 bring-up images (parity, bench, live) build at sound
+with reproducible bounces and an offline audition render; lane D's curation slice opens preset
+documents and packages in it, plays them with their modes, edits them with the pedal's macro
+knobs (with pickup) and the raw leaves, and saves canonical JSON through the compiler. The Daisy Seed Rev7 bring-up images (parity, bench, live) build at sound
 revision 3 and carry the corpus's packages. Nothing has touched real hardware, and the preset
 jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 
@@ -39,8 +40,8 @@ jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
-| Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters, Restart on transport start, offline audition, test-bench editor; no presets, library or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), and the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it; and lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash). Next: wave 1 (lane F), the first factory documents and their listening pass, the app's curation slice (lane D) |
+| Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters under host model (b) with the macro, expression and effect-volume parameters, Restart on transport start, offline audition; lane D's curation slice (mode-compiler.md §9.1): a preset document or package opened, played with its mode, edited with the pedal's eight knobs (pickup, Shift) and the raw leaves, saved as canonical JSON through the compiler (derive, solve position, the compiler's errors and lint), A/B against the stored version with level matching, and a one-click render through `tools/audition`; no library, session v2 or device link yet |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), and the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it; and lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash); and lane D's curation slice in the app (above). Next: wave 1 (lane F), the first factory documents and their listening pass |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
@@ -352,10 +353,11 @@ implementing:
   row, Reserved ones included, live beside the descriptors in `dsp/` (`ParamDisplay.h`), so a
   pedal pot and a plugin knob at the same position give the same plain bits. The host flags
   follow the recommended host model (owner question Q12, provisionally: only Mix, the macros,
-  the effect volume and the performance rows automatable), except that revision 1's leaves stay
-  automatable until the plugin registers the macro parameters (lane D). In the plugin today
-  every registered parameter, the 26 leaves and Freeze, is automatable; the macro, expression
-  and effect-volume parameters arrive with lane D (design §9.2). Every consumer, the golden
+  the effect volume and the performance rows automatable). The plugin registers, since lane D's
+  curation slice, the 26 leaves (only Mix automatable), Freeze, the eight macros (a host move is
+  a `MacroMove`), the expression pedal and the effect volume (design §9.2); the leaf mirrors
+  follow a macro's fan-out through the engine's own evaluator, but the fan-out is not yet
+  reported to hosts. Every consumer, the golden
   harness and the plugin included, iterates the Leaf rows, and the plugin's 32-bit touched mask
   is a per-leaf set.
 - **The preset package** ([mode-compiler.md](design/mode-compiler.md) §5–§6, lane B), the
@@ -756,8 +758,9 @@ records live in [docs/design/reviews/](design/reviews/).
   pass. The golden file ties a preset's render to the package it starts from, not to packages it
   loads mid-render: a change to one of those shows in `MANIFEST` (the label), and its render's
   change counts as the engine's, conservatively. Unit tests whose parameter lists named 27 or 28
-  still do, read as structure (`dsp/tests/RetiredRows.h`). The plugin cannot load a mode yet
-  (lane D), so its onset and mark switches are gone and an older session loads without them.
+  still do, read as structure (`dsp/tests/RetiredRows.h`). The plugin loads modes since lane D's
+  curation slice, but its session state (`BSWS` v1) still holds leaves only, so a session plays
+  the default mode and an older session loads without its onset and mark switches.
   Nothing lane C added has run on GitHub; the M7 and the x86 legs here agree.
 - **The Mix law's open ends** (sound revision 3). It builds the owner's provisional answer to
   Q13, reversible until the first public revision (a reversal is its own revision). The law raises
@@ -775,11 +778,22 @@ records live in [docs/design/reviews/](design/reviews/).
   natively), the wrapper bypass with crossfade, the pedal-faithful live input option
   (`ConditionInput24`; the audition render applies it), event scripts in the app's audition panel
   (the shared render plays them, as `bspc render`'s scripts do), MIDI CC
-  mapping, pluginval in CI, CLAP and LV2, `.bsp` presets and session state (so modes: the
-  plugin plays the default mode), the macro, performance and effect-volume parameters with the
-  host model's reporting (mode-compiler.md §9.2), and the
+  mapping, pluginval in CI, CLAP and LV2, session state v2 (a `.bsp` in the session, so a
+  recalled session plays its mode; v1 holds leaves only), the library and its banks, reporting a
+  macro's fan-out to hosts (mode-compiler.md §3.6, §9.2), and the
   freeze of parameter IDs and tapers (the table exists; step 6 freezes it). The In/Out level
   controls are wrapper code outside the guard and never part of a preset.
+- **The curation slice's open ends** (lane D, mode-compiler.md §9.1). Built: open, play,
+  edit, save, derive, solve, findings, A/B with level matching, one-click render, pickup and
+  Shift. Not yet: watching the document on disk and reloading on an outside save, the "capture
+  endpoint" button (a target's `lo` or `hi` from the current leaves), the rating form that
+  appends a row to `firmware/factory/AUDITION.md` (`tools/audition/ratings.py` does it from the
+  command line), the declarations from the ratings log (the slice's input-class toggle stands in),
+  "knobs follow" (Q8's alternative), a recent-documents list, and editing structure (the editor of
+  §9.1, with its schema-generated form). The level match measures both versions on the class's
+  test-signal vector, not the live input, and the one-click render writes through `fopen`, so a
+  render folder whose path is not ASCII fails on Windows. A DAW session recall closes the open
+  document, since session v1 cannot carry it.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs
@@ -834,11 +848,12 @@ Steps 1–4 need no hardware.
    (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
    trim, the effect volume and the wet kill, the corpus on compiled packages). Next: wave 1, one
    revision per feature (lane F; the owner's Q2 puts it before CLOCK), lane E's audition render
-   and scripts (built: `tools/audition`, `bspc render`), lane D's curation slice. The Mix law (Q13, the owner's provisional answer) is
+   and scripts (built: `tools/audition`, `bspc render`), lane D's curation slice (built: the
+   app's Pedal view, documents, derive and solve, A/B, one-click render). The Mix law (Q13, the owner's provisional answer) is
    sound revision 3, with the first set's recipes re-measured under it.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    App integration continues in parallel: the resampled 48 kHz plugin mode for other host
-   rates, `.bsp` presets and session state, and the rest of the plugin gaps above.
+   rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On a
    Daisy Seed3: the DWT measurement pass and the decisions it gates (subnormal cost and the
    flush, explicit FMA, polynomial kernels or tables, `Restart` time, and the pedal's

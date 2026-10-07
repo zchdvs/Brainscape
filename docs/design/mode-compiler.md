@@ -1237,6 +1237,26 @@ optional M7 leg is not built.
 - **Audition**: a package, an input and an event script (§11.3); the render moves to
   `tools/audition/` and takes a `PresetState` instead of 28 floats (`plugin/src/Audition.h:45`).
 
+As built (lane D's curation slice, `plugin/src/Curation.*`, `plugin/src/gui/CurationViews.*`):
+the processor owns a curation session, so a document outlives the editor. It opens a document
+or a package (its JSON section, or the document rebuilt) and plays it as a state restore does
+(Spillover with Trails while audio runs, Exact before). The working document is the stored one
+with what plays now: the leaf mirrors, the macro mirrors as positions, and `editor.detached`.
+Save derives every targeted leaf that is not detached, compiles, writes the stamped canonical
+JSON (and the package when one sits beside it or the document came from one) and Spillover-loads
+what it wrote; it does not watch the file on disk. Before saving, the session compiles and lints
+what Save would write as the knobs come to rest, factory rules for a `factory.` id, and lists
+the leaves derive will change. "Solve position" runs for one macro or all. A/B switches between
+the stored package (A) and the remembered working state (B) with Trails; level matching renders
+both offline on the class input's test-signal vector, measures K-weighted loudness and trims the
+louder on a monitor-only output trim, outside every preset and render. One click renders the
+document as Save would write it through `tools/audition`'s S0 or S0–S11 with the pre-screen.
+The editor's Pedal view holds the eight knobs with pickup (a knob waits after a load until the
+hand reaches the stored position; a caught knob follows the host) and Shift; the Leaves view is
+the raw-parameter view, each targeted leaf marked with its macros, its right-click menu detaching
+or solving. The capture-endpoint button and the rating form wait (the ratings log is
+`tools/audition/ratings.py`'s), as does the input class from the log's declarations.
+
 ### 9.2 Load modes, parameters and session state
 
 - **Loads**: Spillover with Trails while audio runs, Exact when nothing has played since the
@@ -1248,6 +1268,12 @@ optional M7 leg is not built.
   the host model says (§3.6); a host move of a macro parameter becomes a `MacroMove`.
   `Reserved` rows and rows retired before release are not registered.
 - **Device settings** (§3.8) live in the wrapper's settings and are written into every recipe.
+  As built (the curation slice): the effect volume is a host parameter (automatable, a SetParam
+  on its Global row), restored before the start state's Exact load at Init, re-sent after a
+  restore, and saved in `BSWS` v1 as setting key 5; the macros (a host move is a `MacroMove`)
+  and `perf.expression` are registered too, the leaves under host model (b), and the leaf mirrors
+  follow a move's fan-out through `EvalMacro`/`EvalExpression`, though hosts are not told of it
+  yet. Session v2 is still to build: a v1 session holds leaves only and plays the default mode.
 - **Session state** (`BSWS` v2): a wrapper header, the current `.bsp` and the wrapper settings
   (companion §6.9). A host set that is not an exact echo rewrites STAT, patches the JSON and
   recomputes `sound_hash` before saving; v1 states are migrated (§4.4).

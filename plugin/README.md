@@ -3,8 +3,10 @@
 One JUCE `AudioProcessor` (`BrainscapeProcessor`) hosting the same `dsp/` engine as the pedal,
 built as a **Standalone** app and a **VST3** plugin (plus **AU** on macOS). This is the skeleton
 of phase B in [companion-app.md](../docs/design/companion-app.md) §8.1: the wrapper (§4), the
-plain-value parameter layer (§5.1–§5.6) and a test-bench editor for playing through the engine
-while the engine work lands. Presets, the library and the device link come later.
+plain-value parameter layer (§5.1–§5.6), and a curation bench: the mode compiler's curation
+slice ([mode-compiler.md](../docs/design/mode-compiler.md) §9.1), which opens a preset document,
+plays it with its mode, edits it with the pedal's knobs and the raw leaves and saves it back as
+canonical JSON. The library, session state with packages and the device link come later.
 
 JUCE 9.0.3 is used under the AGPLv3 (companion §3.5): desktop binaries are GPLv3 combined with
 AGPLv3, and only targets under `plugin/` link JUCE.
@@ -59,7 +61,9 @@ The build never copies plugins into system folders.
    **Input: Mono** copies the left input to the right, for a guitar on input 1 (the Standalone's
    default); **Stereo** keeps both (the plugins' default, so a stereo track passes unchanged at
    Mix 0). **In level** and **Out level** are global settings, never part of a preset.
-4. Every engine parameter is a knob. Drag a knob to turn it, double-click it for the default,
+4. **Leaves** (the tab under the header) shows every engine parameter as a knob, the design's
+   Advanced view; **Pedal** holds the pedal's knobs and the open preset document (next section).
+   Drag a knob to turn it, double-click it for the default,
    double-click the value to type one in its units (`250`, `1.2 s`, `2.5k`, `40%`, `-3 dB`,
    `Off`, `Kill`, `LP`…). Typed values are stored exactly as typed, read by the preset
    compiler's exact number reader, so a typed value has the bits a preset document with the same
@@ -72,11 +76,11 @@ The build never copies plugins into system folders.
 5. **FREEZE** pins the grain position (host-automatable); **TRIGGER** fires one grain, as does
    any MIDI note-on (enable a MIDI input in the settings). The **ONSET** light flashes for every
    onset the detector hears; **Trigger → Sense** sets its threshold. Onsets firing grains and
-   grains on onset marks are a mode's structure since sound revision 2, which the plugin does
-   not load yet (`.bsp` presets come with the app's preset work, mode-compiler.md §9): it plays
-   the default mode. An orange **control events lost** in the status line counts triggers and
-   frame-stamped events that a full event queue dropped; ordinary knob edits are never lost,
-   because the wrapper re-sends every parameter after an overflow.
+   grains on onset marks are a mode's structure since sound revision 2: open a preset document
+   whose mode has them (next section); without one the plugin plays the default mode. An orange
+   **control events lost** in the status line counts triggers, macro moves and frame-stamped
+   events that a full event queue dropped; ordinary knob edits are never lost, because the
+   wrapper re-sends every parameter after an overflow.
 6. **Render audition…** (the Test input panel's last row) renders the test input through the
    current preset into a WAV file (companion §4.9): the loaded file when **File loop** is
    selected, otherwise 10 s of `dsp/`'s plucks test signal, then 4 s of silence for the trails.
@@ -90,6 +94,45 @@ The build never copies plugins into system folders.
    render of the test signal or of a 48 kHz file is identical on every conforming build; a file
    at another rate is converted by linear interpolation, and the recipe says the render is
    reproducible on this machine only.
+
+## Curate a preset (the Pedal view)
+
+The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tuned and rated.
+
+1. **Open...** (Ctrl+O) a schema-1 preset document (`.json`) or a package (`.bsp`). It compiles
+   through the compiler library and plays at once: a Spillover load with Trails while audio
+   runs, Exact before anything has played. A document that does not read or compile is refused
+   with the compiler's findings, and the open one stays.
+2. **The eight knobs** are the pedal's: Activity, Repeats, Shape, Time, Space and Filter move
+   the mode's macros (titled with its display names, the knob's own name and target count
+   below), Mix the wet/dry leaf, and Loop Level waits for the looper. Under each knob: the
+   position and the first target's value. After every load a knob is **locked** until you turn
+   it to the stored position (the pedal's pickup, owner question Q8): its marker dot shows that
+   position, its pointer your hand's, and the line under it says where to pick up; double-click
+   catches it there. **SHIFT** turns Repeats, Shape, Space, Filter and Mix into the mod depth,
+   mod rate, reverb time, resonance and effect volume, each picked up anew.
+3. **Leaves** shows which macros move each leaf (coloured dots by its caption, hollow when the
+   leaf is detached). Edit any leaf there; one a macro targets turns amber when it is off the
+   macro's value, since **Save** derives it from the knob's position. Right-click a targeted leaf
+   to **detach** it (Save keeps your value, written to `editor.detached`) or to **solve** that
+   macro's position from it. **Solve positions** does the latter for every macro.
+4. **Compile · lint** lists, live, what Save would hit: the compiler's errors, the lint findings
+   (factory rules for a `factory.` id) and the leaves derive will change.
+5. **Save** (Ctrl+S) writes canonical JSON stamped with this build's sound revision and hash,
+   and the `.bsp` beside it when one is there (or the document came from one), then plays what it
+   wrote. **Save as...** writes elsewhere; **Revert** re-opens from disk. A document that does
+   not compile is written as JSON only.
+6. **A stored / B working** (key B) compares the version on disk with your edits, both loaded
+   with Trails; the knobs lock while A plays. **Match level** renders both offline on the input
+   class's test signal (**Attack**: Plucks, **Pad**: SoftNotes), measures K-weighted loudness
+   and trims the louder one on the monitor output only (never in a preset or a render).
+7. **Render** renders the document as Save would write it through `tools/audition`'s scripts,
+   S0 or (**S0-S11**) all twelve, with the objective pre-screen, into
+   `Music/Brainscape audition/<id>/` (WAVs, recipes, `audition.json`); **Show** opens the folder,
+   and the status line's tooltip holds the pre-screen summary. `bspc render` makes the same bits.
+
+The document stays open while the editor is closed. A DAW's session (BSWS v1) holds leaves
+only, so recalling one closes the document and plays the default mode.
 
 ## Load the VST3
 
@@ -153,10 +196,20 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   and recipe), the test input's file loop (exact playback, wrap, mono and 44.1 kHz files, bad
   files, loads during playback), the default input mode per format, and zero heap allocations
   inside `processBlock`.
+  The mode system's part: the host model's registration (the leaves, freeze, eight macros,
+  expression, effect volume), document loads (Exact and Spillover, an invalid mode refused),
+  host macro moves at three block patterns with the leaf mirrors following the fan-out, an
+  undefined macro, expression fan-out, the effect volume across loads, Init and sessions, and the
+  transport-start restart with a mode; the curation session (an unchanged document saving back
+  byte for byte, a macro move, a derived and a detached leaf, solve position, A/B, a session
+  recall, refused documents, a package saved as a pair, level matching, the one-click render),
+  and the pedal knob's pickup.
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
-  `build/plugin/plugin/screenshots/` (default, minimum, large and 2× sizes, a 44.1 kHz frozen
+  `build/plugin/plugin/screenshots/`: both views with no document and with a scratch copy of
+  `compiler/tests/data/engram.json` open (a knob waiting for pickup, a hand-edited leaf, Shift, A
+  playing, a finished render) at the default, minimum, large and 2× sizes, a 44.1 kHz frozen
   frame with Restart on play on, and the Standalone's editor after an audition render, which it
-  also writes there).
+  also writes there.
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
   in-place audio in odd host blocks equals the engine reference, and that an offline export
@@ -181,14 +234,16 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   `wet_trim_db` and `layer0.pitch.transpose_st` replaced `out_trim_db` and `layer0.pitch.st`,
   and `scheduler.onset_trigger` and `layer0.position.source` were retired into mode structure at
   sound revision 2, so automation lanes saved on the old names are lost, and a session saved
-  before then loads without its onset and mark switches (§4.4). Every registered parameter and
-  **Freeze** are host-automatable for now. The recommended host model (§3.6, owner question
-  Q12), under which only the macros, Mix, the effect volume and the performance controls are
-  automatable, applies with the macro parameters (lane D of §12.4); the shared display table
-  already carries its flags for the rows that do not exist here yet.
-- **Session state is a provisional binary v1** (exact plain values plus the input mode, levels
-  and the restart option); `.bsp` packages, the preset library and the device link are not
-  built, and the audition renders no event script yet.
+  before then loads without its onset and mark switches (§4.4). The recommended host model
+  (§3.6, owner question Q12, provisionally) applies: the eight macros (`macro.activity` …
+  `macro.aux2`; a host move is a `MacroMove`), Mix, the effect volume
+  (`global.effect_volume_db`), **Freeze** and the expression pedal (`perf.expression`) are
+  automatable, every other leaf is registered but not. A macro's fan-out updates the leaves the
+  editor shows, but hosts are not told of it yet.
+- **Session state is a provisional binary v1** (exact plain values plus the input mode, levels,
+  the restart option and the effect volume): it holds no package, so a session plays the default
+  mode. The preset library and the device link are not built, and the Leaves view's audition
+  renders no event script (the Pedal view's **Render** runs the scripts).
 - **Not yet built from §4:** the wrapper-owned bypass with crossfade (JUCE's default bypass
   stops the engine, so trails do not continue), the resampled 48 kHz mode, MIDI CC mapping, LV2
   and CLAP.
