@@ -190,7 +190,14 @@ std::string RecipeJson(const RecipeInput& in) {
   w.Key("outputSegmentSha256").BeginArray();
   for (const std::string& h : in.hashes.seconds) w.String(h);
   w.EndArray();
-  if (in.result != nullptr) w.Key("onsets").Uint(in.result->onsets);
+  if (in.result != nullptr) {
+    w.Key("onsets").Uint(in.result->onsets);
+    std::string per = "[";
+    for (size_t i = 0; i < in.result->onsetSeconds.size(); ++i) {
+      per += (i == 0 ? "" : ", ") + std::to_string(in.result->onsetSeconds[i]);
+    }
+    w.Key("onsetsPerSecond").Raw(per + "]");
+  }
   w.Key("wav");
   if (in.wavPath.empty()) {
     w.Null();
@@ -212,6 +219,8 @@ std::string RecipeJson(const RecipeInput& in) {
     w.Key("loudnessLufs").Double(m.loudness, 2);
     w.Key("tailSeconds").Double(m.tailSeconds, 3);
     w.Key("tailFinite").Bool(m.tailFinite);
+    w.Key("tailEstimated").Bool(m.tailEstimated);
+    w.Key("tailDecayDbPerS").Double(m.tailDecayDbPerS, 2);
     w.Key("maxStep").Double(m.maxStep, 6);
     w.Key("maxStepFrame").Uint(m.maxStepFrame);
     w.Key("brightnessHz").Double(m.features.brightnessHz, 1);

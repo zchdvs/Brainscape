@@ -416,9 +416,8 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
       peak.Add(Round1(e->metrics.peakDbfs) <= kPeakStoredDbfs, vn + " " + Db(e->metrics.peakDbfs) + " dBFS");
       const double d = e->metrics.loudness - dry;
       engaged.Add(Round1(d) >= kEngagedLowLu && Round1(d) <= kEngagedHighLu, vn + " " + Lu(d) + " LU");
-      const bool finite = e->metrics.tailFinite;
-      const std::string t =
-          vn + " " + (finite ? Fmt("%.2f s", e->metrics.tailSeconds) : Fmt("over %.1f s", e->metrics.tailSeconds));
+      const bool        finite = e->metrics.tailFinite;
+      const std::string t      = vn + " " + TailText(e->metrics);
       if (finite || !preset.declare.selfOscillating) tail.Add(finite, t);
       else tail.parts.push_back(t + " (declared self-oscillating)");
     }
@@ -514,7 +513,8 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
       for (size_t i = 0; i < rungs.size(); ++i) {
         const Metrics& m = rungs[i]->metrics;
         lv += (i ? " " : "") + Db(m.loudness);
-        tv += (i ? " " : "") + (m.tailFinite ? Fmt("%.1f", m.tailSeconds) : std::string("unending"));
+        tv += (i ? " " : "") + (!m.tailFinite ? std::string("unending")
+                                               : Fmt(m.tailEstimated ? "~%.0f" : "%.1f", m.tailSeconds));
         if (i > 0) {
           const Metrics& p = rungs[i - 1]->metrics;
           if (m.loudness < p.loudness - kRungTolLu) levelOk = false;
@@ -556,8 +556,7 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
       std::string d = std::to_string(held.n - held.failed.size()) + " of " + std::to_string(held.n) + " hold";
       if (!held.failed.empty()) d += "; " + held.Failures();
       d += "; worst: peak " + worstPeak->plan.name + " " + Db(worstPeak->metrics.peakDbfs) + " dBFS, tail " +
-           worstTail->plan.name + " " +
-           (worstTail->metrics.tailFinite ? Fmt("%.1f s", worstTail->metrics.tailSeconds) : std::string("unending")) +
+           worstTail->plan.name + " " + TailText(worstTail->metrics) +
            ", step " + worstStep->plan.name + Fmt(" %.3f", worstStep->metrics.maxStep);
       checks.push_back({"Combinations", held.failed.empty() ? "pass" : "FAIL", d});
     }
@@ -571,21 +570,30 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     checks.push_back({"Peak (moved)", moved.failed.empty() ? "pass" : "FAIL", d});
   }
 
-  {  // S7-S10 peaks: reported, not judged (§11.3 judges stored positions, sweeps and S11).
+  {  // Other peaks: reported, not judged (§11.3 judges the class inputs at stored positions, the
+     // sweeps and S11): S0 on the other vectors and at Mix 1, and S7-S10.
     std::string d;
-    for (const char* script : {"S7", "S8", "S9", "S10"}) {
+    auto        report = [&](const std::string& label, auto&& pick) {
       Tally t;
       for (const Rendered& r : rs) {
-        if (r.ok && r.plan.script == script && r.plan.role != Role::Determinism) {
+        if (r.ok && r.plan.role != Role::Determinism && pick(r)) {
           t.Add(r, true, r.metrics.peakDbfs);
           t.over += r.metrics.overFull;
         }
       }
-      if (t.n == 0) continue;
-      d += (d.empty() ? "" : "; ") + std::string(script) + " highest " + Db(t.worst) + " dBFS";
-      if (t.over != 0) d += " (" + std::to_string(t.over) + " samples over full scale)";
+      if (t.n == 0) return;
+      d += (d.empty() ? "" : "; ") + label + " highest " + Db(t.worst) + " dBFS (" + t.worstName + ")";
+      if (t.over != 0) d += ", " + std::to_string(t.over) + " samples over full scale";
+    };
+    report("S0", [&](const Rendered& r) {
+      return r.plan.script == "S0" &&
+             (r.plan.role != Role::Engaged ||
+              std::find(inputs.begin(), inputs.end(), r.plan.vector) == inputs.end());
+    });
+    for (const char* script : {"S7", "S8", "S9", "S10"}) {
+      report(script, [&](const Rendered& r) { return r.plan.script == script; });
     }
-    checks.push_back({"Peak (S7-S10)", d.empty() ? "n/a" : "info", d.empty() ? "nothing to report" : d});
+    checks.push_back({"Peak (other)", d.empty() ? "n/a" : "info", d.empty() ? "nothing to report" : d});
   }
 
   {
@@ -644,6 +652,16 @@ const PresetState& DefaultPreset() {
     return LeafPreset(values);
   }();
   return *s;
+}
+
+// The onsets the engine's own detector hears in `audio`, per second: `audio` as the input of the
+// default preset, since the detector listens to the input whatever the preset plays.
+std::vector<uint32_t> HeardOnsets(Renderer& renderer, const Stereo& audio) {
+  RenderRequest rq;
+  rq.preset = &DefaultPreset();
+  rq.input  = &audio;
+  RenderResult r;
+  return renderer.Render(rq, &r) ? r.onsetSeconds : std::vector<uint32_t>();
 }
 
 std::string JoinPath(const std::string& a, const std::string& b) {
@@ -709,6 +727,7 @@ void WriteIndex(const std::string& path, const Preset& preset, const SuiteResult
     w.Key("loudnessLufs").Double(x.metrics.loudness, 2);
     w.Key("tailSeconds").Double(x.metrics.tailSeconds, 3);
     w.Key("tailFinite").Bool(x.metrics.tailFinite);
+    w.Key("tailEstimated").Bool(x.metrics.tailEstimated);
     w.EndObject();
   }
   w.EndArray();
@@ -814,8 +833,9 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
   };
 
   // Response features need the audio of the sweeps and their reference, kept per sweep.
-  std::vector<Check> response;
-  Stereo             refAudio;
+  std::vector<Check>    response;
+  Stereo                refAudio;
+  std::vector<uint32_t> refHeard;  // the reference's heard onsets, measured once
   for (const Planned& p : plans) {
     Rendered     rd;
     RenderResult rr;
@@ -846,8 +866,19 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
         const bool ok = std::fabs(bright) >= kShapeBrightPct || std::fabs(env) >= kShapeEnvDb;
         response.push_back({"Response (Shape)", ok ? "pass" : "FAIL", d});
       } else {
+        // Event density as the pedal's own onset detector hears the output, per second of the
+        // rising leg (0 to 1), beside the reference's: the engine reports no voices or births.
+        if (refHeard.empty()) refHeard = HeardOnsets(renderer, refAudio);
+        const std::vector<uint32_t> heard = HeardOnsets(renderer, rr.out);
+        const auto first = static_cast<size_t>(std::ceil(8.0 * p.stored));
+        std::string seq, refSeq;
+        for (size_t k = first; k < first + 8 && k < heard.size() && k < refHeard.size(); ++k) {
+          seq += (seq.empty() ? "" : " ") + std::to_string(heard[k]);
+          refSeq += (refSeq.empty() ? "" : " ") + std::to_string(refHeard[k]);
+        }
         response.push_back({"Response (Activity)", "info",
-                            d + "; density and voice count are not observable through the engine's API"});
+                            d + "; onsets the detector hears per second from 0 to 1: " + seq +
+                                " (the stored position: " + refSeq + ")"});
       }
     }
     result.renders.push_back(std::move(rd));

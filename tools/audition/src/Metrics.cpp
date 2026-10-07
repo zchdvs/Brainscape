@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 
 namespace bsa {
 
@@ -24,6 +25,50 @@ struct Biquad {
 double PowerDb(double meanSquare) { return meanSquare > 0 ? 10.0 * std::log10(meanSquare) : kSilentDb; }
 double Lufs(double meanSquare) {
   return meanSquare > 0 ? -0.691 + 10.0 * std::log10(meanSquare) : kSilentDb;
+}
+
+// The tail of a render that ends above -70 dBFS (Metrics.h, kTailFitFrames): a least-squares line
+// through the 100 ms peak envelope, in dB against seconds, over the render's last 5 s or its
+// silent part, whichever is shorter. A fall of at least kMinDecayDbPerS is extended to -70 dBFS.
+void Extrapolate(const Stereo& s, Metrics* m) {
+  const size_t frames = s.Frames();
+  const size_t silent = frames > m->span ? frames - m->span : 0;
+  const size_t fit    = std::min<size_t>(kTailFitFrames, silent);
+  if (fit < kTailFitMinFrames) return;  // too short to fit: unending as far as the render shows
+  std::vector<double> t, y;
+  for (size_t a = frames - fit; a + kSubBlock <= frames; a += kSubBlock) {
+    double peak = 0;
+    for (size_t i = a; i < a + kSubBlock; ++i) {
+      for (const float x : {s.l[i], s.r[i]}) {
+        if (std::isfinite(x)) peak = std::max(peak, std::fabs(static_cast<double>(x)));
+      }
+    }
+    if (peak <= 0) continue;  // exact silence between repeats carries no level
+    t.push_back(static_cast<double>(a + kSubBlock / 2 - m->span) / kRate);
+    y.push_back(Db20(peak));
+  }
+  if (t.size() < 5) return;
+  double mt = 0, my = 0;
+  for (size_t k = 0; k < t.size(); ++k) {
+    mt += t[k];
+    my += y[k];
+  }
+  mt /= static_cast<double>(t.size());
+  my /= static_cast<double>(t.size());
+  double sty = 0, stt = 0;
+  for (size_t k = 0; k < t.size(); ++k) {
+    sty += (t[k] - mt) * (y[k] - my);
+    stt += (t[k] - mt) * (t[k] - mt);
+  }
+  const double slope  = stt > 0 ? sty / stt : 0.0;  // dB per second
+  m->tailDecayDbPerS  = -slope;
+  if (slope > -kMinDecayDbPerS) return;  // flat, rising or too slow: unending
+  const double tEnd  = static_cast<double>(silent) / kRate;
+  const double yEnd  = my + slope * (tEnd - mt);  // the line's level at the render's end
+  m->tailFinite      = true;
+  if (yEnd <= kTailDbfs) return;  // the line has already reached -70 dBFS: the measured time
+  m->tailSeconds   = tEnd + (yEnd - kTailDbfs) / -slope;
+  m->tailEstimated = true;
 }
 
 }  // namespace
@@ -157,6 +202,7 @@ Metrics Measure(const Stereo& s, size_t span) {
   const auto end = static_cast<int64_t>(m.span);
   m.tailSeconds  = last + 1 > end ? static_cast<double>(last + 1 - end) / kRate : 0.0;
   m.tailFinite   = static_cast<int64_t>(m.frames) - (last + 1) >= static_cast<int64_t>(kTailMargin);
+  if (!m.tailFinite) Extrapolate(s, &m);
   const Loudness k(s);
   m.loudness = k.Integrated(0, m.span);
   for (size_t from = 0; from / kSubBlock + kShortTermSubs <= k.SubBlocks(); from += kRate) {
@@ -164,6 +210,19 @@ Metrics Measure(const Stereo& s, size_t span) {
   }
   m.features = Features(s, 0, m.span);
   return m;
+}
+
+std::string TailText(const Metrics& m) {
+  char buf[64];
+  if (!m.tailFinite) {
+    std::snprintf(buf, sizeof buf, "unending (over %.1f s)", m.tailSeconds);
+  } else if (m.tailEstimated) {
+    std::snprintf(buf, sizeof buf, m.tailSeconds < 100 ? "about %.1f s (extrapolated)" : "about %.0f s (extrapolated)",
+                  m.tailSeconds);
+  } else {
+    std::snprintf(buf, sizeof buf, "%.2f s", m.tailSeconds);
+  }
+  return buf;
 }
 
 }  // namespace bsa

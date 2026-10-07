@@ -56,6 +56,8 @@ struct RenderResult {
   Stereo                 out;
   brainscape::LoadReport load;     // the Exact load's report
   uint64_t               onsets  = 0;  // ConsumeOnsetCount over the render
+  // The same per 1 s of the render, each block's count in the second it starts in.
+  std::vector<uint32_t>  onsetSeconds;
   uint32_t               events  = 0;  // events delivered
   std::string            error;        // why a render failed
 };

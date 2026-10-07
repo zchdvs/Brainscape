@@ -90,6 +90,7 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
   Stereo&        out    = result->out;
   out.l.assign(frames, 0.f);
   out.r.assign(frames, 0.f);
+  result->onsetSeconds.assign((frames + kRate - 1) / kRate, 0u);
 
   uint32_t seq       = 0;
   size_t   next      = 0;  // the next script event to push
@@ -123,7 +124,9 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
     ctx.numEvents = impl_->queue->PopBlock(static_cast<int64_t>(pos), n, impl_->blockEvents.data(),
                                            static_cast<uint32_t>(impl_->blockEvents.size()));
     engine.Process(ctx);
-    result->onsets += engine.ConsumeOnsetCount();
+    const uint32_t onsets = engine.ConsumeOnsetCount();
+    result->onsets += onsets;
+    result->onsetSeconds[pos / kRate] += onsets;
     pos += n;
   }
   // Retire the last block's events, so no staged preset is referenced after the render.

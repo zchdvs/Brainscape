@@ -41,7 +41,9 @@ import sys
 
 FORMAT = "brainscape-ratings/1"
 INDEX_FORMAT = "brainscape-audition-index/1"
-DEFAULT_LOG = os.path.join("firmware", "factory", "AUDITION.json")
+# The repository's log, wherever the script is run from.
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_LOG = os.path.join(REPO, "firmware", "factory", "AUDITION.json")
 SCRIPTS = ["S%d" % i for i in range(12)]
 KNOBS = ["activity", "repeats", "shape", "time", "space", "filter"]
 FAMILIES = ["recall", "reverie", "misfire", "echoic"]

@@ -159,6 +159,11 @@ TEST_CASE("the shared render is the engine's from the exact-restart state, in an
   REQUIRE(r.Render(rq, &got));
   CHECK(got.load.exact);
   CHECK(SameBits(got.out, want));
+  // The input's onsets, per second of the render (2 s of plucks, then 1 s of silence).
+  REQUIRE(got.onsetSeconds.size() == 3u);
+  CHECK(got.onsets > 0u);
+  CHECK(got.onsetSeconds[0] + got.onsetSeconds[1] + got.onsetSeconds[2] == got.onsets);
+  CHECK(got.onsetSeconds[2] == 0u);
   for (const std::vector<uint32_t>& pattern :
        {std::vector<uint32_t>{48}, std::vector<uint32_t>{512}, std::vector<uint32_t>{1},
         kMixedPattern}) {
@@ -348,12 +353,17 @@ TEST_CASE("metrics: peak, tail, steps and the numbers checks") {
   // -70 dBFS from 0.5 amplitude (-6.02 dBFS) is 64 dB down: 0.533 s at 120 dB per second.
   CHECK(m.tailSeconds == Approx(64.0 / 120.0).margin(0.01));
   CHECK(m.tailFinite);
+  CHECK_FALSE(m.tailEstimated);
+  CHECK(TailText(m) == "0.53 s");
   CHECK(m.nonFinite == 0u);
   CHECK(m.subnormal == 0u);
   CHECK(m.overFull == 0u);
   Stereo hum = Sine(500.0, 0.01, 3 * kRate);
   m          = Measure(hum, kRate);
-  CHECK_FALSE(m.tailFinite);
+  CHECK_FALSE(m.tailFinite);  // a level that does not fall
+  CHECK(m.tailSeconds == Approx(2.0).margin(0.01));
+  CHECK(std::fabs(m.tailDecayDbPerS) < 0.05);
+  CHECK(TailText(m) == "unending (over 2.0 s)");
   hum.l[100]  = std::nanf("");
   hum.r[200]  = 1e-40f;  // subnormal
   hum.l[300]  = 1.5f;
@@ -364,6 +374,39 @@ TEST_CASE("metrics: peak, tail, steps and the numbers checks") {
   CHECK(m.peakDbfs == Approx(Db20(1.5)));
   CHECK((m.maxStepFrame == 300u || m.maxStepFrame == 301u));  // into or out of the 1.5
   CHECK(Round1(4.04) == Approx(4.0));
+
+  // A tail still sounding when the render ends: a fall of 6 dB per second from -6 dBFS reaches
+  // -70 dBFS about 10.7 s after the input stops, beyond the render's 4 s of silence.
+  auto decaying = [](double dbPerSecond, size_t silent) {
+    Stereo d = Sine(500.0, 0.5, kRate + silent);
+    for (size_t i = kRate; i < d.Frames(); ++i) {
+      const double t = static_cast<double>(i - kRate) / kRate;
+      d.l[i] = d.r[i] = static_cast<float>(d.l[i] * std::pow(10.0, -dbPerSecond * t / 20.0));
+    }
+    return d;
+  };
+  m = Measure(decaying(6.0, 4 * kRate), kRate);
+  CHECK(m.tailFinite);
+  CHECK(m.tailEstimated);
+  CHECK(m.tailDecayDbPerS == Approx(6.0).margin(0.05));
+  CHECK(m.tailSeconds == Approx(64.0 / 6.0).margin(0.15));
+  CHECK(TailText(m).rfind("about 10.", 0) == 0);
+  // The fit spans the render's last 5 s at most: a 9 s silence fits its last 5 s.
+  m = Measure(decaying(6.0, 9 * kRate), kRate);
+  CHECK(m.tailEstimated);
+  CHECK(m.tailSeconds == Approx(64.0 / 6.0).margin(0.15));
+  // A fall slower than 0.2 dB per second is unending; so is a silence too short to fit.
+  m = Measure(decaying(0.1, 4 * kRate), kRate);
+  CHECK_FALSE(m.tailFinite);
+  CHECK(m.tailDecayDbPerS == Approx(0.1).margin(0.02));
+  m = Measure(decaying(6.0, kRate), kRate);
+  CHECK_FALSE(m.tailFinite);
+  CHECK_FALSE(m.tailEstimated);
+  // A fall that reaches -70 dBFS inside the last 0.5 s: the measured time, confirmed by the fit.
+  m = Measure(decaying(30.0, 5 * kRate / 2), kRate);
+  CHECK(m.tailFinite);
+  CHECK_FALSE(m.tailEstimated);
+  CHECK(m.tailSeconds == Approx(64.0 / 30.0).margin(0.02));
   CHECK(Round1(-1.06) == Approx(-1.1));
 }
 
@@ -502,6 +545,15 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
   CHECK(verdict(cs, "Tail") == "pass");
   CHECK(verdict(cs, "Renders") == "pass");
   CHECK(verdict(cs, "Fallback") == "n/a");  // not an onset mode
+  rs.push_back(make("S0", "S0.engaged.saturation", Role::Engaged, dp, 6.0));
+  rs.back().plan.vector = Vector::Saturation;
+  cs = PreScreen(preset, rs);
+  CHECK(verdict(cs, "Peak") == "pass");  // judged on the class inputs only
+  CHECK(verdict(cs, "Peak (other)") == "info");  // the other vectors and the wet: reported
+  for (const Check& c : cs) {
+    if (c.name == "Peak (other)") CHECK(c.detail.find("6.0 dBFS (S0.engaged.saturation)") != std::string::npos);
+  }
+  rs.pop_back();
   rs[0].metrics.loudness = dp + 4.06;
   rs[1].metrics.loudness = ds - 1.0;
   CHECK(verdict(PreScreen(preset, rs), "Engaged") == "FAIL");
@@ -515,7 +567,11 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
   rs[0].metrics.peakDbfs = -0.94;
   CHECK(verdict(PreScreen(preset, rs), "Peak") == "FAIL");
   rs[0].metrics.peakDbfs = -3.0;
-  rs[0].metrics.tailFinite = false;
+  rs[0].metrics.tailEstimated = true;  // still sounding at the render's end, but falling
+  rs[0].metrics.tailSeconds   = 40.0;
+  CHECK(verdict(PreScreen(preset, rs), "Tail") == "pass");
+  rs[0].metrics.tailEstimated = false;
+  rs[0].metrics.tailFinite    = false;
   CHECK(verdict(PreScreen(preset, rs), "Tail") == "FAIL");
   preset.declare.selfOscillating = true;
   CHECK(verdict(PreScreen(preset, rs), "Tail") == "pass");

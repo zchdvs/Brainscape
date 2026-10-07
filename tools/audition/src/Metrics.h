@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "Render.h"
@@ -16,8 +17,14 @@ namespace bsa {
 inline constexpr double   kSilentDb      = -200.0;  // a level below the absolute gate, or silence
 inline constexpr double   kTailDbfs      = -70.0;   // the tail's end
 inline constexpr uint32_t kSubBlock      = kRate / 10;  // 100 ms: the gating blocks' hop
-inline constexpr uint32_t kTailMargin    = kRate / 2;   // a finite tail ends 0.5 s before the render
+inline constexpr uint32_t kTailMargin    = kRate / 2;   // a measured tail ends 0.5 s before the render
 inline constexpr uint32_t kShortTermSubs = 30;          // the 3 s short-term window, in sub-blocks
+// A tail still above -70 dBFS at the render's end is extrapolated from the 100 ms peak envelope of
+// the render's last kTailFitFrames (at most its silent part): a line fitted to it that falls by at
+// least kMinDecayDbPerS is extended to -70 dBFS, a slower fall, a flat or a rising one is unending.
+inline constexpr uint32_t kTailFitFrames   = 5 * kRate;
+inline constexpr uint32_t kTailFitMinFrames = 2 * kRate;  // shorter silent parts: not extrapolated
+inline constexpr double   kMinDecayDbPerS  = 0.2;
 
 // K-weighted power per 100 ms sub-block (the sum over both channels of the mean square), the K
 // filter run from frame 0: every level below derives from it.
@@ -55,8 +62,12 @@ struct Metrics {
   uint64_t nonFinite    = 0;          // NaN or infinite samples
   uint64_t subnormal    = 0;          // nonzero samples below FLT_MIN
   double   loudness     = kSilentDb;  // integrated, over [0, span)
-  double   tailSeconds  = 0;          // from the span's end to the last sample above -70 dBFS
-  bool     tailFinite   = true;       // the render ends at least 0.5 s below -70 dBFS
+  // From the span's end to the last sample above -70 dBFS. When the render ends above it, the
+  // extrapolated time (tailEstimated), or, for an unending tail, the time the render shows.
+  double   tailSeconds  = 0;
+  bool     tailFinite   = true;       // measured, or extrapolated from a falling envelope
+  bool     tailEstimated = false;     // extrapolated: the render ends above -70 dBFS
+  double   tailDecayDbPerS = 0;       // the fitted fall of an extrapolated or unending tail
   double   maxStep      = 0;          // the largest |x[n] - x[n-1]| of either channel
   size_t   maxStepFrame = 0;
   SpanFeatures features;              // over [0, span)
@@ -64,6 +75,9 @@ struct Metrics {
 };
 
 Metrics Measure(const Stereo& s, size_t span);
+
+// A tail's text: "2.94 s", "about 146 s (extrapolated)" or "unending (over 10.0 s)".
+std::string TailText(const Metrics& m);
 
 double Db20(double amplitude);  // 20 log10, kSilentDb for 0
 double Round1(double v);        // to 0.1, what the pre-screen compares
