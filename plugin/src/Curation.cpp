@@ -80,8 +80,17 @@ bool WriteTemp(const juce::TemporaryFile& temp, const juce::File& file, const vo
   return true;
 }
 
+// A directory where a file goes is refused before anything is written: JUCE's replace on POSIX
+// falls back to copying into it and reports success, where Windows' ReplaceFile fails.
+bool InTheWay(const juce::File& file, juce::String* error) {
+  if (!file.isDirectory()) return false;
+  *error = "cannot replace " + file.getFullPathName() + ": a directory is in the way";
+  return true;
+}
+
 // Through a temporary file beside the target, so a failed write leaves the old file whole.
 bool WriteBytes(const juce::File& file, const void* data, size_t size, juce::String* error) {
+  if (InTheWay(file, error)) return false;
   juce::TemporaryFile temp(file);
   if (!WriteTemp(temp, file, data, size, error)) return false;
   if (!temp.overwriteTargetFileWithTemporary()) {
@@ -99,6 +108,7 @@ bool WriteBytes(const juce::File& file, const void* data, size_t size, juce::Str
 bool WritePair(const juce::File& json, const std::string& text, const juce::File& bsp,
                const std::vector<uint8_t>& package, juce::String* error, bool* mixed) {
   *mixed = false;
+  if (InTheWay(json, error) || InTheWay(bsp, error)) return false;
   juce::TemporaryFile tj(json), tp(bsp);
   if (!WriteTemp(tj, json, text.data(), text.size(), error) ||
       !WriteTemp(tp, bsp, package.data(), package.size(), error)) {

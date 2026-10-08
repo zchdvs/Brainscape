@@ -437,7 +437,7 @@ void DocumentPanel::StyleToggle(juce::TextButton& b, juce::Colour on) {
 }
 
 DocumentPanel::DocumentPanel(BrainscapeProcessor& processor)
-    : processor_(processor), session_(processor.Curation()), noteColour_(palette::kTextDim) {
+    : session_(processor.Curation()), noteColour_(palette::kTextDim) {
   name_.setFont(UiFont(17.0f, true));
   name_.setColour(juce::Label::textColourId, palette::kText);
   for (auto* l : {&file_, &state_, &note_, &render_}) {
