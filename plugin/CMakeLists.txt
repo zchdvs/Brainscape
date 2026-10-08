@@ -30,6 +30,7 @@ juce_add_plugin(Brainscape
 set(BRAINSCAPE_PLUGIN_SOURCES
   src/Audition.cpp
   src/BrainscapeParam.cpp
+  src/Curation.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
   src/PluginProcessor.cpp
@@ -37,6 +38,7 @@ set(BRAINSCAPE_PLUGIN_SOURCES
   src/StateCodec.cpp
   src/TestInput.cpp
   src/gui/BrainscapeLookAndFeel.cpp
+  src/gui/CurationViews.cpp
   src/gui/Widgets.cpp
 )
 target_sources(Brainscape PRIVATE ${BRAINSCAPE_PLUGIN_SOURCES})
@@ -74,10 +76,12 @@ target_compile_options(brainscape_plugin_warnings INTERFACE
 target_link_libraries(Brainscape
   PUBLIC
     brainscape_dsp
+    # The offline render, its hashes and recipes (tools/audition, mode-compiler.md §8.1, §9.1):
+    # JUCE-free, shared with `bspc render`. PUBLIC, as Audition.h includes its header.
+    brainscape_audition
   PRIVATE
     brainscape_compiler      # the exact number reader behind typed text (mode-compiler.md §6.5)
     juce::juce_audio_utils
-    juce::juce_cryptography  # SHA-256 of audition renders (companion §4.9)
     juce::juce_recommended_warning_flags
     brainscape_plugin_warnings
 )
@@ -90,7 +94,11 @@ if(BRAINSCAPE_BUILD_TESTS)
   # objects every format wrapper links. The format wrappers re-export the shared code's
   # private include directories in the same way.
   add_executable(brainscape_plugin_tests tests/plugin_tests.cpp)
-  target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape)
+  # The compiler compiles the test documents (compiler/tests/data) the mode tests load.
+  target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape brainscape_compiler)
+  target_compile_definitions(brainscape_plugin_tests PRIVATE
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data"
+    BRAINSCAPE_GOLDEN_PRESETS="${PROJECT_SOURCE_DIR}/dsp/tests/golden/presets")
   target_include_directories(brainscape_plugin_tests PRIVATE
     src
     ${PROJECT_SOURCE_DIR}/dsp/tests  # golden/Sha256.h: an independent check of audition hashes
@@ -103,7 +111,9 @@ if(BRAINSCAPE_BUILD_TESTS)
 
   # Renders the editor offscreen to PNG at the default and minimum sizes.
   add_executable(brainscape_editor_snapshot tests/editor_snapshot.cpp)
-  target_link_libraries(brainscape_editor_snapshot PRIVATE Brainscape)
+  target_link_libraries(brainscape_editor_snapshot PRIVATE Brainscape brainscape_compiler)
+  target_compile_definitions(brainscape_editor_snapshot PRIVATE
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data")
   target_include_directories(brainscape_editor_snapshot PRIVATE
     src
     $<TARGET_PROPERTY:Brainscape,INCLUDE_DIRECTORIES>)

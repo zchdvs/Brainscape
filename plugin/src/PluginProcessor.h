@@ -21,6 +21,19 @@
 
 namespace brainscape::plugin {
 
+class CurationSession;  // Curation.h
+
+// The structure a preset plays besides its leaves (mode-compiler.md §5.1): the mode, CTRL
+// (macro positions and expression assignments) and the stored performance state, as a decoded
+// package holds them. Default-constructed it is the default mode, which a leaf-only preset
+// plays. Fixed-size, trivially copyable data: state units carry it as words (§9.2).
+struct ModeState {
+  ModeBlob         mode;
+  ControlState     control;
+  PerformanceState performance;
+  uint32_t         soundRev = 0;  // the package's sound_rev, 0 when not from a package
+};
+
 // The one AudioProcessor behind every format and the companion app (companion §2.1),
 // hosting brainscape::Engine under the wrapper obligations of companion §4.12.
 class BrainscapeProcessor final : public juce::AudioProcessor {
@@ -65,7 +78,52 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     return *params_[LeafIndex(id)];
   }
   FreezeParam&     Freeze() noexcept { return *freeze_; }
+  // The other registered rows (§9.2, host model (b), §3.6): a Macro row (69-76), whose moves
+  // are MacroMove events; perf.expression (78), an Expression event; the effect volume (82),
+  // a Global row the engine keeps across loads and restarts.
+  BrainscapeParam& Macro(ParamId id) noexcept {
+    jassert(IsMacroRow(id));
+    return *macros_[MacroIndex(id)];
+  }
+  BrainscapeParam& Expression() noexcept { return *expression_; }
+  BrainscapeParam& EffectVolume() noexcept { return *effectVolume_; }
+  // Any registered row's parameter but freeze's, or null.
+  BrainscapeParam* FindHostParam(ParamId id) noexcept;
   TestInput&       GetTestInput() noexcept { return testInput_; }
+
+  static constexpr bool IsMacroRow(ParamId id) noexcept {
+    return static_cast<uint32_t>(id) >= static_cast<uint32_t>(ParamId::MacroActivity) &&
+           static_cast<uint32_t>(id) <= static_cast<uint32_t>(ParamId::MacroAux2);
+  }
+  static constexpr size_t MacroIndex(ParamId id) noexcept {
+    return static_cast<uint32_t>(id) - static_cast<uint32_t>(ParamId::MacroActivity);
+  }
+
+  // Message thread: plays a decoded preset (a compiled document or package) as a state restore
+  // does (§9.2): a Spillover load with Trails at the next block's first frame while audio runs,
+  // Exact when nothing has played since the last Init or restart. The leaf mirrors take its
+  // leaves (a leaf it lacks, its default), the macro mirrors its CTRL positions, which are
+  // pickup references never re-applied (§3.5), and freeze goes off. Refused, with nothing
+  // changed, when its mode is invalid; *report says how faithfully it loads.
+  bool LoadPresetState(const PresetState& state, LoadReport* report = nullptr);
+  // What the wrapper plays now, as a preset: the leaf mirrors, the current mode, and CTRL with
+  // the macro mirrors as its positions. Not on the audio thread.
+  std::unique_ptr<PresetState> CurrentPreset() const;
+  ModeState                    CurrentMode() const;
+  // Message thread: counts the loads that replaced the preset (LoadPresetState and session
+  // restores), so an editor can lock its knobs for pickup after each (mode-compiler.md §3.5).
+  uint32_t LoadSerial() const noexcept { return loadSerial_.load(std::memory_order_relaxed); }
+
+  // The curation slice's document (mode-compiler.md §9.1): message thread only.
+  CurationSession& Curation() noexcept { return *curation_; }
+  // The editor's view (BrainscapeEditor::View), kept while the editor is closed. Message thread.
+  int  EditorView() const noexcept { return editorView_; }
+  void SetEditorView(int view) noexcept { editorView_ = view; }
+
+  // A monitoring trim on the output, after the output level: the curation slice's level-matched
+  // A/B (§9.1). Never saved, never part of a preset or a render. Any thread.
+  void  SetMonitorTrimDb(float db) noexcept;
+  float MonitorTrimDb() const noexcept { return monitorTrimDb_.load(std::memory_order_relaxed); }
 
   // A momentary footswitch-style trigger (companion §5.7), applied at the next block.
   void TriggerFromUi() noexcept;
@@ -119,18 +177,29 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
  private:
   // An engine with its arenas, and the preset values its last Exact load applied. Values
   // are every leaf by ordinal (Params.h kLeafParams), as a complete preset holds them.
+  // And the effect volume it started with: a Global row, which the engine keeps across loads,
+  // so a spare restarted with another one would not play what the live engine plays.
   struct EngineSlot {
     Engine                             engine;
     std::unique_ptr<host::HeapArenas>  arenas;
     std::array<float, kNumLeafParams>  preset{};
+    ModeState                          mode;
+    float                              effectVolume = 0.f;
   };
   using Values = std::array<float, kNumLeafParams>;
+  static constexpr size_t kModeWords = sizeof(ModeState) / sizeof(uint32_t);
 
   void     InitEngine(double sampleRate);
   void     LoadAfterRestart() noexcept;
   void     RestartTimeline() noexcept;
   uint32_t NextGeneration() noexcept;
-  void     PostStateUnit(const float* plain) noexcept;
+  void     PostStateUnit(const float* plain, const ModeState& mode) noexcept;
+  void     SetMacroMirrors(const ControlState& control) noexcept;
+  void     NotifyHostOfMirrors();
+  // Applies `e`'s effect on the leaves to `values` (a SetParam on a leaf, or the fan-out of a
+  // MacroMove or Expression through the active mode), marking each leaf it writes in *touched.
+  // Audio thread.
+  void     Track(const WrapperEvent& e, Values& values, std::bitset<kNumLeafParams>* touched) const noexcept;
   void     ApplyStateUnit() noexcept;
   void     CheckTransportStart() noexcept;
   void     RestartAtTransportStart() noexcept;
@@ -157,6 +226,16 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::array<BrainscapeParam*, kNumLeafParams>     params_{};  // by leaf ordinal; owned by
                                                                // AudioProcessor
   FreezeParam*                                     freeze_ = nullptr;
+  std::array<BrainscapeParam*, kMaxMacros>         macros_{};  // by macro id - 69
+  BrainscapeParam*                                 expression_   = nullptr;
+  BrainscapeParam*                                 effectVolume_ = nullptr;
+
+  // The mode the wrapper's preset plays (message side): written under controlMutex_ and
+  // modeMutex_, read under either. The audio thread plays its own copy, activeMode_, which
+  // state units update; the spare's worker reads this under modeMutex_ alone, which is never
+  // held while another lock is taken.
+  ModeState          mode_;
+  mutable std::mutex modeMutex_;
 
   // Two slots at most: the live engine and, while the restart option is on, the spare. The
   // audio thread swaps the two pointers at a transport start; slots are allocated and
@@ -179,6 +258,10 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<uint32_t>                       stateSeq_{0};
   std::atomic<uint32_t>                       stateGen_{0};
   std::array<std::atomic<float>, kNumLeafParams> stateSlot_{};
+  std::array<std::atomic<uint32_t>, kModeWords>  modeSlot_{};  // the unit's ModeState, as words
+  ModeState                                   activeMode_;   // audio thread: what plays
+  uint64_t                                    activeModeHash_ = 0;
+  ModeState                                   unitMode_;     // audio thread: a unit being read
   uint32_t                                    seqApplied_ = 0;  // audio thread
   std::unique_ptr<PresetState>                restore_;         // audio thread
   bool                                        loadPending_ = false;
@@ -202,6 +285,11 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   uint32_t                                           seq_            = 0;
   Values                                             sent_{};
   std::bitset<kNumLeafParams>                        touched_;  // by leaf ordinal
+  float                                              sentEffectVolume_ = 0.f;
+  bool                                               effectTouched_    = false;
+  // A restore applied this block: the effect volume's mirror goes out after it, since an edit
+  // posted before the restore lost to it, and no preset holds a device setting.
+  bool                                               resendVolume_     = false;
   bool                                               resync_  = false;  // re-send the mirrors
 
   // Transport starts (§4.9 c): armed by a non-playing block, prepareToPlay or a switch
@@ -218,6 +306,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<int>        spareState_{0};
   Values                  spareSnapshot_{};  // worker: what the Ready spare was loaded with
   Values                  lastSnapshot_{};   // worker: the preset at its previous pass
+  ModeState               spareMode_, lastMode_;      // worker: the same for the mode
+  float                   spareVolume_ = 0.f, lastVolume_ = 0.f;  // and the effect volume
   // For the status: hashes of the Ready spare's preset and of the values sent to the live
   // engine.
   std::atomic<uint64_t>   spareHash_{0}, sentHash_{0};
@@ -234,6 +324,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   std::atomic<int>   inputMode_{static_cast<int>(InputMode::Stereo)};
   std::atomic<float> inputGainDb_{0.f}, outputGainDb_{0.f};
+  std::atomic<float> monitorTrimDb_{0.f};
+  std::atomic<uint32_t> loadSerial_{0};
+  int                   editorView_ = 0;
 
   std::atomic<double>   hostRate_{0.0};
   std::atomic<double>   statusEngineRate_{0.0};
@@ -246,6 +339,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   TestInput   testInput_;
   AuditionJob audition_;
+  // Last, so it is destroyed first: it refers to the processor.
+  std::unique_ptr<CurationSession> curation_;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrainscapeProcessor)
 };

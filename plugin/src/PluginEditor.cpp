@@ -1,12 +1,20 @@
 #include "PluginEditor.h"
 
+#include <set>
+#include <string>
+
+#include "Curation.h"
+
 namespace brainscape::plugin {
 
 namespace {
 
 constexpr int kHeaderHeight = 76;
+constexpr int kTabHeight    = 32;
 constexpr int kStatusHeight = 28;
 constexpr int kGap          = 10;
+
+const juce::String kDot = juce::String::fromUTF8("\xc2\xb7");  // ·
 
 struct Slot {
   juce::Component* component;
@@ -26,20 +34,56 @@ void LayoutRow(juce::Rectangle<int> row, std::initializer_list<Slot> slots) {
   }
 }
 
+void StyleTab(juce::TextButton& b) {
+  b.setClickingTogglesState(false);
+  b.setColour(juce::TextButton::buttonColourId, palette::kHeader);
+  b.setColour(juce::TextButton::buttonOnColourId, palette::kControlHover);
+  b.setColour(juce::TextButton::textColourOffId, palette::kTextDim);
+  b.setColour(juce::TextButton::textColourOnId, palette::kText);
+}
+
+std::string Fmt(float v) {  // a macro target's range end, for tooltips
+  return juce::String(v, 3).trimCharactersAtEnd("0").trimCharactersAtEnd(".").toStdString();
+}
+
 }  // namespace
 
 BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
-    : juce::AudioProcessorEditor(owner), processor_(owner), testPanel_(owner) {
+    : juce::AudioProcessorEditor(owner),
+      processor_(owner),
+      macros_(owner),
+      document_(owner),
+      findings_(owner.Curation()),
+      testPanel_(owner) {
   setLookAndFeel(&laf_);
   for (size_t g = 0; g < kNumParamGroups; ++g) {
     const auto group = static_cast<ParamGroup>(g);
     sections_[g]     = std::make_unique<SectionPanel>(GroupTitle(group), palette::GroupAccent(group));
-    addAndMakeVisible(*sections_[g]);
+    addChildComponent(*sections_[g]);
   }
   for (size_t i = 0; i < kNumLeafParams; ++i) {  // the registered rows
-    const ParamDisplay* m = FindParamDisplay(LeafId(i));
-    knobs_.push_back(&sections_[static_cast<size_t>(m->group)]->AddKnob(processor_.Param(LeafId(i))));
+    const ParamDisplay* m    = FindParamDisplay(LeafId(i));
+    ParamKnob&          knob = sections_[static_cast<size_t>(m->group)]->AddKnob(processor_.Param(LeafId(i)));
+    knob.onPopup             = [this, id = LeafId(i)] { ShowLeafMenu(id); };
+    knobs_.push_back(&knob);
   }
+
+  for (auto* t : {&pedalTab_, &leavesTab_}) {
+    StyleTab(*t);
+    addAndMakeVisible(*t);
+  }
+  pedalTab_.setTooltip("The pedal: its eight knobs with pickup, and the open preset document.");
+  leavesTab_.setTooltip("Every engine leaf as a knob (Advanced), marked with the macros that move it.");
+  pedalTab_.onClick  = [this] { SetView(View::Pedal); };
+  leavesTab_.onClick = [this] { SetView(View::Leaves); };
+  tabNote_.setFont(UiFont(13.0f));
+  tabNote_.setJustificationType(juce::Justification::centredRight);
+  tabNote_.setMinimumHorizontalScale(0.7f);
+  tabNote_.setInterceptsMouseClicks(false, false);
+  addAndMakeVisible(tabNote_);
+  addChildComponent(macros_);
+  addChildComponent(document_);
+  addChildComponent(findings_);
 
   freeze_.onClick = [this] { ToggleFreeze(); };
   freeze_.setTooltip("Freeze pins the grain position: the grains keep replaying the captured "
@@ -54,11 +98,13 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
     addAndMakeVisible(*c);
   }
   inMeter_.setTooltip("Engine input after the input level and the input functions.");
-  outMeter_.setTooltip("Output after the output level.");
+  outMeter_.setTooltip("Output after the output level (and the A/B level match, while it trims).");
 
+  setWantsKeyboardFocus(true);
   setResizable(true, true);
   setResizeLimits(kMinWidth, kMinHeight, 2600, 1700);
   setSize(kDefaultWidth, kDefaultHeight);
+  SetView(processor_.EditorView() == static_cast<int>(View::Leaves) ? View::Leaves : View::Pedal);
   RefreshNow();
   startTimerHz(30);
 }
@@ -66,6 +112,44 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
 BrainscapeEditor::~BrainscapeEditor() {
   stopTimer();
   setLookAndFeel(nullptr);
+}
+
+void BrainscapeEditor::SetView(View view) {
+  view_ = view;
+  processor_.SetEditorView(static_cast<int>(view));
+  const bool pedal = view == View::Pedal;
+  pedalTab_.setToggleState(pedal, juce::dontSendNotification);
+  leavesTab_.setToggleState(!pedal, juce::dontSendNotification);
+  for (auto& s : sections_) {
+    const bool shown = !pedal && !s->Knobs().empty();
+    s->setVisible(shown);
+  }
+  macros_.setVisible(pedal);
+  document_.setVisible(pedal);
+  findings_.setVisible(pedal);
+  resized();
+  repaint();
+}
+
+bool BrainscapeEditor::keyPressed(const juce::KeyPress& key) {
+  const auto c = juce::CharacterFunctions::toLowerCase(key.getTextCharacter());
+  if (key.getModifiers().isCommandDown()) {
+    if (key.getKeyCode() == 'S' || c == 's') {
+      document_.Save();
+      return true;
+    }
+    if (key.getKeyCode() == 'O' || c == 'o') {
+      document_.ChooseOpen();
+      return true;
+    }
+    return false;
+  }
+  if (c == 'b') {
+    document_.ToggleSide();
+    RefreshNow();
+    return true;
+  }
+  return false;
 }
 
 void BrainscapeEditor::ToggleFreeze() {
@@ -76,8 +160,86 @@ void BrainscapeEditor::ToggleFreeze() {
   RefreshNow();
 }
 
+// The Leaves view's marks: which macros move each leaf, whether it is detached from them, and
+// whether Save will derive it (it is off its macro's value at the macro's position).
+void BrainscapeEditor::RefreshMarks() {
+  CurationSession&      s = processor_.Curation();
+  std::set<std::string> pending;
+  for (const std::string& line : s.PendingDerives()) pending.insert(line.substr(0, line.find(':')));
+  for (ParamKnob* k : knobs_) {
+    const ParamId id = k->Attachment().Param().Id();
+    std::vector<juce::Colour> marks;
+    juce::String              tip;
+    if (s.HasDocument()) {
+      for (const auto& t : s.TargetsOf(id)) {
+        marks.push_back(MacroAccent(t.macro));
+        tip << "Moved by " << s.MacroName(t.macro) << ": " << Fmt(t.lo) << " to " << Fmt(t.hi);
+        if (t.curve != 1.0f) tip << ", curve " << Fmt(t.curve);
+        if (t.inLo != 0.0f || t.inHi != 1.0f) tip << ", over " << Fmt(t.inLo) << "-" << Fmt(t.inHi);
+        tip << "\n";
+      }
+    }
+    const bool detached = !marks.empty() && s.IsDetached(id);
+    const bool due      = pending.count(FindParam(id)->name) != 0;
+    if (!marks.empty()) {
+      tip << (detached ? "Detached: Save keeps this value (editor.detached)."
+                       : due ? "Off its macro's value: Save derives it from the knob, unless detached."
+                             : "Save derives it from the knob's position.")
+          << " Right-click to detach, attach or solve.";
+    }
+    k->SetMarks(marks, detached, due, tip);
+  }
+}
+
+void BrainscapeEditor::ShowLeafMenu(ParamId leaf) {
+  CurationSession& s = processor_.Curation();
+  if (!s.HasDocument()) return;
+  const auto targets = s.TargetsOf(leaf);
+  if (targets.empty()) return;
+  juce::PopupMenu menu;
+  menu.addSectionHeader(FindParamDisplay(leaf)->title);
+  const bool detached = s.IsDetached(leaf);
+  const bool a        = s.GetSide() == CurationSession::Side::Stored;
+  menu.addItem(1, detached ? "Attach to its macros (Save derives it)" : "Detach from its macros (Save keeps this value)",
+               !a);
+  int item = 10;
+  for (const auto& t : targets) {  // a target whose range is one value says nothing of a position
+    menu.addItem(item++, "Solve " + s.MacroName(t.macro) + "'s position from this leaf",
+                 !a && !detached && t.lo != t.hi);
+  }
+  menu.showMenuAsync(juce::PopupMenu::Options(),
+                     [safe = juce::Component::SafePointer<BrainscapeEditor>(this), leaf, targets, detached](int r) {
+                       if (safe == nullptr || r == 0) return;
+                       CurationSession& session = safe->processor_.Curation();
+                       if (r == 1) {
+                         session.SetDetached(leaf, !detached);
+                       } else if (r >= 10 && static_cast<size_t>(r - 10) < targets.size()) {
+                         session.SolvePositions(targets[static_cast<size_t>(r - 10)].macro, leaf);
+                       }
+                       safe->RefreshNow();
+                     });
+}
+
 void BrainscapeEditor::RefreshNow() {
+  CurationSession& s = processor_.Curation();
+  s.Refresh();
+  const bool a = s.HasDocument() && s.GetSide() == CurationSession::Side::Stored;
   for (ParamKnob* k : knobs_) k->Refresh();
+  for (auto& section : sections_) section->setEnabled(!a);
+  RefreshMarks();
+  macros_.Refresh();
+  document_.Refresh();
+  findings_.Refresh();
+  juce::String note;
+  if (s.HasDocument()) {
+    note << juce::String::fromUTF8(s.Stored().name.c_str()) << "   " << kDot << "   "
+         << s.DocumentFile().getFileName() << (a ? "   " + kDot + "   A: stored version" : juce::String())
+         << (s.Dirty() ? "   " + kDot + "   unsaved" : juce::String());
+  } else {
+    note = "No document " + kDot + " the default mode";
+  }
+  tabNote_.setText(note, juce::dontSendNotification);
+  tabNote_.setColour(juce::Label::textColourId, a ? palette::kWarn : s.Dirty() ? palette::kWarn : palette::kTextDim);
   freeze_.setToggleState(processor_.Freeze().get(), juce::dontSendNotification);
   led_.Push(processor_.ConsumeOnsets());
   inMeter_.Push(processor_.ConsumeInputPeak());
@@ -116,8 +278,7 @@ void BrainscapeEditor::paint(juce::Graphics& g) {
   g.drawText("BRAINSCAPE", text.removeFromTop(Scaled(26, scale_)), juce::Justification::bottomLeft, false);
   g.setColour(palette::kTextDim);
   g.setFont(UiFont(13.0f * scale_));
-  g.drawText(juce::String::fromUTF8("granular delay \xc2\xb7 engine test bench"), text,
-             juce::Justification::topLeft, false);
+  g.drawText("granular delay " + kDot + " curation bench", text, juce::Justification::topLeft, false);
 }
 
 void BrainscapeEditor::resized() {
@@ -134,6 +295,10 @@ void BrainscapeEditor::resized() {
   trigger_.SetScale(scale_);
   freeze_.SetScale(scale_);
   status_.SetScale(scale_);
+  macros_.SetScale(scale_);
+  document_.SetScale(scale_);
+  findings_.SetScale(scale_);
+  tabNote_.setFont(UiFont(13.0f * scale_));
 
   auto r  = getLocalBounds();
   header_ = r.removeFromTop(px(kHeaderHeight));
@@ -150,7 +315,22 @@ void BrainscapeEditor::resized() {
   h.removeFromRight(px(18));
   led_.setBounds(h.removeFromRight(px(84)).withSizeKeepingCentre(px(84), px(34)));
 
-  r              = r.reduced(12, kGap);
+  r        = r.reduced(12, kGap);
+  auto tab = r.removeFromTop(px(kTabHeight) - 4);
+  r.removeFromTop(kGap - 2);
+  pedalTab_.setBounds(tab.removeFromLeft(px(96)));
+  tab.removeFromLeft(4);
+  leavesTab_.setBounds(tab.removeFromLeft(px(96)));
+  tab.removeFromLeft(12);
+  tabNote_.setBounds(tab);
+
+  if (view_ == View::Pedal) {
+    auto row1 = r.removeFromTop(juce::jmax(px(196), r.getHeight() * 41 / 100));
+    r.removeFromTop(kGap);
+    macros_.setBounds(row1);
+    LayoutRow(r, {{&document_, 9}, {&findings_, 7}, {&testPanel_, 10}});
+    return;
+  }
   const int rowH = (r.getHeight() - 2 * kGap) / 3;
   auto      row1 = r.removeFromTop(rowH);
   r.removeFromTop(kGap);

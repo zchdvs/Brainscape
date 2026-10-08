@@ -26,13 +26,18 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Audition.h"
+#include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
+#include "Curation.h"
+#include "Lint.h"  // brainscape_compiler: derive, for the saved documents
 #include "PlainAttachment.h"
+#include "gui/CurationViews.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
 #include "TestSupport.h"
 #include "brainscape/InputCondition.h"
+#include "brainscape/ModeEval.h"
 #include "brainscape/ParamDisplay.h"
 #include "brainscape/SoundRevision.h"
 #include "golden/Sha256.h"
@@ -280,6 +285,17 @@ std::string ExactText(ParamId id, float plain) {
   return s.substr(0, e) + "e" + std::to_string(exponent + (hundreds ? 2 : 0)) + (percent ? "%" : "");
 }
 
+// A test document (compiler/tests/data), compiled and decoded as a package loads.
+std::unique_ptr<PresetState> CompiledState(const char* name) {
+  const juce::File file = juce::File(BRAINSCAPE_TEST_DATA).getChildFile(name);
+  const std::string text = file.loadFileAsString().toStdString();
+  const bsc::CompileResult r = bsc::Compile(text);
+  REQUIRE(r.ok);
+  bsc::DecodedPackage p = bsc::DecodePackage(r.package.data(), r.package.size());
+  REQUIRE(p.ok);
+  return std::move(p.state);
+}
+
 std::vector<float> SampleValues(ParamId id, uint32_t seed, int count) {
   const ParamDescriptor* d = FindParam(id);
   std::vector<float>     v = {d->min, d->max, d->def, 7.02f, 0.4f, 0.55f, 1234.5f, -3.3f, 0.1f};
@@ -452,7 +468,8 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
     p.setValue(0.3f);  // a lossy host set maps through the shared taper
     REQUIRE(Bits(p.Plain()) == Bits(PlainFromNormalized(d.id, 0.3f)));
   }
-  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 1);  // + freeze
+  // + freeze, the eight macros, the expression pedal and the effect volume
+  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 11);
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
   // Sound revision 2 retired rows 27 and 28 into mode structure: no longer registered.
   REQUIRE_FALSE(IsLeaf(ParamId::OnsetTrigger));
@@ -460,15 +477,16 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
   REQUIRE(proc.Param(ParamId::FilterMorph).getParameterID() == "post.filter.morph");
 }
 
-// The ID table (mode-compiler.md §4): one host parameter per Leaf row, keyed on its stable
-// name; Reserved rows are not registered, and macro and performance rows join with the macro
-// work (§9.2). Automation follows the shared flags: host model (b) (§3.6, Q12) applies with
-// those macro parameters in lane D (§12.4), so until then sound revision 1's leaves stay
-// automatable, as freeze is.
-TEST_CASE("the plugin registers the Leaf rows under the host model") {
+// The ID table (mode-compiler.md §4, §9.2): one host parameter per Leaf row, then freeze, the
+// eight Macro rows, perf.expression and the effect volume, each keyed on its stable name;
+// Reserved and Retired rows are not registered. Automation follows host model (b) (§3.6, Q12)
+// through the shared flags: the macros, Mix, the effect volume and the performance rows are
+// automatable, every other leaf is registered but not, so a host records the knobs a player
+// turns, not the leaves they fan out to.
+TEST_CASE("the plugin registers the rows of host model (b)") {
   BrainscapeProcessor proc;
   const auto&         params = proc.getParameters();
-  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 1);
+  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 11);
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const ParamDescriptor& d = *FindParam(LeafId(i));
     INFO(d.name);
@@ -476,21 +494,44 @@ TEST_CASE("the plugin registers the Leaf rows under the host model") {
     REQUIRE(p != nullptr);
     REQUIRE(p->Id() == d.id);
     REQUIRE(&proc.Param(d.id) == p);
+    REQUIRE(proc.FindHostParam(d.id) == p);
     REQUIRE(p->getParameterID() == juce::String(d.name));
     REQUIRE(p->isAutomatable() == ((FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u));
-    REQUIRE(p->isAutomatable() == (d.sinceRev == 1u));
+    REQUIRE(p->isAutomatable() == (d.id == ParamId::Mix));
   }
   REQUIRE(proc.Param(ParamId::WetTrimDb).getParameterID() == "wet_trim_db");
   REQUIRE(proc.Param(ParamId::TransposeSt).getParameterID() == "layer0.pitch.transpose_st");
+  REQUIRE(params[static_cast<int>(kNumLeafParams)] == &proc.Freeze());
   REQUIRE(proc.Freeze().isAutomatable());
   REQUIRE(proc.Freeze().getParameterID() == FindParam(ParamId::PerfFreeze)->name);
+  for (size_t k = 0; k < kMaxMacros; ++k) {
+    const auto id = static_cast<ParamId>(static_cast<uint32_t>(ParamId::MacroActivity) + k);
+    INFO(FindParam(id)->name);
+    auto* p = dynamic_cast<BrainscapeParam*>(params[static_cast<int>(kNumLeafParams + 1 + k)]);
+    REQUIRE(p == &proc.Macro(id));
+    REQUIRE(proc.FindHostParam(id) == p);
+    REQUIRE(p->getParameterID() == juce::String(FindParam(id)->name));
+    REQUIRE(p->isAutomatable());
+    REQUIRE(BrainscapeParam::EventTypeFor(id) == WrapperEvent::Type::Macro);
+  }
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 9] == &proc.Expression());
+  REQUIRE(proc.Expression().getParameterID() == "perf.expression");
+  REQUIRE(proc.Expression().isAutomatable());
+  REQUIRE(BrainscapeParam::EventTypeFor(ParamId::PerfExpression) == WrapperEvent::Type::Expression);
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 10] == &proc.EffectVolume());
+  REQUIRE(proc.EffectVolume().getParameterID() == "global.effect_volume_db");
+  REQUIRE(proc.EffectVolume().isAutomatable());
+  REQUIRE(BrainscapeParam::EventTypeFor(ParamId::EffectVolumeDb) == WrapperEvent::Type::Param);
+  REQUIRE(proc.FindHostParam(ParamId::LevelDb) == nullptr);      // Reserved
+  REQUIRE(proc.FindHostParam(ParamId::OnsetTrigger) == nullptr); // Retired
+  REQUIRE(proc.FindHostParam(ParamId::PerfLoopLevel) == nullptr);
   for (const auto* p : params) {
     const auto* w = dynamic_cast<const juce::AudioProcessorParameterWithID*>(p);
     REQUIRE(w != nullptr);
     INFO(w->getParameterID());
     for (const ParamDescriptor& d : kParamTable) {
-      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Macro) {
-        REQUIRE(w->getParameterID() != juce::String(d.name));
+      if (d.kind == ParamKind::Reserved || d.kind == ParamKind::Retired) {
+        REQUIRE((d.name == nullptr || w->getParameterID() != juce::String(d.name)));
       }
     }
   }
@@ -1085,7 +1126,8 @@ TEST_CASE("scripted events reach the engine stamped at their frames, host blocks
 
 // The per-leaf touched set that replaced the 32-bit mask (mode-compiler.md §10.4): an event on
 // any Leaf row, the last ordinal included, writes that leaf's mirror back once applied, and
-// events on rows of other kinds (Reserved, Macro, Global) reach no mirror and no engine state.
+// SetParam events on rows of other kinds (Reserved, Macro) reach no mirror and no engine state.
+// (A macro moves by its own event; the effect volume, a Global row, takes SetParam.)
 TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds change nothing") {
   using E           = WrapperEvent;
   const Stereo in   = MakeInput(4800);
@@ -1102,7 +1144,7 @@ TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds ch
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(d.id), v});
     ref.push_back(RefParam(0, d.id, v));
   }
-  for (const ParamId other : {ParamId::LevelDb, ParamId::MacroActivity, ParamId::EffectVolumeDb}) {
+  for (const ParamId other : {ParamId::LevelDb, ParamId::MacroActivity, ParamId::PerfLoopLevel}) {
     REQUIRE_FALSE(IsLeaf(other));
     proc->PostAt(0, {E::Type::Param, E::Source::Ui, static_cast<uint32_t>(other), FindParam(other)->min});
   }
@@ -1113,7 +1155,6 @@ TEST_CASE("every leaf's mirror follows its applied event; rows of other kinds ch
     INFO(FindParam(LeafId(i))->name);
     REQUIRE(Bits(proc->Param(LeafId(i)).Plain()) == Bits(sent[i]));
   }
-  REQUIRE(proc->getParameters().size() == static_cast<int>(kNumLeafParams) + 1);
   RequireSame(got, RenderReference({}, in, kRate, ref), "the leaf events alone");
 }
 
@@ -1575,6 +1616,25 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
                  std::vector<float>(read.getReadPointer(1), read.getReadPointer(1) + frames)},
                 {want.l, want.r}, "the WAV's samples");
 
+    // The same preset and input through `bspc render`'s S0 (tools/audition): one hash.
+    {
+      bsa::Preset leafOnly;
+      leafOnly.state = std::shared_ptr<const PresetState>(proc->CurrentPreset());
+      bsa::SuiteOptions o;
+      o.scripts = {"S0"};
+      o.wav     = false;
+      o.outDir  = dir.getChildFile("s0").getFullPathName().toStdString();
+      bsa::Renderer          renderer;
+      const bsa::SuiteResult s0 = bsa::RunSuite(renderer, leafOnly, {&leafOnly}, o);
+      bool                   found = false;
+      for (const bsa::Rendered& x : s0.renders) {
+        if (x.plan.name != "S0.engaged.plucks") continue;
+        found = true;
+        REQUIRE(juce::String(x.hashes.whole) == result.outputSha256);
+      }
+      REQUIRE(found);
+    }
+
     // Independent SHA-256s of the interleaved little-endian float32: the whole render and
     // each 1 s segment, as the golden harness hashes them.
     golden::Sha256           sha, segment;  // Hex() finishes a digest and starts the next
@@ -1589,7 +1649,7 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
       segment.Update(bytes, 8);
       if ((i + 1) % 48000 == 0 || i + 1 == want.l.size()) segments.push_back(segment.Hex());
     }
-    REQUIRE(segments.size() == 14u);  // 10 s of signal, a 4 s tail
+    REQUIRE(segments.size() == 20u);  // 10 s of signal, a 10 s tail: S0's input
     REQUIRE(result.outputSha256.toStdString() == sha.Hex());
     const juce::var recipe = juce::JSON::parse(dir.getChildFile("take.recipe.json"));
     REQUIRE(recipe["outputSha256"].toString() == result.outputSha256);
@@ -1604,6 +1664,746 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
     reader.reset();
     dir.deleteRecursively();
   }
+}
+
+// ── Modes, macros and device settings (mode-compiler.md §3.4-§3.8, §9.2) ─────────────────
+
+TEST_CASE("a document loaded before anything has played is an Exact load of its mode") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  auto         proc  = MakeProcessor(Busy(), {});
+  LoadReport   report;
+  REQUIRE(proc->LoadPresetState(*state, &report));
+  REQUIRE(report.exact);
+  REQUIRE_FALSE(proc->GetStatus().lastLoadInexact);
+  const Stereo got = RenderProcessor(*proc, in, {}, {{441}});
+  RequireSame(got, RenderStateReference(*state, in), "engram, Exact");
+  // The mirrors hold the document: its leaves, and its CTRL positions as the macros'.
+  for (uint32_t k = 0; k < state->leafCount; ++k) {
+    INFO(FindParam(static_cast<ParamId>(state->leaves[k].id))->name);
+    REQUIRE(Bits(proc->Param(static_cast<ParamId>(state->leaves[k].id)).Plain()) == Bits(state->leaves[k].value));
+  }
+  REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+  REQUIRE(Bits(proc->Macro(ParamId::MacroSpace).Plain()) == Bits(0.24f));
+  REQUIRE(Bits(proc->Macro(ParamId::MacroFilter).Plain()) == Bits(1.0f));
+  // What the wrapper plays, as a preset: the same state.
+  const auto now = proc->CurrentPreset();
+  REQUIRE(now->leafCount == state->leafCount);
+  for (uint32_t k = 0; k < now->leafCount; ++k) REQUIRE(Bits(now->leaves[k].value) == Bits(state->leaves[k].value));
+  REQUIRE(std::memcmp(&now->mode, &state->mode, sizeof(ModeBlob)) == 0);
+  REQUIRE(std::memcmp(&now->control, &state->control, sizeof(ControlState)) == 0);
+}
+
+TEST_CASE("a document loaded while running is a Spillover load with Trails at the next block") {
+  const auto   state  = CompiledState("engram.json");
+  const Stereo in     = MakeInput(96000);
+  const int    change = 48000;
+  auto         proc   = MakeProcessor(Busy(), {});
+  proc->Freeze().setValueNotifyingHost(1.0f);
+  HostRender r;
+  r.pattern     = {480};
+  r.beforeBlock = [&](int pos) {
+    if (pos == change) REQUIRE(proc->LoadPresetState(*state));
+  };
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  RequireSame(got, RenderReference(Busy(), in, kRate, {RefFreeze(0, true), RefLoad(change, state.get()),
+                                                       RefFreeze(change, false)}),
+              "engram over Busy at frame 48000");
+  REQUIRE_FALSE(proc->Freeze().get());  // the load turned it off
+}
+
+TEST_CASE("a mode whose structure is invalid is refused and changes nothing") {
+  auto state = CompiledState("engram.json");
+  state->mode.macros.macroCount = 9;  // over kMaxMacros
+  BrainscapeProcessor proc;
+  const float before = proc.Param(ParamId::Mix).Plain();
+  LoadReport  report;
+  REQUIRE_FALSE(proc.LoadPresetState(*state, &report));
+  REQUIRE(report.invalidMode);
+  REQUIRE(Bits(proc.Param(ParamId::Mix).Plain()) == Bits(before));
+}
+
+// A host's macro move (§3.6) is a MacroMove: the engine applies the mode's targets, and the
+// wrapper mirrors the same fan-out on the leaves, computed by the same evaluator, so a session
+// saved after the move holds what plays. At every host block pattern.
+TEST_CASE("a host macro move is a MacroMove; the leaf mirrors follow its fan-out") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  for (const auto& pattern : std::vector<std::vector<int>>{{480}, {1, 7, 513}, {0, 4096, 37}}) {
+    auto proc = MakeProcessor({}, {});
+    REQUIRE(proc->LoadPresetState(*state));
+    int        appliedAt = -1;
+    HostRender r;
+    r.pattern     = pattern;
+    r.beforeBlock = [&](int pos) {
+      if (appliedAt >= 0 || pos < 20011) return;
+      proc->Macro(ParamId::MacroTime).setValue(0.8f);
+      proc->Macro(ParamId::MacroActivity).setValue(0.3f);
+      appliedAt = pos;
+    };
+    const Stereo got  = RenderProcessor(*proc, in, {}, r);
+    const float  time = PlainFromNormalized(ParamId::MacroTime, 0.8f);
+    const float  act  = PlainFromNormalized(ParamId::MacroActivity, 0.3f);
+    RequireSame(got, RenderStateReference(*state, in, kRate,
+                                          {RefMacro(appliedAt, ParamId::MacroTime, time),
+                                           RefMacro(appliedAt, ParamId::MacroActivity, act)}),
+                PatternName(pattern).c_str());
+    for (const auto& move : {std::make_pair(ParamId::MacroTime, time), std::make_pair(ParamId::MacroActivity, act)}) {
+      REQUIRE(Bits(proc->Macro(move.first).Plain()) == Bits(move.second));
+      PresetLeaf   out[kMaxMacroTargets];
+      const size_t n = EvalMacro(state->mode, move.first, move.second, out, kMaxMacroTargets);
+      REQUIRE(n > 0u);
+      for (size_t k = 0; k < n; ++k) {
+        INFO(FindParam(static_cast<ParamId>(out[k].id))->name);
+        REQUIRE(Bits(proc->Param(static_cast<ParamId>(out[k].id)).Plain()) == Bits(out[k].value));
+      }
+    }
+    REQUIRE(proc->Param(ParamId::DelayTimeMs).Plain() > 405.0f);  // Time 0.8 is later than 0.5
+  }
+}
+
+TEST_CASE("a macro the mode leaves undefined moves nothing") {
+  const auto   state = CompiledState("engram.json");  // no aux macros
+  const Stereo in    = MakeInput(9600);
+  auto         proc  = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  proc->PostAt(4800, {WrapperEvent::Type::Macro, WrapperEvent::Source::Ui,
+                      static_cast<uint32_t>(ParamId::MacroAux1), 0.9f});
+  const Stereo got = RenderProcessor(*proc, in, {}, {{480}});
+  RequireSame(got, RenderStateReference(*state, in), "aux1 undefined");
+}
+
+TEST_CASE("an expression move fans out through CTRL's assignments") {
+  const auto   state = CompiledState("controls.json");
+  const Stereo in    = MakeInput(48000);
+  auto         proc  = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  REQUIRE(state->control.exprCount > 0u);
+  int        appliedAt = -1;
+  HostRender r;
+  r.pattern     = {441};
+  r.beforeBlock = [&](int pos) {
+    if (appliedAt >= 0 || pos < 12000) return;
+    proc->Expression().setValue(0.6f);
+    appliedAt = pos;
+  };
+  const Stereo got = RenderProcessor(*proc, in, {}, r);
+  const float  pos = PlainFromNormalized(ParamId::PerfExpression, 0.6f);
+  RequireSame(got, RenderStateReference(*state, in, kRate, {RefExpression(appliedAt, pos)}), "expression 0.6");
+  PresetLeaf   out[kMaxTargets];
+  const size_t n = EvalExpression(state->mode, state->control, pos, out, kMaxTargets);
+  REQUIRE(n > 0u);
+  for (size_t k = 0; k < n; ++k) {
+    if (!IsLeaf(out[k].id)) continue;
+    // A leaf two assignments write ends on the later one.
+    bool later = false;
+    for (size_t j = k + 1; j < n; ++j) later = later || out[j].id == out[k].id;
+    if (later) continue;
+    INFO(FindParam(static_cast<ParamId>(out[k].id))->name);
+    REQUIRE(Bits(proc->Param(static_cast<ParamId>(out[k].id)).Plain()) == Bits(out[k].value));
+  }
+}
+
+// global.effect_volume_db (§3.8): a Global row the engine keeps across loads and restarts, so
+// the wrapper restores it after Init and keeps it in the session, never in a preset.
+TEST_CASE("the effect volume is a device setting: kept across loads, re-prepares and sessions") {
+  const auto   state = CompiledState("engram.json");
+  const Stereo in    = MakeInput(48000);
+  SECTION("an edit applies at the next block, and a document load keeps it") {
+    auto proc = MakeProcessor({}, {});
+    proc->EffectVolume().SetPlainNotifyingHost(-6.0f);
+    HostRender r;
+    r.pattern     = {480};
+    r.beforeBlock = [&](int pos) {
+      if (pos == 24000) REQUIRE(proc->LoadPresetState(*state));
+    };
+    const Stereo got = RenderProcessor(*proc, in, {}, r);
+    RequireSame(got, RenderReference({}, in, kRate, {RefParam(0, ParamId::EffectVolumeDb, -6.0f),
+                                                     RefLoad(24000, state.get())}),
+                "-6 dB, then engram");
+    REQUIRE(Bits(proc->EffectVolume().Plain()) == Bits(-6.0f));
+  }
+  SECTION("Init restores it before the start state's Exact load") {
+    auto proc = std::make_unique<BrainscapeProcessor>();
+    proc->EffectVolume().SetPlainNotifyingHost(-9.5f);
+    REQUIRE(proc->LoadPresetState(*state));
+    proc->setRateAndBufferSizeDetails(kRate, 512);
+    proc->prepareToPlay(kRate, 512);
+    const Stereo got = RenderProcessor(*proc, in, {}, {{512}});
+    RequireSame(got, RenderStateReference(*state, in, kRate, {}, {}, -9.5f), "-9.5 dB from Init");
+  }
+  SECTION("the session keeps it; a v1 session plays the default mode") {
+    BrainscapeProcessor a;
+    REQUIRE(a.LoadPresetState(*state));
+    a.EffectVolume().SetPlainNotifyingHost(-3.0f);
+    juce::MemoryBlock blob;
+    a.getStateInformation(blob);
+    auto b = MakeProcessor({}, {});
+    REQUIRE(b->LoadPresetState(*CompiledState("controls.json")));
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(Bits(b->EffectVolume().Plain()) == Bits(-3.0f));
+    const ModeState mode = b->CurrentMode();
+    REQUIRE(std::memcmp(&mode.mode, &ModeState{}.mode, sizeof(ModeBlob)) == 0);
+    REQUIRE(Bits(b->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+    const Stereo got = RenderProcessor(*b, in, {}, {{480}});
+    auto         leaves = std::make_unique<PresetState>();
+    *leaves             = *state;
+    const ModeState defaults{};
+    leaves->mode    = defaults.mode;
+    leaves->control = defaults.control;
+    RequireSame(got, RenderStateReference(*leaves, in, kRate, {RefParam(0, ParamId::EffectVolumeDb, -3.0f)}),
+                "engram's leaves on the default mode, -3 dB");
+  }
+}
+
+TEST_CASE("restart on transport start restarts with the document's mode") {
+  const auto   state   = CompiledState("engram.json");
+  const Stereo source  = MakeInput(4 * 48000);
+  const Stereo preroll = Slice(source, 0, 24000);
+  const Stereo take    = Slice(source, 48000, 120000);
+  const Stereo gap     = Slice(source, 130000, 140000);
+  const Stereo ref     = RenderStateReference(*state, take, kRate, {}, {}, -2.0f);
+  TestPlayHead head;
+  auto         proc = MakeProcessor({}, {});
+  REQUIRE(proc->LoadPresetState(*state));
+  proc->EffectVolume().SetPlainNotifyingHost(-2.0f);
+  WrapperSettings s = proc->GetSettings();
+  s.restartOnStart  = true;
+  proc->SetSettings(s);
+  proc->setPlayHead(&head);
+  const auto play = [&](const Stereo& in, std::vector<int> pattern) {
+    head.playing     = true;
+    const Stereo out = RenderProcessor(*proc, in, {}, {std::move(pattern)});
+    head.playing     = false;
+    return out;
+  };
+  RenderProcessor(*proc, preroll, {}, {{441}});
+  REQUIRE(WaitForSpare(*proc));
+  RequireSame(play(take, {441}), ref, "real time: the spare holds the mode and the volume");
+  REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+  RenderProcessor(*proc, gap, {}, {{441}});
+  proc->setNonRealtime(true);
+  RequireSame(play(take, {512}), ref, "offline: restarted in place with the mode");
+  proc->setPlayHead(nullptr);
+}
+
+// ── The curation slice's document (mode-compiler.md §9.1) ─────────────────────────────────
+
+namespace {
+
+// A scratch directory of the test's own, removed afterwards.
+struct ScratchDir {
+  juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                       .getNonexistentChildFile("brainscape-curation", "", false);
+  ScratchDir() { REQUIRE(dir.createDirectory()); }
+  ~ScratchDir() { dir.deleteRecursively(); }
+  juce::File Copy(const char* name) const {
+    const juce::File to = dir.getChildFile(name);
+    REQUIRE(juce::File(BRAINSCAPE_TEST_DATA).getChildFile(name).copyFileTo(to));
+    return to;
+  }
+};
+
+// Runs the processor (silence in) so the mirrors follow what it applied.
+void Pump(BrainscapeProcessor& p, int frames = 4800) {
+  juce::AudioBuffer<float> buffer(2, 480);
+  juce::MidiBuffer         midi;
+  for (int done = 0; done < frames; done += 480) {
+    buffer.clear();
+    p.processBlock(buffer, midi);
+  }
+}
+
+std::string Text(const juce::File& f) { return f.loadFileAsString().toStdString(); }
+
+std::unique_ptr<bsc::Document> ReadBack(const juce::File& f) {
+  auto                      d = std::make_unique<bsc::Document>();
+  std::vector<bsc::Finding> found;
+  REQUIRE(bsc::ReadDocumentText(Text(f), {}, d.get(), &found));
+  return d;
+}
+
+float StoredPositionOf(const bsc::Document& d, ParamId macro) {
+  for (uint32_t k = 0; k < d.state->control.macroCount; ++k) {
+    if (d.state->control.positions[k].macroId == static_cast<uint32_t>(macro)) return d.state->control.positions[k].position;
+  }
+  return -1.f;
+}
+
+float LeafOf(const bsc::Document& d, ParamId id) { return bsc::FloatOf(d.LeafBits(static_cast<uint32_t>(id))); }
+
+float Eval1(const PresetState& s, ParamId macro, float position, ParamId leaf) {
+  PresetLeaf   out[kMaxMacroTargets];
+  const size_t n = EvalMacro(s.mode, macro, position, out, kMaxMacroTargets);
+  for (size_t k = 0; k < n; ++k) {
+    if (out[k].id == static_cast<uint32_t>(leaf)) return out[k].value;
+  }
+  return -1.f;
+}
+
+}  // namespace
+
+TEST_CASE("the curation session opens a document, plays it and saves it back canonical") {
+  ScratchDir         scratch;
+  const juce::File   json = scratch.Copy("engram.json");
+  const std::string  original = Text(json);
+  auto               proc = MakeProcessor({}, {});
+  CurationSession&   s    = proc->Curation();
+  juce::String       error;
+  REQUIRE(s.Open(json, &error));
+  INFO(error);
+  REQUIRE(s.HasDocument());
+  REQUIRE(s.DocumentFile() == json);
+  REQUIRE_FALSE(s.WritesPackage());
+  REQUIRE(s.StampCurrent());
+  REQUIRE_FALSE(s.Dirty());
+  REQUIRE(s.PendingDerives().empty());
+  REQUIRE(s.MacroName(ParamId::MacroActivity) == "Smear");  // the document's display name
+  REQUIRE(s.MacroName(ParamId::MacroTime) == "Time");
+  REQUIRE(s.MacroDefined(ParamId::MacroSpace));
+  REQUIRE_FALSE(s.MacroDefined(ParamId::MacroAux1));
+  REQUIRE(s.TargetsOf(ParamId::DelayTimeMs).size() == 1u);
+  REQUIRE(s.TargetsOf(ParamId::DelayTimeMs)[0].macro == ParamId::MacroTime);
+  const auto state = CompiledState("engram.json");
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));
+
+  SECTION("an unchanged document saves back byte for byte") {
+    REQUIRE_FALSE(s.SaveChangesFile());
+    const auto r = s.Save();
+    INFO(r.message);
+    REQUIRE(r.written);
+    REQUIRE(r.compiled);
+    REQUIRE(r.derived.empty());
+    REQUIRE(Text(json) == original);
+  }
+  SECTION("a macro move saves its position, and the leaves derived from it") {
+    proc->Macro(ParamId::MacroTime).setValue(0.8f);  // a host move: a MacroMove
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.Dirty());
+    REQUIRE(s.PendingDerives().empty());  // the mirrors already hold the fan-out
+    const auto r = s.Save();
+    REQUIRE(r.compiled);
+    REQUIRE(r.derived.empty());
+    const auto back = ReadBack(json);
+    REQUIRE(Bits(StoredPositionOf(*back, ParamId::MacroTime)) == Bits(0.8f));
+    REQUIRE(Bits(LeafOf(*back, ParamId::DelayTimeMs)) == Bits(Eval1(*state, ParamId::MacroTime, 0.8f, ParamId::DelayTimeMs)));
+    REQUIRE(back->stamped);
+    REQUIRE(back->soundRev == kSoundRevision);
+    REQUIRE_FALSE(s.Dirty());
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.8f));
+    // Canonical: formatting the written text changes nothing.
+    std::string               formatted;
+    std::vector<bsc::Finding> found;
+    REQUIRE(bsc::FormatText(Text(json), &formatted, &found));
+    REQUIRE(formatted == Text(json));
+  }
+  SECTION("a hand-edited targeted leaf is derived back on save, unless detached") {
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.3f);  // Repeats at 0.5 gives 0.45
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.Dirty());
+    REQUIRE(s.SaveChangesFile());
+    REQUIRE(s.PendingDerives().size() == 1u);
+    REQUIRE(s.PendingDerives()[0].find("post.delay.fb") != std::string::npos);
+    auto r = s.Save();
+    REQUIRE(r.derived.size() == 1u);
+    REQUIRE(Bits(proc->Param(ParamId::DelayFb).Plain()) == Bits(0.45f));  // what plays is what saved
+    REQUIRE(Bits(LeafOf(*ReadBack(json), ParamId::DelayFb)) == Bits(0.45f));
+
+    s.SetDetached(ParamId::DelayFb, true);
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.3f);
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(s.PendingDerives().empty());
+    r = s.Save();
+    REQUIRE(r.derived.empty());
+    const auto back = ReadBack(json);
+    REQUIRE(Bits(LeafOf(*back, ParamId::DelayFb)) == Bits(0.3f));
+    REQUIRE(back->detached == std::vector<uint32_t>{static_cast<uint32_t>(ParamId::DelayFb)});
+    REQUIRE(Text(json).find("\"detached\"") != std::string::npos);
+    REQUIRE(s.IsDetached(ParamId::DelayFb));
+  }
+  SECTION("solve position moves a macro to the leaf it should reach") {
+    proc->Param(ParamId::DelayFb).SetPlainNotifyingHost(0.72f);  // Repeats 0.8
+    Pump(*proc);
+    const auto log = s.SolvePositions(ParamId::MacroRepeats);
+    REQUIRE_FALSE(log.empty());
+    const float position = proc->Macro(ParamId::MacroRepeats).Plain();
+    REQUIRE(std::fabs(position - 0.8f) < 1e-6f);
+    // The leaf is now exactly the macro's value at the solved position: nothing left to derive.
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Param(ParamId::DelayFb).Plain()) == Bits(Eval1(*state, ParamId::MacroRepeats, position, ParamId::DelayFb)));
+    REQUIRE(s.PendingDerives().empty());
+    // A derived document solves back to itself.
+    REQUIRE(s.SolvePositions().empty());
+  }
+  SECTION("solve from a leaf that is not the macro's first target") {
+    // The review's case: Smear's third target, scheduler.jitter, set by hand to Smear's value at
+    // 0.5; "Solve Smear's position from this leaf" solves from jitter, not from the overlap.
+    const float want = Eval1(*state, ParamId::MacroActivity, 0.5f, ParamId::Jitter);
+    REQUIRE(want > 0.f);
+    proc->Param(ParamId::Jitter).SetPlainNotifyingHost(want);
+    Pump(*proc);
+    s.Refresh();
+    const auto log = s.SolvePositions(ParamId::MacroActivity, ParamId::Jitter);
+    REQUIRE_FALSE(log.empty());
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Macro(ParamId::MacroActivity).Plain()) == Bits(0.5f));
+    REQUIRE(Bits(proc->Param(ParamId::Jitter).Plain()) == Bits(want));  // the hand-set value stays
+    // Smear's other targets follow the solved position.
+    REQUIRE(Bits(proc->Param(ParamId::Overlap).Plain()) == Bits(Eval1(*state, ParamId::MacroActivity, 0.5f, ParamId::Overlap)));
+    REQUIRE(s.PendingDerives().empty());
+  }
+  SECTION("A/B switches between the stored version and the working state") {
+    proc->Macro(ParamId::MacroTime).setValue(0.8f);
+    proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.6f);
+    Pump(*proc);
+    s.Refresh();
+    const float time = proc->Param(ParamId::DelayTimeMs).Plain();
+    REQUIRE(s.SetSide(CurationSession::Side::Stored));
+    Pump(*proc);
+    REQUIRE(s.GetSide() == CurationSession::Side::Stored);
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
+    REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(0.35f));
+    REQUIRE(s.Dirty());  // the working document waits while A plays
+    REQUIRE(s.SetSide(CurationSession::Side::Working));
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Macro(ParamId::MacroTime).Plain()) == Bits(0.8f));
+    REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(time));
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(0.6f));
+    // Save while A plays saves B.
+    REQUIRE(s.SetSide(CurationSession::Side::Stored));
+    REQUIRE(s.Save().compiled);
+    REQUIRE(s.GetSide() == CurationSession::Side::Working);
+    REQUIRE(Bits(LeafOf(*ReadBack(json), ParamId::Mix)) == Bits(0.6f));
+  }
+  SECTION("a session recall that loads another mode closes the document") {
+    BrainscapeProcessor other;
+    juce::MemoryBlock   blob;
+    other.getStateInformation(blob);
+    proc->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(s.Refresh());
+    REQUIRE_FALSE(s.HasDocument());
+  }
+}
+
+TEST_CASE("the curation session refuses what does not read or compile, and keeps what it has") {
+  ScratchDir       scratch;
+  const juce::File good = scratch.Copy("engram.json");
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(good, &error));
+  const std::vector<bsc::Finding> before = s.Findings();
+  const juce::File bad = scratch.dir.getChildFile("bad.json");
+  REQUIRE(bad.replaceWithText(juce::String(Text(good)).replace("\"size_ms\": 100", "\"size_ms\": 900")));
+  REQUIRE_FALSE(s.Open(bad, &error));
+  REQUIRE(error.contains("E4"));
+  REQUIRE_FALSE(s.RefusedFindings().empty());
+  REQUIRE(s.RefusedFindings().front().code == "E4");
+  REQUIRE(s.RefusedFile() == "bad.json");
+  REQUIRE(s.HasDocument());
+  REQUIRE(s.SourceFile() == good);
+  // The open document's own findings stay: the refused file's errors are not its.
+  for (int i = 0; i < 5; ++i) s.Refresh();
+  REQUIRE(s.Findings().size() == before.size());
+  for (const bsc::Finding& f : s.Findings()) REQUIRE_FALSE(f.error);
+  FindingsPanel panel(s);
+  panel.Refresh();
+  REQUIRE(panel.Rows() >= 1);
+  const juce::File broken = scratch.dir.getChildFile("broken.json");
+  REQUIRE(broken.replaceWithText("{\"schema_version\": 1,"));
+  REQUIRE_FALSE(s.Open(broken, &error));
+  REQUIRE(error.contains("E1"));
+  REQUIRE_FALSE(s.Open(scratch.dir.getChildFile("missing.json"), &error));
+  REQUIRE(s.SourceFile() == good);
+}
+
+// Every document of the compiler's examples and the golden corpus, opened and saved unedited:
+// what Save writes is `bspc derive` then `bspc stamp`, and it is the file itself exactly when the
+// session says Save changes nothing (no pending derive, a current stamp).
+TEST_CASE("saving an unedited document writes what derive and stamp write") {
+  int opened = 0, unchanged = 0;
+  for (const char* dir : {BRAINSCAPE_TEST_DATA, BRAINSCAPE_GOLDEN_PRESETS}) {
+    for (const juce::File& src : juce::File(dir).findChildFiles(juce::File::findFiles, false, "*.json")) {
+      ScratchDir       scratch;
+      const juce::File json = scratch.dir.getChildFile(src.getFileName());
+      REQUIRE(src.copyFileTo(json));
+      const std::string original = Text(json);
+      auto              proc     = MakeProcessor({}, {});
+      CurationSession&  s        = proc->Curation();
+      juce::String      error;
+      if (!s.Open(json, &error)) continue;  // the compiler's refused examples
+      ++opened;
+      INFO(src.getFileName());
+      REQUIRE_FALSE(s.Dirty());
+      const bool changes = s.SaveChangesFile();
+      REQUIRE(changes == (!s.PendingDerives().empty() || !s.StampCurrent() || !s.Canonical()));
+      bsc::Document             doc;
+      std::vector<bsc::Finding> found;
+      REQUIRE(bsc::ReadDocumentText(original, {}, &doc, &found));
+      bsc::Derive(&doc, false, nullptr);
+      const bsc::CompileResult want = bsc::CompileDocument(doc);
+      REQUIRE(want.ok);
+      const auto r = s.Save();
+      REQUIRE(r.compiled);
+      REQUIRE(Text(json) == want.json);
+      REQUIRE((Text(json) == original) == !changes);
+      unchanged += changes ? 0 : 1;
+      REQUIRE_FALSE(s.SaveChangesFile());  // saved: nothing more to change
+    }
+  }
+  REQUIRE(opened >= 20);
+  REQUIRE(unchanged >= 1);
+  // A current stamp and nothing to derive, but not in canonical form (indented by hand): Save
+  // rewrites it, and the session says so.
+  ScratchDir       scratch;
+  const juce::File json = scratch.Copy("engram.json");
+  REQUIRE(json.replaceWithText(juce::String(Text(json)).replace("\n  \"", "\n    \"")));
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(json, &error));
+  REQUIRE(s.StampCurrent());
+  REQUIRE(s.PendingDerives().empty());
+  REQUIRE_FALSE(s.Canonical());
+  REQUIRE(s.SaveChangesFile());
+  REQUIRE(s.Save().compiled);
+  REQUIRE(s.Canonical());
+  REQUIRE_FALSE(s.SaveChangesFile());
+}
+
+// The package beside the document is written with it or not at all (the review's case: a
+// directory where the package goes).
+TEST_CASE("a save whose package cannot be written leaves the pair on disk as it was") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  const juce::File source = scratch.Copy("engram.json");
+  REQUIRE(s.Open(source, &error));
+  const juce::File target = scratch.dir.getChildFile("x.json");
+  REQUIRE(target.replaceWithText("old"));
+  REQUIRE(scratch.dir.getChildFile("x.bsp").createDirectory());
+  const auto r = s.SaveAs(target, true);
+  INFO(r.message);
+  REQUIRE_FALSE(r.written);
+  REQUIRE(r.message.contains("x.bsp"));
+  REQUIRE(Text(target) == "old");  // put back
+  REQUIRE(s.SourceFile() == source);
+  REQUIRE(scratch.dir.getChildFile("x.bsp").isDirectory());
+  // A new pair whose package fails leaves no document behind either.
+  const juce::File fresh = scratch.dir.getChildFile("y.json");
+  REQUIRE(scratch.dir.getChildFile("y.bsp").createDirectory());
+  REQUIRE_FALSE(s.SaveAs(fresh, true).written);
+  REQUIRE_FALSE(fresh.existsAsFile());
+  // And with a writable package path the pair is written.
+  REQUIRE(scratch.dir.getChildFile("x.bsp").deleteRecursively());
+  const auto ok = s.SaveAs(target, true);
+  REQUIRE(ok.written);
+  REQUIRE(ok.compiled);
+  REQUIRE(scratch.dir.getChildFile("x.bsp").existsAsFile());
+}
+
+TEST_CASE("the curation session opens a package and saves the pair") {
+  ScratchDir               scratch;
+  const bsc::CompileResult r = bsc::Compile(Text(juce::File(BRAINSCAPE_TEST_DATA).getChildFile("engram.json")));
+  REQUIRE(r.ok);
+  const juce::File bsp = scratch.dir.getChildFile("engram.bsp");
+  REQUIRE(bsp.replaceWithData(r.package.data(), r.package.size()));
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(bsp, &error));
+  REQUIRE(s.WritesPackage());
+  REQUIRE(s.DocumentFile() == scratch.dir.getChildFile("engram.json"));
+  const auto saved = s.Save();
+  REQUIRE(saved.compiled);
+  juce::MemoryBlock written;
+  REQUIRE(bsp.loadFileAsData(written));
+  REQUIRE(written.getSize() == r.package.size());
+  REQUIRE(std::memcmp(written.getData(), r.package.data(), r.package.size()) == 0);
+  REQUIRE(Text(scratch.dir.getChildFile("engram.json")) == r.json);
+}
+
+TEST_CASE("level matching measures both versions and trims the louder on the monitor output") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(scratch.Copy("engram.json"), &error));
+  const auto wait = [&] {
+    for (int i = 0; i < 4000; ++i) {
+      s.Refresh();
+      const auto m = s.GetLevelMatch();
+      if (m.state == CurationSession::LevelMatch::State::Ready || m.state == CurationSession::LevelMatch::State::Failed) {
+        return m;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return s.GetLevelMatch();
+  };
+  s.SetMatchLevel(true);
+  auto m = wait();
+  REQUIRE(m.state == CurationSession::LevelMatch::State::Ready);
+  REQUIRE(m.storedLufs == m.workingLufs);  // one preset, one input: the same bits
+  REQUIRE(m.trimStored == 0.f);
+  REQUIRE(m.trimWorking == 0.f);
+  proc->Param(ParamId::WetTrimDb).SetPlainNotifyingHost(6.0f);  // B louder
+  Pump(*proc);
+  s.Refresh();
+  std::this_thread::sleep_for(std::chrono::milliseconds(450));
+  for (int i = 0; i < 4000 && s.GetLevelMatch().workingLufs == m.workingLufs; ++i) {
+    s.Refresh();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  m = wait();
+  REQUIRE(m.state == CurationSession::LevelMatch::State::Ready);
+  REQUIRE(m.workingLufs > m.storedLufs + 1.0);
+  REQUIRE(m.trimWorking < -1.f);
+  REQUIRE(m.trimStored == 0.f);
+  s.Refresh();
+  REQUIRE(Bits(proc->MonitorTrimDb()) == Bits(CanonicalGainDb(m.trimWorking)));
+  REQUIRE(s.SetSide(CurationSession::Side::Stored));
+  REQUIRE(proc->MonitorTrimDb() == 0.f);
+  REQUIRE(s.SetSide(CurationSession::Side::Working));
+  s.SetMatchLevel(false);
+  REQUIRE(proc->MonitorTrimDb() == 0.f);
+}
+
+TEST_CASE("one click renders the document through the audition scripts with the pre-screen") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(scratch.Copy("engram.json"), &error));
+  CurationSession::RenderRequest rq;
+  rq.outDir = scratch.dir.getChildFile("renders");
+  REQUIRE(s.StartRender(rq, &error));
+  REQUIRE_FALSE(s.StartRender(rq, &error));  // one at a time
+  CurationSession::RenderStatus st;
+  for (int i = 0; i < 6000; ++i) {
+    s.Refresh();
+    st = s.GetRender();
+    if (st.state != CurationSession::RenderStatus::State::Running) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  INFO(st.message << "\n" << st.summary);
+  REQUIRE(st.state == CurationSession::RenderStatus::State::Done);
+  REQUIRE(st.renders > 0);
+  REQUIRE(st.dir == rq.outDir.getChildFile("factory.engram"));
+  REQUIRE(st.dir.getChildFile("audition.json").existsAsFile());
+  REQUIRE(st.dir.findChildFiles(juce::File::findFiles, false, "*.wav").size() >= 1);
+  REQUIRE(st.summary.contains("factory.engram"));
+}
+
+TEST_CASE("closing the plugin during a render does not wait for it") {
+  ScratchDir   scratch;
+  auto         proc = MakeProcessor({}, {});
+  juce::String error;
+  REQUIRE(proc->Curation().Open(scratch.Copy("engram.json"), &error));
+  CurationSession::RenderRequest rq;
+  rq.allScripts = true;  // half a minute of renders
+  rq.outDir     = scratch.dir.getChildFile("renders");
+  REQUIRE(proc->Curation().StartRender(rq, &error));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  REQUIRE(proc->Curation().GetRender().state == CurationSession::RenderStatus::State::Running);
+  const auto start = std::chrono::steady_clock::now();
+  proc.reset();  // the host removes the plugin
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  REQUIRE(took < 1.0);
+  REQUIRE_FALSE(rq.outDir.getChildFile("factory.engram").getChildFile("audition.json").existsAsFile());
+
+  // Opening another document stops the render of the one it replaces.
+  auto proc2 = MakeProcessor({}, {});
+  REQUIRE(proc2->Curation().Open(scratch.Copy("engram.json"), &error));
+  REQUIRE(proc2->Curation().StartRender(rq, &error));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const auto again = std::chrono::steady_clock::now();
+  REQUIRE(proc2->Curation().Open(scratch.dir.getChildFile("engram.json"), &error));
+  REQUIRE(std::chrono::duration<double>(std::chrono::steady_clock::now() - again).count() < 1.0);
+  const auto st = proc2->Curation().GetRender();
+  REQUIRE(st.state == CurationSession::RenderStatus::State::Failed);
+  REQUIRE(st.message.startsWith("Stopped"));
+}
+
+// The knobs' names are the document's (META): a renamed knob shows its new name on Revert or
+// Open, though the macro table is the same; a document opened over the same mode shows its
+// target counts.
+TEST_CASE("the pedal knobs take their names from the open document") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  MacroPanel       panel(*proc);
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Caption() == "default macro");
+  juce::String     error;
+  const juce::File json = scratch.Copy("engram.json");
+  REQUIRE(proc->Curation().Open(json, &error));
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Smear");
+  REQUIRE(panel.Knob(0).Caption().contains("3 targets"));
+  REQUIRE(json.replaceWithText(juce::String(Text(json)).replace("\"Smear\"", "\"Blur\"")));
+  REQUIRE(proc->Curation().Revert(&error));
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Blur");
+  proc->Curation().Close();
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Activity");
+  REQUIRE(panel.Knob(0).Caption() == "default macro");
+}
+
+// The pedal view's knob (mode-compiler.md §3.5, Q8): after a load it waits until the hand reaches
+// the stored position, then moves the macro; a caught knob follows what the host moves.
+TEST_CASE("a pedal knob picks up after a load, then sends MacroMoves") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  BrainscapeParam& time = proc->Macro(ParamId::MacroTime);
+  PickupKnob       knob;
+  knob.Bind(&time, juce::Colours::white, "Time", "", "");
+  REQUIRE(knob.Caught());  // opened at the value
+  REQUIRE(knob.Pointer() == time.getValue());
+  juce::String error;
+  REQUIRE(proc->Curation().Open(scratch.Copy("engram.json"), &error));
+  // Engram stores Time at 0.5, the knob's pointer too: still caught. Moved to 0.3 by the host:
+  // a caught knob follows.
+  time.setValueNotifyingHost(0.3f);
+  knob.Refresh({});
+  REQUIRE(knob.Pointer() == 0.3f);
+  // A load that stores another position locks it: Spillover-load Engram with Time at 0.7.
+  auto state = CompiledState("engram.json");
+  for (uint32_t k = 0; k < state->control.macroCount; ++k) {
+    if (state->control.positions[k].macroId == static_cast<uint32_t>(ParamId::MacroTime)) {
+      state->control.positions[k].position = 0.7f;
+    }
+  }
+  REQUIRE(proc->LoadPresetState(*state));
+  knob.Lock();
+  knob.Refresh({});
+  REQUIRE_FALSE(knob.Caught());
+  REQUIRE(knob.Pointer() == 0.3f);  // the hand stays where it was
+  knob.MoveTo(0.5f);                // short of 0.7: nothing moves
+  Pump(*proc);
+  REQUIRE_FALSE(knob.Caught());
+  REQUIRE(Bits(time.Plain()) == Bits(0.7f));
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));  // the stored leaf
+  knob.MoveTo(0.75f);  // across 0.7: caught, and the move goes out as a MacroMove
+  Pump(*proc);
+  REQUIRE(knob.Caught());
+  REQUIRE(Bits(time.Plain()) == Bits(0.75f));
+  PresetLeaf out[kMaxMacroTargets];
+  REQUIRE(EvalMacro(state->mode, ParamId::MacroTime, 0.75f, out, kMaxMacroTargets) == 1u);
+  REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(out[0].value));
+  // Double-click catches a locked knob where the value is, sending nothing.
+  REQUIRE(proc->LoadPresetState(*state));
+  knob.Lock();
+  REQUIRE_FALSE(knob.Caught());
+  knob.Bind(nullptr, juce::Colours::white, "", "", "");
+  REQUIRE(knob.Caught());  // a knob with no target has nothing to wait for
 }
 
 TEST_CASE("latency, tail and supported layouts") {
