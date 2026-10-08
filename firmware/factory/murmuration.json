@@ -4,14 +4,14 @@
   "name": "Murmuration",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "b27a9566a7b8f0857ba86398dcdbdd2736986ea33432c1f81e0c21473253cfd1",
+  "sound_hash": "1417835778fe02f9c504ff78fcf3548e74aa34caacb0269e5202f7760ef37d1f",
   "meta": {
     "author": "Brainscape",
     "description": "A dense, randomized grain cloud that flocks around the playing.",
     "tags": ["reverie", "first-set"]
   },
   "global": {
-    "mix": 0.55
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],

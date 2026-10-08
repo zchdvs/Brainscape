@@ -4,18 +4,18 @@
   "name": "Updraft",
   "family": "echoic",
   "sound_rev": 7,
-  "sound_hash": "5d6884fc7d5c1e1aa9f54201dde8b96ddb646101daf3bc98ef4550c25525226d",
+  "sound_hash": "9e31f796bb53a2039b6c33bee20dc86cff7c050c00c8313708c492961a2263e0",
   "meta": {
     "author": "Brainscape",
     "description": "Echoes that climb an octave with every repeat.",
     "tags": ["echoic", "first-set"]
   },
   "global": {
-    "mix": 0.45
+    "mix": 0.4
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
-    "overlap": 0.45,
+    "overlap": 0.6,
     "jitter": 0.18973666,
     "intermittency": 0,
     "burst": {
@@ -25,7 +25,7 @@
   },
   "layers": [
     {
-      "voice_count": 64,
+      "voice_count": 5.84605,
       "position": {
         "source": "live",
         "base_ms": 400,
@@ -102,6 +102,12 @@
           "range": [0, 0.6],
           "in_range": [0, 1],
           "curve": 1
+        },
+        {
+          "param": "layer0.voice_count",
+          "range": [3, 12],
+          "in_range": [0, 1],
+          "curve": 1
         }
       ]
     },
@@ -121,9 +127,9 @@
       "targets": [
         {
           "param": "scheduler.overlap",
-          "range": [0.45, 0.25],
+          "range": [0.6, 0.25],
           "in_range": [0, 1],
-          "curve": 1
+          "curve": 0.5
         },
         {
           "param": "layer0.window.sustain",
@@ -140,6 +146,12 @@
         {
           "param": "layer0.size_ms",
           "range": [120, 190],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.intermittency",
+          "range": [0, 0.4],
           "in_range": [0, 1],
           "curve": 1
         }

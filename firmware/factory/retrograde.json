@@ -4,7 +4,7 @@
   "name": "Retrograde",
   "family": "echoic",
   "sound_rev": 7,
-  "sound_hash": "243ea26a3e849ba715ff6e52d5bfe23de337ff1e8daf38fa2cda06885ab40ed9",
+  "sound_hash": "81217c556b840e6a58b4a3f684d3dc3af205ba8553a4454bf8f94509d1707758",
   "meta": {
     "author": "Brainscape",
     "description": "A reverse delay in crossfaded chunks.",
@@ -25,7 +25,7 @@
   },
   "layers": [
     {
-      "voice_count": 64,
+      "voice_count": 8,
       "position": {
         "source": "live",
         "base_ms": 45.714283,
@@ -96,6 +96,12 @@
           "range": [0, 0.6],
           "in_range": [0, 1],
           "curve": 1
+        },
+        {
+          "param": "scheduler.overlap",
+          "range": [0.32, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
         }
       ]
     },
@@ -114,12 +120,6 @@
       "id": "shape",
       "targets": [
         {
-          "param": "scheduler.overlap",
-          "range": [0.32, 0.25],
-          "in_range": [0, 1],
-          "curve": 1
-        },
-        {
           "param": "layer0.window.sustain",
           "range": [0.6, 0],
           "in_range": [0, 1],
@@ -128,6 +128,18 @@
         {
           "param": "layer0.window.skew",
           "range": [0.5, 0.95],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.voice_count",
+          "range": [8, 1],
+          "in_range": [0, 1],
+          "curve": 0.3
+        },
+        {
+          "param": "scheduler.intermittency",
+          "range": [0, 0.4],
           "in_range": [0, 1],
           "curve": 1
         }

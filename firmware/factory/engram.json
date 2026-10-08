@@ -4,7 +4,7 @@
   "name": "Engram",
   "family": "echoic",
   "sound_rev": 7,
-  "sound_hash": "944b3ec1de7162de251ae125f935a4a672e2bc2fe078ca04a7749b79b6e568c4",
+  "sound_hash": "f3a537060d5d0845c64ec47043d80cf111674bea9782bbc7124bbce9f8a4a6e7",
   "meta": {
     "author": "Brainscape",
     "description": "A clean delay whose repeats land on exact taps; Activity smears what enters it.",
@@ -15,7 +15,7 @@
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
-    "overlap": 0.39685,
+    "overlap": 0.63,
     "jitter": 0,
     "intermittency": 0,
     "burst": {
@@ -25,7 +25,7 @@
   },
   "layers": [
     {
-      "voice_count": 64,
+      "voice_count": 4,
       "position": {
         "source": "live",
         "base_ms": 2,
@@ -102,6 +102,12 @@
           "range": [0, 8],
           "in_range": [0, 1],
           "curve": 1
+        },
+        {
+          "param": "layer0.voice_count",
+          "range": [4, 16],
+          "in_range": [0, 1],
+          "curve": 1
         }
       ]
     },
@@ -121,9 +127,9 @@
       "targets": [
         {
           "param": "scheduler.overlap",
-          "range": [0.39685, 0.25],
+          "range": [0.63, 0.25],
           "in_range": [0, 1],
-          "curve": 1
+          "curve": 0.5
         },
         {
           "param": "layer0.window.skew",
@@ -134,6 +140,12 @@
         {
           "param": "layer0.size_ms",
           "range": [100, 300],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.intermittency",
+          "range": [0, 0.4],
           "in_range": [0, 1],
           "curve": 1
         }

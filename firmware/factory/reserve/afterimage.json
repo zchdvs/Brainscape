@@ -4,14 +4,14 @@
   "name": "Afterimage",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "dc367b32188398f390dcd29ce32961a9444ab4ccced009d2180d6848da213c3a",
+  "sound_hash": "9faf1c55543650f2bcc7a52ef1b3a2df825fef51d2da7a91d1f2d284d3db0e5c",
   "meta": {
     "author": "Brainscape",
     "description": "A short, close grain cloud that lingers just behind the playing.",
     "tags": ["reverie", "reserve"]
   },
   "global": {
-    "mix": 0.4
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -55,7 +55,7 @@
     }
   ],
   "feedback": {
-    "amount": 0.24999999
+    "amount": 0.25
   },
   "post": {
     "mod": {
@@ -104,7 +104,7 @@
       "targets": [
         {
           "param": "feedback.amount",
-          "range": [0, 0.85],
+          "range": [0, 0.65],
           "in_range": [0, 1],
           "curve": 1
         }
@@ -129,6 +129,12 @@
           "param": "layer0.window.sustain",
           "range": [0.25, 0],
           "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.pitch.reverse_prob",
+          "range": [0, 0.5],
+          "in_range": [0.3, 1],
           "curve": 1
         }
       ]
@@ -170,7 +176,7 @@
   "controls": {
     "macro_positions": {
       "activity": 0.42499995,
-      "repeats": 0.29411763,
+      "repeats": 0.3846154,
       "shape": 0.13513513,
       "time": 0.15911146,
       "space": 0.35,

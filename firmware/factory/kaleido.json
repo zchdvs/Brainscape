@@ -4,14 +4,14 @@
   "name": "Kaleido",
   "family": "recall",
   "sound_rev": 7,
-  "sound_hash": "89b75fe755625c02254a3a6f44a5e19648c96380cdacc3366c5e097f683d1ed9",
+  "sound_hash": "82174ce27475b1d179e11c5099aaf354f1474e7a821093cac0c5aa096077d532",
   "meta": {
     "author": "Brainscape",
     "description": "Octave-up loops anchored to the newest onset.",
     "tags": ["recall", "first-set"]
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],

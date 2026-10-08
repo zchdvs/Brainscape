@@ -4,14 +4,14 @@
   "name": "Lull",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "b77bb9e1db8f54481c0b8ab0e3e438023d35e74048d51e5d20fcff7ef635a439",
+  "sound_hash": "5016601d80f1b82ea14595d40b32d990aa9a250e11d54c8c1736ea651ac8b9d1",
   "meta": {
     "author": "Brainscape",
-    "description": "A slow drone that holds what you play; Repeats sets how long it lingers.",
+    "description": "A long, slow wash that holds what you play; Repeats sets how long it lingers.",
     "tags": ["reverie", "first-set"]
   },
   "global": {
-    "mix": 0.6
+    "mix": 0.35
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -110,7 +110,7 @@
       "targets": [
         {
           "param": "feedback.amount",
-          "range": [0.7, 0.97],
+          "range": [0.4, 1],
           "in_range": [0, 1],
           "curve": 0.8
         }
@@ -170,7 +170,7 @@
   "controls": {
     "macro_positions": {
       "activity": 0.2515773,
-      "repeats": 0.6871991,
+      "repeats": 0.79620224,
       "shape": 0.8913044,
       "time": 0.37796447,
       "space": 0.55,

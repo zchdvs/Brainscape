@@ -4,14 +4,14 @@
   "name": "Refrain",
   "family": "recall",
   "sound_rev": 7,
-  "sound_hash": "9d352bfc9e13ed4f9dc6c3adf6408c0a5ec7b6a7a245f1672c1c70507538e5d0",
+  "sound_hash": "c8af188b50ac3262098dc9bb5ce6c6ff74a709defcf831354e0c1098c68ea8db",
   "meta": {
     "author": "Brainscape",
     "description": "Free-running loops at pitch and an octave up; Activity sets how many play.",
     "tags": ["recall", "first-set"]
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.35
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],

@@ -7,7 +7,7 @@
   "sound_hash": "0d4a3b60901644c84f81cd9df09e71bc602a02219c28bf7971c3f8e8d3c0ac2c",
   "meta": {
     "author": "Brainscape",
-    "description": "Each attack scatters a stream of reversed, octave-up shards of itself.",
+    "description": "Each attack scatters a stream of octave-up shards of itself, half of them reversed.",
     "tags": ["misfire", "first-set"]
   },
   "global": {

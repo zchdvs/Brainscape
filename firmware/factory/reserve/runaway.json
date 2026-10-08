@@ -4,14 +4,14 @@
   "name": "Runaway",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "fa3bc405ffe31a94959792bc8cf786025cc998d3bf432dbff7ea7da96395bfc6",
+  "sound_hash": "da84eb4c0c34be47f9abb776816537231127b76fd4fa93a4c8192e9a6199be5b",
   "meta": {
     "author": "Brainscape",
-    "description": "An octave-up shimmer that feeds itself into a bounded, endless swell.",
+    "description": "An octave-up shimmer that feeds on itself into a long swell, then fades.",
     "tags": ["reverie", "reserve"]
   },
   "global": {
-    "mix": 0.6
+    "mix": 0.45
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -94,6 +94,12 @@
         {
           "param": "layer0.pitch.spread_cents",
           "range": [0, 20],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.overlap",
+          "range": [0.47, 0.67],
           "in_range": [0, 1],
           "curve": 1
         }

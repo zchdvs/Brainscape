@@ -4,14 +4,14 @@
   "name": "Recurrence",
   "family": "recall",
   "sound_rev": 7,
-  "sound_hash": "4d16c491f34af5a43ad2247ee96b760a76033ade535aa3248d393678f5572b0b",
+  "sound_hash": "a0d1eb6a93adffa72c8f25a402aef0282c7e1d8e5154c1cacc4bacbbb35f98b4",
   "meta": {
     "author": "Brainscape",
     "description": "Free-running loops at pitch and an octave down; Activity sets how many play.",
     "tags": ["recall", "reserve"]
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.35
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -119,7 +119,13 @@
         },
         {
           "param": "layer0.window.skew",
-          "range": [0.5, 0.15],
+          "range": [0.5, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.intermittency",
+          "range": [0, 0.4],
           "in_range": [0, 1],
           "curve": 1
         }

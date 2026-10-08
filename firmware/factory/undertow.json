@@ -4,14 +4,14 @@
   "name": "Undertow",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "ad0a66b0f92ac743dd418a4cbf3ddde70af072f9360e00467fa9baee6f81fe4a",
+  "sound_hash": "b93e5bef880493381f4d26f8945dc267d4d70bf02ee4b5d1138b39bab0cca35d",
   "meta": {
     "author": "Brainscape",
     "description": "A grain cloud with an octave below pulling under it.",
     "tags": ["reverie", "first-set"]
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -67,9 +67,9 @@
       "depth": 0
     },
     "delay": {
-      "time_ms": 350,
-      "fb": 0.3,
-      "mix": 0
+      "time_ms": 420,
+      "fb": 0.35,
+      "mix": 0.35
     },
     "reverb": {
       "time": 0.5,
@@ -107,8 +107,8 @@
       "id": "repeats",
       "targets": [
         {
-          "param": "feedback.amount",
-          "range": [0, 0.85],
+          "param": "post.delay.fb",
+          "range": [0.15, 0.75],
           "in_range": [0, 1],
           "curve": 1
         }
@@ -168,7 +168,7 @@
   "controls": {
     "macro_positions": {
       "activity": 0.42857137,
-      "repeats": 0.3529412,
+      "repeats": 0.3333333,
       "shape": 0.39999998,
       "time": 0.29111126,
       "space": 0.3,

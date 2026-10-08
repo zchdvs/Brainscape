@@ -4,14 +4,14 @@
   "name": "Downdraft",
   "family": "echoic",
   "sound_rev": 7,
-  "sound_hash": "6b418d327d83cdf025ed61addbb1f0e550a4b71050e5da63ff09c48d1bc8a305",
+  "sound_hash": "b698f6115d682415af656b7707b3b1623adbacc125bcb7953ea2aa6f9e4e88ff",
   "meta": {
     "author": "Brainscape",
     "description": "Echoes that fall an octave with every repeat.",
     "tags": ["echoic", "reserve"]
   },
   "global": {
-    "mix": 0.45
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
@@ -135,6 +135,12 @@
           "param": "layer0.window.sustain",
           "range": [0.55, 0],
           "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "scheduler.intermittency",
+          "range": [0, 0.5],
+          "in_range": [0.25, 1],
           "curve": 1
         }
       ]

@@ -4,14 +4,14 @@
   "name": "Déjà Vu",
   "family": "reverie",
   "sound_rev": 7,
-  "sound_hash": "bb673c575838c8333a0cef63aa93ef7be1bcdccddc8b60507b51d3cb3b1ff9b3",
+  "sound_hash": "416d47693884dbf68bd9342a8ca2bf56a9716d3a865f9234bab8a7d66ec8d4db",
   "meta": {
     "author": "Brainscape",
     "description": "Phasing copies of the newest onset, fading as it ages.",
     "tags": ["reverie", "first-set"]
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.3
   },
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
