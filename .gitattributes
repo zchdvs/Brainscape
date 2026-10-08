@@ -8,3 +8,7 @@
 /firmware/factory/MANIFEST text eol=lf
 # Packages are bytes: never converted, never diffed as text.
 *.bsp binary
+# Silicon records (firmware/records/): device captures, kept byte for byte as the host tools saved
+# them (CRLF on the owner's Windows machine). No commit or checkout may convert them.
+/firmware/records/**/*.log -text
+/firmware/records/**/*.json -text
