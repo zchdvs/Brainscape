@@ -22,7 +22,8 @@ vocabulary (revisions 4–7, lane F: trigger sources, bursts and intermittency; 
 micro-loop repeat and decay; per-layer voice count), and `dsp/tests/golden/golden.json` holds
 the hashes of a 45-preset corpus, 23 of them loaded from packages that `bspc` compiled. MSVC
 reproduces it at any block size and from a hostile caller floating-point environment, and so do
-GCC 11, Clang 14 and the Cortex-M7 code run under emulation, at revisions 3 to 7 each; CI fails a
+GCC 11, Clang 14 and the Cortex-M7 code run under emulation, at revisions 3 to 7 each; at
+revision 3 the Cortex-M7 code reproduced its file in CI and on the Seed Rev7 itself too; CI fails a
 pull request that changes them (see [Internal sound revisions 4–7](#internal-sound-revisions-47-wave-1),
 [3](#internal-sound-revision-3), [2](#internal-sound-revision-2) and
 [1](#internal-sound-revision-1)). A JUCE
@@ -31,11 +32,17 @@ with reproducible bounces and an offline audition render; lane D's curation slic
 documents and packages in it, plays them with their modes, edits them with the pedal's macro
 knobs (with pickup) and the raw leaves, and saves canonical JSON through the compiler. The Daisy
 Seed Rev7 bring-up images (parity, bench, live) build at sound revision 7 and carry the corpus's
-packages. **Step 4's first factory set is authored and pre-screened** (see
+packages. On the owner's Rev7 (2026-10-07) the parity image rendered the golden corpus bit for bit
+at sound revisions 1 and 3, and the DWT pass (revision 1) showed that **the worst-case CPU budget
+is not met**: a fix is under design, with owner decisions pending
+([the silicon record](design/reviews/rev7-silicon-record.md)); revisions 4 to 7 have not run on
+the board. **Step 4's first factory set is authored and pre-screened** (see
 [Step 4: the first factory set](#step-4-the-first-factory-set)): 14 modes and 4 reserves in
 `firmware/factory/`, every one passing the objective pre-screen at revision 7; the owner's
-listening pass is next. Nothing has touched real hardware, and the preset
-jobs that mode-compiler lane G added to CI have not yet run on GitHub.
+listening pass is next. The preset
+jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull requests #5
+(run 37658865968), #6 (run 37693138971) and #7 (run 37701943741); wave 1, lanes E and D and the
+factory set have not yet run on GitHub.
 
 | Phase | State |
 | --- | --- |
@@ -45,13 +52,13 @@ jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 | `dsp/` core: grain scheduler + 64-voice pool | ✅ Shipped & hardened (block-split defect found and fixed 2026-10-05) |
 | `dsp/` core: post chain + feedback taming | ✅ Shipped & hardened |
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
-| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg; then the hardware measurements and the decisions they gate |
+| Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg. The hardware measurements are taken (Rev7, revision 1, [record](design/reviews/rev7-silicon-record.md)): gradual underflow stays; explicit FMA (now a candidate under §7.3's rule), kernels or tables and the default load mode stay open beside the CPU budget's fix |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters under host model (b) with the macro, expression and effect-volume parameters, Restart on transport start, offline audition; lane D's curation slice (mode-compiler.md §9.1): a preset document or package opened, played with its mode, edited with the pedal's eight knobs (pickup, Shift) and the raw leaves, saved as canonical JSON through the compiler (derive, solve position, the compiler's errors and lint), A/B against the stored version with level matching, and a one-click render through `tools/audition`; no library, session v2 or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it, and wave 1 at sound revisions 4–7 (lane F: trigger sources, bursts, intermittency, pitch sets, micro-loop repeat and decay, voice count); lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash and the authoring history); and lane D's curation slice in the app (above). Step 4's first factory set ([firmware/factory](../firmware/factory/README.md): 14 modes in all four families and 4 reserves, every one passing the pre-screen at revision 7) awaits the owner's listening pass. Next: that pass, then W2's CLOCK |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 29 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset; awaiting the owner's bench session |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending. Not yet run on the board: the live image, the bench at revision 3, any image at revisions 4 to 7 |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -215,8 +222,8 @@ from packages (29 packages, some only loaded mid-render).
 
 **What changed in the packages.** A new leaf joins every package's STAT at its default (the
 compiler writes every Leaf row, design §6.4), so at revisions 4, 6 and 7 every corpus package's
-`sound_hash` changed while its render did not, and each of those three pull requests needs the
-package rule's `package-change` label with its cause (`Package-change: wave 1's leaves 57-59
+`sound_hash` changed while its render did not, and the pull request that carries each of those
+revisions needs the package rule's `package-change` label with its cause (`Package-change: wave 1's leaves 57-59
 join every package's STAT`, then 29–30, then 31); revision 5 only re-stamped them. The frozen
 fixtures keep their bytes and change their verdicts as the design said they would:
 `future-pitch-set.bsp` decodes and validates since revision 5, `w1-leaf-macro-target.bsp` and
@@ -323,15 +330,27 @@ and formatting), GCC 11 and Clang 14 reproduce it too: GCC 11 Release ctest 19/1
 and the harness at blocks of 1, 48 and 512, both mixed patterns, random patterns 1 and 2, a
 hostile caller, split delivery and fresh engines (33 of 33 presets each), and the package
 fuzzer's re-minted digest; GCC 11 Debug ctest 19/19 and four harness patterns; Clang 14 Release
-ctest 19/19 and blocks of 48 and 512 and a hostile caller. The M7 oracle under
-`qemu-arm -cpu cortex-m7` reproduces it too. Its first run was cut off when Docker stopped (every
-hash that arrived matched), and lane F's review ran it in full on revision 3's last tree (the Mix law
-review's, whose engine archive and golden file are the commit's): the golden
-check at blocks of 48, 1 and 512, both mixed patterns, random pattern 1 and a hostile caller, and
-the forced-flush control, 33 of 33 presets each; the parity stream in the parity image's placement
-at `maxBlockSize` 48 and 512 (33 presets, 18 packages) and on the hostile quick set (29); and the
-package fuzzer's digest and the 15 frozen fixtures. Its archive built on Linux is the one above,
-and the arm symbol, flag and armv7 fused audits report 0.
+ctest 19/19 and blocks of 48 and 512 and a hostile caller. **The M7 at revision 3.** The local
+run of the M7 oracle under `qemu-arm -cpu cortex-m7` was cut off when Docker stopped, every hash
+that arrived matching the file (17 of 33 presets at blocks of 48 and 512, {48, 1, 127, 32}, random
+1 and a hostile caller, 11 at blocks of 1, 10 under the forced-flush control, 17 in the parity
+streams at `maxBlockSize` 48 and 512 and 25 in the hostile quick set). CI's `parity-m7` job then
+rendered the whole corpus, on pull requests #6 (run 37693138971) and #7 (run 37701943741) and on
+`main` at `4090270` (run 37700307648): the archive
+`1d6fe1dc…` under QEMU 10.2.3 matches the file on all 33 presets at blocks of 48 and 512,
+{48, 1, 127, 32}, random pattern 1, from a hostile caller and under the forced-flush control, the
+parity stream at `maxBlockSize` 48 in the parity image's placement matches the file and
+`MANIFEST`, and the package fuzzer's digest and the 15 fixtures match. Lane F's review ran the
+local run in full on revision 3's last tree (the Mix law review's, whose engine archive and golden
+file are the commit's): the golden check at blocks of 48, 1 and 512, both mixed patterns, random
+pattern 1 and a hostile caller, and the forced-flush control, 33 of 33 presets each; the parity
+stream in the parity image's placement at `maxBlockSize` 48 and 512 (33 presets, 18 packages) and
+on the hostile quick set (29); and the package fuzzer's digest and the 15 frozen fixtures. Its
+archive built on Linux is the one above, and the arm symbol, flag and armv7 fused audits report 0.
+On 2026-10-07 the Rev7 itself rendered the whole corpus bit for bit at `maxBlockSize` 512 and 48
+and from a hostile caller, the 18 packages matching `MANIFEST`
+([the silicon record](design/reviews/rev7-silicon-record.md) §2). 1-frame blocks have run in full
+on the M7 at revision 3 only under emulation, in lane F's run.
 
 ## Internal sound revision 2
 
@@ -434,15 +453,24 @@ run in every build, so `host.yml` and `plugin.yml` gate on the file as well. `so
 (companion-app.md §3.4's `sound-rev-gate`) fails a pull request that changes a golden hash
 without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp/src`,
 `dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
-forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
-bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
-Its package rule (mode-compiler.md §8.3, lane G) fails one that changes a committed package's
-`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
-`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the
-"package-change" label and a `Package-change: <cause>` line in its description, and counts a
-package preset's changed render as an engine change unless its package changed too and the pull
-request touches no path-trigger path without a bump; no package is committed yet, so it binds
-from sound revision 2.
+forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label.
+It checks bumps per commit: each revision is one commit that raises `kSoundRevision` by exactly
+one, and its golden file is minted (`brainscape_golden --mode mint`) at that revision, by that
+commit or a later one before the next bump; a pull request may carry several consecutive
+revisions. It walks every commit the pull request adds and fails a commit that lowers the
+revision or skips a number, a revision two commits introduce or one the base already has, and a
+revision no commit at that revision minted; the walk needs the whole history, so the job checks
+out with `fetch-depth: 0` and the gate fails on a shallow clone. It checks a golden file below
+the head's revision by its key and the commit that wrote it, not by rendering it (parity and
+host render the head's), so each revision commit is pushed and passes them as the pull
+request's head before the next one; and the rule holds on `main` only for pull requests merged
+with a merge commit (Known gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull
+request that changes a committed package's `soundHash` or `controlHash` (a golden preset's, a
+corpus or factory package's in `dsp/tests/golden/presets/MANIFEST` or
+`firmware/factory/MANIFEST`) without the "package-change" label and a `Package-change: <cause>`
+line in its description, and counts a package preset's changed render as an engine change
+unless its package changed too and the pull request touches no path-trigger path without a
+bump; no package is committed yet, so it binds from sound revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
 an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
@@ -466,11 +494,12 @@ the harness of the mint (`06557f3`) passed all of them but the changed counter. 
 self-test runs 26 synthetic pull requests on every run.
 
 **What remains.** The rest of profile step 10 ([Known gaps](#known-gaps-and-deferred-work)) and
-the nightly legs (profile step 11). On hardware, the DWT measurements and
-the decisions they gate (subnormal cost and the flush, explicit FMA, polynomial kernels or
-tables, `Restart` time and the pedal's default load mode), each adopted one bumping the
-revision. The resampled 48 kHz plugin mode, the mode compiler, the `.bsp` preset package and
-the device link with its PARITY check ([Next steps](#next-steps-recommended-order) 3–5).
+the nightly legs (profile step 11). On hardware, the DWT measurements are taken (2026-10-07, on
+revision 1; [the silicon record](design/reviews/rev7-silicon-record.md)): they keep gradual
+underflow and the engine's flush, and measure `Restart`; the decisions they leave (explicit FMA,
+polynomial kernels or tables, the pedal's default load mode) and the CPU budget's fix remain,
+each adopted change bumping the revision. The resampled 48 kHz plugin mode, the mode compiler,
+the `.bsp` preset package and the device link with its PARITY check ([Next steps](#next-steps-recommended-order) 3–5).
 
 ## What the engine does today
 
@@ -700,7 +729,7 @@ tests are green in Release and Debug with MSVC 19.40 and GCC 11 and in Release w
 the compiler's digests and manifest identical on all three (GCC 14, and Clang 14 in Debug,
 were last run before the ID table; at sound revisions 2 and 3 MSVC AVX2 ran the whole suite too;
 at revisions 3 to 7 GCC 11, Clang 14 and the emulated M7 ran in lane F's review, GCC's Debug suite
-at 6 and 7), and the emulated M7 runs
+at 6 and 7, and at revision 3 the emulated M7 ran in CI's `parity-m7` job too), and the emulated M7 runs
 the package fuzzer and fixtures beside the golden check; the plugin tests with MSVC, Release
 and Debug (Linux and macOS plugin builds are left to CI).
 **CI**: `host.yml` (Linux/macOS/Windows with `-Werror`, Debug+ASan/UBSan, Release+ASan, a
@@ -735,15 +764,26 @@ records live in [docs/design/reviews/](design/reviews/).
 
 ## Known gaps and deferred work
 
-- **Parity is proven on emulation, not yet on silicon.** The owner prototypes on a Daisy Seed Rev7
+- **Parity holds on silicon; the CPU budget does not.** The owner prototypes on a Daisy Seed Rev7
   (STM32H750, PCM3060), with a custom H750 board later; the Rev7 parity, DWT bench and live-audio
   images are built at sound revision 7 and fit their memory; at revisions 2 to 7 they passed
   every off-hardware check (the parity stream's code matched each revision's golden file and the
   packages' `MANIFEST` under `qemu-arm -cpu cortex-m7` in the parity image's own memory
-  placement); they wait for the bench
-  ([firmware/README.md](../firmware/README.md)). They use libDaisy's ST USB code and must not be
-  distributed. The first GitHub runs (2026-10-06) rendered the golden corpus bit-identically
-  on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
+  placement) ([firmware/README.md](../firmware/README.md)). On the owner's Rev7 on 2026-10-07
+  ([the silicon record](design/reviews/rev7-silicon-record.md); the captures and the commands that
+  re-check them in [`firmware/records/rev7-2026-10-07/`](../firmware/records/rev7-2026-10-07/README.md)),
+  the parity image rendered the golden corpus bit for bit at sound revision 1 (28 presets) and
+  revision 3 (33 presets, its 18 packages matching `MANIFEST`), each at `maxBlockSize` 512 and 48
+  and from a hostile caller. The DWT pass ran on revision 1's three bench builds and found **the
+  worst-case CPU budget not met**: with the engine's code in ITCM and warm caches, the nominal
+  64-voice row peaks at 99.1 % of the 480,000-cycle block (100.3 % cold), the pessimistic rows at
+  135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
+  `dense_1ms`, a live-image preset, at 118.6 %.
+  A fix is under design, with owner decisions pending; none of it is in this tree. Still to run
+  on the board: the live image's checks, the bench at revision 3 and every image at revisions 4
+  to 7. The images use libDaisy's
+  ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
+  golden corpus bit-identically on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
   `macos-14` and AppleClang 21 on `macos-latest`) and the Cortex-M7 under QEMU 10.2.3, whose
   engine archive was byte-identical to a local build (`4f4ddaa3…`). The ARM toolchain's MD5
   passed against Arm's download and QEMU is now pinned to the commit that run recorded. The
@@ -759,7 +799,8 @@ records live in [docs/design/reviews/](design/reviews/).
   §5.12 and §6.1 require, and, from mode-compiler lane G, `compiler/`, `tools/bspc/`,
   `firmware/factory/` and the root `.gitattributes` (mode-compiler.md §8.1, §8.3; the golden
   corpus's packages sit under `dsp/`).
-  Lane G adds eight checks for the owner to require once they have run: `bspc-roundtrip` on
+  Lane G adds eight checks, which have run and passed (Mode compiler lane G's open ends), for
+  the owner to require: `bspc-roundtrip` on
   `linux-x64-gcc`, `linux-x64-clang`, `linux-arm64-gcc`, `windows-x64-msvc`,
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
@@ -773,6 +814,15 @@ records live in [docs/design/reviews/](design/reviews/).
   bypass, which the protection allows on purpose. Running `sound-rev-gate` from the base
   branch (`pull_request_target`) would not close the first caveat alone, since a pull request
   can add a workflow whose job has the same name.
+- **Squash and rebase merging are still allowed** (2026-10-07). `sound-rev-gate` checks
+  GitHub's test merge of a pull request, and its per-commit rule holds on `main` only when the
+  pull request lands as a merge commit. A squash merge of one that carries r2 and r3 lands a
+  single commit that raises `kSoundRevision` from 1 to 3, and no check reads `main`'s history
+  afterwards; a rebase merge lands copies of the pull request's commits, so a branch built on
+  the originals claims revisions `main` already has until it is rebased. Owner merges go
+  through the administrator bypass, so the method is picked by hand each time: merge with a
+  merge commit until the owner turns squash and rebase merging off (Settings, General, Pull
+  Requests).
 - **Profile step 10 is not finished** (determinism-profile.md §8.4 lists it). Not yet built:
   the engine-side coverage counters (births, steals, reverse and mark-positioned births,
   re-anchors, far-rail clamps, blocks with an underflow flag, the write-ahead counter) and the
@@ -831,9 +881,13 @@ records live in [docs/design/reviews/](design/reviews/).
     of the figures above); the parity stream in the
     image's placement under `qemu-arm -cpu cortex-m7` matches the revision-2 `golden.json` and
     `MANIFEST` on the whole corpus at `maxBlockSize` 48 and 512 and on the quick set from a hostile
-    caller, and so does each revision's from 3 to 7 (lane F's review); the static audits report 0 on the firmware build (256
+    caller, and so does each revision's from 3 to 7 (lane F's review; at revision 3 CI's
+    `parity-m7` job runs it at `maxBlockSize` 48 too, and the Rev7 itself matched at 48 and 512 and
+    from a hostile caller); the static audits report 0 on the firmware build (256
     translation units); `parity_check.py` passes the intact stream and gives the intended verdict
-    on 14 damaged revision-2 streams. Still needs the board: everything in firmware/README.md §6.
+    on 14 damaged revision-2 streams. On the board since (2026-10-07): the parity and bench items
+    of firmware/README.md §6 ([the silicon record](design/reviews/rev7-silicon-record.md)); the
+    live items are still to do.
   - The firmware now spells IDs 4 and 8 `WetTrimDb` and `TransposeSt`; the old `OutTrimDb` and
     `PitchSt` in `Params.h`, kept for this merge, remain only for the `tools/parity/bugcheck`
     probes. The live image's 16 `PresetState`s (2,656 bytes each) sit in `.data`, since their
@@ -888,10 +942,15 @@ records live in [docs/design/reviews/](design/reviews/).
   and CODEOWNERS for `compiler/`, `tools/bspc/`, `firmware/factory/` and `.gitattributes`. The
   compiler's digests, like the number code's hashes, are measured on x86-64 only until those
   legs first run on GitHub. `render` came with lane E's `tools/audition/`.
-- **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run is
-  the gate for the number code's and the compiler's digests on arm64 and macOS (above), and for
-  `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
-  locally the new steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
+- **Mode compiler lane G's open ends.** Lane G's jobs have run on GitHub since pull request #5:
+  its first run (37657240905) aborted `compiler_number_hashes` on the two Linux GCC legs at a
+  fortified buffer in the test's random generator (fixed in `7f20481`), and its second
+  (37658865968) and those of #6 and #7 (37693138971, 37701943741) passed all eight jobs,
+  `compiler_number_hashes` and `bspc roundtrip` on linux-arm64 and both macOS legs included.
+  Those runs were the gate for the number code's and the compiler's digests on arm64 and macOS
+  (above), and for `bspc`'s non-ASCII file names and the import check on macOS, which no host
+  here offered; the "provisional" and "x86-64 only" wording above predates them. Locally the new
+  steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
   later lanes must write for the package rule: lane C's harness puts `soundHash` and
@@ -961,10 +1020,11 @@ records live in [docs/design/reviews/](design/reviews/).
   layers (W3), a burst gain or velocity (W2's trigger velocity). Wave 1 grew the images' ITCM by
   about 4.4 KiB: the live image's is at 94.4% (60.4 KiB, 87.5% at revision 3) and the parity
   image's at 91.2%, so the next wave moves cold engine code (`Validate` first) out of ITCM. The
-  four revisions land as four pull requests in order, one commit each: the sound-revision gate
-  passes each commit's diff (with the package-change label at 4, 6 and 7, above) and refuses one
-  pull request spanning them, since a bump is exactly one; the review's fixes and these docs
-  follow the last of them, with no bump and no label. Nothing lane F added has run on
+  four revisions are one commit each, each minting its own golden file: since pull request #7 the
+  sound-revision gate checks them commit by commit, so one pull request may carry all four (with
+  the package-change label for 4, 6 and 7, above), provided each revision commit passes parity and
+  host as the pull request's head before the next is pushed, since those render only the head's
+  golden file; the review's fixes and these docs follow the last of them, with no bump. Nothing lane F added has run on
   GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision (lane F's
   review). A local check that review added: `audit_symbols.py --toolchain arm` on the Windows
   M7 oracle's archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).
@@ -1015,13 +1075,20 @@ records live in [docs/design/reviews/](design/reviews/).
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs
   a pinned libDaisy patch, TinyUSB (MIT) for USB, and its own SD disk-I/O layer — see
   companion-app.md. Not yet reviewed by a lawyer.
-- **M7 budget pass (design §8/§10 gates)**: all §8 numbers remain derived, not
-  DWT-measured. The scheduler's 64-slot sweep wants a free bitmask; segment batching at
-  extreme birth rates; the detector's per-hop FFT is a single-sample cost spike (~2–2.4× the
-  budgeted pessimistic row in its worst block) that likely wants stage-splitting. The
-  determinism profile adds costs to measure (contraction off, in-tree math at the maximum
-  birth rate, denormal flush sites, subnormal timing); **hardware measurement gates
-  everything**.
+- **M7 budget pass (design §8/§10 gates): measured, and the worst case does not fit.** The DWT
+  pass on the Rev7 (2026-10-07, sound revision 1;
+  [the silicon record](design/reviews/rev7-silicon-record.md) §3) replaces §8's derived
+  totals: the nominal row costs 7,774 cycles/sample on average (77.7 %) and 9,915 in its worst
+  warm block (99.1 %; 100.3 % cold), the pessimistic rows 8,922–11,958 on average and up to
+  16,847 (168.5 %), against §8's ≈2,950–3,700 and ≈6,800 (3,200–4,050 and 7,700–7,800 with the
+  determinism profile's costs). By difference, 64 voices against 1 cost 6,549 cycles/sample in
+  the pessimistic configuration (§8: ≈4,000 for the grain render), and a birth at most 6,203
+  cycles (§8: ≈530 cycles/sample at 1 ms grains). Of the profile's costs, subnormal operations
+  cost nothing extra and the flush 0.9–1.8 %; contraction off is inside every figure, not
+  isolated. A fix is under design, with owner decisions pending. From the design, still: the
+  scheduler's 64-slot sweep wants a free bitmask; segment batching at extreme birth rates; the
+  detector's per-hop FFT is a single-sample cost spike (~2–2.4× the budgeted pessimistic row in
+  its worst block) that likely wants stage-splitting.
 - **Trigger layer**: no sidechain input; detector constants are calibrated for 44.1/48 kHz
   (the plugin design runs the engine at 48 kHz and resamples at other host rates; until that
   mode lands, the skeleton runs it at the host rate).
@@ -1075,12 +1142,16 @@ Steps 1–4 need no hardware.
    **feel**, which only the owner's ears can judge), ratings and the exit criteria; then the
    keepers join the golden corpus. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
-5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On a
-   Daisy Seed3: the DWT measurement pass and the decisions it gates (subnormal cost and the
-   flush, explicit FMA, polynomial kernels or tables, `Restart` time, and the pedal's
-   default load mode); the pedal side of the device link (TinyUSB, GPL-clean SD disk I/O,
-   the preset slot store, the upload protocol with its PARITY check, the firmware update
-   path, and the engine's SPSC event queue for the firmware's producers); and the app side
+5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
+   Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
+   (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
+   subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
+   Next, the CPU budget's fix (under design, owner decisions pending; the worst case is not
+   met) and the decisions the pass leaves (explicit FMA, polynomial kernels or tables, the
+   pedal's default load mode); the live image's checks; the pedal side of the device link
+   (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY
+   check, the firmware update path, and the engine's SPSC event queue for the firmware's
+   producers); and the app side
    (upload, download, verified upload, sound-revision skew handling). A desktop pedal
    simulator lets the protocol work start before the hardware is finished. Each adopted
    hardware-gated decision bumps the internal sound revision.

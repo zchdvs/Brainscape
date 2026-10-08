@@ -288,7 +288,7 @@ The existing jobs in `.github/workflows/host.yml` stay. The profile owns the par
 | `boundary-grep` | No `#include <juce` outside `plugin/`, so none under `dsp/`, `protocol/`, `link/`, `firmware/` or `tools/` (§3.5). | seconds |
 | `bspc-roundtrip` | Every factory JSON compiles to identical bytes on all three OSes, equal to the committed `firmware/factory/*.bsp` (§6.6). | small |
 | `firmware-elf-audit` | From the **first** firmware image, test images included: no ST USB or SD-glue symbol (`USBD_*`, `USBH_*`, `SD_Driver`) or object from libDaisy's `src/usbd/`, `src/usbh/`, `src/util/*diskio*` or ST's USB middleware (§7.2); no GOT relocation in the `dsp/` archive (§3.2). | seconds |
-| `sound-rev-gate` | Profile §5.12's triggers: a diff under `dsp/src` or `dsp/include`, or to `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the forbidden-flag list or the arm toolchain file, needs a `kSoundRevision` bump or a CODEOWNERS-approved "sound-neutral" label; a golden-hash change always needs the bump. | seconds |
+| `sound-rev-gate` | Profile §5.12's triggers: a diff under `dsp/src` or `dsp/include`, or to `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the forbidden-flag list or the arm toolchain file, needs a `kSoundRevision` bump or a CODEOWNERS-approved "sound-neutral" label; a golden-hash change always needs the bump. Bumps are checked per commit: each revision is one commit that raises `kSoundRevision` by exactly one, and its golden file is minted at that revision, by that commit or a later one before the next bump; a pull request may carry several consecutive revisions; the job checks out the whole history (`fetch-depth: 0`) to walk them and fails on a shallow one, and the rule holds on `main` only for pull requests merged with a merge commit. | seconds |
 
 **Implementation constraints.** `plugin/parity-host` is built on JUCE's own plugin hosting
 (`juce::AudioPluginFormatManager`, which loads VST3, AU and LV2) and adds a minimal CLAP host
@@ -479,6 +479,13 @@ option and PARITY. On the pedal it costs about **45–160 ms** (*estimated*; rec
 §5.8's two alternatives, a restart watermark that would remove the wet mute (it must reproduce
 the clearing implementation's golden hashes) and a DMA2D fill, are proposed but not yet
 prototyped, and are evaluated before the default load mode is chosen (§10.2 Q20).
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** `Restart` is measured on the owner's
+> Daisy Seed Rev7: 47.18 ms after 2 s of rendering (an Exact load 47.17 ms), of which clearing
+> 16 MiB of SDRAM at the core's floor without DMA is 44.97 ms; 0.02 ms on an engine that has
+> rendered nothing since. The default load mode no longer waits on the measurement, only on the
+> two alternatives above, neither yet prototyped, and the owner's choice
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
 
 **Offline audition render:** a separate `Engine` on a worker thread, canonical configuration,
 `LoadPreset(Exact)`; input decoded with `juce::AudioFormatManager`, converted once to 48 kHz if
@@ -878,6 +885,12 @@ The mode schema and `modes::Compile` get their own design document (merged step 
 | Cost | ≈45–160 ms on the pedal (*estimated*, §4.9), or none if the restart watermark (§4.9, not yet prototyped) proves out | a stamped event, no large clears (§6.1) |
 | Pedal | global setting "Exact preset load" | recommended default, pending the DWT measurement of `Restart` (§10.2 Q20) |
 | App | audition, offline render, PARITY, plugin restart option | live monitoring of a pedal set to Spillover |
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** The Exact load's cost is measured:
+> 47.17 ms on the owner's Daisy Seed Rev7, so the wet path mutes for about 47 ms (§4.9). The
+> pedal's default no longer waits on that measurement, only on §4.9's two alternatives (the
+> watermark and a DMA2D fill, neither yet prototyped) and the owner's choice (§10.2 Q20;
+> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
 
 **Neither mode makes live playing comparable to the app**; Exact's value is a defined start state
 for PARITY and audition, so the pedal default is a user-experience choice. Spillover is
@@ -1326,7 +1339,28 @@ and visibility (§3.2); 10 iPlug2 and contract #7 (§1.1); 11 block-split fix sc
 14. **Shipping friction:** unsigned macOS plugins fail confusingly; notarization costs $99/yr;
     Windows signing eligibility is unconfirmed.
 
+> **Update (2026-10-07, Rev7 silicon record).** From the owner's Daisy Seed Rev7
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md)). Risk 1: the parity image
+> rendered the golden corpus bit for bit at sound revisions 1 and 3, at `maxBlockSize` 512 and
+> 48 and from a hostile caller (silicon record §2); the audio interrupt's FPU state is still
+> untested on silicon. Risk 2 is measured, and came true: with the engine's code in ITCM and warm
+> caches, the nominal row's worst block takes 99.1 % of the budget (100.3 % cold) and the
+> pessimistic rows' 135.5–168.5 % (136.2–169.0 % cold), against the 77–78 % estimated above; the
+> flush costs 0.9–1.8 %, and contraction off is inside every figure. Explicit FMA is a candidate
+> under profile §7.3's rule, to build and measure before adopting, and ITCM placement is
+> confirmed (silicon record §3.2–§3.5, §3.9). A fix for the budget is under design, with owner
+> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6).
+
 ### 10.2 Open questions
+
+> **Update (2026-10-07, Rev7 silicon record).** Q13's DWT pass ran on the owner's Daisy Seed Rev7,
+> not a Seed3 ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3–§4): profile
+> §8.3 Q1 is settled (no subnormal penalty at FZ = 0; gradual underflow stays) and Q5 answered
+> (the engine's bit-test flush, 0.9–1.8 % of the budget), `Restart` takes 47.18 ms, and the
+> parity image rendered at 2.66× realtime at sound revision 1 and 2.57× at revision 3 (silicon
+> record §2). Q2 and the watermark remain: there is no contraction-on or explicit-FMA build, and
+> the watermark is not built. Q20 no longer waits on the `Restart` measurement, only on §4.9's
+> watermark and DMA2D alternatives.
 
 **Legal review** (licence-text readings, not legal advice):
 

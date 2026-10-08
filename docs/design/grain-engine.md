@@ -604,6 +604,19 @@ the trade is visible.
 
 ## 8. CPU budget
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** Measured with DWT on the owner's Daisy
+> Seed Rev7, the costs exceed this table, and the worst case does not fit the budget. With the
+> engine's code in ITCM and warm caches, the nominal row (64 voices at unity rate, 20 ms grains,
+> every post stage) costs 7,774 cycles/sample on average and 9,915 in its worst block (99.1 %);
+> the pessimistic configuration costs 9,062 on average and 13,554 at worst with 20 ms grains
+> (135.5 %), and 11,958 and 16,847 with 1 ms grains (168.5 %). By difference in the pessimistic
+> configuration, 64 voices against 1 cost 6,549 cycles/sample (grain render row: ~4,000), the post
+> delay 319 (~60), the filter 200 (70), modulation 192 (60), the reverb 559 (800) and feedback
+> taming 68 (~200); a birth costs at most 6,203 cycles (the `ScheduleGrain` row: ~530
+> cycles/sample at 1 ms grains). "Even the pessimistic case stays inside budget", below, does not
+> hold. A fix is under design, with owner decisions pending. The figures and their sources are in
+> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.
+
 Worst case, 10,000 cycles/sample @ 48 kHz / 480 MHz. All figures derived, **not measured**;
 DWT counters gate every stage (§10). The v1 table's two systematic errors are fixed: the
 cache-miss model is **rate-dependent** (misses/grain/sample = r/8 for interleaved stereo
@@ -643,6 +656,12 @@ budget").
 > style)` instead of `PublishMode` and `LoadMode`, the `MacroMove` and `Expression` events, the
 > exported `EvalMacro` and `EvalExpression`, `ValidateMode` without a sample rate, and
 > `Engine::ModeSwitches()`; `ActiveModeInfo` is not built.
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** `ClearHistory` is measured on the owner's
+> Daisy Seed Rev7 at 22,622,276 cycles, 47.13 ms (`Restart` 47.18 ms); clearing 16 MiB of SDRAM
+> alone takes 44.97 ms at the core's floor without DMA. The listing's "est. ~45-160 ms" and the
+> note below that calls the range an estimate predate it
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
 
 ```cpp
 namespace brainscape {
@@ -959,6 +978,14 @@ do not vendor.
     mark, measured from the live head, so freeze has no effect on `POS_MARK` grains,
     measured) waits on a listening test.
     The app-side risks are in [companion-app.md](companion-app.md).
+
+> **Update (2026-10-07, Rev7 silicon record).** Three of risk 13's items are measured on the
+> owner's Daisy Seed Rev7 ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md)).
+> The M7 cost: the worst case does not fit the budget (pessimistic worst block 135.5–168.5 %
+> with warm caches, against the 77–78 % estimated; §8's update has the figures), and a fix is
+> under design, with owner decisions pending (silicon record §3.2–§3.3). Subnormal timing: a
+> subnormal costs the M7 nothing at FZ = 0 (silicon record §3.7). Emulation against silicon: the
+> chip rendered the golden corpus bit for bit at sound revisions 1 and 3 (silicon record §2).
 
 ## 13. Provenance
 
