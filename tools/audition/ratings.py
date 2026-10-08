@@ -12,7 +12,10 @@ holds one row per preset, keyed by the preset `id`:
   * the owner's rating: one chord sounds finished (yes or no), each knob 1-5, the level against
     bypass, keep, revise or drop, notes; recorded with the sound_rev, sound_hash and the hash of
     every S0-S11 render the rating was made on (with its per-second hashes, shortened), and
-    whether the pre-screen had failed.
+    whether the pre-screen had failed;
+  * the mode's authoring history (`note`): the recipe it started from and each pre-screen
+    iteration before the listening pass, with its reason, so a later reader knows why a leaf or
+    range is what it is. Notes that apply to the whole set are kept beside the rows.
 
 After a sound-revision bump or a re-stamp, `refresh` re-renders S0-S11 with `bspc render` and
 `carry` compares: a rating whose renders all kept their hashes carries forward (its sound_rev and
@@ -33,6 +36,7 @@ is "unchecked" until a render has it again, and the exit criteria do not count i
   ratings.py carry    [--log LOG] --renders DIR [--check]
   ratings.py refresh  [--log LOG] --renders DIR --bspc BSPC [--no-wav] DOCUMENT...
   ratings.py exit     [--log LOG] [--renders DIR]
+  ratings.py note     [--log LOG] (ID | --set) --step STEP --text TEXT
   ratings.py md       [--log LOG] [--check]
 
 Exit codes: 0 success; 1 a check failed (carry --check: a row would change; md --check: the
@@ -395,6 +399,18 @@ def render_md(log):
                 "rating carries without them.", ""]
         for pid, row in retired:
             out.append("- `%s`: %s" % (pid, ", ".join(row["retired_renders"])))
+    general = log.get("notes", [])
+    noted = [(pid, row) for pid, row in sorted(log["presets"].items()) if row.get("history")]
+    if general or noted:
+        out += ["", "## Authoring history", "",
+                "How each recipe came to be what the listening pass hears: where it started and every",
+                "pre-screen iteration since, with its reason (`ratings.py note`).", ""]
+        for n in general:
+            out.append("- **%s**: %s" % (cell(n["step"]), cell(n["text"])))
+        for pid, row in noted:
+            out += ["", "### `%s`%s" % (pid, " (%s)" % cell(row["name"]) if row["name"] else ""), ""]
+            for n in row["history"]:
+                out.append("- **%s**: %s" % (cell(n["step"]), cell(n["text"])))
     met, lines = exit_report(log)
     out += ["", "## Exit criteria", "", "Met." if met else "Not met.", ""]
     out += ["    " + line for line in lines]
@@ -561,6 +577,25 @@ def cmd_exit(a):
     return 0 if met else 1
 
 
+def cmd_note(a):
+    """Records (or, for a step already noted, replaces) one step of the authoring history."""
+    if (a.id is None) == (not a.set_wide):
+        raise UsageError("give a preset id or --set, not both")
+    if not a.step.strip() or not a.text.strip():
+        raise UsageError("--step and --text must not be empty")
+    log = load_log(a.log)
+    notes = log.setdefault("notes", []) if a.set_wide else row_of(log, a.id).setdefault("history", [])
+    for n in notes:
+        if n["step"] == a.step:
+            n["text"] = a.text
+            break
+    else:
+        notes.append({"step": a.step, "text": a.text})
+    save_log(a.log, log)
+    print("%s: %s noted" % (a.id if a.id is not None else "the set", a.step))
+    return 0
+
+
 def cmd_md(a):
     current = read_text(a.log)
     log = parse_log(current, a.log)
@@ -608,12 +643,18 @@ def main(argv=None):
     s.add_argument("documents", nargs="+")
     s = add("exit")
     s.add_argument("--renders")
+    s = add("note")
+    s.add_argument("id", nargs="?")
+    s.add_argument("--set", dest="set_wide", action="store_true")
+    s.add_argument("--step", required=True)
+    s.add_argument("--text", required=True)
     s = add("md")
     s.add_argument("--check", action="store_true")
     a = p.parse_args(argv)
     try:
         return {"init": cmd_init, "declare": cmd_declare, "rate": cmd_rate, "carry": cmd_carry,
-                "refresh": cmd_refresh, "exit": cmd_exit, "md": cmd_md}[a.command](a)
+                "refresh": cmd_refresh, "exit": cmd_exit, "note": cmd_note,
+                "md": cmd_md}[a.command](a)
     except UsageError as e:
         print("ratings.py %s: %s" % (a.command, e), file=sys.stderr)
         return 2

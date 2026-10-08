@@ -168,11 +168,14 @@ a preset document to `bspc_roundtrip.py`.) A row per preset `id` holds what the 
 rating: one chord sounds finished (yes or no), each knob 1–5, the level against bypass, keep,
 revise or drop, notes; recorded with the `sound_rev`, `sound_hash` and the hash of every
 S0–S11 render the rating was made on (with per-second hashes), and whether the pre-screen had
-failed.
+failed. Beside the rating, a row keeps the mode's authoring history (`note`): the recipe it
+started from and each pre-screen iteration before the listening pass, with its reason; notes on
+the whole set (`note --set`) are kept once. `AUDITION.md` shows them under "Authoring history".
 
 ```bash
 python tools/audition/ratings.py init
 python tools/audition/ratings.py declare factory.lull --class pad --self-oscillating
+python tools/audition/ratings.py note factory.lull --step v2 --text "trim -1 dB: Peak on SoftNotes"
 bspc render --script all --metrics --declarations firmware/factory/AUDITION.md -o renders firmware/factory/*.json
 python tools/audition/ratings.py rate --renders renders factory.lull --chord yes \
     --knob activity=4 --knob repeats=3 --knob shape=4 --knob time=3 --knob space=4 --knob filter=5 \
@@ -214,7 +217,7 @@ it (a hand edit).
   pre-screen threshold on both sides of its edge, the dead Activity knob among them; a suite
   written to disk; the review's growing tail (grain feedback over 1) unending and failing the
   Tail check through the probe; a cancelled render and suite.
-- `audition_ratings` (`tests/test_ratings.py`): the log, declarations, a rating, the
+- `audition_ratings` (`tests/test_ratings.py`): the log, declarations, the authoring notes, a rating, the
   carry-forward on a re-stamp, re-listen with the first differing second, gone and new renders,
   renders retired when a mode is dropped or added and after a set of one, unchecked rows, the
   exit criteria (keepers absent from the renders or rated at another sound revision, undefined

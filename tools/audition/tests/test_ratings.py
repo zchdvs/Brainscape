@@ -385,6 +385,37 @@ class RatingsTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.run_cli(*(args + ["--knob", "filter=3"]))[0], 2)  # undefined: refused
 
+    def test_notes_record_the_authoring_history(self):
+        self.assertEqual(self.run_cli("init", "--log", self.log)[0], 0)
+        self.assertEqual(self.run_cli("declare", "--log", self.log, "factory.m1", "--class", "pad")[0], 0)
+        before = self.log_json()["presets"]["factory.m1"]["declare"]
+        for args in (["factory.m1", "--step", "v1", "--text", "the record's recipe"],
+                     ["factory.m1", "--step", "v2", "--text", "trim -2 dB: Peak"],
+                     ["factory.m1", "--step", "v1", "--text", "the record's recipe, r7"],  # replaces
+                     ["--set", "--step", "classes", "--text", "clouds are attack modes"]):
+            rc, out = self.run_cli("note", "--log", self.log, *args)
+            self.assertEqual(rc, 0, out)
+        log = self.log_json()
+        self.assertEqual(log["presets"]["factory.m1"]["history"],
+                         [{"step": "v1", "text": "the record's recipe, r7"},
+                          {"step": "v2", "text": "trim -2 dB: Peak"}])
+        self.assertEqual(log["notes"], [{"step": "classes", "text": "clouds are attack modes"}])
+        self.assertEqual(log["presets"]["factory.m1"]["declare"], before)
+        md = read(self.log)
+        self.assertIn("## Authoring history", md)
+        self.assertIn("- **v2**: trim -2 dB: Peak", md)
+        self.assertIn("- **classes**: clouds are attack modes", md)
+        self.assertLess(md.index("## Authoring history"), md.index("## Exit criteria"))
+        self.assertEqual(self.run_cli("md", "--log", self.log, "--check")[0], 0)
+        # A rating and a carry keep the history.
+        self.write_index(index("factory.m1"))
+        self.assertEqual(self.run_cli("carry", "--log", self.log, "--renders", self.renders)[0], 0)
+        self.assertEqual(len(self.log_json()["presets"]["factory.m1"]["history"]), 2)
+        # Refused: both an id and --set, neither, or empty text.
+        for args in (["factory.m1", "--set", "--step", "x", "--text", "y"], ["--step", "x", "--text", "y"],
+                     ["factory.m1", "--step", "x", "--text", " "]):
+            self.assertEqual(self.run_cli("note", "--log", self.log, *args)[0], 2)
+
     def test_first_difference(self):
         self.assertEqual(ratings.first_difference("aaaaaaaabbbbbbbb", "aaaaaaaacccccccc"), 1)
         self.assertEqual(ratings.first_difference("aaaaaaaa", "aaaaaaaabbbbbbbb"), 1)
