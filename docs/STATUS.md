@@ -223,9 +223,10 @@ from packages (29 packages, some only loaded mid-render).
 **What changed in the packages.** A new leaf joins every package's STAT at its default (the
 compiler writes every Leaf row, design §6.4), so at revisions 4, 6 and 7 every corpus package's
 `sound_hash` changed while its render did not, and the pull request that carries each of those
-revisions needs the package rule's `package-change` label with its cause (`Package-change: wave 1's leaves 57-59
-join every package's STAT`, then 29–30, then 31); revision 5 only re-stamped them. The frozen
-fixtures keep their bytes and change their verdicts as the design said they would:
+revisions needs the package rule's `package-change` label with its cause, one `Package-change:`
+line per revision (`wave 1's leaves 57-59 join every package's STAT`, then 29–30, then 31);
+revision 5 only re-stamped them. The frozen fixtures keep their bytes and change their verdicts
+as the design said they would:
 `future-pitch-set.bsp` decodes and validates since revision 5, `w1-leaf-macro-target.bsp` and
 `w1-leaf-expression.bsp` since 6. The compiler's random-document and reader-fuzz digests and the
 package fuzzer's verdict digest were re-minted at each revision. Lane F's review restored what
@@ -254,7 +255,9 @@ blocks of 48, 1 and 512, both mixed patterns, random pattern 1 and a hostile cal
 forced-flush control, the parity stream in the parity image's placement at `maxBlockSize` 48 and
 512 (the whole corpus and every package) and on the hostile quick set, and the package fuzzer's
 digest and the frozen fixtures. Its engine archives built on Linux equal those built on Windows and
-the firmware's (revision 7: `ea7c5dfb08cf44e3…`, hooks `959493f9b4cf03f2…`; 6:
+the firmware's (revision 7: `987179706f090560…`, hooks `2c086121ddc937d6…`, as this tree builds
+them; at revision 7's own commit, `54ce912`, `ea7c5dfb08cf44e3…`, hooks `959493f9b4cf03f2…`, which
+lane D's flags-only `ParamDisplay` change, `c8b739d`, changed with no render moving; 6:
 `9e07ead26fac7402…`, hooks `bb616b8b55d80185…`; 5: `fc2d3076d962a781…`; 4: `7c20000633f303ee…`).
 The plugin's ctest passes in Release and Debug at revisions 4 (whose leaves its session test had
 to learn) and 7. The static audits report 0 at every revision, the arm symbol audit included,
@@ -462,23 +465,25 @@ revision or skips a number, a revision two commits introduce or one the base alr
 revision no commit at that revision minted; the walk needs the whole history, so the job checks
 out with `fetch-depth: 0` and the gate fails on a shallow clone. It checks a golden file below
 the head's revision by its key and the commit that wrote it, not by rendering it (parity and
-host render the head's). `sound-rev-render.yml` renders those: the gate's `--list-revisions`
-names, for each revision below the head's, the last commit at that revision whose golden file is
-keyed to it, and the job builds that commit's own harness in a worktree and checks that commit's
-golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks, {48, 1, 127, 32})
-and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole corpus); with at most
-one revision it passes after the listing, and a listed commit it cannot build or check fails it.
-Once branch protection requires that check, a pull request may push several revision commits at
-once; it is not required yet (Known gaps), so until the owner adds it each revision commit is
-pushed and passes parity and host as the pull request's head before the next one. The rule holds
-on `main` only for pull requests merged with a merge commit (Known gaps). Its package rule
-(mode-compiler.md §8.3, lane G) fails a pull request that changes a committed package's
-`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
-`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the "package-change"
-label and a `Package-change: <cause>` line in its description, and counts a package preset's
-changed render as an engine change unless its package changed too and the pull request touches
-no path-trigger path without a bump; no package is committed yet, so it binds from sound
-revision 2.
+host render the head's), so each revision commit is pushed and passes parity and host as the
+pull request's head before the next one. `sound-rev-render.yml` also renders the lower
+revisions, on two of those toolchains: the gate's `--list-revisions` names, for each revision
+below the head's, every commit at that revision that a commit at another revision has as a
+parent (the next revision's bump, or a merge into a later one, so a side line merged after the
+next bump is rendered too), and the job builds each one's own harness in a worktree and checks
+its golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks,
+{48, 1, 127, 32}) and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole
+corpus); with at most one revision it passes after the listing, and a listed commit it cannot
+build or check, or whose golden file is not keyed to its revision, fails it. It has none of
+parity's Clang, arm64, MSVC or AppleClang legs, so it does not replace the per-commit rule,
+required or not (Known gaps). The rule holds on `main` only for pull requests merged with a
+merge commit (Known gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull request
+that changes a committed package's `soundHash` or `controlHash` (a golden preset's, a corpus or
+factory package's in `dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without
+the "package-change" label and a `Package-change: <cause>` line in its description, and counts a
+package preset's changed render as an engine change unless its package changed too and the pull
+request touches no path-trigger path without a bump; no package is committed yet, so it binds
+from sound revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
 an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
@@ -751,9 +756,9 @@ committed document on the seven host legs, each set against its required `MANIFE
 manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compiler audit runs
 its source ban in `parity-audits` and its import check on the GCC and Clang legs),
 `sound-rev.yml` (the sound-revision gate with the package rule), `sound-rev-render.yml` (each
-revision a pull request carries below its head's, rendered at its own commit on Linux GCC and
-the emulated M7; not yet run on GitHub), `nightly.yml` (the number
-code's exhaustive round trip on x86-64 and arm64, and 30 minutes of libFuzzer from a kept
+revision a pull request carries below its head's, rendered on Linux GCC and the emulated M7 at
+every commit at it a later revision is built on; not yet run on GitHub), `nightly.yml` (the
+number code's exhaustive round trip on x86-64 and arm64, and 30 minutes of libFuzzer from a kept
 corpus) and `plugin.yml` (every format on three OSes, Release and Debug). Everything but lane
 G's additions first ran on GitHub on 2026-10-06 (Known gaps).
 
@@ -816,12 +821,18 @@ records live in [docs/design/reviews/](design/reviews/).
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
   steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks.
   `sound-rev-render` (`sound-rev-render.yml`, one job of that name) is not required either: it
-  renders each sound revision a pull request carries below its head's at its own commit, and has
-  run only locally, in Docker on 4 CPUs: step 4's r4, r5 and r6 passed every run in 206 s, and a
-  pull request whose r4 golden file had one hash altered and whose r5 did not compile failed all
-  four of r4's runs and both of r5's builds. Until the owner requires it, a pull request that
-  carries several revisions pushes each revision commit and lets parity and host pass it as the
-  head before pushing the next; once it is required, they may be pushed at once. Only
+  renders each sound revision a pull request carries below its head's, on Linux GCC and the
+  emulated M7, at every commit at it a later revision is built on, and has run only locally, in
+  Docker on 4 CPUs: step 4's r4, r5 and r6 passed every run in 206 s; a pull request whose r4
+  golden file had one hash altered and whose r5 did not compile failed all four of r4's runs and
+  both of r5's builds; and the two histories its review found passing fail it now (an unminted
+  engine change at r4 under the r5 bump, beside a side line at r4 merged after that bump; and an
+  r4 whose last commit took its golden file back to the base's). It covers two of parity's
+  toolchains (an r4 commit whose engine diverged only under MSVC passed it), so required or not, a
+  pull request that carries several revisions pushes each revision commit and lets parity and host
+  pass it as the head before pushing the next; required, it makes the GCC and M7 renders of the
+  lower revisions a check rather than a promise. It also runs on description edits, since its
+  listing depends on the base and a base change fires only that event. Only
   collaborators can apply the "sound-neutral" label, so today only the owner can waive the path
   trigger; the same holds for the "package-change" label, which the owner creates in the
   repository before the first package lands. Caveats: every gate runs the pull request's own
@@ -1040,16 +1051,16 @@ records live in [docs/design/reviews/](design/reviews/).
   four revisions are one commit each, each minting its own golden file: since pull request #7 the
   sound-revision gate checks them commit by commit, so one pull request may carry all four (with
   the package-change label for 4, 6 and 7, above). Parity and host render only the head's golden
-  file; `sound-rev-render` renders 4, 5 and 6 at their own commits (here in Docker, GCC 11 and the
-  emulated M7: all three match their golden files at 48 and 512-frame blocks, at {48, 1, 127, 32}
-  and on the M7's 48-frame grid, 38, 40 and 43 presets, from the M7 archives [Internal sound
-  revisions 4–7](#internal-sound-revisions-47-wave-1) records), so once branch protection requires
-  that check the four need not be pushed one at a time; until the owner adds it, each revision
-  commit passes parity and host as the pull request's head before the next is pushed. The review's
-  fixes and these docs follow the last of them, with no bump. Nothing lane F added has run on
-  GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision (lane F's review).
-  A local check that review added: `audit_symbols.py --toolchain arm` on the Windows M7 oracle's
-  archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).
+  file, so each revision commit passes them as the pull request's head before the next is pushed:
+  the pull request opens at r4's commit and pushes r5's, r6's and r7's in turn, then the rest.
+  `sound-rev-render` also renders 4, 5 and 6 at their own commits, the ones the next revision is
+  built on (here in Docker, GCC 11 and the emulated M7: all three match their golden files at 48
+  and 512-frame blocks, at {48, 1, 127, 32} and on the M7's 48-frame grid, 38, 40 and 43 presets,
+  from the M7 archives [Internal sound revisions 4–7](#internal-sound-revisions-47-wave-1)
+  records). The review's fixes and these docs follow the last of them, with no bump. Nothing lane
+  F added has run on GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision
+  (lane F's review). A local check that review added: `audit_symbols.py --toolchain arm` on the
+  Windows M7 oracle's archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).
 - **Engine API still to come:** tap/tempo events (W2) and `SaveState`/`LoadState` (which will
   carry the epoch). Smaller items: automating `DelayMs`
   still splices clean delays (the grain engine's glide, below), input above 0 dBFS

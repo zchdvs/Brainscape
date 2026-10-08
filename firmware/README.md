@@ -16,9 +16,9 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 
 Every image links the engine archive `libbrainscape_dsp.a` exactly as CI's `parity-m7` job builds,
 audits and renders it under QEMU (same toolchain, flags and deterministic archive: SHA-256
-`ea7c5dfb08cf44e3…` at sound revision 7, `1d6fe1dc41f02fd9…` at revision 3, `89b73b51fe4261bf…` at
-revision 2, `4f4ddaa3583e46f2…` at revision 1; `firmware.yml` checks the two are
-byte-identical), reports that hash in its hello line, and the firmware build writes it to
+`987179706f090560…` at sound revision 7 as this tree builds it, `1d6fe1dc41f02fd9…` at revision 3,
+`89b73b51fe4261bf…` at revision 2, `4f4ddaa3583e46f2…` at revision 1; `firmware.yml` checks the
+two are byte-identical), reports that hash in its hello line, and the firmware build writes it to
 `build/fw/firmware/engine-archives.sha256` for the host tools' `--expect-archive`.
 
 **Sound revision 2** ([mode-compiler.md](../docs/design/mode-compiler.md) §7). The engine plays
@@ -53,10 +53,13 @@ repeat and decay (6) and a voice count (7), with six new leaves the console name
 `decay`, `voices`, `skip`, `burst`, `spacing`). The corpus is version 12: 45 presets and 29
 packages, every package compiled into the images. Revision 6 grew the grain pool, so
 `sizeof(Engine)` is 8,192 bytes and the DTCM engine slot 9 KiB. At revision 7 the five images build
-and their engine archives equal the M7 oracle built on Windows and on Linux (`ea7c5dfb08cf44e3…`,
-hooks `959493f9b4cf03f2…`), and the emulated checks of §9 pass at each of revisions 4 to 7: the
-golden check, the parity stream in the parity image's placement, the package fuzzer and the frozen
-fixtures under `qemu-arm -cpu cortex-m7`. Lane F's review moved `DecayGain` to a 32-bit age, so the
+and their engine archives equal the M7 oracle built on Windows and on Linux (`987179706f090560…`,
+hooks `2c086121ddc937d6…`, which a device's hello line reports). Revision 7's own commit,
+`54ce912`, built `ea7c5dfb08cf44e3…`, hooks `959493f9b4cf03f2…`: lane D's flags-only change to
+`ParamDisplay` (`c8b739d`, every leaf but Mix non-automatable) came after it at the same
+revision, changing the archive and no render. The emulated checks of §9 pass at each of
+revisions 4 to 7: the golden check, the parity stream in the parity image's placement, the package
+fuzzer and the frozen fixtures under `qemu-arm -cpu cortex-m7`. Lane F's review moved `DecayGain` to a 32-bit age, so the
 engine imports no soft-float helper (`__aeabi_ul2f` had pulled 540 bytes of libgcc's `float`
 arithmetic into the parity and bench images' ITCM at revisions 6 and 7 as first built).
 
@@ -191,19 +194,19 @@ python tools/hil/parity_check.py --port auto --save parity-rev7.log --expect-arc
 ```
 
 The tool asks the device for its hello line (board, clock, FP registers, caches, archive hash,
-last fault), sends `run`, and prints each preset as it arrives. The device renders all 14 vectors
-and 33 presets (709 s of audio) offline in its main loop, never in the audio callback: one engine in
+last fault), sends `run`, and prints each preset as it arrives. The device renders all 15 vectors
+and 45 presets (933 s of audio) offline in its main loop, never in the audio callback: one engine in
 the pedal's memory placement (Hot arena and Engine object in DTCM, Warm in AXI SRAM, Bulk in SDRAM),
 restarted with `LoadPreset(…, Exact)` for every render, 48-frame blocks, the integer test signal as
 input, events through the engine's `EventQueue`, the packages decoded from the image's own copies —
 the golden harness's own code
 ([`dsp/tests/golden/ParityStream.h`](../dsp/tests/golden/ParityStream.h)), not a copy. On the Rev7 at
-revision 3 it rendered the 709 s of audio in 276 s, 2.57× realtime (the profile estimated
-1.3–3.1×); the stream carries DWT cycles per preset, so the tool prints the measured realtime
-factor too. It ends with
+revision 3 it rendered that revision's 709 s of audio (14 vectors, 33 presets) in 276 s, 2.57×
+realtime (the profile estimated 1.3–3.1×); the stream carries DWT cycles per preset, so the tool
+prints the measured realtime factor too. At revision 7 it ends with
 
 ```text
-VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match MANIFEST (sound revision 3, whole corpus)
+VERDICT: PASS - 45 preset(s) match golden.json bit for bit, 29 package(s) match MANIFEST (sound revision 7, whole corpus)
 ```
 
 or `FAIL` with the first differing second of every preset that differs (exit 1). Before the
@@ -570,8 +573,9 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
   `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (sound revision 7: `ea7c5dfb08cf44e3…`, hooks `959493f9b4cf03f2…`; revision 6:
-  `9e07ead26fac7402…`, hooks `bb616b8b55d80185…`; revision 5: `fc2d3076d962a781…`, hooks
+  (sound revision 7: `987179706f090560…`, hooks `2c086121ddc937d6…`, and at its own commit
+  `54ce912`, before lane D's flags-only `ParamDisplay` change, `ea7c5dfb08cf44e3…`, hooks
+  `959493f9b4cf03f2…`; revision 6: `9e07ead26fac7402…`, hooks `bb616b8b55d80185…`; revision 5: `fc2d3076d962a781…`, hooks
   `e6432e13a7e74c91…`; revision 4: `7c20000633f303ee…`, hooks `176b3797a7977851…`; revision 3:
   `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
   `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:

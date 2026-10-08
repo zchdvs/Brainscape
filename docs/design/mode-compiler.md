@@ -1140,9 +1140,10 @@ As built (item 6, wave 1, sound revisions 4–7, 2026-10-07): four bumps, R9 to 
 commit and `--mode mint`. At each, every earlier preset reproduced its hashes and counters bit
 for bit (33, 38, 40 and 43 of them) and the new presets were added (§10.3). Revisions 4, 6 and
 7 add leaves (57–59, 29–30, 31), which the compiler writes into every document at their
-defaults, so every corpus package's `sound_hash` changed with no render moving: each of those
-pull requests needs the package rule's label (§8.3); revision 5 adds none and only re-stamped
-them. The frozen fixtures changed verdict as §10.3 planned: `future-pitch-set.bsp` decodes at 5,
+defaults, so every corpus package's `sound_hash` changed with no render moving: the pull
+request that carries each of them needs the package rule's label, with one `Package-change:`
+line per revision (§8.3); revision 5 adds none and only re-stamped them. The frozen fixtures
+changed verdict as §10.3 planned: `future-pitch-set.bsp` decodes at 5,
 `w1-leaf-macro-target.bsp` and `w1-leaf-expression.bsp` at 6. The compiler's two digests and the
 package fuzzer's were re-minted at each revision. Lane F's review restored the coverage those
 verdicts gave: three fixtures hold their roles for later waves (`w3-leaf-macro-target.bsp` and
@@ -1730,7 +1731,7 @@ touches.
 | **C** runtime | R1, R2b, R3, R5–R7; R3b after approval; corpus conversion, frozen fixtures, wet-kill cases; r2 | `dsp/include/brainscape/{Params,Engine,PresetState,SoundRevision}.h`, `dsp/src/{Engine,Granular}.cpp`, `dsp/src/detail/Granular.h`, `dsp/tests/`, `dsp/tests/golden/` | after B; merges after A and G's rule | 7–10 |
 | **E** audition | first, the JUCE-free render out of `plugin/src/Audition.*`; scripts S0–S11, metrics, carry-forward; factory documents, `MANIFEST`, `AUDITION.md` | `tools/audition/`, `plugin/src/Audition.*` (extraction), `firmware/factory/` | after 0; scripts after C | 4–7 plus curation |
 | **D** app | curation slice first (§9.1); then parameters by kind and host model, `PresetState` plumbing, session v2, views | `plugin/` (rebased onto 0 and E's extraction) | slice after A and C; rest after B | slice 6–9; rest 12–25; GUI unsized |
-| **F** wave 1 | R9–R12, a pull request and bump each | `Granular.*`, `GrainMath.h`, `Engine.cpp`, `Params.h`, `ParamDisplay.cpp`, the compiler's support table, `DecodePreset`'s feature set, `dsp/tests/golden/`, `firmware/factory/` | after C | 8–14 |
+| **F** wave 1 | R9–R12, a pull request and bump each (as built: a commit and bump each, one pull request for all four, which profile §5.12's per-commit gate allows) | `Granular.*`, `GrainMath.h`, `Engine.cpp`, `Params.h`, `ParamDisplay.cpp`, the compiler's support table, `DecodePreset`'s feature set, `dsp/tests/golden/`, `firmware/factory/` | after C | 8–14 |
 
 Pull requests in order: lane 0; B; A; G's package rule; C (r2); the Mix law (r3, if
 approved); then F's features one by one while D and E continue, F serializing with A, B and E

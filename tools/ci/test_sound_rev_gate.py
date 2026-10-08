@@ -14,7 +14,7 @@ their mints; the last ones give the gate a shallow clone and histories with a co
 or a directory missing, which it must refuse. Every history case, and one single-commit case,
 runs the gate a second time with --list-revisions: the report and the exit code must be the
 same, and the listing (the revisions below the head's, the commits that introduce each and the
-one sound-rev-render renders) must be the one the case names, or absent where the gate stops.
+ones sound-rev-render renders) must be the one the case names, or absent where the gate stops.
 No case may get a line starting "::" (a workflow command) out of the gate, whatever the pull
 request's text. A case that passes when it should fail means the gate lost a trigger. Exit 1
 on any wrong verdict.
@@ -302,6 +302,16 @@ HISTORY_CASES = [
      [("main2", ["fork"], sound_revision(2, "main")), ("p2", ["fork"], sound_revision(2, "pr")),
       ("sync", ["p2", "main2"], sound_revision(3))], TAKEN),
     ("a revision never minted", "fork", [("b2", ["fork"], bumped(2)), ("r3", ["b2"], sound_revision(3))], UNMINTED),
+    # Revisions the rule passes whose lower revision is built on by a state its own mint is not:
+    # sound-rev-render must render that state (its golden file then fails it or passes it).
+    ("a revision on two lines, one merged after the next revision", "fork",
+     [("r2", ["fork"], sound_revision(2)), ("x2", ["r2"], {"dsp/src/PostChain.cpp": "// r2 again\n"}),
+      ("r3", ["x2"], sound_revision(3)), ("side", ["r2"], {"docs/STATUS.md": "side\n"}),
+      ("join", ["r3", "side"], {"docs/STATUS.md": "side\n"})], 0),
+    ("a revision whose last commit takes golden.json back to the base's", "fork",
+     [("r2", ["fork"], sound_revision(2)),
+      ("stale", ["r2"], {"dsp/src/PostChain.cpp": "// r2 again\n", GOLDEN: BASE[GOLDEN]}),
+      ("r3", ["stale"], sound_revision(3))], 0),
     # A mint is a golden file keyed to its own commit's revision, as the harness's --mode mint
     # writes it.
     ("a revision minted only by the next revision's commit", "fork",
@@ -341,10 +351,10 @@ HISTORY_CASES = [
 # `short hash` and subject ({merge} for CI's merge commit): "listing", the summary's list of
 # introduced revisions and their mints, exactly; "present" and "absent", text that must and
 # must not be in the report or the error.
-UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: sound-rev-render renders "
-              "each at the last commit at its revision, and parity and host render r6's. Until branch protection "
-              "requires sound-rev-render, each revision commit must also have passed parity and host as the pull "
-              "request's head (profile §5.12).")
+UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: parity and host render "
+              "r6's, so each revision commit must have passed them as the pull request's head (profile §5.12). "
+              "sound-rev-render also renders each, on Linux GCC and the emulated M7 only, at every commit at it a "
+              "later revision is built on.")
 EXPECT = {
     "a bump, its mint in the next commit, then the next revision":
         {"listing": ["- r2: {b2}", "  - minted at {m2}", "- r3: {r3}", "  - minted at {r3}"]},
@@ -362,39 +372,47 @@ EXPECT = {
                                     f"revision, 1."], "absent": ["is gone at {still}"]},
 }
 # What --list-revisions must write for a case: (revision, the commits that introduce it, the
-# commit to render it at or None) per revision below the head's, or None where the gate stops
-# before it has read the history, so it writes no file.
+# commits to render it at) per revision below the head's, or None where the gate stops before it
+# has read the history, so it writes no file. The commits to render are every commit at the
+# revision that a commit at another revision has as a parent, whatever their golden files say
+# (render_revisions.py fails one not keyed to the revision); their order is compared as a set.
 LISTINGS = {
     "dsp/src with a bump and a regenerated golden file": [],
     "one revision": [],
-    "two revisions, a commit each, each minted": [(2, ["r2"], "r2")],
-    "a bump, its mint in the next commit, then the next revision": [(2, ["b2"], "m2")],
-    "a bump, its mint and a re-mint, then the next revision": [(2, ["b2"], "again")],
-    "five revisions, a commit each": [(r, [f"r{r}"], f"r{r}") for r in range(2, 6)],
-    # The last commit at the revision, not its mint.
-    "a revision, a later commit at it, then the next revision": [(2, ["r2"], "tidy")],
-    "the base merged in between the pull request's revisions": [(2, ["r2"], "sync")],
-    "one commit of several skips a number": [(2, ["r2"], "r2")],
+    "two revisions, a commit each, each minted": [(2, ["r2"], ["r2"])],
+    "a bump, its mint in the next commit, then the next revision": [(2, ["b2"], ["m2"])],
+    "a bump, its mint and a re-mint, then the next revision": [(2, ["b2"], ["again"])],
+    "five revisions, a commit each": [(r, [f"r{r}"], [f"r{r}"]) for r in range(2, 6)],
+    # The commit the next revision is built on, not the revision's mint.
+    "a revision, a later commit at it, then the next revision": [(2, ["r2"], ["tidy"])],
+    "the base merged in between the pull request's revisions": [(2, ["r2"], ["sync"])],
+    "one commit of several skips a number": [(2, ["r2"], ["r2"])],
     "a revision taken back by a later commit": [],
     "one revision introduced on two merged lines": [],
-    "a merge that bumps past both of its lines": [(2, ["a2"], "a2")],
-    "a parallel line's revision the base already has, then a bump past both": [(2, ["p2"], "p2")],
-    "a revision never minted": [(2, ["b2"], None)],
-    "a revision minted only by the next revision's commit": [(2, ["b2"], None)],
-    # A file keyed to the revision at a commit at it, whoever wrote it (the verdict still fails).
-    "a revision minted before its bump": [(2, ["b2"], "b2")],
-    "a revision minted on a line without it": [(2, ["b2"], None)],
-    "a bump that rewrites golden.json still keyed to the previous revision": [(2, ["b2"], None)],
+    # Only the revisions the pull request introduces: the docs line is at the base's revision.
+    "a merge that bumps past both of its lines": [(2, ["a2"], ["a2"])],
+    "a parallel line's revision the base already has, then a bump past both": [(2, ["p2"], ["p2"])],
+    # Both lines the next revision is built on: the one its bump sits on, and the side line a
+    # merge brings into it after the bump.
+    "a revision on two lines, one merged after the next revision": [(2, ["r2"], ["x2", "side"])],
+    # The state the next revision is built on even though its golden file is not keyed to the
+    # revision (its render fails), not the earlier commit that minted it.
+    "a revision whose last commit takes golden.json back to the base's": [(2, ["r2"], ["stale"])],
+    "a revision never minted": [(2, ["b2"], ["b2"])],
+    "a revision minted only by the next revision's commit": [(2, ["b2"], ["b2"])],
+    "a revision minted before its bump": [(2, ["b2"], ["b2"])],
+    "a revision minted on a line without it": [(2, ["b2"], ["join"])],
+    "a bump that rewrites golden.json still keyed to the previous revision": [(2, ["b2"], ["b2"])],
     "a comment names another revision than the definition": [],
     "two definitions of the revision in one commit": None,
     "a header the gate cannot read in a commit a later one fixes": None,
     "the header moved aside and back": [],
     # A commit without the header is at its parents' revision.
-    "the header deleted, then restored a number too high": [(2, ["r2"], "gone")],
+    "the header deleted, then restored a number too high": [(2, ["r2"], ["gone"])],
     "run by hand: a branch on a revision the base took back": [],
     "run by hand: a branch behind the base's revision": [],
 }
-LISTING_FORMAT = "brainscape-sound-revisions/1"
+LISTING_FORMAT = "brainscape-sound-revisions/2"
 ENV = dict(os.environ, GIT_AUTHOR_NAME="sound-rev self-test", GIT_AUTHOR_EMAIL="self-test@example.invalid",
            GIT_COMMITTER_NAME="sound-rev self-test", GIT_COMMITTER_EMAIL="self-test@example.invalid")
 
@@ -466,8 +484,11 @@ def listing_wrong(p, cwd, base, head, labels, body_file, listing):
             got = json.load(fh)
     ends = {k: git(cwd, "rev-parse", v) for k, v in (("base", base), ("head", head))}
     want = {"format": LISTING_FORMAT, **ends,
-            "revisions": [{"revision": r, "introduced": cs, "render": c} for r, cs, c in listing]}
+            "revisions": [{"revision": r, "introduced": cs, "render": sorted(ts)} for r, cs, ts in listing]}
     got_part = {k: got.get(k) for k in want}
+    for r in got_part["revisions"] if isinstance(got_part["revisions"], list) else []:
+        if isinstance(r, dict) and isinstance(r.get("render"), list):
+            r["render"] = sorted(r["render"])  # the walk's order, which ties may break either way
     if got_part != want:
         wrong.append(f"the listing is {got_part}, not {want}")
     if not all(isinstance(got.get(k), int) for k in ("baseRevision", "headRevision")):
@@ -540,7 +561,7 @@ def main():
             expect = {k: [t.format(**shown) for t in v] for k, v in EXPECT.get(name, {}).items()}
             listing = LISTINGS[name]
             if listing is not None:
-                listing = [(r, [ids[c] for c in cs], c and ids[c]) for r, cs, c in listing]
+                listing = [(r, [ids[c] for c in cs], [ids[t] for t in ts]) for r, cs, ts in listing]
             results.append(verdict(name, want, repo, ids[base], head, expect=expect, listing=listing))
         # A commit subject is the pull request's text: a carriage return in it, which git keeps,
         # must not start a line of the report or of an error that names the commit.
@@ -565,7 +586,7 @@ def main():
         shallow = os.path.join(scratch, "shallow")
         git(scratch, "clone", "-q", "--depth", "2", "--branch", "unread", pathlib.Path(repo).as_uri(), shallow)
         results.append(verdict("a shallow clone (fetch-depth: 2)", UNREAD, shallow, "HEAD^1", "HEAD", listing=None))
-        results.append(verdict("the same history, whole", 0, repo, fork, head, listing=[(2, [r2], r2)]))
+        results.append(verdict("the same history, whole", 0, repo, fork, head, listing=[(2, [r2], [r2])]))
         # A commit missing, a file of a pull request's own (a header no other case has) missing, and
         # a directory of one (the golden file's, around a golden file no other case has) missing.
         u2 = commit(repo, changed(BASE, {**sound_revision(2), HEADER: header(2) + "// unread\n"}), [fork], "unread: u2")

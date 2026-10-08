@@ -43,11 +43,12 @@ request's own commits and the merge commit, not those already in the base), and 
     one, or on a line without the revision) mints nothing. A commit that introduces a revision
     the base already has (a parallel line claimed its number) fails: renumber on top of the
     base. The head going below the base fails too. A golden file below the head's revision is
-    checked here by its key and the commit that wrote it, not rendered: sound-rev-render.yml
-    renders each one at the last commit at its revision (--list-revisions names them), and
-    parity.yml and host.yml render the head's. Until branch protection requires
-    sound-rev-render, each revision commit is also pushed and passes parity and host as the
-    pull request's head before the next revision's commit is pushed;
+    checked here by its key and the commit that wrote it, not rendered: parity.yml and host.yml
+    render the head's, so each revision commit is pushed and passes parity and host as the pull
+    request's head before the next revision's commit is pushed. sound-rev-render.yml also
+    renders each lower revision, on Linux GCC and the emulated Cortex-M7 only, at every commit
+    at it that a later revision is built on (--list-revisions names them); it does not replace
+    that rule, since parity and host cover toolchains it does not;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
 
@@ -65,12 +66,14 @@ text: the report prints every control character in a line as a space, so none of
 a line of its own (a line starting "::" is a workflow command to the Actions runner).
 
 --list-revisions FILE also writes, as JSON, each revision the pull request introduces below the
-head's: the commits that introduce it (one, in a pull request the rule passes) and the one to
-render, the last commit of the walk at that revision whose golden.json is keyed to it (null when
-there is none: the revision was never minted). tools/ci/render_revisions.py reads it. The file
-is written once the walk has read the whole history, whatever the verdict; the gate writes no
-file when it cannot read the history. The verdict and the exit code are the same with or without
-it.
+head's: the commits that introduce it (one, in a pull request the rule passes) and the ones to
+render, every commit of the walk at that revision that a commit of the walk at another revision
+has as a parent (the next revision's bump, or a merge into a later revision): each state at that
+revision a later one is built on, on whichever line, whatever its golden.json says (a tip whose
+golden.json is not keyed to the revision is render_revisions.py's to fail). A revision below the
+head's always has one. tools/ci/render_revisions.py reads it. The file is written once the walk
+has read the whole history, whatever the verdict; the gate writes no file when it cannot read the
+history. The verdict and the exit code are the same with or without it.
 
   sound_rev_gate.py --base REV [--head REV] [--labels JSON_OR_COMMA_LIST]
                     [--body-file FILE] [--summary FILE] [--list-revisions FILE]
@@ -102,7 +105,7 @@ PACKAGE_LABEL = "package-change"
 PACKAGE_MANIFESTS = ("dsp/tests/golden/presets/MANIFEST", "firmware/factory/MANIFEST")
 PACKAGE_CAUSE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?package-change:[ \t]*(\S.*?)[ \t]*$",
                            re.IGNORECASE | re.MULTILINE)
-LISTING_FORMAT = "brainscape-sound-revisions/1"
+LISTING_FORMAT = "brainscape-sound-revisions/2"
 MANIFEST_LINE = re.compile(r"^([0-9a-f]{64}) ([0-9a-f]{64}) ([0-9a-f]{64}) (\S.*)$")
 FULL_HISTORY = ("fetch the full history (actions/checkout with fetch-depth: 0) and run the gate again; "
                 "it does not pass on a history it cannot read")
@@ -193,8 +196,8 @@ def keyed(text):
 
 def history(base, head):
     """The commits of base..head, parents first, as (commit, its kSoundRevision, the highest of
-    its parents', the revision it mints or None, its golden.json's object id or None), and notes
-    on commits that remove the header.
+    its parents', the revision it mints or None, its golden.json's object id or None), notes on
+    commits that remove the header, and {commit: its parents}.
 
     A commit without the header keeps the highest of its parents' revisions; a parent in the
     base without it counts as 0. A commit writes golden.json when its file differs from every
@@ -220,9 +223,10 @@ def history(base, head):
         """A walked commit's revision as resolved below; one of the base's, its header's or 0."""
         return walked[commit] if commit in walked else state(commit)[0] or 0
 
-    out, notes = [], []
+    out, notes, parents_of = [], [], {}
     for line in p.stdout.splitlines():
         commit, *parents = line.split()
+        parents_of[commit] = parents
         rev, gold = state(commit)
         prev = max((rev_of(c) for c in parents), default=0)
         if rev is None:
@@ -234,7 +238,7 @@ def history(base, head):
         writes = gold is not None and all(state(c)[1] != gold for c in parents)
         key = keyed(blob(gold)) if writes else None
         out.append((commit, rev, prev, key if key == rev else None, gold))
-    return out, notes
+    return out, notes, parents_of
 
 
 def describe(commit):
@@ -288,18 +292,23 @@ def revision_failures(commits, base_rev, head_rev):
     return failures, introduced, mints
 
 
-def listing(commits, introduced, head_rev):
+def listing(commits, parents, introduced, head_rev):
     """Each revision introduced below the head's, for sound-rev-render: the commits that
-    introduce it, and the one to render, the last walked commit at that revision whose
-    golden.json is keyed to it (None when there is none). Reads golden files the verdict does
-    not, so only --list-revisions calls it."""
-    out = []
-    for r, cs in sorted(introduced.items()):
-        if r >= head_rev:
-            continue
-        at = [c for c, rev, _, _, gold in commits if rev == r and gold is not None and keyed(blob(gold)) == r]
-        out.append({"revision": r, "introduced": cs, "render": at[-1] if at else None})
-    return out
+    introduce it, and the ones to render, in the walk's order: every walked commit at that
+    revision that a walked commit at another revision has as a parent (the next revision's bump,
+    or a merge into a later revision). Those are the states at that revision the pull request
+    builds on, a side line merged after the next bump included, so neither the walk's order nor
+    a golden file's key picks them. Their golden files are not read here: render_revisions.py
+    fails a tip whose golden.json is not keyed to its revision."""
+    rev = {c: r for c, r, *_ in commits}
+    order = {c: i for i, (c, *_) in enumerate(commits)}
+    tips = {}
+    for c, r, *_ in commits:
+        for p in parents[c]:
+            if rev.get(p, r) != r:  # a parent outside the walk is the base's, never a tip
+                tips.setdefault(rev[p], set()).add(p)
+    return [{"revision": r, "introduced": cs, "render": sorted(tips.get(r, ()), key=order.get)}
+            for r, cs in sorted(introduced.items()) if r < head_rev]
 
 
 def write_listing(path, base, head, base_rev, head_rev, revisions):
@@ -435,11 +444,11 @@ def main():
     ap.add_argument("--body-file", help="the pull request's description, for the package rule's cause")
     ap.add_argument("--summary", help="also append the Markdown to this file ($GITHUB_STEP_SUMMARY)")
     ap.add_argument("--list-revisions", metavar="FILE",
-                    help="also write the revisions introduced below the head's, and the commit to render "
+                    help="also write the revisions introduced below the head's, and the commits to render "
                          "each at, to this file as JSON (for tools/ci/render_revisions.py)")
     args = ap.parse_args()
 
-    commits, notes = history(args.base, args.head)
+    commits, notes, parents = history(args.base, args.head)
     paths = [p for p in git("diff", "--name-only", "--no-renames", args.base, args.head).stdout.splitlines() if p]
     touched = triggers(paths)
     labels = parse_labels(args.labels)
@@ -454,7 +463,7 @@ def main():
     failures, introduced, mints = revision_failures(commits, base_rev, head_rev)
     if args.list_revisions:
         write_listing(args.list_revisions, args.base, args.head, base_rev, head_rev,
-                      listing(commits, introduced, head_rev))
+                      listing(commits, parents, introduced, head_rev))
     base_golden, head_golden = golden(args.base), golden(args.head)
     packages, packaged = package_changes(
         base_golden, head_golden, {p: manifest(args.base, p) for p in PACKAGE_MANIFESTS},
@@ -468,10 +477,10 @@ def main():
     unrendered = [f"r{r}" for r in sorted(introduced) if r < head_rev]
     if unrendered:
         notes.append(f"The golden file of {', '.join(unrendered)} is checked here by its key and the commit that "
-                     f"wrote it, not rendered: sound-rev-render renders each at the last commit at its revision, "
-                     f"and parity and host render r{head_rev}'s. Until branch protection requires "
-                     f"sound-rev-render, each revision commit must also have passed parity and host as the pull "
-                     f"request's head (profile §5.12).")
+                     f"wrote it, not rendered: parity and host render r{head_rev}'s, so each revision commit must "
+                     f"have passed them as the pull request's head (profile §5.12). sound-rev-render also renders "
+                     f"each, on Linux GCC and the emulated M7 only, at every commit at it a later revision is "
+                     f"built on.")
     if changed and not bumped:
         failures.append(f"{len(changed)} golden hash(es) changed without a kSoundRevision bump (hard "
                         f"trigger, profile §5.12; no label overrides it)."

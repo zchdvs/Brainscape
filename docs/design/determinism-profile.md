@@ -941,17 +941,20 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > commit's mints nothing. A commit that introduces a number the base already has (a parallel
 > line's claim) fails until the line is renumbered on top of the base. The gate checks a lower
 > revision's golden file by its key and the commit that wrote it, and parity and host render
-> only the head's; `sound-rev-render.yml` renders the lower ones. For each revision below the
-> head's, the gate's `--list-revisions` names the last commit at that revision whose golden
-> file is keyed to it, and the job builds that commit's own harness and checks that commit's
-> golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks and
+> only the head's, so each revision commit is pushed and passes parity and host as the pull
+> request's head before the next revision's commit is pushed. `sound-rev-render.yml` also
+> renders the lower revisions, on two of those toolchains. For each revision below the head's,
+> the gate's `--list-revisions` names every commit at that revision that a commit at another
+> revision has as a parent (the next revision's bump, or a merge into a later one, so a side
+> line merged after the next bump counts), and the job builds each one's own harness and checks
+> its golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks and
 > {48, 1, 127, 32}) and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole
 > corpus). It passes at once when the pull request introduces at most one revision, and fails
-> when a listed commit cannot be built or checked. Once branch protection on `main` requires
-> the `sound-rev-render` check, a pull request may push several revision commits at once. It is
-> not required until the owner adds it there; until then each revision commit is pushed and
-> passes parity and host as the pull request's head before the next revision's commit is
-> pushed. The walk needs the whole history: `sound-rev.yml` checks out with `fetch-depth: 0`,
+> when a listed commit cannot be built or checked or its golden file is not keyed to its
+> revision. It does not replace the per-commit rule, required or not: §6.1 asks every x86 leg
+> and the emulated M7 to agree with a golden file, and the job has neither Clang, arm64, MSVC
+> nor AppleClang, nor the M7's other block sizes, the hostile FP environment or the parity
+> stream. The walk needs the whole history: `sound-rev.yml` checks out with `fetch-depth: 0`,
 > and the gate fails on a shallow clone or a missing object rather than pass. The rule holds on
 > `main` only for pull requests merged with a merge commit; a squash merge would land several
 > revisions as one commit that skips numbers.

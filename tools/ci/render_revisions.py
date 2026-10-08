@@ -3,17 +3,22 @@
 §5.12, companion §3.4; .github/workflows/sound-rev-render.yml).
 
 The sound-revision gate (sound_rev_gate.py) checks a lower revision's golden file only by its
-key and the commit that wrote it, and parity.yml and host.yml render only the head's. This
-renders the lower ones, so a pull request that carries several revisions need not push them one
-at a time:
+key and the commit that wrote it, and parity.yml and host.yml render only the head's, so each
+revision commit is pushed and passes them as the pull request's head before the next is pushed.
+This renders the lower ones too, on two of those toolchains, Linux GCC and the emulated
+Cortex-M7, at every state at each revision a later one is built on. It does not replace that
+rule: parity and host also cover Clang, arm64, MSVC (SSE2 and AVX2) and AppleClang, the M7 at
+other block sizes, more block patterns, the hostile FP environment, the parity stream and the
+unit tests.
 
   list    runs the gate with --list-revisions over the pull request (in CI, the merge commit's
           first parent and the merge commit) and checks the listing it writes: each revision
-          introduced below the head's and the commit to render it at, the last commit at that
-          revision whose golden.json is keyed to it. The gate's verdict is sound-rev.yml's and
-          does not matter here (no labels are given, so its package rule may fail); a listing
-          the gate does not write, as on a history it cannot read, fails. --github-output
-          writes count=N for the workflow, which skips the toolchains and the render at 0.
+          introduced below the head's and the commits to render it at, every commit at that
+          revision that a commit at another revision has as a parent (the next revision's bump,
+          or a merge into a later revision). The gate's verdict is sound-rev.yml's and does not
+          matter here (no labels are given, so its package rule may fail); a listing the gate
+          does not write, as on a history it cannot read, fails. --github-output writes count=N
+          (the revisions listed) for the workflow, which skips the toolchains and the render at 0.
   render  checks out each listed commit in a worktree of its own, builds that commit's own
           golden harness from it and runs it in --mode check against that commit's own
           golden.json:
@@ -29,11 +34,12 @@ at a time:
 
 A listing without revisions (the pull request introduces at most one) passes with nothing to
 render. Everything else fails closed (exit 1): a listing that is missing or malformed, a revision
-with no commit to render (never minted), a commit that cannot be checked out or whose header or
-golden.json is not at the listed revision or lists no preset, a harness that does not configure
-or build, and a render that exits non-zero, whose report does not name exactly the presets its
-golden file lists, that does not print every preset matching, or that runs past --timeout
-minutes. Reports, logs and the WAV files of mismatching presets go to --out.
+with no commit to render, a commit that cannot be checked out or whose header or golden.json is
+not at the listed revision (a state built on whose golden file was never minted for it, or was
+taken back) or lists no preset, a harness that does not configure or build, and a render that
+exits non-zero, whose report does not name exactly the presets its golden file lists, that does
+not print every preset matching, or that runs past --timeout minutes. Reports, logs and the WAV
+files of mismatching presets go to --out, one directory per revision and commit.
 Commit subjects are the pull request's text: control characters in them print as spaces.
 
   render_revisions.py list --base REV [--head REV] --listing FILE [--github-output FILE]
@@ -129,8 +135,9 @@ def read_listing(path):
           and isinstance(doc.get("revisions"), list))
     for r in doc["revisions"] if ok else []:
         ok = ok and (isinstance(r, dict) and isinstance(r.get("revision"), int)
-                     and isinstance(r.get("introduced"), list)
-                     and (r.get("render") is None or isinstance(r.get("render"), str)))
+                     and isinstance(r.get("introduced"), list) and isinstance(r.get("render"), list)
+                     and all(isinstance(c, str) and c for c in r["render"])
+                     and len(set(r["render"])) == len(r["render"]))
     if ok and len({r["revision"] for r in doc["revisions"]}) != len(doc["revisions"]):
         ok = False
     if not ok:
@@ -155,8 +162,10 @@ def cmd_list(args):
     if not revs:
         print("No revision below the head's: the pull request introduces at most one, so nothing is rendered here.")
     for r in revs:
-        at = f"at {describe(r['render'])}" if r["render"] else "nowhere: never minted (the render fails)"
-        print(f"- r{r['revision']}: rendered {at}")
+        for c in r["render"]:
+            print(f"- r{r['revision']}: rendered at {describe(c)}")
+        if not r["render"]:
+            print(f"- r{r['revision']}: no commit to render (the render fails)")
     print(f"The gate's report without labels is in {log}; sound-rev-gate gives the verdict.")
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as fh:
@@ -209,13 +218,13 @@ def sha256(path):
     return h.hexdigest()
 
 
-class Revision:
-    """A listed revision: its commit, worktree, harnesses and what went wrong."""
+class Target:
+    """A listed revision at one of its commits: the worktree, harnesses and what went wrong."""
 
-    def __init__(self, entry, args):
-        self.rev = entry["revision"]
-        self.commit = entry["render"]
-        self.tag = f"r{self.rev}"
+    def __init__(self, rev, commit, args):
+        self.rev = rev
+        self.commit = commit  # None when the listing names no commit for the revision
+        self.tag = f"r{rev}-{commit[:12]}" if commit else f"r{rev}"
         self.out = os.path.join(args.out, self.tag)
         self.wt = os.path.join(args.work, self.tag)
         self.problems = []
@@ -228,7 +237,7 @@ class Revision:
 def prepare(r, args, timings):
     """Checks the commit out in a worktree and builds its host and M7 harnesses."""
     if r.commit is None:
-        r.problems.append("never minted: no commit at this revision has golden.json keyed to it")
+        r.problems.append("no commit to render: the listing names none at this revision")
         return
     log = os.path.join(r.out, "worktree.log")
     if run(["git", "worktree", "add", "--detach", r.wt, r.commit], log) != 0:
@@ -324,7 +333,7 @@ def cmd_render(args):
     print(f"{args.jobs} jobs; worktrees in {args.work}; reports in {args.out}")
     t_start = time.monotonic()
     timings = []
-    revs = [Revision(e, args) for e in doc["revisions"]]
+    revs = [Target(e["revision"], c, args) for e in doc["revisions"] for c in (e["render"] or [None])]
     for r in revs:
         print(f"== r{r.rev}: preparing {describe(r.commit) if r.commit else '(no commit)'}", flush=True)
         prepare(r, args, timings)
@@ -341,9 +350,9 @@ def cmd_render(args):
                    for r, leg, build, extra in tasks}
         for f in concurrent.futures.as_completed(futures):
             r, leg = futures[f]
-            results[(r.rev, leg)] = f.result()
-            ok, presets, secs, why = results[(r.rev, leg)]
-            print(f"   r{r.rev} {leg}: {'pass' if ok else 'FAIL: ' + why} ({presets} presets, {secs:.1f} s)", flush=True)
+            results[(r.tag, leg)] = f.result()
+            ok, presets, secs, why = results[(r.tag, leg)]
+            print(f"   {r.tag} {leg}: {'pass' if ok else 'FAIL: ' + why} ({presets} presets, {secs:.1f} s)", flush=True)
             if not ok:
                 for line in tail(os.path.join(r.out, f"{leg}.log"), 30):
                     print(f"      {line}")
@@ -351,25 +360,27 @@ def cmd_render(args):
 
     failed = []
     lines += [f"{head}, whose golden file parity and host render. Each revision below it is rendered "
-              f"at the last commit at that revision, by that commit's own harness, against that commit's "
-              f"golden.json.", "",
+              f"at every commit at it that a later revision is built on, by that commit's own harness, against "
+              f"that commit's golden.json, on Linux GCC and the emulated M7 only: each revision commit still "
+              f"passes parity and host as the pull request's head before the next is pushed.", "",
               "| Revision | Commit | Run | Result | Presets | Time |", "|---|---|---|---|---|---|"]
     for r in revs:
         at = (describe(r.commit) if r.commit else "none").replace("|", "\\|")
+        where = f"r{r.rev} at `{r.commit[:7]}`" if r.commit else f"r{r.rev}"
         for p in r.problems:
-            failed.append(f"r{r.rev}: {p}")
+            failed.append(f"{where}: {p}")
             lines.append(f"| r{r.rev} | {at} | prepare | **FAIL**: {p} | | |")
         for leg, _, _, what in LEGS:
-            if (r.rev, leg) in results:
-                ok, presets, secs, why = results[(r.rev, leg)]
+            if (r.tag, leg) in results:
+                ok, presets, secs, why = results[(r.tag, leg)]
                 if not ok:
-                    failed.append(f"r{r.rev} {leg} ({what}): {why}")
+                    failed.append(f"{where} {leg} ({what}): {why}")
                 lines.append(f"| r{r.rev} | {at} | {what} | {'pass' if ok else '**FAIL**: ' + why} | "
                              f"{presets} | {secs:.1f} s |")
             elif not r.problems:  # a run that went missing without a word is never a pass
-                failed.append(f"r{r.rev} {leg} ({what}): not run")
+                failed.append(f"{where} {leg} ({what}): not run")
     lines.append("")
-    lines += [f"- r{r.rev}: libbrainscape_dsp.a (M7) `{r.archive}`" for r in revs if r.archive]
+    lines += [f"- r{r.rev} at `{r.commit[:7]}`: libbrainscape_dsp.a (M7) `{r.archive}`" for r in revs if r.archive]
     lines += [f"- M7 emulator: {emulator_name}; host compiler: {first_line([args.cxx, '--version'])}",
               f"- Builds {t_built - t_start:.0f} s ("
               + ", ".join(f"{tag} {what} {secs:.0f} s" for tag, what, secs in timings)
@@ -399,7 +410,7 @@ def main():
     lp.add_argument("--head", default="HEAD", help="the pull request, merged (default HEAD)")
     lp.add_argument("--listing", required=True, help="write the listing to this file")
     lp.add_argument("--github-output", help="append count=N to this file ($GITHUB_OUTPUT)")
-    rp = sub.add_parser("render", help="render each listed revision at its commit")
+    rp = sub.add_parser("render", help="render each listed revision at each of its commits")
     rp.add_argument("--listing", required=True, help="the listing `list` wrote")
     rp.add_argument("--work", help="where the worktrees and builds go (default: a new temporary directory)")
     rp.add_argument("--out", default="sound-rev-render", help="reports, logs and WAV files (default %(default)s)")
