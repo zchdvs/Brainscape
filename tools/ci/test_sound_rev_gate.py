@@ -11,9 +11,13 @@ file has a preset that plays a committed package and which has a corpus and a fa
 manifest; the history cases build pull requests of several commits and merges, for the
 per-commit sound-revision rule, and some also require the report's list of the revisions and
 their mints; the last ones give the gate a shallow clone and histories with a commit, a file
-or a directory missing, which it must refuse. No case may get a line starting "::" (a
-workflow command) out of the gate, whatever the pull request's text. A case that passes when
-it should fail means the gate lost a trigger. Exit 1 on any wrong verdict.
+or a directory missing, which it must refuse. Every history case, and one single-commit case,
+runs the gate a second time with --list-revisions: the report and the exit code must be the
+same, and the listing (the revisions below the head's, the commits that introduce each and the
+one sound-rev-render renders) must be the one the case names, or absent where the gate stops.
+No case may get a line starting "::" (a workflow command) out of the gate, whatever the pull
+request's text. A case that passes when it should fail means the gate lost a trigger. Exit 1
+on any wrong verdict.
 
   test_sound_rev_gate.py
 """
@@ -269,6 +273,7 @@ MOVED = HEADER + ".moved"
 TWO_DEFINITIONS = ("#pragma once\nnamespace brainscape {\n#if 0\ninline constexpr uint32_t kSoundRevision = 2;\n"
                    "#else\ninline constexpr uint32_t kSoundRevision = 3;\n#endif\n}\n")
 HISTORY_CASES = [
+    ("one revision", "fork", [("r2", ["fork"], sound_revision(2))], 0),
     ("two revisions, a commit each, each minted", "fork",
      [("r2", ["fork"], sound_revision(2)), ("r3", ["r2"], sound_revision(3))], 0),
     ("a bump, its mint in the next commit, then the next revision", "fork",
@@ -277,6 +282,9 @@ HISTORY_CASES = [
      [("b2", ["fork"], bumped(2)), ("m2", ["b2"], mint(2)), ("again", ["m2"], mint(2, "again")),
       ("r3", ["again"], sound_revision(3))], 0),
     ("five revisions, a commit each", "fork", WAVE, 0),
+    ("a revision, a later commit at it, then the next revision", "fork",
+     [("r2", ["fork"], sound_revision(2)), ("tidy", ["r2"], {"dsp/tests/test_engine.cpp": "// tidier\n"}),
+      ("r3", ["tidy"], sound_revision(3))], 0),
     ("the base merged in between the pull request's revisions", "main",
      [("main", ["fork"], {"docs/STATUS.md": "main moved\n"}), ("r2", ["fork"], sound_revision(2)),
       ("sync", ["r2", "main"], {"docs/STATUS.md": "main moved\n"}), ("r3", ["sync"], sound_revision(3))], 0),
@@ -333,8 +341,10 @@ HISTORY_CASES = [
 # `short hash` and subject ({merge} for CI's merge commit): "listing", the summary's list of
 # introduced revisions and their mints, exactly; "present" and "absent", text that must and
 # must not be in the report or the error.
-UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: parity and host render "
-              "r6's.")
+UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: sound-rev-render renders "
+              "each at the last commit at its revision, and parity and host render r6's. Until branch protection "
+              "requires sound-rev-render, each revision commit must also have passed parity and host as the pull "
+              "request's head (profile §5.12).")
 EXPECT = {
     "a bump, its mint in the next commit, then the next revision":
         {"listing": ["- r2: {b2}", "  - minted at {m2}", "- r3: {r3}", "  - minted at {r3}"]},
@@ -351,6 +361,40 @@ EXPECT = {
         {"listing": [], "present": [f"- {HEADER} is gone at {{gone}}, so that commit counts as its parents' "
                                     f"revision, 1."], "absent": ["is gone at {still}"]},
 }
+# What --list-revisions must write for a case: (revision, the commits that introduce it, the
+# commit to render it at or None) per revision below the head's, or None where the gate stops
+# before it has read the history, so it writes no file.
+LISTINGS = {
+    "dsp/src with a bump and a regenerated golden file": [],
+    "one revision": [],
+    "two revisions, a commit each, each minted": [(2, ["r2"], "r2")],
+    "a bump, its mint in the next commit, then the next revision": [(2, ["b2"], "m2")],
+    "a bump, its mint and a re-mint, then the next revision": [(2, ["b2"], "again")],
+    "five revisions, a commit each": [(r, [f"r{r}"], f"r{r}") for r in range(2, 6)],
+    # The last commit at the revision, not its mint.
+    "a revision, a later commit at it, then the next revision": [(2, ["r2"], "tidy")],
+    "the base merged in between the pull request's revisions": [(2, ["r2"], "sync")],
+    "one commit of several skips a number": [(2, ["r2"], "r2")],
+    "a revision taken back by a later commit": [],
+    "one revision introduced on two merged lines": [],
+    "a merge that bumps past both of its lines": [(2, ["a2"], "a2")],
+    "a parallel line's revision the base already has, then a bump past both": [(2, ["p2"], "p2")],
+    "a revision never minted": [(2, ["b2"], None)],
+    "a revision minted only by the next revision's commit": [(2, ["b2"], None)],
+    # A file keyed to the revision at a commit at it, whoever wrote it (the verdict still fails).
+    "a revision minted before its bump": [(2, ["b2"], "b2")],
+    "a revision minted on a line without it": [(2, ["b2"], None)],
+    "a bump that rewrites golden.json still keyed to the previous revision": [(2, ["b2"], None)],
+    "a comment names another revision than the definition": [],
+    "two definitions of the revision in one commit": None,
+    "a header the gate cannot read in a commit a later one fixes": None,
+    "the header moved aside and back": [],
+    # A commit without the header is at its parents' revision.
+    "the header deleted, then restored a number too high": [(2, ["r2"], "gone")],
+    "run by hand: a branch on a revision the base took back": [],
+    "run by hand: a branch behind the base's revision": [],
+}
+LISTING_FORMAT = "brainscape-sound-revisions/1"
 ENV = dict(os.environ, GIT_AUTHOR_NAME="sound-rev self-test", GIT_AUTHOR_EMAIL="self-test@example.invalid",
            GIT_COMMITTER_NAME="sound-rev self-test", GIT_COMMITTER_EMAIL="self-test@example.invalid")
 
@@ -397,14 +441,47 @@ def changed(files, changes):
     return out
 
 
-def verdict(name, want, cwd, base, head, labels="", body_file=None, expect=None):
+def run_gate(cwd, base, head, labels, body_file, extra=()):
+    return subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels]
+                          + (["--body-file", body_file] if body_file else []) + list(extra),
+                          cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                          env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+
+
+def listing_wrong(p, cwd, base, head, labels, body_file, listing):
+    """Runs the gate again with --list-revisions and returns what is wrong: a report or exit code
+    other than `p`'s, or a listing other than `listing` (LISTINGS's, with commit ids; None for no
+    file)."""
+    with tempfile.TemporaryDirectory() as scratch:
+        path = os.path.join(scratch, "revisions.json")
+        q = run_gate(cwd, base, head, labels, body_file, ["--list-revisions", path])
+        wrong = [f"with --list-revisions, the {what} differs" for what, a, b in
+                 (("exit code", p.returncode, q.returncode), ("report", p.stdout, q.stdout),
+                  ("error", p.stderr, q.stderr)) if a != b]
+        if listing is None:
+            return wrong + (["--list-revisions wrote a file where the gate stops"] if os.path.exists(path) else [])
+        if not os.path.exists(path):
+            return wrong + ["--list-revisions wrote no file"]
+        with open(path, encoding="utf-8") as fh:
+            got = json.load(fh)
+    ends = {k: git(cwd, "rev-parse", v) for k, v in (("base", base), ("head", head))}
+    want = {"format": LISTING_FORMAT, **ends,
+            "revisions": [{"revision": r, "introduced": cs, "render": c} for r, cs, c in listing]}
+    got_part = {k: got.get(k) for k in want}
+    if got_part != want:
+        wrong.append(f"the listing is {got_part}, not {want}")
+    if not all(isinstance(got.get(k), int) for k in ("baseRevision", "headRevision")):
+        wrong.append(f"the listing's revisions are {got.get('baseRevision')!r} and {got.get('headRevision')!r}")
+    return wrong
+
+
+def verdict(name, want, cwd, base, head, labels="", body_file=None, expect=None, listing=False):
     """Runs the gate and prints whether it gave the verdict `want` and the report `expect` asks
-    for (EXPECT's keys, formatted); returns True when it did. No line of its output may start
-    with "::", a workflow command to the Actions runner, whatever the pull request's text."""
-    p = subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels]
-                       + (["--body-file", body_file] if body_file else []),
-                       cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    for (EXPECT's keys, formatted) and, unless `listing` is False, the same report and exit code
+    with --list-revisions and that listing (listing_wrong); returns True when it did. No line of
+    its output may start with "::", a workflow command to the Actions runner, whatever the pull
+    request's text."""
+    p = run_gate(cwd, base, head, labels, body_file)
     out = p.stdout.splitlines()
     fails = [ln[len("- **FAIL:** "):] for ln in out if ln.startswith("- **FAIL:** ")]
     if want == 0:
@@ -415,11 +492,13 @@ def verdict(name, want, cwd, base, head, labels="", body_file=None, expect=None)
     expect = expect or {}
     if "listing" in expect:
         start = next((i + 1 for i, ln in enumerate(out) if ln.startswith("Sound revisions introduced")), len(out))
-        listing = out[start:out.index("", start) if "" in out[start:] else len(out)]
-        if listing != expect["listing"]:
-            wrong.append(f"the listing is {listing}, not {expect['listing']}")
+        shown = out[start:out.index("", start) if "" in out[start:] else len(out)]
+        if shown != expect["listing"]:
+            wrong.append(f"the listing is {shown}, not {expect['listing']}")
     wrong += [f"the report lacks: {t}" for t in expect.get("present", []) if t not in p.stdout + p.stderr]
     wrong += [f"the report has: {t}" for t in expect.get("absent", []) if t in p.stdout + p.stderr]
+    if listing is not False:
+        wrong += listing_wrong(p, cwd, base, head, labels, body_file, listing)
     ok = ok and not wrong
     print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {p.returncode}")
     for f in fails + p.stderr.strip().splitlines() + wrong:
@@ -444,7 +523,8 @@ def main():
                 files = changed(base_files, changes)
                 tip = commit(repo, files, [base], name)
                 head = commit(repo, files, [base, tip], f"Merge {name}")
-                results.append(verdict(name, want, repo, base, head, labels, body_file))
+                results.append(verdict(name, want, repo, base, head, labels, body_file,
+                                       listing=LISTINGS.get(name, False)))
         # Pull requests of several commits.
         fork = commit(repo, BASE, [], "fork")
         for case in HISTORY_CASES:
@@ -458,7 +538,10 @@ def main():
                 repo, files[tip], [ids[base], ids[tip]], f"Merge {name}")
             shown = {c: git(repo, "log", "-1", "--format=`%h` %s", i) for c, i in ids.items()}
             expect = {k: [t.format(**shown) for t in v] for k, v in EXPECT.get(name, {}).items()}
-            results.append(verdict(name, want, repo, ids[base], head, expect=expect))
+            listing = LISTINGS[name]
+            if listing is not None:
+                listing = [(r, [ids[c] for c in cs], c and ids[c]) for r, cs, c in listing]
+            results.append(verdict(name, want, repo, ids[base], head, expect=expect, listing=listing))
         # A commit subject is the pull request's text: a carriage return in it, which git keeps,
         # must not start a line of the report or of an error that names the commit.
         cr = os.path.join(scratch, "message.txt")
@@ -481,8 +564,8 @@ def main():
         git(repo, "update-ref", "refs/heads/unread", head)
         shallow = os.path.join(scratch, "shallow")
         git(scratch, "clone", "-q", "--depth", "2", "--branch", "unread", pathlib.Path(repo).as_uri(), shallow)
-        results.append(verdict("a shallow clone (fetch-depth: 2)", UNREAD, shallow, "HEAD^1", "HEAD"))
-        results.append(verdict("the same history, whole", 0, repo, fork, head))
+        results.append(verdict("a shallow clone (fetch-depth: 2)", UNREAD, shallow, "HEAD^1", "HEAD", listing=None))
+        results.append(verdict("the same history, whole", 0, repo, fork, head, listing=[(2, [r2], r2)]))
         # A commit missing, a file of a pull request's own (a header no other case has) missing, and
         # a directory of one (the golden file's, around a golden file no other case has) missing.
         u2 = commit(repo, changed(BASE, {**sound_revision(2), HEADER: header(2) + "// unread\n"}), [fork], "unread: u2")
@@ -498,7 +581,8 @@ def main():
             loose = os.path.join(repo, ".git", "objects", obj[:2], obj[2:])
             os.chmod(loose, stat.S_IWRITE)  # git writes objects read-only
             os.remove(loose)
-            results.append(verdict(f"a history with {name} missing", UNREAD, repo, fork, case_head))
+            results.append(verdict(f"a history with {name} missing", UNREAD, repo, fork, case_head,
+                                   listing=None))
     print(f"{sum(results)}/{len(results)} cases gave the expected verdict")
     return 0 if all(results) else 1
 

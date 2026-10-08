@@ -1,0 +1,89 @@
+name: sound-rev-render
+
+# Renders every sound revision a pull request introduces below its head's (determinism-profile.md
+# §5.12, companion-app.md §3.4). sound-rev.yml's gate checks such a revision's golden file only
+# by its key and the commit that wrote it, and parity.yml and host.yml render only the head's.
+# This job asks the gate for the lower revisions (--list-revisions: for each, the last commit at
+# that revision whose golden.json is keyed to it), checks each of those commits out in a worktree
+# of its own and runs that commit's own golden harness in --mode check against that commit's own
+# golden.json (tools/ci/render_revisions.py): Linux GCC at 48-frame blocks with ablations on (the
+# mint's run), at 512-frame blocks and at the mixed pattern {48, 1, 127, 32}, and the Cortex-M7
+# oracle built with the pinned arm-none-eabi toolchain at 48-frame blocks over the whole corpus
+# under the pinned qemu-arm (parity-m7's installers and caches). A pull request that introduces
+# at most one revision passes after the listing, in seconds, with no toolchain installed; a listed
+# commit that cannot be checked out, built or checked fails the job, and so does a listing the
+# gate cannot make (a history it cannot read).
+# Cost: the listing takes seconds. Each revision below the head's adds two harness builds and
+# four renders, run --jobs (the runner's 4 vCPUs) at a time, the M7's first; the M7's is the
+# longest. Measured in Docker on 4 CPUs (GCC 11, binfmt qemu-arm) for step 4's r4, r5 and r6:
+# builds 3-4 s each, host renders 45-50 s per revision, M7 renders 164-187 s each, 206 s for
+# all three. The M7's quick set took 109 s against the whole corpus's 162 s at r4, so the job
+# keeps the whole corpus. On GitHub's runner parity-m7 renders r3's corpus in 208 s, so expect
+# about 7 minutes for three revisions (estimated) and a few seconds for the rest.
+# Required only once the owner adds the "sound-rev-render" check to branch protection on main
+# (docs/STATUS.md, Known gaps). From then on a pull request may push several revision commits at
+# once; until then each revision commit is pushed and passes parity and host as the pull
+# request's head before the next one is pushed.
+# Its own workflow on the default pull_request events, so a label or description edit (which
+# re-runs sound-rev.yml) does not render again, and a newer push cancels a render in progress.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sound-rev-render-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sound-rev-render:
+    name: sound-rev-render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      # The pull request's merge commit, its first parent (the base) and the whole history,
+      # which the gate's walk reads.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: List the sound revisions below the head's
+        id: list
+        run: >
+          python3 tools/ci/render_revisions.py list --base HEAD^1 --head HEAD
+          --listing "$RUNNER_TEMP/revisions.json" --github-output "$GITHUB_OUTPUT"
+      # Everything below runs unless the listing says 0; a count that is missing runs it, and the
+      # render then fails without a listing.
+      - name: Cache the pinned arm-none-eabi toolchain
+        if: steps.list.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-gnu-toolchain
+          key: arm-gnu-toolchain-10.3-2021.10-x86_64-linux
+      - name: Install the pinned arm-none-eabi toolchain (10.3-2021.10, checksum-verified)
+        if: steps.list.outputs.count != '0'
+        run: bash tools/ci/install_arm_toolchain.sh "$HOME/arm-gnu-toolchain"
+      - name: Cache the pinned qemu-arm
+        if: steps.list.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: ~/qemu-arm
+          key: qemu-arm-10.2.3-ubuntu-24.04
+      - name: Install the pinned qemu-arm (10.2.3, version-checked)
+        if: steps.list.outputs.count != '0'
+        run: bash tools/ci/install_qemu_arm.sh "$HOME/qemu-arm"
+      - name: Render each revision at its commit (host GCC and the emulated M7)
+        if: steps.list.outputs.count != '0'
+        run: >
+          python3 tools/ci/render_revisions.py render --listing "$RUNNER_TEMP/revisions.json"
+          --work "$RUNNER_TEMP/sound-rev-render" --out sound-rev-render --jobs "$(nproc)"
+          --cxx g++ --emulator "qemu-arm -cpu cortex-m7" --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the reports, logs and the WAV files of mismatching presets
+        if: ${{ always() && steps.list.outputs.count != '0' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sound-rev-render
+          path: sound-rev-render/
+          if-no-files-found: warn
+          retention-days: 14

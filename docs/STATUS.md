@@ -462,15 +462,23 @@ revision or skips a number, a revision two commits introduce or one the base alr
 revision no commit at that revision minted; the walk needs the whole history, so the job checks
 out with `fetch-depth: 0` and the gate fails on a shallow clone. It checks a golden file below
 the head's revision by its key and the commit that wrote it, not by rendering it (parity and
-host render the head's), so each revision commit is pushed and passes them as the pull
-request's head before the next one; and the rule holds on `main` only for pull requests merged
-with a merge commit (Known gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull
-request that changes a committed package's `soundHash` or `controlHash` (a golden preset's, a
-corpus or factory package's in `dsp/tests/golden/presets/MANIFEST` or
-`firmware/factory/MANIFEST`) without the "package-change" label and a `Package-change: <cause>`
-line in its description, and counts a package preset's changed render as an engine change
-unless its package changed too and the pull request touches no path-trigger path without a
-bump; no package is committed yet, so it binds from sound revision 2.
+host render the head's). `sound-rev-render.yml` renders those: the gate's `--list-revisions`
+names, for each revision below the head's, the last commit at that revision whose golden file is
+keyed to it, and the job builds that commit's own harness in a worktree and checks that commit's
+golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks, {48, 1, 127, 32})
+and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole corpus); with at most
+one revision it passes after the listing, and a listed commit it cannot build or check fails it.
+Once branch protection requires that check, a pull request may push several revision commits at
+once; it is not required yet (Known gaps), so until the owner adds it each revision commit is
+pushed and passes parity and host as the pull request's head before the next one. The rule holds
+on `main` only for pull requests merged with a merge commit (Known gaps). Its package rule
+(mode-compiler.md §8.3, lane G) fails a pull request that changes a committed package's
+`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
+`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the "package-change"
+label and a `Package-change: <cause>` line in its description, and counts a package preset's
+changed render as an engine change unless its package changed too and the pull request touches
+no path-trigger path without a bump; no package is committed yet, so it binds from sound
+revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
 an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
@@ -742,7 +750,9 @@ committed document on the seven host legs, each set against its required `MANIFE
 `.gitattributes` keeping its documents LF, with `parity-summary` requiring their package
 manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compiler audit runs
 its source ban in `parity-audits` and its import check on the GCC and Clang legs),
-`sound-rev.yml` (the sound-revision gate with the package rule), `nightly.yml` (the number
+`sound-rev.yml` (the sound-revision gate with the package rule), `sound-rev-render.yml` (each
+revision a pull request carries below its head's, rendered at its own commit on Linux GCC and
+the emulated M7; not yet run on GitHub), `nightly.yml` (the number
 code's exhaustive round trip on x86-64 and arm64, and 30 minutes of libFuzzer from a kept
 corpus) and `plugin.yml` (every format on three OSes, Release and Debug). Everything but lane
 G's additions first ran on GitHub on 2026-10-06 (Known gaps).
@@ -804,16 +814,23 @@ records live in [docs/design/reviews/](design/reviews/).
   `linux-x64-gcc`, `linux-x64-clang`, `linux-arm64-gcc`, `windows-x64-msvc`,
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
-  steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks. Only
-  collaborators can apply the "sound-neutral" label, so today only the owner can waive the
-  path trigger; the same holds for the "package-change" label, which the owner creates in the
+  steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks.
+  `sound-rev-render` (`sound-rev-render.yml`, one job of that name) is not required either: it
+  renders each sound revision a pull request carries below its head's at its own commit, and has
+  run only locally, in Docker on 4 CPUs: step 4's r4, r5 and r6 passed every run in 206 s, and a
+  pull request whose r4 golden file had one hash altered and whose r5 did not compile failed all
+  four of r4's runs and both of r5's builds. Until the owner requires it, a pull request that
+  carries several revisions pushes each revision commit and lets parity and host pass it as the
+  head before pushing the next; once it is required, they may be pushed at once. Only
+  collaborators can apply the "sound-neutral" label, so today only the owner can waive the path
+  trigger; the same holds for the "package-change" label, which the owner creates in the
   repository before the first package lands. Caveats: every gate runs the pull request's own
   code (a pull request that edits the harness or a workflow can pass its own checks), so
-  code-owner review of those paths is the real control; and the owner is the only code owner
-  and cannot approve their own pull requests, so owner merges go through the administrator
-  bypass, which the protection allows on purpose. Running `sound-rev-gate` from the base
-  branch (`pull_request_target`) would not close the first caveat alone, since a pull request
-  can add a workflow whose job has the same name.
+  code-owner review of those paths is the real control; and the owner is the only code owner and
+  cannot approve their own pull requests, so owner merges go through the administrator bypass,
+  which the protection allows on purpose. Running `sound-rev-gate` from the base branch
+  (`pull_request_target`) would not close the first caveat alone, since a pull request can add a
+  workflow whose job has the same name.
 - **Squash and rebase merging are still allowed** (2026-10-07). `sound-rev-gate` checks
   GitHub's test merge of a pull request, and its per-commit rule holds on `main` only when the
   pull request lands as a merge commit. A squash merge of one that carries r2 and r3 lands a
@@ -1022,12 +1039,17 @@ records live in [docs/design/reviews/](design/reviews/).
   image's at 91.2%, so the next wave moves cold engine code (`Validate` first) out of ITCM. The
   four revisions are one commit each, each minting its own golden file: since pull request #7 the
   sound-revision gate checks them commit by commit, so one pull request may carry all four (with
-  the package-change label for 4, 6 and 7, above), provided each revision commit passes parity and
-  host as the pull request's head before the next is pushed, since those render only the head's
-  golden file; the review's fixes and these docs follow the last of them, with no bump. Nothing lane F added has run on
-  GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision (lane F's
-  review). A local check that review added: `audit_symbols.py --toolchain arm` on the Windows
-  M7 oracle's archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).
+  the package-change label for 4, 6 and 7, above). Parity and host render only the head's golden
+  file; `sound-rev-render` renders 4, 5 and 6 at their own commits (here in Docker, GCC 11 and the
+  emulated M7: all three match their golden files at 48 and 512-frame blocks, at {48, 1, 127, 32}
+  and on the M7's 48-frame grid, 38, 40 and 43 presets, from the M7 archives [Internal sound
+  revisions 4–7](#internal-sound-revisions-47-wave-1) records), so once branch protection requires
+  that check the four need not be pushed one at a time; until the owner adds it, each revision
+  commit passes parity and host as the pull request's head before the next is pushed. The review's
+  fixes and these docs follow the last of them, with no bump. Nothing lane F added has run on
+  GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision (lane F's review).
+  A local check that review added: `audit_symbols.py --toolchain arm` on the Windows M7 oracle's
+  archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).
 - **Engine API still to come:** tap/tempo events (W2) and `SaveState`/`LoadState` (which will
   carry the epoch). Smaller items: automating `DelayMs`
   still splices clean delays (the grain engine's glide, below), input above 0 dBFS

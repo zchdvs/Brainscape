@@ -940,12 +940,21 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > keys the file to the revision it was built with, so a file keyed to another revision than its
 > commit's mints nothing. A commit that introduces a number the base already has (a parallel
 > line's claim) fails until the line is renumbered on top of the base. The gate checks a lower
-> revision's golden file by its key and the commit that wrote it; CI renders only the head's
-> (parity, host), so each revision commit is pushed and passes those checks as the pull
-> request's head before the next revision's commit is pushed. The walk needs the whole history:
-> `sound-rev.yml` checks out with `fetch-depth: 0`, and the gate fails on a shallow clone or a
-> missing object rather than pass. The rule holds on `main` only for pull requests merged with
-> a merge commit; a squash merge would land several revisions as one commit that skips numbers.
+> revision's golden file by its key and the commit that wrote it, and parity and host render
+> only the head's; `sound-rev-render.yml` renders the lower ones. For each revision below the
+> head's, the gate's `--list-revisions` names the last commit at that revision whose golden
+> file is keyed to it, and the job builds that commit's own harness and checks that commit's
+> golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks and
+> {48, 1, 127, 32}) and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole
+> corpus). It passes at once when the pull request introduces at most one revision, and fails
+> when a listed commit cannot be built or checked. Once branch protection on `main` requires
+> the `sound-rev-render` check, a pull request may push several revision commits at once. It is
+> not required until the owner adds it there; until then each revision commit is pushed and
+> passes parity and host as the pull request's head before the next revision's commit is
+> pushed. The walk needs the whole history: `sound-rev.yml` checks out with `fetch-depth: 0`,
+> and the gate fails on a shallow clone or a missing object rather than pass. The rule holds on
+> `main` only for pull requests merged with a merge commit; a squash merge would land several
+> revisions as one commit that skips numbers.
 
 ### 5.13 Shared deterministic test-signal generator
 
