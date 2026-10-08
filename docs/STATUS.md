@@ -717,13 +717,16 @@ records live in [docs/design/reviews/](design/reviews/).
   fixtures load inexact (their 27 and 28 are unknown ids) and added `r2-onset-marks.bsp`, which
   must load exact on every later build; the fixtures' recipes now spell out each revision's
   leaves, so they keep rebuilding the committed bytes. **The
-  number code's committed hashes are provisional:** measured on x86-64 (MSVC 19.40, GCC 11.4,
-  Clang 14; the exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit
-  Cortex-M7 under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review), but the
-  design commits them only after one linux-arm64 and one macOS run (§10.2), which no host here
-  offered. Lane G's `bspc-roundtrip` legs run them on linux-arm64 and both macOS legs, and
-  their first GitHub run reproducing them is still the gate before the number code is relied
-  on; a leg that differs is a finding, not a reason to re-mint. The fuzzers' M7 run, the
+  number code's hashes** were measured on x86-64 (MSVC 19.40, GCC 11.4, Clang 14; the
+  exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit Cortex-M7
+  under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review); the design commits
+  them only after one linux-arm64 and one macOS run (§10.2), which no host here offered. Those
+  runs have happened on GitHub: `compiler_number_hashes` passed in lane G's `bspc-roundtrip`
+  legs on linux-arm64 and both macOS legs on pull requests #5, #6 and #7 (runs 37658865968,
+  37693138971, 37701943741), and the nightly exhaustive round trip reproduced its hashes on
+  linux-arm64 and linux-x64 GCC (run 37770014635, `main` at `1624f80`, 2026-10-08). Whether
+  that commits them under §10.2 is the owner's call, still pending; a leg that differs is a
+  finding, not a reason to re-mint. The fuzzers' M7 run, the
   libFuzzer leg and the number-check legs are CI jobs since lane G, and the plugin's typed-text
   parser now uses `Number` (lane A).
 - **Mode compiler lane A's open ends.** The compiler admits the default structure, the onset
@@ -751,16 +754,17 @@ records live in [docs/design/reviews/](design/reviews/).
   `compiler_bspc_cli` into a leg check, and added the compiler audit, its source ban scoped to
   `compiler/src` since the tests cross-check against `std::from_chars`, `to_chars` and `printf`,
   and CODEOWNERS for `compiler/`, `tools/bspc/`, `firmware/factory/` and `.gitattributes`. The
-  compiler's digests, like the number code's hashes, are measured on x86-64 only until those
-  legs first run on GitHub. `render` waits for lane E's `tools/audition/`.
+  compiler's digests (`compiler_unit`) passed on linux-arm64 and both macOS legs in the same
+  runs as the number code's hashes (lane B, above). `render` waits for lane E's
+  `tools/audition/`.
 - **Mode compiler lane G's open ends.** Lane G's jobs have run on GitHub since pull request #5:
   its first run (37657240905) aborted `compiler_number_hashes` on the two Linux GCC legs at a
   fortified buffer in the test's random generator (fixed in `7f20481`), and its second
   (37658865968) and those of #6 and #7 (37693138971, 37701943741) passed all eight jobs,
   `compiler_number_hashes` and `bspc roundtrip` on linux-arm64 and both macOS legs included.
-  Those runs were the gate for the number code's and the compiler's digests on arm64 and macOS
-  (above), and for `bspc`'s non-ASCII file names and the import check on macOS, which no host
-  here offered; the "provisional" and "x86-64 only" wording above predates them. Locally the new
+  Those runs reproduced the number code's and the compiler's digests on arm64 and macOS (whether
+  that commits them is pending the owner; lanes B and A, above) and passed `bspc`'s non-ASCII
+  file names and the import check on macOS, which no host here offered. Locally the new
   steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
@@ -803,7 +807,14 @@ records live in [docs/design/reviews/](design/reviews/).
   change counts as the engine's, conservatively. Unit tests whose parameter lists named 27 or 28
   still do, read as structure (`dsp/tests/RetiredRows.h`). The plugin cannot load a mode yet
   (lane D), so its onset and mark switches are gone and an older session loads without them.
-  Nothing lane C added has run on GitHub; the M7 and the x86 legs here agree.
+  Lane C has run on GitHub since pull request #5: at sound revision 2 on #5 (parity run
+  37658865968, host 37658866047, plugin 37658865963), with revision 3 on top on #6
+  (37693138971, 37693138908, 37693138848; firmware, compile only, 37693138947) and #7
+  (37701943741, 37701943769, 37701943754, 37701943724), and parity on `main` at `4090270`
+  (37700307648). Every parity leg (the emulated M7 included) and every host, plugin and
+  firmware job passed. #6's `sound-rev-gate` (37693138926) failed on the pull request's jump
+  from revision 1 to 3, not on a render; #7 made the gate per commit, so a pull request may
+  carry consecutive revisions.
 - **The Mix law's open ends** (sound revision 3). It builds the owner's provisional answer to
   Q13, reversible until the first public revision (a reversal is its own revision). The law raises
   output peaks with the level, by up to 6 dB at Mix 0.5 where dry and wet peak together: on the
@@ -880,8 +891,9 @@ Steps 1–4 need no hardware.
    lint, derive), which compiles only the default structure until sound revision 2; and lane G,
    the CI: the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the
    decoder's fuzzers on every leg and the emulated M7, libFuzzer, nightly legs and the compiler
-   audit (on their first GitHub run, the arm64 and macOS legs must reproduce the number code's
-   and the compiler's committed hashes); and lane C, the engine runtime at sound revision 2
+   audit (the arm64 and macOS legs reproduced the number code's and the compiler's hashes on
+   pull requests #5–#7; whether that commits them is the owner's call); and lane C, the engine
+   runtime at sound revision 2
    (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
    trim, the effect volume and the wet kill, the corpus on compiled packages). Next: wave 1, one
    revision per feature (lane F; the owner's Q2 puts it before CLOCK), lane E's audition render
