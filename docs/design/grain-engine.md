@@ -534,11 +534,14 @@ filter concurrency vs. tier capacity); `d_min_fb` when feedback > 0; grain-lengt
 
 > **Update (2026-10-08, CLOCK design pass).** The Time knob's dual mode below is specified in
 > [clock.md](clock.md) §5.1 and §6.4. The Microcosm's manual settles what the Subdiv steps mean:
-> 1/4, 1/2, TAP, 2×, 4× and 8× are **rate multipliers of the tapped quarter note**, so "1/4" is
-> a whole-note grid and "forced to quarters" means TAP; the stored code 0 is TAP, the default. A
-> mode's separate `subdiv` field is withdrawn: the preset's performance state holds the one
-> stored subdivision, which the live control overrides. A third time mode, Free, keeps the Time
-> knob on `macro.time` for modes that are not tempo-driven. All provisional (clock.md §11.5).
+> its 1/4, 1/2, TAP, 2×, 4× and 8× are **rate multipliers of the tapped quarter note**, so its
+> "1/4" is a whole-note grid and "forced to quarters" means TAP; the stored code 0 is TAP, the
+> default. Brainscape writes them as rates (×1/4, ×1/2, TAP, ×2, ×4, ×8; `x1/4` … `x8` in JSON)
+> so they never read as the note values of synced fields. A mode's separate `subdiv` field is
+> withdrawn: the preset's performance state holds the one stored subdivision, which the live
+> control overrides. The stage gesture toggles Subdiv and Tempo, as the Microcosm's does; a third
+> time mode, Free, authored in the preset, keeps the Time knob on `macro.time` for modes that are
+> not tempo-driven. All provisional (clock.md §11.5).
 
 Two tiers over **one** parameter system (microcosm.md §13.1; preset doc recs #6–#7).
 

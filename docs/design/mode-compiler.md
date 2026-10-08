@@ -267,9 +267,10 @@ floating point out of the compiler. Freeze is never stored. Until W2, other valu
 
 > **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §2.4, §5.1 and §11.1 amend
 > this section and §2.3's `scheduler.subdiv` row (provisional, its D3, D7 and D14). The six
-> subdivisions are rate multipliers of the tapped quarter (1/4 is a whole-note grid), re-coded so
-> code 0 is `tap`, the default: §2.3's "default `1/4`" becomes `tap`, and no package changes,
-> every stored byte being 0. `scheduler.subdiv` is withdrawn, SCHD's byte reserved, so the
+> subdivisions are rate multipliers of the tapped quarter (the Microcosm's "1/4" is a whole-note
+> grid), written `tap, x1/4, x1/2, x2, x4, x8` so no label reads as a note value, and re-coded so
+> code 0 is `tap`, the default: §2.3's "default `1/4`" becomes `tap`, the printed labels are E5,
+> and no package changes, every stored byte being 0. `scheduler.subdiv` is withdrawn, SCHD's byte reserved, so the
 > preset's performance state holds the one stored subdivision. `tempo_source` is withdrawn, its
 > STAT byte reserved: the source is a device setting, and a byte in STAT would split
 > `sound_hash` between presets that sound the same. The divisions of `base_sync`, modulator
