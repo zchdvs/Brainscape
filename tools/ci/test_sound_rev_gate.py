@@ -3,17 +3,25 @@
 and the package rule of mode-compiler.md §8.3).
 
 Builds a scratch repository holding a revision header, a golden file and a few other
-files, writes a base tree and one head tree per case (trees, not commits: the gate only
-diffs and reads them), and requires the gate's verdict for each. The package rule's cases
-run against a second base whose golden file has a preset that plays a committed package
-and which has a corpus and a factory manifest. A case that passes when it should fail means
-the gate lost a trigger. Exit 1 on any wrong verdict.
+files, commits a base and, per case, the pull request's commits and the merge commit CI
+makes of the base and the pull request (the gate diffs the two ends and walks every commit
+between them), and requires the gate's verdict for each. The single-commit cases change the
+base's files in one commit; the package rule's cases run against a second base whose golden
+file has a preset that plays a committed package and which has a corpus and a factory
+manifest; the history cases build pull requests of several commits and merges, for the
+per-commit sound-revision rule, and some also require the report's list of the revisions and
+their mints; the last ones give the gate a shallow clone and histories with a commit, a file
+or a directory missing, which it must refuse. No case may get a line starting "::" (a
+workflow command) out of the gate, whatever the pull request's text. A case that passes when
+it should fail means the gate lost a trigger. Exit 1 on any wrong verdict.
 
   test_sound_rev_gate.py
 """
 import json
 import os
+import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -104,6 +112,11 @@ CASES = [
     ("revision skips a number", {HEADER: header(3), GOLDEN: golden(3, BASE_PRESETS)}, "", "skipped a number"),
     ("revision goes down", {HEADER: header(0), GOLDEN: golden(0, BASE_PRESETS)}, "", "went down"),
     ("golden keyed to another revision", {GOLDEN: golden(2, BASE_PRESETS)}, "", STALE),
+    # The pull request's text reaches the report: a line break in it must not start a line.
+    ("golden keyed to a line break and a workflow command",
+     {GOLDEN: golden("1\n::error title=sound-rev-gate::forged", BASE_PRESETS)}, "", STALE),
+    ("docs only, a label with a carriage return and a workflow command", {"docs/STATUS.md": "new status\n"},
+     '["docs\\r::warning title=sound-rev-gate::forged"]', 0),
 ]
 
 # The package rule (mode-compiler.md §8.3). "engram" plays a committed package, which the
@@ -219,8 +232,131 @@ PACKAGE_CASES = [
 ]
 
 
+def bumped(rev, line=""):
+    """A sound change with kSoundRevision raised to rev, golden.json not re-minted."""
+    return {"dsp/src/PostChain.cpp": f"// the sound of revision {rev}{line}\n", HEADER: header(rev)}
+
+
+def mint(rev, line=""):
+    """golden.json minted at rev: the default preset renders differently at each revision."""
+    return {GOLDEN: golden(rev, [("default", f"{rev}{line}".ljust(64, "0"), [f"{rev}0", f"{rev}1"]),
+                                 BASE_PRESETS[1]])}
+
+
+def sound_revision(rev, line=""):
+    """A sound revision in one commit: the change, the bump and the mint."""
+    return {**bumped(rev, line), **mint(rev, line)}
+
+
+# Pull requests of several commits (the per-commit sound-revision rule):
+# (name, the base it merges into, commits, 0 to pass or the failure it reports[, False when the
+# gate reads the pull request's last commit itself, as when run by hand, instead of the merge
+# commit CI makes of it and the base]). A commit is (name, parents, changes to its first
+# parent's files); "fork" is the base files' commit, and every other parent is a commit named
+# before it. "main..." commits stand for the base branch moving on.
+SKIP = "skipped a number"
+DOWN = "went down"
+TWICE = "two different sounds cannot share a number"
+TAKEN = "a number the base already has"
+UNMINTED = "never minted its golden file"
+GAP = "are introduced by no commit"
+UNREAD = "fetch the full history"
+UNPARSED = "does not name kSoundRevision once outside comments"
+BACK = {path: BASE[path] for path in ("dsp/src/PostChain.cpp", HEADER, GOLDEN)}
+WAVE = [(f"r{r}", [f"r{r - 1}" if r > 2 else "fork"], sound_revision(r)) for r in range(2, 7)]
+MOVED = HEADER + ".moved"
+# A header the preprocessor reads as revision 3 that holds a definition of 2 as well.
+TWO_DEFINITIONS = ("#pragma once\nnamespace brainscape {\n#if 0\ninline constexpr uint32_t kSoundRevision = 2;\n"
+                   "#else\ninline constexpr uint32_t kSoundRevision = 3;\n#endif\n}\n")
+HISTORY_CASES = [
+    ("two revisions, a commit each, each minted", "fork",
+     [("r2", ["fork"], sound_revision(2)), ("r3", ["r2"], sound_revision(3))], 0),
+    ("a bump, its mint in the next commit, then the next revision", "fork",
+     [("b2", ["fork"], bumped(2)), ("m2", ["b2"], mint(2)), ("r3", ["m2"], sound_revision(3))], 0),
+    ("a bump, its mint and a re-mint, then the next revision", "fork",
+     [("b2", ["fork"], bumped(2)), ("m2", ["b2"], mint(2)), ("again", ["m2"], mint(2, "again")),
+      ("r3", ["again"], sound_revision(3))], 0),
+    ("five revisions, a commit each", "fork", WAVE, 0),
+    ("the base merged in between the pull request's revisions", "main",
+     [("main", ["fork"], {"docs/STATUS.md": "main moved\n"}), ("r2", ["fork"], sound_revision(2)),
+      ("sync", ["r2", "main"], {"docs/STATUS.md": "main moved\n"}), ("r3", ["sync"], sound_revision(3))], 0),
+    ("one commit of several skips a number", "fork",
+     [("r2", ["fork"], sound_revision(2)), ("r4", ["r2"], sound_revision(4))], SKIP),
+    ("a revision taken back by a later commit", "fork", [("r2", ["fork"], sound_revision(2)), ("back", ["r2"], BACK)],
+     DOWN),
+    ("one revision introduced on two merged lines", "fork",
+     [("a2", ["fork"], sound_revision(2, "a")), ("b2", ["fork"], sound_revision(2, "b")), ("join", ["a2", "b2"], {})],
+     TWICE),
+    ("a merge that bumps past both of its lines", "fork",
+     [("a2", ["fork"], sound_revision(2)), ("docs", ["fork"], {"docs/STATUS.md": "docs\n"}),
+      ("join", ["a2", "docs"], {**sound_revision(3), "docs/STATUS.md": "docs\n"})], 0),
+    ("a parallel line's revision the base already has, then a bump past both", "main2",
+     [("main2", ["fork"], sound_revision(2, "main")), ("p2", ["fork"], sound_revision(2, "pr")),
+      ("sync", ["p2", "main2"], sound_revision(3))], TAKEN),
+    ("a revision never minted", "fork", [("b2", ["fork"], bumped(2)), ("r3", ["b2"], sound_revision(3))], UNMINTED),
+    # A mint is a golden file keyed to its own commit's revision, as the harness's --mode mint
+    # writes it.
+    ("a revision minted only by the next revision's commit", "fork",
+     [("b2", ["fork"], bumped(2)), ("b3", ["b2"], {**bumped(3), **mint(2)}), ("m3", ["b3"], mint(3))], UNMINTED),
+    ("a revision minted before its bump", "fork",
+     [("pre", ["fork"], mint(2)), ("b2", ["pre"], bumped(2)), ("r3", ["b2"], sound_revision(3))], UNMINTED),
+    ("a revision minted on a line without it", "fork",
+     [("b2", ["fork"], bumped(2)), ("side", ["fork"], mint(2)), ("join", ["b2", "side"], {}),
+      ("r3", ["join"], sound_revision(3))], UNMINTED),
+    ("a bump that rewrites golden.json still keyed to the previous revision", "fork",
+     [("b2", ["fork"], {**bumped(2), GOLDEN: golden(1, [("default", "dd" * 32, ["d0", "d1"]), BASE_PRESETS[1]])}),
+      ("r3", ["b2"], sound_revision(3))], UNMINTED),
+    # The header as the compiler reads it: comments do not count, and a second definition stops
+    # the gate wherever it is.
+    ("a comment names another revision than the definition", "fork",
+     [("a", ["fork"], {**sound_revision(3), **mint(2), HEADER: "// kSoundRevision = 2;\n" + header(3)}),
+      ("b", ["a"], sound_revision(3))], SKIP),
+    ("two definitions of the revision in one commit", "fork",
+     [("a", ["fork"], {**bumped(3), **mint(2), HEADER: TWO_DEFINITIONS}), ("b", ["a"], sound_revision(3))],
+     UNPARSED),
+    ("a header the gate cannot read in a commit a later one fixes", "fork",
+     [("a", ["fork"], {HEADER: header("1u")}), ("b", ["a"], {HEADER: header(1)})], UNPARSED),
+    # A commit without the header keeps its parents' revision.
+    ("the header moved aside and back", "fork",
+     [("gone", ["fork"], {HEADER: None, MOVED: header(1)}), ("still", ["gone"], {"docs/STATUS.md": "still\n"}),
+      ("back", ["still"], {HEADER: header(1), MOVED: None, "docs/STATUS.md": BASE["docs/STATUS.md"]})], 0),
+    ("the header deleted, then restored a number too high", "fork",
+     [("r2", ["fork"], sound_revision(2)), ("gone", ["r2"], {HEADER: None}), ("back", ["gone"], sound_revision(4))],
+     SKIP),
+    ("run by hand: a branch on a revision the base took back", "main1",
+     [("main2", ["fork"], sound_revision(2)), ("main1", ["main2"], BACK),
+      ("docs", ["main2"], {"docs/STATUS.md": "docs\n"})], GAP, False),
+    ("run by hand: a branch behind the base's revision", "main2",
+     [("main2", ["fork"], sound_revision(2)), ("docs", ["fork"], {"docs/STATUS.md": "docs\n"})], DOWN, False),
+]
+# What some history cases must report besides the verdict, with {commit} for a commit's
+# `short hash` and subject ({merge} for CI's merge commit): "listing", the summary's list of
+# introduced revisions and their mints, exactly; "present" and "absent", text that must and
+# must not be in the report or the error.
+UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: parity and host render "
+              "r6's.")
+EXPECT = {
+    "a bump, its mint in the next commit, then the next revision":
+        {"listing": ["- r2: {b2}", "  - minted at {m2}", "- r3: {r3}", "  - minted at {r3}"]},
+    "a bump, its mint and a re-mint, then the next revision":
+        {"listing": ["- r2: {b2}", "  - minted at {m2}", "  - minted at {again}", "- r3: {r3}", "  - minted at {r3}"]},
+    "five revisions, a commit each": {"present": ["- The golden file of r2, r3, r4, r5 " + UNRENDERED]},
+    "the base merged in between the pull request's revisions":
+        {"listing": ["- r2: {r2}", "  - minted at {r2}", "- r3: {r3}", "  - minted at {r3}"]},
+    "one commit of several skips a number": {"absent": [GAP]},
+    "a merge that bumps past both of its lines":
+        {"listing": ["- r2: {a2}", "  - minted at {a2}", "- r3: {join}", "  - minted at {join}"]},
+    "a revision never minted": {"listing": ["- r2: {b2}", "  - never minted", "- r3: {r3}", "  - minted at {r3}"]},
+    "the header moved aside and back":
+        {"listing": [], "present": [f"- {HEADER} is gone at {{gone}}, so that commit counts as its parents' "
+                                    f"revision, 1."], "absent": ["is gone at {still}"]},
+}
+ENV = dict(os.environ, GIT_AUTHOR_NAME="sound-rev self-test", GIT_AUTHOR_EMAIL="self-test@example.invalid",
+           GIT_COMMITTER_NAME="sound-rev self-test", GIT_COMMITTER_EMAIL="self-test@example.invalid")
+
+
 def git(repo, *args):
-    p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, env=ENV)
     if p.returncode != 0:
         sys.exit(f"test_sound_rev_gate: git {' '.join(args)} failed: {p.stderr.strip()}")
     return p.stdout.strip()
@@ -245,42 +381,126 @@ def tree(repo, files):
     return git(repo, "write-tree")
 
 
+def commit(repo, files, parents, subject):
+    """Commits exactly `files` on the given parents and returns the commit's id."""
+    return git(repo, "commit-tree", tree(repo, files), "-m", subject, *[a for p in parents for a in ("-p", p)])
+
+
+def changed(files, changes):
+    """`files` with `changes` applied (None deletes)."""
+    out = dict(files)
+    for path, text in changes.items():
+        if text is None:
+            out.pop(path, None)
+        else:
+            out[path] = text
+    return out
+
+
+def verdict(name, want, cwd, base, head, labels="", body_file=None, expect=None):
+    """Runs the gate and prints whether it gave the verdict `want` and the report `expect` asks
+    for (EXPECT's keys, formatted); returns True when it did. No line of its output may start
+    with "::", a workflow command to the Actions runner, whatever the pull request's text."""
+    p = subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels]
+                       + (["--body-file", body_file] if body_file else []),
+                       cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    out = p.stdout.splitlines()
+    fails = [ln[len("- **FAIL:** "):] for ln in out if ln.startswith("- **FAIL:** ")]
+    if want == 0:
+        ok = p.returncode == 0 and not fails
+    else:  # a FAIL line, or an input the gate refuses to read (stderr)
+        ok = p.returncode == 1 and (any(want in f for f in fails) or want in p.stderr)
+    wrong = [f"a line starts with '::': {ln}" for ln in out + p.stderr.splitlines() if ln.startswith("::")]
+    expect = expect or {}
+    if "listing" in expect:
+        start = next((i + 1 for i, ln in enumerate(out) if ln.startswith("Sound revisions introduced")), len(out))
+        listing = out[start:out.index("", start) if "" in out[start:] else len(out)]
+        if listing != expect["listing"]:
+            wrong.append(f"the listing is {listing}, not {expect['listing']}")
+    wrong += [f"the report lacks: {t}" for t in expect.get("present", []) if t not in p.stdout + p.stderr]
+    wrong += [f"the report has: {t}" for t in expect.get("absent", []) if t in p.stdout + p.stderr]
+    ok = ok and not wrong
+    print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {p.returncode}")
+    for f in fails + p.stderr.strip().splitlines() + wrong:
+        print(f"       {f}")
+    if not ok:
+        print(p.stdout)
+    return ok
+
+
 def main():
-    failures = total = 0
+    results = []
     with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as scratch:
         git(repo, "init", "-q")
         body_file = os.path.join(scratch, "body.txt")
+        # One commit on the base, merged into it as CI merges a pull request.
         for base_files, cases in ((BASE, CASES), (PACKAGE_BASE, PACKAGE_CASES)):
-            base = tree(repo, base_files)
+            base = commit(repo, base_files, [], "base")
             for case in cases:
                 name, changes, labels, want = case[:4]
                 with open(body_file, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(case[4] if len(case) > 4 else "")
-                files = dict(base_files)
-                for path, text in changes.items():
-                    if text is None:
-                        files.pop(path, None)
-                    else:
-                        files[path] = text
-                head = tree(repo, files)
-                p = subprocess.run([sys.executable, GATE, "--base", base, "--head", head, "--labels", labels,
-                                    "--body-file", body_file],
-                                   cwd=repo, capture_output=True, text=True, encoding="utf-8",
-                                   env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-                fails = [ln[len("- **FAIL:** "):] for ln in p.stdout.splitlines() if ln.startswith("- **FAIL:** ")]
-                if want == 0:
-                    ok = p.returncode == 0 and not fails
-                else:  # a FAIL line, or an input the gate refuses to read (stderr)
-                    ok = p.returncode == 1 and (any(want in f for f in fails) or want in p.stderr)
-                failures += not ok
-                total += 1
-                print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {p.returncode}")
-                for f in fails:
-                    print(f"       {f}")
-                if not ok:
-                    print(p.stdout + p.stderr)
-    print(f"{total - failures}/{total} cases gave the expected verdict")
-    return 1 if failures else 0
+                files = changed(base_files, changes)
+                tip = commit(repo, files, [base], name)
+                head = commit(repo, files, [base, tip], f"Merge {name}")
+                results.append(verdict(name, want, repo, base, head, labels, body_file))
+        # Pull requests of several commits.
+        fork = commit(repo, BASE, [], "fork")
+        for case in HISTORY_CASES:
+            name, base, spec, want = case[:4]
+            ids, files = {"fork": fork}, {"fork": BASE}
+            for c, parents, changes in spec:
+                files[c] = changed(files[parents[0]], changes)
+                ids[c] = commit(repo, files[c], [ids[p] for p in parents], f"{name}: {c}")
+            tip = spec[-1][0]
+            head = ids["merge"] = ids[tip] if len(case) > 4 and not case[4] else commit(
+                repo, files[tip], [ids[base], ids[tip]], f"Merge {name}")
+            shown = {c: git(repo, "log", "-1", "--format=`%h` %s", i) for c, i in ids.items()}
+            expect = {k: [t.format(**shown) for t in v] for k, v in EXPECT.get(name, {}).items()}
+            results.append(verdict(name, want, repo, ids[base], head, expect=expect))
+        # A commit subject is the pull request's text: a carriage return in it, which git keeps,
+        # must not start a line of the report or of an error that names the commit.
+        cr = os.path.join(scratch, "message.txt")
+        with open(cr, "wb") as fh:
+            fh.write(b"Sound revision 2\r::error title=sound-rev-gate::forged\r\n\r\nbody\n")
+        for name, files, want in (("", changed(BASE, sound_revision(2)), 0),
+                                  (", on a header the gate cannot read", changed(BASE, {HEADER: header("1u")}),
+                                   UNPARSED)):
+            c2 = git(repo, "commit-tree", tree(repo, files), "-p", fork, "-F", cr)
+            head = commit(repo, changed(BASE, {}), [fork, c2], "Merge cr") if want else commit(
+                repo, files, [fork, c2], "Merge cr")
+            results.append(verdict(f"a commit subject with a carriage return and a workflow command{name}", want,
+                                   repo, fork, head,
+                                   expect={"present": ["Sound revision 2 ::error title=sound-rev-gate::forged"]}))
+        # Fail closed. The checkout the gate had before it walked commits (fetch-depth: 2) reads the
+        # merge commit and its parents but none of the pull request's earlier commits.
+        r2 = commit(repo, changed(BASE, sound_revision(2)), [fork], "unread: r2")
+        r3 = commit(repo, changed(BASE, sound_revision(3)), [r2], "unread: r3")
+        head = commit(repo, changed(BASE, sound_revision(3)), [fork, r3], "Merge unread")
+        git(repo, "update-ref", "refs/heads/unread", head)
+        shallow = os.path.join(scratch, "shallow")
+        git(scratch, "clone", "-q", "--depth", "2", "--branch", "unread", pathlib.Path(repo).as_uri(), shallow)
+        results.append(verdict("a shallow clone (fetch-depth: 2)", UNREAD, shallow, "HEAD^1", "HEAD"))
+        results.append(verdict("the same history, whole", 0, repo, fork, head))
+        # A commit missing, a file of a pull request's own (a header no other case has) missing, and
+        # a directory of one (the golden file's, around a golden file no other case has) missing.
+        u2 = commit(repo, changed(BASE, {**sound_revision(2), HEADER: header(2) + "// unread\n"}), [fork], "unread: u2")
+        u3 = commit(repo, changed(BASE, sound_revision(3)), [u2], "unread: u3")
+        u_head = commit(repo, changed(BASE, sound_revision(3)), [fork, u3], "Merge unread u3")
+        t2 = commit(repo, changed(BASE, {**bumped(2), **mint(2, "tree")}), [fork], "unread: t2")
+        t3 = commit(repo, changed(BASE, sound_revision(3)), [t2], "unread: t3")
+        t_head = commit(repo, changed(BASE, sound_revision(3)), [fork, t3], "Merge unread t3")
+        golden_dir = git(repo, "rev-parse", f"{t2}:{os.path.dirname(GOLDEN)}")
+        for name, obj, case_head in (("a commit", r2, head),
+                                     ("a file", git(repo, "rev-parse", f"{u2}:{HEADER}"), u_head),
+                                     ("a directory", golden_dir, t_head)):
+            loose = os.path.join(repo, ".git", "objects", obj[:2], obj[2:])
+            os.chmod(loose, stat.S_IWRITE)  # git writes objects read-only
+            os.remove(loose)
+            results.append(verdict(f"a history with {name} missing", UNREAD, repo, fork, case_head))
+    print(f"{sum(results)}/{len(results)} cases gave the expected verdict")
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":

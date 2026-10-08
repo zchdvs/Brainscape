@@ -893,6 +893,26 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > alters what a document means, not what the engine plays.
 > That design amends this section and §6.1 when it is accepted (its §12.5).
 
+> **Update (2026-10-07, revisions per commit).** The gate holds the bump rule per commit, not
+> per pull request: each revision is one commit that raises `kSoundRevision` by exactly one,
+> and its golden file is minted at that revision, by that commit or a later one before the next
+> bump; a pull request may carry several consecutive revisions (step 3 carries r2 and r3, and
+> wave 1 one per feature). The gate walks every commit the pull request adds and CI's merge
+> commit, and reads each one's revision from the header's one `kSoundRevision = N;` outside
+> comments (a commit without the header keeps its parents'). A commit below the highest of its
+> parents' revisions, or more than one above it, fails. The revisions introduced above the
+> base's must run from the base's + 1 to the head's, each introduced by one commit (two would
+> be two sounds sharing a number) and each minted by a commit at that revision: the harness
+> keys the file to the revision it was built with, so a file keyed to another revision than its
+> commit's mints nothing. A commit that introduces a number the base already has (a parallel
+> line's claim) fails until the line is renumbered on top of the base. The gate checks a lower
+> revision's golden file by its key and the commit that wrote it; CI renders only the head's
+> (parity, host), so each revision commit is pushed and passes those checks as the pull
+> request's head before the next revision's commit is pushed. The walk needs the whole history:
+> `sound-rev.yml` checks out with `fetch-depth: 0`, and the gate fails on a shallow clone or a
+> missing object rather than pass. The rule holds on `main` only for pull requests merged with
+> a merge commit; a squash merge would land several revisions as one commit that skips numbers.
+
 ### 5.13 Shared deterministic test-signal generator
 
 Add `dsp/include/brainscape/TestSignal.h`: an integer-only, versioned generator of noise bursts

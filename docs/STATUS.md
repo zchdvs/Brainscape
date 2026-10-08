@@ -269,15 +269,24 @@ run in every build, so `host.yml` and `plugin.yml` gate on the file as well. `so
 (companion-app.md §3.4's `sound-rev-gate`) fails a pull request that changes a golden hash
 without bumping `kSoundRevision`, whatever its labels, and one that touches `dsp/src`,
 `dsp/include`, `dsp/CMakeLists.txt`, the root `CMakeLists.txt`, the profile CMake file, the
-forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label; a
-bump is exactly one and must regenerate the golden file (`brainscape_golden --mode mint`).
-Its package rule (mode-compiler.md §8.3, lane G) fails one that changes a committed package's
-`soundHash` or `controlHash` (a golden preset's, a corpus or factory package's in
-`dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without the
-"package-change" label and a `Package-change: <cause>` line in its description, and counts a
-package preset's changed render as an engine change unless its package changed too and the pull
-request touches no path-trigger path without a bump; no package is committed yet, so it binds
-from sound revision 2.
+forbidden-flag list or the arm toolchain file without a bump or the "sound-neutral" label.
+It checks bumps per commit: each revision is one commit that raises `kSoundRevision` by exactly
+one, and its golden file is minted (`brainscape_golden --mode mint`) at that revision, by that
+commit or a later one before the next bump; a pull request may carry several consecutive
+revisions. It walks every commit the pull request adds and fails a commit that lowers the
+revision or skips a number, a revision two commits introduce or one the base already has, and a
+revision no commit at that revision minted; the walk needs the whole history, so the job checks
+out with `fetch-depth: 0` and the gate fails on a shallow clone. It checks a golden file below
+the head's revision by its key and the commit that wrote it, not by rendering it (parity and
+host render the head's), so each revision commit is pushed and passes them as the pull
+request's head before the next one; and the rule holds on `main` only for pull requests merged
+with a merge commit (Known gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull
+request that changes a committed package's `soundHash` or `controlHash` (a golden preset's, a
+corpus or factory package's in `dsp/tests/golden/presets/MANIFEST` or
+`firmware/factory/MANIFEST`) without the "package-change" label and a `Package-change: <cause>`
+line in its description, and counts a package preset's changed render as an engine change
+unless its package changed too and the pull request touches no path-trigger path without a
+bump; no package is committed yet, so it binds from sound revision 2.
 Since 2026-10-06 this binds on GitHub: branch protection on `main` requires all 23 CI checks
 (every `parity-*` leg, `parity-summary`, `sound-rev-gate`, and the `host` and `plugin` jobs),
 an up-to-date branch and code-owner review (Known gaps has the caveats); lane G's eight new
@@ -599,6 +608,15 @@ records live in [docs/design/reviews/](design/reviews/).
   bypass, which the protection allows on purpose. Running `sound-rev-gate` from the base
   branch (`pull_request_target`) would not close the first caveat alone, since a pull request
   can add a workflow whose job has the same name.
+- **Squash and rebase merging are still allowed** (2026-10-07). `sound-rev-gate` checks
+  GitHub's test merge of a pull request, and its per-commit rule holds on `main` only when the
+  pull request lands as a merge commit. A squash merge of one that carries r2 and r3 lands a
+  single commit that raises `kSoundRevision` from 1 to 3, and no check reads `main`'s history
+  afterwards; a rebase merge lands copies of the pull request's commits, so a branch built on
+  the originals claims revisions `main` already has until it is rebased. Owner merges go
+  through the administrator bypass, so the method is picked by hand each time: merge with a
+  merge commit until the owner turns squash and rebase merging off (Settings, General, Pull
+  Requests).
 - **Profile step 10 is not finished** (determinism-profile.md §8.4 lists it). Not yet built:
   the engine-side coverage counters (births, steals, reverse and mark-positioned births,
   re-anchors, far-rail clamps, blocks with an underflow flag, the write-ahead counter) and the
