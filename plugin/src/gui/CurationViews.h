@@ -86,6 +86,13 @@ class MacroPanel final : public juce::Component {
   float                     scale_      = 1.f;
 };
 
+// Before a mode or a file replaces the open document while it has unsaved edits
+// (CurationSession::Dirty): an OK/Cancel box over `parent` names the document and `replacement`,
+// and `discard` runs on Discard only; Cancel keeps the edits and what plays. The box closes with
+// the returned object, so the caller keeps it as long as it lives.
+[[nodiscard]] juce::ScopedMessageBox AskDiscard(const CurationSession& session, const juce::String& replacement,
+                                                juce::Component* parent, std::function<void()> discard);
+
 // The document: what is open, its state, and the slice's commands.
 class DocumentPanel final : public juce::Component {
  public:
@@ -94,15 +101,18 @@ class DocumentPanel final : public juce::Component {
   void SetScale(float scale);
   void paint(juce::Graphics&) override;
   void resized() override;
-  // Commands the editor's keys also reach.
+  // Commands the editor's keys and the Modes menu also reach. Save on a factory mode (built in,
+  // no file) is Save as. Open asks before a chosen file replaces unsaved edits (AskDiscard).
   void ChooseOpen();
   void Save();
   void ToggleSide();
+  // The note line: the last command's outcome (the Modes menu's too).
+  void Note(const juce::String& text, juce::Colour colour);
 
  private:
+  void OpenChosen(const juce::File& file);
   void ChooseSaveAs();
   void StartRender();
-  void Note(const juce::String& text, juce::Colour colour);
   static void StyleToggle(juce::TextButton& b, juce::Colour on);
 
   CurationSession&     session_;
@@ -112,6 +122,7 @@ class DocumentPanel final : public juce::Component {
   juce::TextButton     renderButton_{"Render"}, all_{"S0-S11"}, attack_{"Attack"}, pad_{"Pad"};
   juce::TextButton     reveal_{"Show"};
   std::unique_ptr<juce::FileChooser> chooser_;
+  juce::ScopedMessageBox askBox_;  // the discard question, while it is up
   juce::String         noteText_;
   juce::Colour         noteColour_;
   float                scale_ = 1.f;

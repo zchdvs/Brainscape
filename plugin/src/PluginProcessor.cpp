@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Curation.h"
+#include "FactoryModes.h"
 #include "PluginEditor.h"
 #include "brainscape/InputCondition.h"
 #include "brainscape/ModeEval.h"
@@ -101,6 +102,46 @@ uint64_t ValuesHash(const std::array<float, kNumLeafParams>& v, uint64_t modeHas
 }
 
 constexpr auto kEffectVolume = static_cast<uint32_t>(ParamId::EffectVolumeDb);
+
+constexpr size_t kPackageHashAt = 96;  // the package header's package_hash (Preset.h)
+
+// The mode a session's FMOD block restores (StateCodec.h): this build's package of that id,
+// with the session's macro mirrors as its CTRL positions, over the session's leaves. False when
+// this build has no such package or the whole does not validate (ValidateMode's rules, the
+// leaves of absent elements included); *exact cleared when this build's package is not the one
+// the session played.
+bool RestoreFactoryMode(const WrapperState& state, const float* plain, ModeState* mode, PresetSource* source,
+                        bool* exact) {
+  const int index = FindFactory(state.factory.id);
+  if (index < 0) return false;
+  PackageInfo                        info;
+  const std::unique_ptr<PresetState> package = DecodeFactory(static_cast<size_t>(index), nullptr, &info);
+  if (package == nullptr) return false;
+  ModeState m;
+  m.mode        = package->mode;
+  m.control     = package->control;
+  m.performance = package->performance;
+  m.soundRev    = package->soundRev;
+  for (uint32_t k = 0; k < state.factory.macroCount && k < kMaxMacros; ++k) {
+    for (uint32_t j = 0; j < m.control.macroCount && j < kMaxMacros; ++j) {
+      if (m.control.positions[j].macroId == state.factory.macroIds[k]) {
+        m.control.positions[j].position = state.factory.positions[k];
+      }
+    }
+  }
+  auto check = std::make_unique<PresetState>();
+  ToPreset(plain, m, *check);
+  LoadReport report;
+  CheckPreset(*check, &report);
+  if (report.invalidMode) return false;
+  const FactoryPackage& f = Factory(static_cast<size_t>(index));
+  *mode                   = m;
+  *source                 = {index, juce::String::fromUTF8(f.name), f.family};
+  if (std::memcmp(info.packageHash.bytes, state.factory.packageHash, sizeof info.packageHash.bytes) != 0) {
+    *exact = false;  // this build's version of the mode, not the one the session played
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -338,6 +379,11 @@ ModeState BrainscapeProcessor::CurrentMode() const {
   return mode_;
 }
 
+PresetSource BrainscapeProcessor::CurrentSource() const {
+  const std::lock_guard<std::mutex> lock(controlMutex_);
+  return source_;
+}
+
 std::unique_ptr<PresetState> BrainscapeProcessor::CurrentPreset() const {
   auto  preset = std::make_unique<PresetState>();
   float values[kNumLeafParams];
@@ -369,7 +415,8 @@ void BrainscapeProcessor::NotifyHostOfMirrors() {
   for (BrainscapeParam* p : macros_) p->setValueNotifyingHost(p->getValue());
 }
 
-bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* report) {
+bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* report,
+                                          const PresetSource& source) {
   LoadReport r;
   CheckPreset(state, &r);
   if (report != nullptr) *report = r;
@@ -396,6 +443,7 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
       const std::lock_guard<std::mutex> modeLock(modeMutex_);
       mode_ = mode;
     }
+    source_ = source;
     PostStateUnit(plain, mode);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(plain[i]);
     SetMacroMirrors(mode.control);
@@ -434,6 +482,22 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.settings          = GetSettings();
     state.effectVolumeDb    = effectVolume_->Plain();
     state.hasEffectVolume   = true;
+    // While a factory mode plays, the session names its package and keeps the macro mirrors at
+    // the positions its CTRL defines (StateCodec.h, FMOD).
+    if (source_.factory >= 0 && static_cast<size_t>(source_.factory) < FactoryCount()) {
+      const FactoryPackage& f = Factory(static_cast<size_t>(source_.factory));
+      state.hasFactory        = true;
+      state.factory.id        = f.id;
+      std::memcpy(state.factory.packageHash, f.bytes + kPackageHashAt, sizeof state.factory.packageHash);
+      const ControlState& c = mode_.control;
+      for (uint32_t k = 0; k < c.macroCount && k < kMaxMacros; ++k) {
+        const auto id = static_cast<ParamId>(c.positions[k].macroId);
+        if (!IsMacroRow(id)) continue;
+        state.factory.macroIds[state.factory.macroCount]  = static_cast<uint32_t>(id);
+        state.factory.positions[state.factory.macroCount] = macros_[MacroIndex(id)]->Plain();
+        ++state.factory.macroCount;
+      }
+    }
   }
   std::vector<uint8_t> bytes;
   EncodeState(state, bytes);
@@ -443,23 +507,29 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
 void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes) {
   WrapperState state{};
   if (sizeInBytes <= 0 || !DecodeState(data, static_cast<size_t>(sizeInBytes), state)) return;
-  // A v1 session holds leaves only (StateCodec.h): it plays the default mode, whose CTRL
-  // positions the macro mirrors take, until session v2 carries a package (mode-compiler.md §9.2).
-  // The effect volume, a device setting, goes out after the unit's load (ApplyStateUnit), so its
-  // mirror is stored first.
-  const ModeState mode{};
+  // A v1 session holds leaves (StateCodec.h). One saved while a factory mode played names its
+  // package (FMOD): it plays this build's package of that id, over the session's leaves, with
+  // the session's macro mirrors as the CTRL positions. Any other plays the default mode, whose
+  // CTRL positions the macro mirrors take, until session v2 carries a package (mode-compiler.md
+  // §9.2); so does one whose factory mode this build lacks, inexact. The effect volume, a device
+  // setting, goes out after the unit's load (ApplyStateUnit), so its mirror is stored first.
+  ModeState    mode{};
+  PresetSource source;
+  bool         exact = state.unknownIds + state.missingIds == 0u && !state.unreadTail;
+  if (state.hasFactory && !RestoreFactoryMode(state, state.plain, &mode, &source, &exact)) exact = false;
   {
     const std::lock_guard<std::mutex> lock(controlMutex_);
     {
       const std::lock_guard<std::mutex> modeLock(modeMutex_);
       mode_ = mode;
     }
+    source_ = source;
     if (state.hasEffectVolume) effectVolume_->StoreMirror(state.effectVolumeDb);
     PostStateUnit(state.plain, mode);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(state.plain[i]);
     SetMacroMirrors(mode.control);
     SetSettings(state.settings);
-    lastLoadInexact_.store(state.unknownIds + state.missingIds > 0u, std::memory_order_relaxed);
+    lastLoadInexact_.store(!exact, std::memory_order_relaxed);
     loadSerial_.fetch_add(1u, std::memory_order_relaxed);
   }
   // Outside the lock, since a host may call back in. Each inner setValue sees its own

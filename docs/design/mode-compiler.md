@@ -1323,6 +1323,14 @@ hand reaches the stored position; a caught knob follows the host) and Shift; the
 the raw-parameter view, each targeted leaf marked with its macros, its right-click menu detaching
 or solving. The capture-endpoint button and the rating form wait (the ratings log is
 `tools/audition/ratings.py`'s), as does the input class from the log's declarations.
+The header's Modes menu (`plugin/src/gui/ModeMenu.*`) holds the factory set, embedded at build
+time from `firmware/factory/MANIFEST` and the committed packages (`plugin/EmbedFactory.cmake`,
+`plugin/src/FactoryModes.*`; the build fails when a package's header does not carry MANIFEST's
+hashes, the tests when its bytes do not): the set by family, the reserves in a submenu.
+Choosing a mode opens its package in the session as opening the `.bsp` does (the same bytes,
+document and load); a built-in document saves only as a copy. While the open document has
+unsaved edits, the menu and Open ask before replacing it. It stands in for the Factory bank
+until the library exists.
 
 ### 9.2 Load modes, parameters and session state
 
@@ -1340,7 +1348,11 @@ or solving. The capture-endpoint button and the rating form wait (the ratings lo
   restore, and saved in `BSWS` v1 as setting key 5; the macros (a host move is a `MacroMove`)
   and `perf.expression` are registered too, the leaves under host model (b), and the leaf mirrors
   follow a move's fan-out through `EvalMacro`/`EvalExpression`, though hosts are not told of it
-  yet. Session v2 is still to build: a v1 session holds leaves only and plays the default mode.
+  yet. Session v2 is still to build: a v1 session holds leaves and plays the default mode,
+  unless a factory mode played when it was saved: then an `FMOD` block after the settings
+  (which earlier v1 readers never read) names the package by id and package hash with the
+  macro positions, and a recall plays the build's package of that id with the session's leaves
+  and positions, inexact when the build's package differs.
 - **Session state** (`BSWS` v2): a wrapper header, the current `.bsp` and the wrapper settings
   (companion §6.9). A host set that is not an exact echo rewrites STAT, patches the JSON and
   recomputes `sound_hash` before saving; v1 states are migrated (§4.4).

@@ -28,9 +28,11 @@
 #include "Audition.h"
 #include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
 #include "Curation.h"
+#include "FactoryModes.h"
 #include "Lint.h"  // brainscape_compiler: derive, for the saved documents
 #include "PlainAttachment.h"
 #include "gui/CurationViews.h"
+#include "gui/ModeMenu.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
 #include "brainscape/Engine.h"
@@ -2405,6 +2407,513 @@ TEST_CASE("a pedal knob picks up after a load, then sends MacroMoves") {
   REQUIRE_FALSE(knob.Caught());
   knob.Bind(nullptr, juce::Colours::white, "", "", "");
   REQUIRE(knob.Caught());  // a knob with no target has nothing to wait for
+}
+
+// ── The factory set and the Modes menu ───────────────────────────────────────────────────
+
+namespace {
+
+struct ManifestLine {
+  std::string packageHash, soundHash, controlHash, path;
+};
+
+// firmware/factory/MANIFEST as committed: bspc roundtrip --write-manifest's lines.
+std::vector<ManifestLine> ReadManifest() {
+  juce::StringArray lines;
+  juce::File(BRAINSCAPE_FACTORY_DIR).getChildFile("MANIFEST").readLines(lines);
+  std::vector<ManifestLine> out;
+  for (const juce::String& line : lines) {
+    if (line.trim().isEmpty()) continue;
+    juce::StringArray f;
+    f.addTokens(line.trim(), " ", "");
+    REQUIRE(f.size() == 4);
+    out.push_back({f[0].toStdString(), f[1].toStdString(), f[2].toStdString(), f[3].toStdString()});
+  }
+  return out;
+}
+
+std::string HexOf(const Digest32& d) { return golden::Sha256::ToHex(d.bytes, sizeof d.bytes); }
+
+std::string MetaOf(const FactoryPackage& f, const SectionSpan& s) {
+  return std::string(reinterpret_cast<const char*>(f.bytes) + s.offset, s.length);
+}
+
+// The committed .bsp of a factory package and its document beside it, copied into `dir`: the
+// .bsp file Open reads, as it sits in firmware/factory.
+juce::File CopyFactoryBsp(const juce::File& dir, const FactoryPackage& f) {
+  const juce::File json = juce::File(BRAINSCAPE_FACTORY_DIR).getChildFile(f.path);
+  const juce::File from = json.withFileExtension(".bsp");
+  const juce::File to   = dir.getChildFile(from.getFileName());
+  REQUIRE(from.copyFileTo(to));
+  REQUIRE(json.copyFileTo(to.withFileExtension(".json")));
+  return to;
+}
+
+int Lull() {
+  const int lull = FindFactory("factory.lull");
+  REQUIRE(lull >= 0);
+  return lull;
+}
+
+}  // namespace
+
+// Every package MANIFEST lists is in the plugin, in its order, byte for byte as committed, with
+// the document's identity; its bytes hash to MANIFEST's hashes (computed here, and checked by
+// DecodePreset over the content), and it decodes and validates.
+TEST_CASE("the factory set is embedded byte for byte as MANIFEST lists it, and every package validates") {
+  const std::vector<ManifestLine> manifest = ReadManifest();
+  REQUIRE(FactoryCount() == manifest.size());
+  size_t reserves = 0;
+  for (size_t i = 0; i < FactoryCount(); ++i) {
+    const FactoryPackage& f = Factory(i);
+    const ManifestLine&   m = manifest[i];
+    INFO(m.path);
+    REQUIRE(m.path == f.path);
+    REQUIRE(m.packageHash == f.packageHash);
+    REQUIRE(m.soundHash == f.soundHash);
+    REQUIRE(m.controlHash == f.controlHash);
+    REQUIRE(f.reserve == (m.path.rfind("reserve/", 0) == 0));
+    reserves += f.reserve ? 1u : 0u;
+    REQUIRE(FindFactory(f.id) == static_cast<int>(i));
+
+    // Byte for byte the committed package.
+    juce::MemoryBlock committed;
+    const juce::String bsp = juce::String(f.path).upToLastOccurrenceOf(".json", false, false) + ".bsp";
+    REQUIRE(juce::File(BRAINSCAPE_FACTORY_DIR).getChildFile(bsp).loadFileAsData(committed));
+    REQUIRE(committed.getSize() == f.size);
+    REQUIRE(std::memcmp(committed.getData(), f.bytes, f.size) == 0);
+
+    // package_hash: SHA-256 of the package with its own field (bytes 96-127) zeroed.
+    std::vector<uint8_t> zeroed(f.bytes, f.bytes + f.size);
+    std::fill(zeroed.begin() + 96, zeroed.begin() + 128, uint8_t{0});
+    golden::Sha256 sha;
+    sha.Update(zeroed.data(), zeroed.size());
+    REQUIRE(sha.Hex() == m.packageHash);
+
+    // DecodePreset checks all three hashes against the content; ValidateMode the semantics.
+    PresetDiagnostic d;
+    PackageInfo      info;
+    PresetMeta       meta;
+    const auto       state = DecodeFactory(i, &d, &info, &meta);
+    INFO(PresetErrorName(d.error));
+    REQUIRE(state != nullptr);
+    REQUIRE(ValidateMode(*state, &d));
+    REQUIRE(HexOf(info.packageHash) == m.packageHash);
+    REQUIRE(HexOf(info.soundHash) == m.soundHash);
+    REQUIRE(HexOf(info.controlHash) == m.controlHash);
+    REQUIRE((info.flags & kPackageFlagFactory) != 0u);
+    REQUIRE(info.soundRev == kSoundRevision);
+    LoadReport report;
+    REQUIRE(CheckPreset(*state, &report));  // loads exact on this build
+    // The table's identity is the package's META.
+    REQUIRE(MetaOf(f, meta.id) == f.id);
+    REQUIRE(MetaOf(f, meta.name) == f.name);
+    REQUIRE(meta.family == f.family);
+  }
+  REQUIRE(reserves > 0u);
+  REQUIRE(reserves < FactoryCount());
+  // The menu's order holds every package once: the set by family, then the reserves.
+  std::vector<size_t> order = FactoryMenuOrder();
+  REQUIRE(order.size() == FactoryCount());
+  for (size_t k = 0; k + 1 < order.size(); ++k) {
+    REQUIRE((Factory(order[k]).reserve <= Factory(order[k + 1]).reserve));
+  }
+  std::sort(order.begin(), order.end());
+  for (size_t k = 0; k < order.size(); ++k) REQUIRE(order[k] == k);
+}
+
+TEST_CASE("the Modes menu lists the set by family, the reserves in a submenu, and names what plays") {
+  auto     proc = MakeProcessor({}, {});
+  ModeMenu menu(*proc);
+  REQUIRE(menu.Name() == "Default mode");
+  REQUIRE(menu.Caption() == "MODE");
+  REQUIRE_FALSE(menu.Named());
+
+  const auto check = [&](int ticked) {
+    const juce::PopupMenu    m = menu.BuildMenu();
+    std::vector<juce::String> headers;
+    std::vector<int>          set, reserve;
+    bool                      open = false;
+    for (juce::PopupMenu::MenuItemIterator it(m); it.next();) {
+      const juce::PopupMenu::Item& item = it.getItem();
+      if (item.isSectionHeader) {
+        headers.push_back(item.text);
+        continue;
+      }
+      if (item.isSeparator) continue;
+      if (item.itemID == ModeMenu::kOpenItem) {
+        open = true;
+        continue;
+      }
+      if (item.subMenu != nullptr) {
+        REQUIRE(item.text == "Reserves");
+        REQUIRE(item.isTicked == (ticked >= 0 && Factory(static_cast<size_t>(ticked)).reserve));
+        for (juce::PopupMenu::MenuItemIterator sub(*item.subMenu); sub.next();) {
+          const int i = sub.getItem().itemID - ModeMenu::kFactoryItem;
+          REQUIRE(Factory(static_cast<size_t>(i)).reserve);
+          REQUIRE(sub.getItem().text == juce::String::fromUTF8(Factory(static_cast<size_t>(i)).name));
+          REQUIRE(sub.getItem().shortcutKeyDescription == FamilyName(Factory(static_cast<size_t>(i)).family));
+          REQUIRE(sub.getItem().isTicked == (i == ticked));
+          reserve.push_back(i);
+        }
+        continue;
+      }
+      const int i = item.itemID - ModeMenu::kFactoryItem;
+      REQUIRE(i >= 0);
+      REQUIRE(static_cast<size_t>(i) < FactoryCount());
+      const FactoryPackage& f = Factory(static_cast<size_t>(i));
+      REQUIRE_FALSE(f.reserve);
+      REQUIRE(item.text == juce::String::fromUTF8(f.name));
+      REQUIRE(item.isTicked == (i == ticked));
+      REQUIRE_FALSE(headers.empty());
+      REQUIRE(headers.back() == juce::String(FamilyName(f.family)).toUpperCase());  // under its family
+      set.push_back(i);
+    }
+    // The four families in the README's order, every mode of the set once, every reserve once.
+    REQUIRE(headers == std::vector<juce::String>{"ECHOIC", "REVERIE", "RECALL", "MISFIRE"});
+    size_t setCount = 0;
+    for (size_t i = 0; i < FactoryCount(); ++i) setCount += Factory(i).reserve ? 0u : 1u;
+    REQUIRE(set.size() == setCount);
+    REQUIRE(reserve.size() == FactoryCount() - setCount);
+    REQUIRE(open);
+  };
+  check(-1);
+
+  // Choosing Lull plays it and names it; the menu ticks it.
+  bool         heard = false;
+  juce::String message;
+  menu.onChosen = [&](bool opened, const juce::String& m) {
+    heard   = opened;
+    message = m;
+  };
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  REQUIRE(heard);
+  REQUIRE(message.contains("lull.bsp"));
+  REQUIRE(proc->CurrentSource().factory == Lull());
+  REQUIRE(proc->Curation().FactoryIndex() == Lull());
+  REQUIRE(menu.Name() == "Lull");
+  REQUIRE(menu.Caption().endsWith("REVERIE"));
+  REQUIRE(menu.Named());
+  check(Lull());
+  // A reserve is captioned as one.
+  size_t reserve = 0;
+  while (!Factory(reserve).reserve) ++reserve;
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + static_cast<int>(reserve)));
+  REQUIRE(menu.Caption().contains("RESERVE"));
+  check(static_cast<int>(reserve));
+  // Ids outside the menu do nothing; "Open..." asks the editor.
+  REQUIRE_FALSE(menu.Choose(0));
+  REQUIRE_FALSE(menu.Choose(ModeMenu::kFactoryItem + static_cast<int>(FactoryCount())));
+  bool asked      = false;
+  menu.onOpenFile = [&] { asked = true; };
+  REQUIRE(menu.Choose(ModeMenu::kOpenItem));
+  REQUIRE(asked);
+}
+
+// Unsaved edits in the open document go only when the curator says so: the menu asks
+// (onAskDiscard, an OK/Cancel box in the editor), and until then nothing loads, even for the mode
+// already ticked; Discard opens the mode chosen. Without edits it opens at once.
+TEST_CASE("the Modes menu asks before it drops unsaved edits") {
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  ModeMenu         menu(*proc);
+  int              asks = 0;
+  juce::String     askedFor;
+  std::function<void()> discard;
+  menu.onAskDiscard = [&](const juce::String& mode, std::function<void()> d) {
+    ++asks;
+    askedFor = mode;
+    discard  = std::move(d);
+  };
+  int chosen    = 0;
+  menu.onChosen = [&](bool opened, const juce::String&) { chosen += opened ? 1 : 0; };
+
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));  // nothing open: no question
+  REQUIRE(asks == 0);
+  REQUIRE(chosen == 1);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE_FALSE(s.Dirty());
+  size_t reserve = 0;
+  while (!Factory(reserve).reserve) ++reserve;
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + static_cast<int>(reserve)));  // unedited: no question
+  REQUIRE(asks == 0);
+  REQUIRE(chosen == 2);
+  REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+
+  // An edit: the menu asks, and nothing loads until Discard.
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE(s.Dirty());
+  const uint32_t serial = proc->LoadSerial();
+  for (const int item : {Lull(), static_cast<int>(reserve)}) {  // another mode, and the one ticked
+    REQUIRE(menu.Choose(ModeMenu::kFactoryItem + item));
+    REQUIRE(asks > 0);
+    REQUIRE(askedFor == juce::String::fromUTF8(Factory(static_cast<size_t>(item)).name));
+    REQUIRE(discard != nullptr);
+    REQUIRE(chosen == 2);
+    REQUIRE(proc->LoadSerial() == serial);
+    REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+    REQUIRE(s.Dirty());
+    REQUIRE(proc->CurrentSource().factory == static_cast<int>(reserve));
+  }
+  REQUIRE(asks == 2);
+  // Cancel is not calling it; Discard opens what was chosen last.
+  discard();
+  REQUIRE(chosen == 3);
+  REQUIRE(proc->LoadSerial() != serial);
+  REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+  REQUIRE(proc->CurrentSource().factory == static_cast<int>(reserve));
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE_FALSE(s.Dirty());
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  REQUIRE(asks == 2);
+  REQUIRE(s.FactoryIndex() == Lull());
+}
+
+// The menu's path (ModeMenu::Choose, CurationSession::OpenFactory) against Open on the committed
+// .bsp, each on a processor that has been playing: the same state unit, a Spillover load with
+// Trails at the next block's first frame, the same mirrors, the same document, the same output
+// bit for bit; and processBlock allocates nothing (RenderProcessor's audit).
+TEST_CASE("every factory mode loads through the menu exactly as its .bsp file loads") {
+  ScratchDir   scratch;
+  const Stereo in     = MakeInput(9600);
+  const int    change = 4800;
+  for (size_t i = 0; i < FactoryCount(); ++i) {
+    const FactoryPackage& f = Factory(i);
+    INFO(f.path);
+    const juce::File bsp = CopyFactoryBsp(scratch.dir, f);
+    auto             viaMenu = MakeProcessor(Busy(), {});
+    auto             viaFile = MakeProcessor(Busy(), {});
+    ModeMenu         menu(*viaMenu);
+    juce::String     error;
+    HostRender       a, b;
+    a.pattern = b.pattern = {480};
+    a.beforeBlock = [&](int pos) {
+      if (pos == change) REQUIRE(menu.Choose(ModeMenu::kFactoryItem + static_cast<int>(i)));
+    };
+    b.beforeBlock = [&](int pos) {
+      if (pos == change) REQUIRE(viaFile->Curation().Open(bsp, &error));
+    };
+    const Stereo gotMenu = RenderProcessor(*viaMenu, in, {}, a);
+    const Stereo gotFile = RenderProcessor(*viaFile, in, {}, b);
+    RequireSame(gotMenu, gotFile, "the menu against the file");
+    const auto state = DecodeFactory(i);
+    REQUIRE(state != nullptr);
+    RequireSame(gotMenu, RenderReference(Busy(), in, kRate, {RefLoad(change, state.get())}),
+                "a Spillover load with Trails of the package at the block's first frame");
+
+    // The same wrapper state: leaves, mode, CTRL, performance, the macro mirrors, the report.
+    const auto pm = viaMenu->CurrentPreset();
+    const auto pf = viaFile->CurrentPreset();
+    REQUIRE(pm->leafCount == pf->leafCount);
+    for (uint32_t k = 0; k < pm->leafCount; ++k) REQUIRE(Bits(pm->leaves[k].value) == Bits(pf->leaves[k].value));
+    REQUIRE(std::memcmp(&pm->mode, &state->mode, sizeof(ModeBlob)) == 0);
+    REQUIRE(std::memcmp(&pm->mode, &pf->mode, sizeof(ModeBlob)) == 0);
+    REQUIRE(std::memcmp(&pm->control, &pf->control, sizeof(ControlState)) == 0);
+    REQUIRE(std::memcmp(&pm->performance, &pf->performance, sizeof(PerformanceState)) == 0);
+    REQUIRE(pm->soundRev == pf->soundRev);
+    const ModeState mm = viaMenu->CurrentMode(), mf = viaFile->CurrentMode();
+    REQUIRE(std::memcmp(&mm, &mf, sizeof(ModeState)) == 0);
+    for (uint32_t id = static_cast<uint32_t>(ParamId::MacroActivity); id <= static_cast<uint32_t>(ParamId::MacroAux2);
+         ++id) {
+      REQUIRE(Bits(viaMenu->Macro(static_cast<ParamId>(id)).Plain()) ==
+              Bits(viaFile->Macro(static_cast<ParamId>(id)).Plain()));
+    }
+    REQUIRE(viaMenu->GetStatus().lastLoadInexact == viaFile->GetStatus().lastLoadInexact);
+    REQUIRE_FALSE(viaMenu->GetStatus().lastLoadInexact);
+    REQUIRE(viaMenu->LoadSerial() == viaFile->LoadSerial());
+
+    // The same document in the curation session; the menu's has no file and names the package.
+    CurationSession& sm = viaMenu->Curation();
+    CurationSession& sf = viaFile->Curation();
+    REQUIRE(sm.HasDocument());
+    REQUIRE(sm.FactoryIndex() == static_cast<int>(i));
+    REQUIRE(sf.FactoryIndex() == -1);
+    REQUIRE(sm.Stored().id == sf.Stored().id);
+    REQUIRE(sm.Stored().name == sf.Stored().name);
+    REQUIRE(std::memcmp(&sm.Mode(), &sf.Mode(), sizeof(ModeBlob)) == 0);
+    REQUIRE(sm.WritesPackage() == sf.WritesPackage());
+    REQUIRE(sm.StampCurrent() == sf.StampCurrent());
+    REQUIRE(sm.Canonical() == sf.Canonical());
+    REQUIRE(sm.Dirty() == sf.Dirty());
+    REQUIRE(sm.Findings().size() == sf.Findings().size());
+    REQUIRE(sm.DocumentFile() == juce::File());
+    REQUIRE(sm.SourceLabel().startsWith("firmware/factory/"));
+    REQUIRE(viaMenu->CurrentSource().factory == static_cast<int>(i));
+    REQUIRE(viaMenu->CurrentSource().name == juce::String::fromUTF8(f.name));
+    REQUIRE(viaFile->CurrentSource().factory == -1);
+    REQUIRE(viaFile->CurrentSource().name == juce::String::fromUTF8(f.name));
+  }
+}
+
+// A factory mode has no file: Save writes nothing, Save as writes a copy that then plays as a
+// document file, and Revert opens the built-in package again.
+TEST_CASE("a factory mode saves only as a copy, and reverts to the built-in package") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.OpenFactory(static_cast<size_t>(Lull()), &error));
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE(s.Dirty());
+  const auto refused = s.Save();
+  REQUIRE_FALSE(refused.written);
+  REQUIRE(scratch.dir.getNumberOfChildFiles(juce::File::findFiles) == 0);
+  REQUIRE(s.Revert(&error));
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE_FALSE(s.Dirty());
+  REQUIRE(s.FactoryIndex() == Lull());
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  Pump(*proc);
+  const juce::File copy  = scratch.dir.getChildFile("my-lull.json");
+  const auto       saved = s.SaveAs(copy, s.WritesPackage());
+  INFO(saved.message);
+  REQUIRE(saved.compiled);
+  REQUIRE(copy.existsAsFile());
+  REQUIRE(copy.withFileExtension(".bsp").existsAsFile());
+  REQUIRE(s.FactoryIndex() == -1);
+  REQUIRE(s.DocumentFile() == copy);
+  REQUIRE(proc->CurrentSource().factory == -1);
+  REQUIRE(proc->CurrentSource().name == "Lull");
+  REQUIRE(LeafOf(*ReadBack(copy), ParamId::Mix) == 0.5f);
+}
+
+// Host state (StateCodec.h's FMOD block): a session saved while a factory mode plays reloads it,
+// with the leaves and the macro positions it had, and saves back byte for byte; readers before the
+// block, and builds without the mode, play the default mode as every v1 session did.
+TEST_CASE("a session saved with a factory mode reloads it") {
+  const int  lull = Lull();
+  auto       a    = MakeProcessor({}, {});
+  ModeMenu   menu(*a);
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + lull));
+  Pump(*a);
+  // A knob turned (a MacroMove: the leaves follow its fan-out) and a leaf set by hand.
+  a->Macro(ParamId::MacroActivity).SetPlainNotifyingHost(0.8f);
+  a->Param(ParamId::Mix).SetPlainNotifyingHost(0.3f);
+  Pump(*a);
+  juce::MemoryBlock blob;
+  a->getStateInformation(blob);
+  const auto played = a->CurrentPreset();
+  REQUIRE(Bits(a->Macro(ParamId::MacroActivity).Plain()) == Bits(0.8f));
+
+  WrapperState st{};
+  REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
+  REQUIRE(st.hasFactory);
+  REQUIRE_FALSE(st.unreadTail);
+  REQUIRE(st.factory.id == "factory.lull");
+  REQUIRE(golden::Sha256::ToHex(st.factory.packageHash, 32) == Factory(static_cast<size_t>(lull)).packageHash);
+  REQUIRE(st.factory.macroCount == played->control.macroCount);
+
+  const Stereo in = MakeInput(24000);
+  SECTION("restored before anything plays: an Exact load of what played, saved back byte for byte") {
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(b->CurrentSource().factory == lull);
+    REQUIRE(b->CurrentSource().name == "Lull");
+    REQUIRE_FALSE(b->GetStatus().lastLoadInexact);
+    const auto now = b->CurrentPreset();
+    for (uint32_t k = 0; k < now->leafCount; ++k) REQUIRE(Bits(now->leaves[k].value) == Bits(played->leaves[k].value));
+    REQUIRE(std::memcmp(&now->mode, &played->mode, sizeof(ModeBlob)) == 0);
+    REQUIRE(std::memcmp(&now->control, &played->control, sizeof(ControlState)) == 0);  // positions too
+    REQUIRE(Bits(b->Macro(ParamId::MacroActivity).Plain()) == Bits(0.8f));
+    juce::MemoryBlock again;
+    b->getStateInformation(again);
+    REQUIRE(again == blob);
+    const Stereo got = RenderProcessor(*b, in, {}, {{480}});
+    RequireSame(got, RenderStateReference(*played, in), "the restored factory mode, Exact");
+    // The curation views open its document for what plays (no load): edited, so dirty.
+    const uint32_t serial = b->LoadSerial();
+    REQUIRE(b->Curation().Refresh());
+    REQUIRE(b->Curation().FactoryIndex() == lull);
+    REQUIRE(b->Curation().Dirty());
+    REQUIRE(b->LoadSerial() == serial);
+    ModeMenu shown(*b);
+    REQUIRE(shown.Name() == "Lull");
+  }
+  SECTION("a recall replaces an open document with the factory mode it played") {
+    ScratchDir   scratch;
+    auto         b = MakeProcessor({}, {});
+    juce::String error;
+    REQUIRE(b->Curation().Open(scratch.Copy("engram.json"), &error));
+    Pump(*b);
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    Pump(*b);
+    REQUIRE(b->Curation().Refresh());
+    REQUIRE(b->Curation().FactoryIndex() == lull);
+    // Closed by hand, it stays closed for that load.
+    b->Curation().Close();
+    REQUIRE_FALSE(b->Curation().Refresh());
+    REQUIRE_FALSE(b->Curation().HasDocument());
+  }
+  SECTION("a reader before the block, and a session without one, play the default mode") {
+    WrapperState plainState = st;
+    plainState.hasFactory   = false;
+    std::vector<uint8_t> v1;
+    EncodeState(plainState, v1);
+    REQUIRE(v1.size() < blob.getSize());
+    REQUIRE(std::memcmp(v1.data(), blob.getData(), v1.size()) == 0);  // the block is only appended
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(v1.data(), static_cast<int>(v1.size()));
+    const ModeState def{};
+    const ModeState now = b->CurrentMode();
+    REQUIRE(std::memcmp(&now, &def, sizeof(ModeState)) == 0);
+    REQUIRE(b->CurrentSource().factory == -1);
+    REQUIRE(b->CurrentSource().name.isEmpty());
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(b->Param(LeafId(i)).Plain()) == Bits(st.plain[i]));
+  }
+  SECTION("unknown blocks are skipped; a block that does not read whole is ignored, inexact") {
+    std::vector<uint8_t> bytes(static_cast<const uint8_t*>(blob.getData()),
+                               static_cast<const uint8_t*>(blob.getData()) + blob.getSize());
+    WrapperState plainState = st;
+    plainState.hasFactory   = false;
+    std::vector<uint8_t> v1;
+    EncodeState(plainState, v1);
+    std::vector<uint8_t> other(v1);
+    const uint8_t        unknown[] = {'Z', 'Z', 'Z', 'Z', 3, 0, 0, 0, 1, 2, 3, 0};  // a 3-byte payload, padded
+    other.insert(other.end(), std::begin(unknown), std::end(unknown));
+    other.insert(other.end(), bytes.begin() + static_cast<std::ptrdiff_t>(v1.size()), bytes.end());
+    WrapperState got{};
+    REQUIRE(DecodeState(other.data(), other.size(), got));
+    REQUIRE(got.hasFactory);
+    REQUIRE_FALSE(got.unreadTail);
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(other.data(), static_cast<int>(other.size()));
+    REQUIRE(b->CurrentSource().factory == lull);
+
+    bytes.resize(bytes.size() - 3);  // cut inside the block
+    REQUIRE(DecodeState(bytes.data(), bytes.size(), got));
+    REQUIRE_FALSE(got.hasFactory);
+    REQUIRE(got.unreadTail);
+    b->setStateInformation(bytes.data(), static_cast<int>(bytes.size()));
+    REQUIRE(b->CurrentSource().factory == -1);
+    REQUIRE(b->GetStatus().lastLoadInexact);
+  }
+  SECTION("a mode this build lacks plays the default mode; another package of it plays this one's") {
+    WrapperState missing = st;
+    missing.factory.id   = "factory.not-built-in";
+    std::vector<uint8_t> bytes;
+    EncodeState(missing, bytes);
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(bytes.data(), static_cast<int>(bytes.size()));
+    REQUIRE(b->CurrentSource().factory == -1);
+    REQUIRE(b->GetStatus().lastLoadInexact);
+    for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(b->Param(LeafId(i)).Plain()) == Bits(st.plain[i]));
+
+    WrapperState other = st;
+    other.factory.packageHash[0] ^= 1u;
+    EncodeState(other, bytes);
+    b->setStateInformation(bytes.data(), static_cast<int>(bytes.size()));
+    REQUIRE(b->CurrentSource().factory == lull);
+    REQUIRE(b->GetStatus().lastLoadInexact);
+    const ModeState now = b->CurrentMode();
+    REQUIRE(std::memcmp(&now.mode, &played->mode, sizeof(ModeBlob)) == 0);
+  }
 }
 
 TEST_CASE("latency, tail and supported layouts") {

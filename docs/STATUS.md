@@ -1060,8 +1060,10 @@ records live in [docs/design/reviews/](design/reviews/).
   loads mid-render: a change to one of those shows in `MANIFEST` (the label), and its render's
   change counts as the engine's, conservatively. Unit tests whose parameter lists named 27 or 28
   still do, read as structure (`dsp/tests/RetiredRows.h`). The plugin loads modes since lane D's
-  curation slice, but its session state (`BSWS` v1) still holds leaves only, so a session plays
-  the default mode and an older session loads without its onset and mark switches.
+  curation slice. Its session state (`BSWS` v1) holds the leaves and, while a factory mode plays,
+  an `FMOD` reference to it (id, package hash, macro positions), so such a session plays this
+  build's package of that id (inexact if the package differs); any other session plays the
+  default mode, and an older session loads without its onset and mark switches.
   Nothing lane C added has run on GitHub; the M7 and the x86 legs here agree.
 - **The Mix law's open ends** (sound revision 3). It builds the owner's provisional answer to
   Q13, reversible until the first public revision (a reversal is its own revision). The law raises
@@ -1114,7 +1116,8 @@ records live in [docs/design/reviews/](design/reviews/).
   (`ConditionInput24`; the audition render applies it), event scripts in the app's audition panel
   (the shared render plays them, as `bspc render`'s scripts do), MIDI CC
   mapping, pluginval in CI, CLAP and LV2, session state v2 (a `.bsp` in the session, so a
-  recalled session plays its mode; v1 holds leaves only), the library and its banks, reporting a
+  recalled session plays its mode; v1 holds the leaves and names a factory mode only, by its
+  `FMOD` block), the library and its banks, reporting a
   macro's fan-out to hosts (mode-compiler.md §3.6, §9.2), and the
   freeze of parameter IDs and tapers (the table exists; step 6 freezes it). The In/Out level
   controls are wrapper code outside the guard and never part of a preset.
@@ -1127,8 +1130,10 @@ records live in [docs/design/reviews/](design/reviews/).
   "knobs follow" (Q8's alternative), a recent-documents list, and editing structure (the editor of
   §9.1, with its schema-generated form). The level match measures both versions on the class's
   test-signal vector, not the live input, and the one-click render writes through `fopen`, so a
-  render folder whose path is not ASCII fails on Windows. A DAW session recall closes the open
-  document, since session v1 cannot carry it.
+  render folder whose path is not ASCII fails on Windows. A DAW session recall of a factory mode
+  (session v1's `FMOD` block) plays this build's package of that id, inexact if the package
+  differs, and reopens its document; any other recall plays the default mode and closes the open
+  document, since session v1 cannot carry a document file.
 - **The audition tooling's readings** (lane E, `tools/audition`, its README's "Readings"). The
   pre-screen reads the design's checks where they need a measurement: a tail the render does not
   see end is measured on a 60 s probe and only a steady fall over its last 30 s extrapolates;

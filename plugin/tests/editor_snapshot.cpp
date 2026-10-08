@@ -3,17 +3,22 @@
 // minimum and large sizes and a HiDPI frame, with no document and with a preset document open
 // (a knob waiting for pickup, a hand-edited leaf Save will derive, Shift, the stored version
 // playing for A/B, a finished render), a frame at 44.1 kHz with freeze engaged and the restart
-// option on, and the Standalone's editor after an audition render.
+// option on, a factory mode chosen from the header's Modes menu (and a reserve) with the menu
+// itself drawn as the look and feel draws it, and the Standalone's editor after an audition
+// render.
 //   brainscape_editor_snapshot <output directory>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <memory>
 #include <thread>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Curation.h"
+#include "FactoryModes.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "TestSupport.h"
@@ -49,6 +54,84 @@ bool Snapshot(BrainscapeEditor& editor, const juce::File& dir, const juce::Strin
               image.getWidth(), image.getHeight(), static_cast<double>(scale), editor.getWidth(),
               editor.getHeight());
   return ok;
+}
+
+bool WriteImage(const juce::Image& image, const juce::File& dir, const juce::String& name) {
+  const juce::File file = dir.getChildFile(name + ".png");
+  file.deleteFile();
+  juce::FileOutputStream out(file);
+  juce::PNGImageFormat   png;
+  const bool             ok = out.openedOk() && png.writeImageToStream(image, out);
+  std::printf("%s %s (%dx%d)\n", ok ? "wrote" : "FAILED", file.getFullPathName().toRawUTF8(), image.getWidth(),
+              image.getHeight());
+  return ok;
+}
+
+// A popup menu as the look and feel draws it in its window, without one (PopupMenu's window
+// needs a desktop): the background, then each item at its ideal height, section headers and
+// separators included. *rowOfSubMenu: where the item that opens a submenu sits.
+juce::Image DrawMenu(const juce::PopupMenu& menu, juce::LookAndFeel& lf, int minWidth, int itemHeight,
+                     int* rowOfSubMenu) {
+  const auto options = juce::PopupMenu::Options().withStandardItemHeight(itemHeight).withMinimumWidth(minWidth);
+  const int  border  = lf.getPopupMenuBorderSizeWithOptions(options);
+  struct Row {
+    const juce::PopupMenu::Item* item;
+    int                          height;
+  };
+  std::vector<Row> rows;
+  int              width = minWidth, height = 2 * border;
+  for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) {
+    const juce::PopupMenu::Item& item = it.getItem();
+    int                          w = 80, h = 16;
+    if (item.isSectionHeader) {
+      lf.getIdealPopupMenuSectionHeaderSizeWithOptions(item.text, -1, w, h, options);
+    } else {
+      const juce::String measured =
+          item.text + (item.shortcutKeyDescription.isEmpty() ? juce::String() : "   " + item.shortcutKeyDescription);
+      lf.getIdealPopupMenuItemSizeWithOptions(measured, item.isSeparator, itemHeight, w, h, options);
+    }
+    width = std::max(width, w + 2 * border);
+    height += h;
+    rows.push_back({&item, h});
+  }
+  juce::Image image(juce::Image::ARGB, width, height, true);
+  juce::Graphics g(image);
+  lf.drawPopupMenuBackgroundWithOptions(g, width, height, options);
+  int y = border;
+  for (const Row& r : rows) {
+    const juce::Rectangle<int> area(border, y, width - 2 * border, r.height);
+    if (r.item->isSectionHeader) {
+      lf.drawPopupMenuSectionHeaderWithOptions(g, area, r.item->text, options);
+    } else {
+      lf.drawPopupMenuItemWithOptions(g, area, false, *r.item, options);
+    }
+    if (r.item->subMenu != nullptr && rowOfSubMenu != nullptr) *rowOfSubMenu = y;
+    y += r.height;
+  }
+  return image;  // the context flushes into the shared pixels as it goes
+}
+
+// The Modes menu and its reserves submenu beside it, as they open from the header.
+bool SnapshotModesMenu(BrainscapeEditor& editor, const juce::File& dir, const juce::String& name) {
+  const juce::PopupMenu menu  = editor.Modes().BuildMenu();
+  juce::LookAndFeel&    lf    = editor.getLookAndFeel();
+  const int             itemH = 24;
+  int                   subY  = 0;
+  const juce::Image     main  = DrawMenu(menu, lf, editor.Modes().getWidth(), itemH, &subY);
+  juce::Image           sub;
+  for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) {
+    if (it.getItem().subMenu != nullptr) sub = DrawMenu(*it.getItem().subMenu, lf, 160, itemH, nullptr);
+  }
+  const int      w = main.getWidth() + (sub.isValid() ? sub.getWidth() + 2 : 0) + 24;
+  const int      h = std::max(main.getHeight(), subY + (sub.isValid() ? sub.getHeight() : 0)) + 24;
+  juce::Image canvas(juce::Image::ARGB, w, h, true);
+  {
+    juce::Graphics g(canvas);  // flushed into the image when it goes (Direct2D on Windows)
+    g.fillAll(palette::kBackground);
+    g.drawImageAt(main, 12, 12);
+    if (sub.isValid()) g.drawImageAt(sub, 12 + main.getWidth() + 2, 12 + subY);
+  }
+  return WriteImage(canvas, dir, name);
 }
 
 // Waits for the curation session's worker (a level match or a render) with the editor ticking.
@@ -164,6 +247,33 @@ int main(int argc, char* argv[]) {
   editor->SetView(BrainscapeEditor::View::Leaves);
   ok &= Snapshot(*editor, dir, "editor-44k1-frozen", BrainscapeEditor::kDefaultWidth,
                  BrainscapeEditor::kDefaultHeight);
+
+  // A factory mode from the header's Modes menu, as its handler opens it (ModeMenu::Choose): Lull
+  // playing with its document in the Pedal view, at the default and minimum sizes; the menu
+  // itself; then a reserve.
+  proc.Freeze().setValueNotifyingHost(0.0f);
+  settings.restartOnStart = false;
+  proc.SetSettings(settings);
+  proc.prepareToPlay(48000.0, 480);
+  Play(proc, 48000.0, 0.3);
+  editor->SetView(BrainscapeEditor::View::Pedal);
+  const int lull = FindFactory("factory.lull");
+  ok &= lull >= 0 && editor->Modes().Choose(ModeMenu::kFactoryItem + lull);
+  ok &= proc.CurrentSource().factory == lull;
+  Play(proc, 48000.0, 0.8);
+  ok &= Snapshot(*editor, dir, "editor-pedal-factory", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  ok &= Snapshot(*editor, dir, "editor-pedal-factory-minimum", BrainscapeEditor::kMinWidth,
+                 BrainscapeEditor::kMinHeight);
+  editor->setSize(BrainscapeEditor::kDefaultWidth, BrainscapeEditor::kDefaultHeight);
+  ok &= SnapshotModesMenu(*editor, dir, "editor-modes-menu");
+  const int runaway = FindFactory("factory.runaway");
+  ok &= runaway >= 0 && editor->Modes().Choose(ModeMenu::kFactoryItem + runaway);
+  ok &= proc.CurrentSource().factory == runaway;  // Lull unedited: no discard question
+  Play(proc, 48000.0, 0.5);
+  ok &= Snapshot(*editor, dir, "editor-pedal-reserve", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  ok &= Snapshot(*editor, dir, "editor-pedal-reserve-large", 1680, 1000);
   owned.reset();
   scratch.deleteRecursively();
 

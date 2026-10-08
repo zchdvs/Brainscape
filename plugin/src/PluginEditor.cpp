@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include <algorithm>
+#include <cmath>
 #include <set>
 #include <string>
 
@@ -46,11 +48,24 @@ std::string Fmt(float v) {  // a macro target's range end, for tooltips
   return juce::String(v, 3).trimCharactersAtEnd("0").trimCharactersAtEnd(".").toStdString();
 }
 
+// The wordmark's two lines (paint), at a scale.
+juce::Font WordmarkFont(float scale) { return UiFont(23.0f * scale, true).withExtraKerningFactor(0.22f); }
+juce::Font TaglineFont(float scale) { return UiFont(13.0f * scale); }
+const juce::String kWordmark = "BRAINSCAPE";
+const juce::String kTagline  = "granular delay " + kDot + " curation bench";
+
+int WordmarkTextWidth(float scale) {
+  const float w = std::max(juce::GlyphArrangement::getStringWidth(WordmarkFont(scale), kWordmark),
+                           juce::GlyphArrangement::getStringWidth(TaglineFont(scale), kTagline));
+  return static_cast<int>(std::ceil(w)) + Scaled(4, scale);
+}
+
 }  // namespace
 
 BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
     : juce::AudioProcessorEditor(owner),
       processor_(owner),
+      modes_(owner),
       macros_(owner),
       document_(owner),
       findings_(owner.Curation()),
@@ -84,6 +99,12 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
   addChildComponent(macros_);
   addChildComponent(document_);
   addChildComponent(findings_);
+  addAndMakeVisible(modes_);
+  modes_.onChosen = [this](bool opened, const juce::String& message) {
+    document_.Note(message, opened ? palette::kText : palette::kBad);
+    RefreshNow();
+  };
+  modes_.onOpenFile = [this] { document_.ChooseOpen(); };
 
   freeze_.onClick = [this] { ToggleFreeze(); };
   freeze_.setTooltip("Freeze pins the grain position: the grains keep replaying the captured "
@@ -230,13 +251,14 @@ void BrainscapeEditor::RefreshNow() {
   macros_.Refresh();
   document_.Refresh();
   findings_.Refresh();
+  modes_.Refresh();
   juce::String note;
   if (s.HasDocument()) {
-    note << juce::String::fromUTF8(s.Stored().name.c_str()) << "   " << kDot << "   "
-         << s.DocumentFile().getFileName() << (a ? "   " + kDot + "   A: stored version" : juce::String())
+    note << juce::String::fromUTF8(s.Stored().name.c_str()) << "   " << kDot << "   " << s.SourceLabel()
+         << (a ? "   " + kDot + "   A: stored version" : juce::String())
          << (s.Dirty() ? "   " + kDot + "   unsaved" : juce::String());
   } else {
-    note = "No document " + kDot + " the default mode";
+    note = "No document " + kDot + " " + (modes_.Named() ? modes_.Name() + " plays" : "the " + modes_.Name().toLowerCase());
   }
   tabNote_.setText(note, juce::dontSendNotification);
   tabNote_.setColour(juce::Label::textColourId, a ? palette::kWarn : s.Dirty() ? palette::kWarn : palette::kTextDim);
@@ -257,7 +279,8 @@ void BrainscapeEditor::paint(juce::Graphics& g) {
   g.setColour(palette::kPanelBorder);
   g.fillRect(header_.withTop(header_.getBottom() - 1));
 
-  // Wordmark: a small grain cloud, the name and what this window is for.
+  // Wordmark: a small grain cloud, the name and what this window is for (the name and the tagline
+  // only when the header has room for them beside the Modes menu).
   auto       logo     = header_.reduced(Scaled(18, scale_), 0);
   const int  iconSide = Scaled(32, scale_);
   const auto icon     = logo.removeFromLeft(Scaled(36, scale_)).withSizeKeepingCentre(iconSide, iconSide).toFloat();
@@ -271,14 +294,15 @@ void BrainscapeEditor::paint(juce::Graphics& g) {
     g.fillEllipse(icon.getX() + icon.getWidth() * kDots[k][0] - d * 0.5f,
                   icon.getY() + icon.getHeight() * kDots[k][1] - d * 0.5f, d, d);
   }
+  if (!wordmarkText_) return;
   logo.removeFromLeft(Scaled(12, scale_));
   auto text = logo.withSizeKeepingCentre(logo.getWidth(), Scaled(44, scale_));
   g.setColour(palette::kText);
-  g.setFont(UiFont(23.0f * scale_, true).withExtraKerningFactor(0.22f));
-  g.drawText("BRAINSCAPE", text.removeFromTop(Scaled(26, scale_)), juce::Justification::bottomLeft, false);
+  g.setFont(WordmarkFont(scale_));
+  g.drawText(kWordmark, text.removeFromTop(Scaled(26, scale_)), juce::Justification::bottomLeft, false);
   g.setColour(palette::kTextDim);
-  g.setFont(UiFont(13.0f * scale_));
-  g.drawText("granular delay " + kDot + " curation bench", text, juce::Justification::topLeft, false);
+  g.setFont(TaglineFont(scale_));
+  g.drawText(kTagline, text, juce::Justification::topLeft, false);
 }
 
 void BrainscapeEditor::resized() {
@@ -296,6 +320,7 @@ void BrainscapeEditor::resized() {
   freeze_.SetScale(scale_);
   status_.SetScale(scale_);
   macros_.SetScale(scale_);
+  modes_.SetScale(scale_);
   document_.SetScale(scale_);
   findings_.SetScale(scale_);
   tabNote_.setFont(UiFont(13.0f * scale_));
@@ -304,16 +329,29 @@ void BrainscapeEditor::resized() {
   header_ = r.removeFromTop(px(kHeaderHeight));
   status_.setBounds(r.removeFromBottom(px(kStatusHeight)));
 
+  // The header, left to right: the wordmark, the Modes menu, then from the right freeze, trigger,
+  // the meters and the onset LED. The menu takes the width its longest entry needs; the meters
+  // what is left, up to their own; on a narrow window the wordmark keeps only its grain cloud.
   auto h = header_.reduced(px(16), px(12));
   freeze_.setBounds(h.removeFromRight(px(148)));
   h.removeFromRight(px(10));
   trigger_.setBounds(h.removeFromRight(px(110)));
   h.removeFromRight(px(22));
-  auto meters = h.removeFromRight(juce::jlimit(px(160), px(260), h.getWidth() / 3));
+  const int gap     = px(18);
+  const int ledW    = px(84);
+  const int menuW   = modes_.PreferredWidth();
+  const int cloudW  = px(2) + px(36);  // paint: the cloud from px(18), the header from px(16)
+  const int textW   = px(12) + WordmarkTextWidth(scale_);
+  wordmarkText_     = h.getWidth() - cloudW - textW - 3 * gap - ledW - menuW >= px(150);
+  h.removeFromLeft(cloudW + (wordmarkText_ ? textW : 0) + gap);
+  const int menu    = std::min(menuW, h.getWidth());
+  modes_.setBounds(h.removeFromLeft(menu).withSizeKeepingCentre(menu, px(46)));
+  h.removeFromLeft(gap);
+  auto meters = h.removeFromRight(juce::jlimit(0, px(260), h.getWidth() - ledW - gap));
   inMeter_.setBounds(meters.removeFromTop(meters.getHeight() / 2).reduced(0, px(3)));
   outMeter_.setBounds(meters.reduced(0, px(3)));
-  h.removeFromRight(px(18));
-  led_.setBounds(h.removeFromRight(px(84)).withSizeKeepingCentre(px(84), px(34)));
+  h.removeFromRight(gap);
+  led_.setBounds(h.removeFromRight(ledW).withSizeKeepingCentre(ledW, px(34)));
 
   r        = r.reduced(12, kGap);
   auto tab = r.removeFromTop(px(kTabHeight) - 4);
