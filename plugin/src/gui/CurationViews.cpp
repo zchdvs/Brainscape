@@ -36,7 +36,7 @@ constexpr KnobRow kKnobs[8] = {
 
 float Normalized(const BrainscapeParam& p) { return NormalizedFromPlain(p.Id(), p.Plain()); }
 
-uint64_t MacroKey(const ModeBlob& mode) {  // FNV-1a over the macro table: names change with it
+uint64_t MacroKey(const ModeBlob& mode) {  // FNV-1a over the macro table: targets change with it
   uint64_t    h = 0xcbf29ce484222325ull;
   const auto* b = reinterpret_cast<const unsigned char*>(&mode.macros);
   for (size_t i = 0; i < sizeof mode.macros; ++i) {
@@ -44,6 +44,18 @@ uint64_t MacroKey(const ModeBlob& mode) {  // FNV-1a over the macro table: names
     h *= 0x100000001b3ull;
   }
   return h;
+}
+
+// What the knobs' titles and captions are made of: the mode's macro table, whether a document is
+// open, and its display names (META, not MODE: a renamed knob keeps the macro table).
+juce::String BindKey(const ModeBlob& mode, const CurationSession& s) {
+  juce::String key = juce::String::toHexString(static_cast<juce::int64>(MacroKey(mode)));
+  key << (s.HasDocument() ? "|open" : "|none");
+  for (uint32_t id = static_cast<uint32_t>(ParamId::MacroActivity); id <= static_cast<uint32_t>(ParamId::MacroAux2);
+       ++id) {
+    key << "|" << s.MacroName(static_cast<ParamId>(id));
+  }
+  return key;
 }
 
 bool Defined(const ModeBlob& mode, ParamId macro) {
@@ -316,7 +328,7 @@ MacroPanel::MacroPanel(BrainscapeProcessor& processor) : processor_(processor) {
 void MacroPanel::Bind() {
   const ModeBlob mode = processor_.CurrentMode().mode;
   CurationSession& s  = processor_.Curation();
-  modeKey_            = MacroKey(mode);
+  bindKey_            = BindKey(mode, s);
   for (size_t i = 0; i < knobs_.size(); ++i) {
     const KnobRow& row = kKnobs[i];
     const auto     id  = shifted_ ? row.secondary : row.primary;
@@ -366,7 +378,7 @@ void MacroPanel::Refresh() {
   const ModeBlob mode = processor_.CurrentMode().mode;
   CurationSession& s  = processor_.Curation();
   const bool     a    = s.HasDocument() && s.GetSide() == CurationSession::Side::Stored;
-  if (MacroKey(mode) != modeKey_) Bind();
+  if (BindKey(mode, s) != bindKey_) Bind();
   title_ = s.HasDocument() ? "Macros " + kDot + " " + juce::String::fromUTF8(s.Stored().name.c_str())
                            : juce::String("Macros ") + kDot + " default mode";
   const uint32_t serial = processor_.LoadSerial();
@@ -589,12 +601,15 @@ void DocumentPanel::Refresh() {
     if (a) {
       state  = "A: playing the stored version " + kDot + " B waits";
       colour = palette::kWarn;
-    } else if (session_.Dirty()) {
-      state  = "Unsaved changes" + (session_.PendingDerives().empty()
-                                        ? juce::String()
-                                        : " " + kDot + " Save derives " +
-                                              juce::String(static_cast<int>(session_.PendingDerives().size())) +
-                                              " leaf value(s)");
+    } else if (session_.SaveChangesFile()) {
+      // Unsaved edits, or a document on disk that Save would still rewrite: a targeted leaf off
+      // its macro's value (derive), or a stale stamp.
+      const int derives = static_cast<int>(session_.PendingDerives().size());
+      state  = session_.Dirty()          ? juce::String("Unsaved changes")
+               : derives > 0             ? "Save will derive " + juce::String(derives) + " leaf value(s)"
+               : !session_.StampCurrent() ? juce::String("Save will restamp")
+                                          : juce::String("Save will rewrite it in canonical form");
+      if (session_.Dirty() && derives > 0) state << " " << kDot << " Save derives " << derives << " leaf value(s)";
       colour = palette::kWarn;
     } else {
       state = "Saved";
@@ -725,7 +740,7 @@ void FindingsPanel::Refresh() {
     }
     if (rows.empty()) rows.push_back({Row::Kind::Note, "ok", "Compiles; no lint findings; nothing to derive."});
   } else {
-    for (const bsc::Finding& f : session_.Findings()) {  // why the last open failed
+    for (const bsc::Finding& f : session_.RefusedFindings()) {  // why the last open failed
       rows.push_back({f.error ? Row::Kind::Error : Row::Kind::Lint, juce::String(f.code),
                       juce::String::fromUTF8((f.at.pointer + "  " + f.message).c_str())});
     }

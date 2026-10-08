@@ -39,8 +39,9 @@ class CurationSession {
   // ── The document ──────────────────────────────────────────────────────────────────────
   // Opens a schema-1 document (.json) or a package (.bsp: its JSON section, or the document
   // rebuilt from it) and plays it (BrainscapeProcessor::LoadPresetState: Spillover with Trails
-  // while audio runs, Exact before). False, with *error and the findings, when it does not
-  // read, compile or load; the open document stays then.
+  // while audio runs, Exact before); a render or level match of the document it replaces stops.
+  // False, with *error and RefusedFindings(), when it does not read, compile or load; the open
+  // document stays then, with its own findings.
   bool Open(const juce::File& file, juce::String* error);
   // Re-opens the source from disk, dropping unsaved changes.
   bool Revert(juce::String* error);
@@ -65,6 +66,13 @@ class CurationSession {
   bool Refresh();
   // The working document's content differs from the stored one (leaves, positions, detached).
   bool Dirty() const { return dirty_; }
+  // The document on disk is what Save writes for it unedited: canonical JSON with a current
+  // stamp, and no targeted leaf off its macro's value.
+  bool Canonical() const { return canonical_; }
+  // Save would change the file: the content differs, a targeted leaf is off its macro's value
+  // (PendingDerives), the stamp is stale, or the file is not in canonical form. A document that
+  // is none of these saves back byte for byte.
+  bool SaveChangesFile() const { return dirty_ || !pending_.empty() || !stampCurrent_ || !canonical_; }
   // What Save's derive will change: one line per targeted leaf that is off its macro's value at
   // the macro's position ("post.delay.fb: 0.4 -> 0.45 (repeats at 0.5)").
   const std::vector<std::string>& PendingDerives() const { return pending_; }
@@ -72,6 +80,10 @@ class CurationSession {
   // Lint of the working document (L1-L9, factory rules for a "factory." id), and after a save
   // the compile errors too. Errors first.
   const std::vector<bsc::Finding>& Findings() const { return findings_; }
+  // Why the last refused Open failed (its file's findings, errors first); cleared by an Open that
+  // succeeds. They never mix with the open document's.
+  const std::vector<bsc::Finding>& RefusedFindings() const { return refused_; }
+  juce::String                     RefusedFile() const { return refusedFile_; }
   juce::String                     LastMessage() const { return message_; }
 
   // ── Macros and leaves, for the views ───────────────────────────────────────────────────
@@ -91,10 +103,12 @@ class CurationSession {
   void SetDetached(ParamId leaf, bool detached);
 
   // "Solve position" (§3.5): each macro's position (or `macro`'s alone) from the leaf of its
-  // first target that is not detached and not a single value (bsc::SolvePosition), the leaves
-  // the solved positions derive to sent to the engine, the macro mirrors moved without a
-  // MacroMove (pickup references). Returns a line per change.
-  std::vector<std::string> SolvePositions(ParamId macro = static_cast<ParamId>(0));
+  // first target that is not detached and not a single value (bsc::SolvePosition), or, with
+  // `fromLeaf`, from that leaf's target of `macro` (the Leaves view's "solve from this leaf");
+  // the leaves the solved positions derive to sent to the engine, the macro mirrors moved without
+  // a MacroMove (pickup references). Returns a line per change.
+  std::vector<std::string> SolvePositions(ParamId macro    = static_cast<ParamId>(0),
+                                          ParamId fromLeaf = static_cast<ParamId>(0));
 
   // ── Save ──────────────────────────────────────────────────────────────────────────────
   struct SaveResult {
@@ -172,18 +186,22 @@ class CurationSession {
   void ResetMatch();
   void ApplyMonitorTrim();
   void JoinWorkers();
+  // Cancels the render and the level match (their renders stop within a block) and joins them.
+  void StopWorkers(const juce::String& why);
 
   BrainscapeProcessor&               processor_;
   bool                               open_ = false;
   juce::File                         source_, jsonFile_;
   bool                               writesPackage_ = false;
   bool                               stampCurrent_  = false;
+  bool                               canonical_     = false;  // the .json on disk is r.json
   std::unique_ptr<bsc::Document>     stored_, working_;
   std::unique_ptr<PresetState>       storedState_;  // the stored package, decoded: A
   std::vector<uint32_t>              detached_;
   bool                               dirty_ = false;
   std::vector<std::string>           pending_;
-  std::vector<bsc::Finding>          findings_, saveFindings_;
+  std::vector<bsc::Finding>          findings_, saveFindings_, refused_;
+  juce::String                       refusedFile_;
   juce::String                       message_;
   // What the last Refresh saw, to rebuild only on change.
   std::vector<uint32_t>              seenBits_;
@@ -202,6 +220,7 @@ class CurationSession {
                                                      // nothing reset match_ since it started
   RenderStatus                       render_;
   std::vector<std::unique_ptr<Worker>> workers_;
+  std::atomic<bool>                  cancel_{false};  // read by the workers' renders (bsa)
 };
 
 }  // namespace brainscape::plugin

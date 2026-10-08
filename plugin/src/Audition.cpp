@@ -25,8 +25,7 @@ bsa::InputMode ToBsa(InputMode mode) {
 }  // namespace
 
 AuditionInput TestSignalInput() {
-  const bsa::Input v = bsa::VectorInput(bsa::Vector::Plucks, static_cast<uint32_t>(Frames(kAuditionSignalSeconds)),
-                                        static_cast<uint32_t>(Frames(kAuditionTailSeconds)));
+  const bsa::Input v = bsa::VectorInput(bsa::Vector::Plucks);  // S0's: 10 s, then 10 s of silence
   AuditionInput in;
   in.l            = v.audio.l;
   in.r            = v.audio.r;

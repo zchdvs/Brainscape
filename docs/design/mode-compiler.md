@@ -1246,11 +1246,15 @@ Save derives every targeted leaf that is not detached, compiles, writes the stam
 JSON (and the package when one sits beside it or the document came from one) and Spillover-loads
 what it wrote; it does not watch the file on disk. Before saving, the session compiles and lints
 what Save would write as the knobs come to rest, factory rules for a `factory.` id, and lists
-the leaves derive will change. "Solve position" runs for one macro or all. A/B switches between
+the leaves derive will change, and says when Save would rewrite a document that is otherwise
+unedited (a pending derive, a stale stamp). "Solve position" runs for all macros, for one, or
+from a chosen leaf's target. Save writes the document and its package as a pair or not at all.
+A/B switches between
 the stored package (A) and the remembered working state (B) with Trails; level matching renders
 both offline on the class input's test-signal vector, measures K-weighted loudness and trims the
 louder on a monitor-only output trim, outside every preset and render. One click renders the
-document as Save would write it through `tools/audition`'s S0 or S0–S11 with the pre-screen.
+document as Save would write it through `tools/audition`'s S0 or S0–S11 with the pre-screen;
+closing the plugin, or opening or closing a document, stops it within a block.
 The editor's Pedal view holds the eight knobs with pickup (a knob waits after a load until the
 hand reaches the stored position; a caught knob follows the host) and Shift; the Leaves view is
 the raw-parameter view, each targeted leaf marked with its macros, its right-click menu detaching

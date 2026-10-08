@@ -97,7 +97,8 @@ if(BRAINSCAPE_BUILD_TESTS)
   # The compiler compiles the test documents (compiler/tests/data) the mode tests load.
   target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape brainscape_compiler)
   target_compile_definitions(brainscape_plugin_tests PRIVATE
-    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data")
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data"
+    BRAINSCAPE_GOLDEN_PRESETS="${PROJECT_SOURCE_DIR}/dsp/tests/golden/presets")
   target_include_directories(brainscape_plugin_tests PRIVATE
     src
     ${PROJECT_SOURCE_DIR}/dsp/tests  # golden/Sha256.h: an independent check of audition hashes

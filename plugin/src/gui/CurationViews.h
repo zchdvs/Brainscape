@@ -38,8 +38,10 @@ class PickupKnob final : public juce::Component, public juce::SettableTooltipCli
   float Pointer() const;  // the hand's position, 0-1
   float Value() const;    // the target's position, 0-1
   BrainscapeParam* Target() const noexcept { return param_; }
-  // Tests and snapshots: a drag of the pointer to `position`.
-  void MoveTo(float position);
+  // Tests and snapshots: a drag of the pointer to `position`; what the labels show.
+  void         MoveTo(float position);
+  juce::String Title() const { return title_.getText(); }
+  juce::String Caption() const { return caption_.getText(); }
   void resized() override;
 
  private:
@@ -79,7 +81,7 @@ class MacroPanel final : public juce::Component {
   juce::TextButton          shift_{"SHIFT"};
   bool                      shifted_    = false;
   uint32_t                  loadSerial_ = 0;
-  uint64_t                  modeKey_    = 0;  // the mode the names were taken from
+  juce::String              bindKey_;  // what the names were taken from (CurationViews.cpp, BindKey)
   juce::String              title_      = "Macros";
   float                     scale_      = 1.f;
 };

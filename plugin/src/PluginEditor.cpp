@@ -203,8 +203,9 @@ void BrainscapeEditor::ShowLeafMenu(ParamId leaf) {
   menu.addItem(1, detached ? "Attach to its macros (Save derives it)" : "Detach from its macros (Save keeps this value)",
                !a);
   int item = 10;
-  for (const auto& t : targets) {
-    menu.addItem(item++, "Solve " + s.MacroName(t.macro) + "'s position from this leaf", !a && !detached);
+  for (const auto& t : targets) {  // a target whose range is one value says nothing of a position
+    menu.addItem(item++, "Solve " + s.MacroName(t.macro) + "'s position from this leaf",
+                 !a && !detached && t.lo != t.hi);
   }
   menu.showMenuAsync(juce::PopupMenu::Options(),
                      [safe = juce::Component::SafePointer<BrainscapeEditor>(this), leaf, targets, detached](int r) {
@@ -213,7 +214,7 @@ void BrainscapeEditor::ShowLeafMenu(ParamId leaf) {
                        if (r == 1) {
                          session.SetDetached(leaf, !detached);
                        } else if (r >= 10 && static_cast<size_t>(r - 10) < targets.size()) {
-                         session.SolvePositions(targets[static_cast<size_t>(r - 10)].macro);
+                         session.SolvePositions(targets[static_cast<size_t>(r - 10)].macro, leaf);
                        }
                        safe->RefreshNow();
                      });

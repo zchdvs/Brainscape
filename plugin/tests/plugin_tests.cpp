@@ -28,6 +28,7 @@
 #include "Audition.h"
 #include "Compile.h"  // brainscape_compiler: the test documents (compiler/tests/data)
 #include "Curation.h"
+#include "Lint.h"  // brainscape_compiler: derive, for the saved documents
 #include "PlainAttachment.h"
 #include "gui/CurationViews.h"
 #include "PluginProcessor.h"
@@ -1597,6 +1598,25 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
                  std::vector<float>(read.getReadPointer(1), read.getReadPointer(1) + frames)},
                 {want.l, want.r}, "the WAV's samples");
 
+    // The same preset and input through `bspc render`'s S0 (tools/audition): one hash.
+    {
+      bsa::Preset leafOnly;
+      leafOnly.state = std::shared_ptr<const PresetState>(proc->CurrentPreset());
+      bsa::SuiteOptions o;
+      o.scripts = {"S0"};
+      o.wav     = false;
+      o.outDir  = dir.getChildFile("s0").getFullPathName().toStdString();
+      bsa::Renderer          renderer;
+      const bsa::SuiteResult s0 = bsa::RunSuite(renderer, leafOnly, {&leafOnly}, o);
+      bool                   found = false;
+      for (const bsa::Rendered& x : s0.renders) {
+        if (x.plan.name != "S0.engaged.plucks") continue;
+        found = true;
+        REQUIRE(juce::String(x.hashes.whole) == result.outputSha256);
+      }
+      REQUIRE(found);
+    }
+
     // Independent SHA-256s of the interleaved little-endian float32: the whole render and
     // each 1 s segment, as the golden harness hashes them.
     golden::Sha256           sha, segment;  // Hex() finishes a digest and starts the next
@@ -1611,7 +1631,7 @@ TEST_CASE("the offline audition renders the input from the exact-restart state")
       segment.Update(bytes, 8);
       if ((i + 1) % 48000 == 0 || i + 1 == want.l.size()) segments.push_back(segment.Hex());
     }
-    REQUIRE(segments.size() == 14u);  // 10 s of signal, a 4 s tail
+    REQUIRE(segments.size() == 20u);  // 10 s of signal, a 10 s tail: S0's input
     REQUIRE(result.outputSha256.toStdString() == sha.Hex());
     const juce::var recipe = juce::JSON::parse(dir.getChildFile("take.recipe.json"));
     REQUIRE(recipe["outputSha256"].toString() == result.outputSha256);
@@ -1930,6 +1950,7 @@ TEST_CASE("the curation session opens a document, plays it and saves it back can
   REQUIRE(Bits(proc->Param(ParamId::DelayTimeMs).Plain()) == Bits(405.0f));
 
   SECTION("an unchanged document saves back byte for byte") {
+    REQUIRE_FALSE(s.SaveChangesFile());
     const auto r = s.Save();
     INFO(r.message);
     REQUIRE(r.written);
@@ -1964,6 +1985,7 @@ TEST_CASE("the curation session opens a document, plays it and saves it back can
     Pump(*proc);
     s.Refresh();
     REQUIRE(s.Dirty());
+    REQUIRE(s.SaveChangesFile());
     REQUIRE(s.PendingDerives().size() == 1u);
     REQUIRE(s.PendingDerives()[0].find("post.delay.fb") != std::string::npos);
     auto r = s.Save();
@@ -1998,6 +2020,24 @@ TEST_CASE("the curation session opens a document, plays it and saves it back can
     REQUIRE(s.PendingDerives().empty());
     // A derived document solves back to itself.
     REQUIRE(s.SolvePositions().empty());
+  }
+  SECTION("solve from a leaf that is not the macro's first target") {
+    // The review's case: Smear's third target, scheduler.jitter, set by hand to Smear's value at
+    // 0.5; "Solve Smear's position from this leaf" solves from jitter, not from the overlap.
+    const float want = Eval1(*state, ParamId::MacroActivity, 0.5f, ParamId::Jitter);
+    REQUIRE(want > 0.f);
+    proc->Param(ParamId::Jitter).SetPlainNotifyingHost(want);
+    Pump(*proc);
+    s.Refresh();
+    const auto log = s.SolvePositions(ParamId::MacroActivity, ParamId::Jitter);
+    REQUIRE_FALSE(log.empty());
+    Pump(*proc);
+    s.Refresh();
+    REQUIRE(Bits(proc->Macro(ParamId::MacroActivity).Plain()) == Bits(0.5f));
+    REQUIRE(Bits(proc->Param(ParamId::Jitter).Plain()) == Bits(want));  // the hand-set value stays
+    // Smear's other targets follow the solved position.
+    REQUIRE(Bits(proc->Param(ParamId::Overlap).Plain()) == Bits(Eval1(*state, ParamId::MacroActivity, 0.5f, ParamId::Overlap)));
+    REQUIRE(s.PendingDerives().empty());
   }
   SECTION("A/B switches between the stored version and the working state") {
     proc->Macro(ParamId::MacroTime).setValue(0.8f);
@@ -2041,20 +2081,115 @@ TEST_CASE("the curation session refuses what does not read or compile, and keeps
   CurationSession& s    = proc->Curation();
   juce::String     error;
   REQUIRE(s.Open(good, &error));
+  const std::vector<bsc::Finding> before = s.Findings();
   const juce::File bad = scratch.dir.getChildFile("bad.json");
   REQUIRE(bad.replaceWithText(juce::String(Text(good)).replace("\"size_ms\": 100", "\"size_ms\": 900")));
   REQUIRE_FALSE(s.Open(bad, &error));
   REQUIRE(error.contains("E4"));
-  REQUIRE_FALSE(s.Findings().empty());
-  REQUIRE(s.Findings().front().code == "E4");
+  REQUIRE_FALSE(s.RefusedFindings().empty());
+  REQUIRE(s.RefusedFindings().front().code == "E4");
+  REQUIRE(s.RefusedFile() == "bad.json");
   REQUIRE(s.HasDocument());
   REQUIRE(s.SourceFile() == good);
+  // The open document's own findings stay: the refused file's errors are not its.
+  for (int i = 0; i < 5; ++i) s.Refresh();
+  REQUIRE(s.Findings().size() == before.size());
+  for (const bsc::Finding& f : s.Findings()) REQUIRE_FALSE(f.error);
+  FindingsPanel panel(s);
+  panel.Refresh();
+  REQUIRE(panel.Rows() >= 1);
   const juce::File broken = scratch.dir.getChildFile("broken.json");
   REQUIRE(broken.replaceWithText("{\"schema_version\": 1,"));
   REQUIRE_FALSE(s.Open(broken, &error));
   REQUIRE(error.contains("E1"));
   REQUIRE_FALSE(s.Open(scratch.dir.getChildFile("missing.json"), &error));
   REQUIRE(s.SourceFile() == good);
+}
+
+// Every document of the compiler's examples and the golden corpus, opened and saved unedited:
+// what Save writes is `bspc derive` then `bspc stamp`, and it is the file itself exactly when the
+// session says Save changes nothing (no pending derive, a current stamp).
+TEST_CASE("saving an unedited document writes what derive and stamp write") {
+  int opened = 0, unchanged = 0;
+  for (const char* dir : {BRAINSCAPE_TEST_DATA, BRAINSCAPE_GOLDEN_PRESETS}) {
+    for (const juce::File& src : juce::File(dir).findChildFiles(juce::File::findFiles, false, "*.json")) {
+      ScratchDir       scratch;
+      const juce::File json = scratch.dir.getChildFile(src.getFileName());
+      REQUIRE(src.copyFileTo(json));
+      const std::string original = Text(json);
+      auto              proc     = MakeProcessor({}, {});
+      CurationSession&  s        = proc->Curation();
+      juce::String      error;
+      if (!s.Open(json, &error)) continue;  // the compiler's refused examples
+      ++opened;
+      INFO(src.getFileName());
+      REQUIRE_FALSE(s.Dirty());
+      const bool changes = s.SaveChangesFile();
+      REQUIRE(changes == (!s.PendingDerives().empty() || !s.StampCurrent() || !s.Canonical()));
+      bsc::Document             doc;
+      std::vector<bsc::Finding> found;
+      REQUIRE(bsc::ReadDocumentText(original, {}, &doc, &found));
+      bsc::Derive(&doc, false, nullptr);
+      const bsc::CompileResult want = bsc::CompileDocument(doc);
+      REQUIRE(want.ok);
+      const auto r = s.Save();
+      REQUIRE(r.compiled);
+      REQUIRE(Text(json) == want.json);
+      REQUIRE((Text(json) == original) == !changes);
+      unchanged += changes ? 0 : 1;
+      REQUIRE_FALSE(s.SaveChangesFile());  // saved: nothing more to change
+    }
+  }
+  REQUIRE(opened >= 20);
+  REQUIRE(unchanged >= 1);
+  // A current stamp and nothing to derive, but not in canonical form (indented by hand): Save
+  // rewrites it, and the session says so.
+  ScratchDir       scratch;
+  const juce::File json = scratch.Copy("engram.json");
+  REQUIRE(json.replaceWithText(juce::String(Text(json)).replace("\n  \"", "\n    \"")));
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(json, &error));
+  REQUIRE(s.StampCurrent());
+  REQUIRE(s.PendingDerives().empty());
+  REQUIRE_FALSE(s.Canonical());
+  REQUIRE(s.SaveChangesFile());
+  REQUIRE(s.Save().compiled);
+  REQUIRE(s.Canonical());
+  REQUIRE_FALSE(s.SaveChangesFile());
+}
+
+// The package beside the document is written with it or not at all (the review's case: a
+// directory where the package goes).
+TEST_CASE("a save whose package cannot be written leaves the pair on disk as it was") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  const juce::File source = scratch.Copy("engram.json");
+  REQUIRE(s.Open(source, &error));
+  const juce::File target = scratch.dir.getChildFile("x.json");
+  REQUIRE(target.replaceWithText("old"));
+  REQUIRE(scratch.dir.getChildFile("x.bsp").createDirectory());
+  const auto r = s.SaveAs(target, true);
+  INFO(r.message);
+  REQUIRE_FALSE(r.written);
+  REQUIRE(r.message.contains("x.bsp"));
+  REQUIRE(Text(target) == "old");  // put back
+  REQUIRE(s.SourceFile() == source);
+  REQUIRE(scratch.dir.getChildFile("x.bsp").isDirectory());
+  // A new pair whose package fails leaves no document behind either.
+  const juce::File fresh = scratch.dir.getChildFile("y.json");
+  REQUIRE(scratch.dir.getChildFile("y.bsp").createDirectory());
+  REQUIRE_FALSE(s.SaveAs(fresh, true).written);
+  REQUIRE_FALSE(fresh.existsAsFile());
+  // And with a writable package path the pair is written.
+  REQUIRE(scratch.dir.getChildFile("x.bsp").deleteRecursively());
+  const auto ok = s.SaveAs(target, true);
+  REQUIRE(ok.written);
+  REQUIRE(ok.compiled);
+  REQUIRE(scratch.dir.getChildFile("x.bsp").existsAsFile());
 }
 
 TEST_CASE("the curation session opens a package and saves the pair") {
@@ -2147,6 +2282,61 @@ TEST_CASE("one click renders the document through the audition scripts with the 
   REQUIRE(st.dir.getChildFile("audition.json").existsAsFile());
   REQUIRE(st.dir.findChildFiles(juce::File::findFiles, false, "*.wav").size() >= 1);
   REQUIRE(st.summary.contains("factory.engram"));
+}
+
+TEST_CASE("closing the plugin during a render does not wait for it") {
+  ScratchDir   scratch;
+  auto         proc = MakeProcessor({}, {});
+  juce::String error;
+  REQUIRE(proc->Curation().Open(scratch.Copy("engram.json"), &error));
+  CurationSession::RenderRequest rq;
+  rq.allScripts = true;  // half a minute of renders
+  rq.outDir     = scratch.dir.getChildFile("renders");
+  REQUIRE(proc->Curation().StartRender(rq, &error));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  REQUIRE(proc->Curation().GetRender().state == CurationSession::RenderStatus::State::Running);
+  const auto start = std::chrono::steady_clock::now();
+  proc.reset();  // the host removes the plugin
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  REQUIRE(took < 1.0);
+  REQUIRE_FALSE(rq.outDir.getChildFile("factory.engram").getChildFile("audition.json").existsAsFile());
+
+  // Opening another document stops the render of the one it replaces.
+  auto proc2 = MakeProcessor({}, {});
+  REQUIRE(proc2->Curation().Open(scratch.Copy("engram.json"), &error));
+  REQUIRE(proc2->Curation().StartRender(rq, &error));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const auto again = std::chrono::steady_clock::now();
+  REQUIRE(proc2->Curation().Open(scratch.dir.getChildFile("engram.json"), &error));
+  REQUIRE(std::chrono::duration<double>(std::chrono::steady_clock::now() - again).count() < 1.0);
+  const auto st = proc2->Curation().GetRender();
+  REQUIRE(st.state == CurationSession::RenderStatus::State::Failed);
+  REQUIRE(st.message.startsWith("Stopped"));
+}
+
+// The knobs' names are the document's (META): a renamed knob shows its new name on Revert or
+// Open, though the macro table is the same; a document opened over the same mode shows its
+// target counts.
+TEST_CASE("the pedal knobs take their names from the open document") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  MacroPanel       panel(*proc);
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Caption() == "default macro");
+  juce::String     error;
+  const juce::File json = scratch.Copy("engram.json");
+  REQUIRE(proc->Curation().Open(json, &error));
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Smear");
+  REQUIRE(panel.Knob(0).Caption().contains("3 targets"));
+  REQUIRE(json.replaceWithText(juce::String(Text(json)).replace("\"Smear\"", "\"Blur\"")));
+  REQUIRE(proc->Curation().Revert(&error));
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Blur");
+  proc->Curation().Close();
+  panel.Refresh();
+  REQUIRE(panel.Knob(0).Title() == "Activity");
+  REQUIRE(panel.Knob(0).Caption() == "default macro");
 }
 
 // The pedal view's knob (mode-compiler.md §3.5, Q8): after a load it waits until the hand reaches

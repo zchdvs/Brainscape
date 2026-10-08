@@ -7,6 +7,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 
+#include "Inputs.h"  // tools/audition: S0's inputs
 #include "Render.h"  // tools/audition: the shared offline render
 #include "StateCodec.h"
 #include "brainscape/Params.h"
@@ -33,11 +34,16 @@ struct AuditionInput {
 };
 
 inline constexpr int    kAuditionBlock         = static_cast<int>(bsa::kPedalBlock);
-inline constexpr double kAuditionTailSeconds   = 4.0;  // silence after the input, for the trails
+// The silence after the input, for the trails, and the test signal's length: `bspc render`'s
+// (tools/audition, Inputs.h), so the app's test-signal audition in stereo is S0's
+// `S0.engaged.plucks`, one hash on the command line and in the app.
+inline constexpr double kAuditionTailSeconds   = 10.0;
 inline constexpr double kAuditionSignalSeconds = 10.0;
+static_assert(kAuditionTailSeconds * bsa::kRate == bsa::kTailFrames, "the app's tail is S0's");
+static_assert(kAuditionSignalSeconds * bsa::kRate == bsa::kSignalFrames, "the app's test signal is S0's");
 
 // dsp/'s test signal (determinism profile §5.13): its plucks vector, integer-generated, so
-// the input bits are the same on every machine.
+// the input bits are the same on every machine; S0's input (bsa::VectorInput(Plucks)).
 AuditionInput TestSignalInput();
 // A decoded file (one channel or two) at its own rate, converted to 48 kHz by linear
 // interpolation when it is not already there.

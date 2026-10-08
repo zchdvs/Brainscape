@@ -64,26 +64,66 @@ bool ReadBytes(const juce::File& file, std::vector<uint8_t>* out, juce::String* 
   return true;
 }
 
+// The bytes into a temporary file beside `file` (`temp`, made for it).
+bool WriteTemp(const juce::TemporaryFile& temp, const juce::File& file, const void* data, size_t size,
+               juce::String* error) {
+  juce::FileOutputStream out(temp.getFile());
+  if (!out.openedOk() || !out.write(data, size)) {
+    *error = "cannot write " + file.getFullPathName();
+    return false;
+  }
+  out.flush();
+  if (out.getStatus().failed()) {
+    *error = "cannot write " + file.getFullPathName() + ": " + out.getStatus().getErrorMessage();
+    return false;
+  }
+  return true;
+}
+
 // Through a temporary file beside the target, so a failed write leaves the old file whole.
 bool WriteBytes(const juce::File& file, const void* data, size_t size, juce::String* error) {
   juce::TemporaryFile temp(file);
-  {
-    juce::FileOutputStream out(temp.getFile());
-    if (!out.openedOk() || !out.write(data, size)) {
-      *error = "cannot write " + file.getFullPathName();
-      return false;
-    }
-    out.flush();
-    if (out.getStatus().failed()) {
-      *error = "cannot write " + file.getFullPathName() + ": " + out.getStatus().getErrorMessage();
-      return false;
-    }
-  }
+  if (!WriteTemp(temp, file, data, size, error)) return false;
   if (!temp.overwriteTargetFileWithTemporary()) {
     *error = "cannot replace " + file.getFullPathName();
     return false;
   }
   return true;
+}
+
+// The document and its package, as a pair: both written to temporary files first, then the JSON
+// replaced and the package after it; when the package cannot be replaced, the JSON's old bytes
+// go back (or the new file goes, when there was none), so the pair on disk is the old one or the
+// new one, never a mix. False with *error when nothing changed on disk; *mixed is set when the
+// JSON could not be put back either.
+bool WritePair(const juce::File& json, const std::string& text, const juce::File& bsp,
+               const std::vector<uint8_t>& package, juce::String* error, bool* mixed) {
+  *mixed = false;
+  juce::TemporaryFile tj(json), tp(bsp);
+  if (!WriteTemp(tj, json, text.data(), text.size(), error) ||
+      !WriteTemp(tp, bsp, package.data(), package.size(), error)) {
+    return false;
+  }
+  juce::MemoryBlock old;
+  const bool        had = json.existsAsFile();
+  if (had && !json.loadFileAsData(old)) {
+    *error = "cannot read " + json.getFullPathName() + " to keep it while the pair is replaced";
+    return false;
+  }
+  if (!tj.overwriteTargetFileWithTemporary()) {
+    *error = "cannot replace " + json.getFullPathName();
+    return false;
+  }
+  if (tp.overwriteTargetFileWithTemporary()) return true;
+  *error = "cannot replace " + bsp.getFullPathName() + "; " + json.getFileName() + " is left as it was";
+  juce::String ignored;
+  const bool   restored = had ? WriteBytes(json, old.getData(), old.getSize(), &ignored) : json.deleteFile();
+  if (!restored) {
+    *mixed = true;
+    *error = "cannot replace " + bsp.getFullPathName() + ", and " + json.getFileName() +
+             " (already replaced) could not be put back: the pair on disk differs";
+  }
+  return false;
 }
 
 juce::String FirstError(const std::vector<bsc::Finding>& findings) {
@@ -115,13 +155,29 @@ struct CurationSession::Worker {
 
 CurationSession::CurationSession(BrainscapeProcessor& processor) : processor_(processor) {}
 
-CurationSession::~CurationSession() { JoinWorkers(); }
+// A render runs for seconds (S0-S11 for half a minute): the processor going away must not wait
+// for it, so the workers' renders stop at their next block.
+CurationSession::~CurationSession() {
+  cancel_.store(true, std::memory_order_relaxed);
+  JoinWorkers();
+}
 
 void CurationSession::JoinWorkers() {
   for (auto& w : workers_) {
     if (w->thread.joinable()) w->thread.join();
   }
   workers_.clear();
+}
+
+void CurationSession::StopWorkers(const juce::String& why) {
+  if (workers_.empty()) return;
+  cancel_.store(true, std::memory_order_relaxed);
+  JoinWorkers();
+  cancel_.store(false, std::memory_order_relaxed);
+  const std::lock_guard<std::mutex> lock(mutex_);
+  if (render_.state == RenderStatus::State::Failed && render_.message.startsWith("Stopped")) {
+    render_.message = "Stopped: " + why;
+  }
 }
 
 juce::File CurationSession::DefaultRenderDir() {
@@ -134,12 +190,17 @@ bool CurationSession::Open(const juce::File& file, juce::String* error) {
   juce::String         local;
   juce::String&        err = error != nullptr ? *error : local;
   std::vector<uint8_t> bytes;
-  if (!ReadBytes(file, &bytes, &err)) return false;
+  if (!ReadBytes(file, &bytes, &err)) {
+    refused_.clear();
+    refusedFile_ = file.getFileName();
+    return false;
+  }
   if (file.hasFileExtension("bsp")) {
     const bsc::DecompileResult d = bsc::Decompile(bytes.data(), bytes.size());
     if (!d.ok) {
-      findings_ = ErrorsFirst(d.findings);
-      err       = file.getFileName() + ": not a package this build reads (" + FirstError(d.findings) + ")";
+      refused_     = ErrorsFirst(d.findings);
+      refusedFile_ = file.getFileName();
+      err          = file.getFileName() + ": not a package this build reads (" + FirstError(d.findings) + ")";
       return false;
     }
     return LoadText(d.json, file, true, &bytes, &err);
@@ -154,6 +215,7 @@ bool CurationSession::Revert(juce::String* error) {
 }
 
 void CurationSession::Close() {
+  StopWorkers("the document closed");
   if (side_ == Side::Stored) SetSide(Side::Working);
   open_ = false;
   stored_.reset();
@@ -180,14 +242,16 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
   auto                      doc = std::make_unique<bsc::Document>();
   std::vector<bsc::Finding> found;
   if (!bsc::ReadDocumentText(text, {}, doc.get(), &found)) {
-    findings_ = ErrorsFirst(found);
-    *error    = source.getFileName() + " does not read: " + FirstError(found);
+    refused_     = ErrorsFirst(found);
+    refusedFile_ = source.getFileName();
+    *error       = source.getFileName() + " does not read: " + FirstError(found);
     return false;
   }
   const bsc::CompileResult r = bsc::CompileDocument(*doc);
   if (!r.ok) {
-    findings_ = ErrorsFirst(r.findings);
-    *error    = source.getFileName() + " does not compile: " + FirstError(r.findings);
+    refused_     = ErrorsFirst(r.findings);
+    refusedFile_ = source.getFileName();
+    *error       = source.getFileName() + " does not compile: " + FirstError(r.findings);
     return false;
   }
   // What plays: the package's own bytes when it came from one (what the pedal plays), else the
@@ -195,18 +259,34 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
   const std::vector<uint8_t>& bytes = package != nullptr ? *package : r.package;
   bsc::DecodedPackage         p     = bsc::DecodePackage(bytes.data(), bytes.size());
   if (!p.ok) {
-    *error = source.getFileName() + ": " + juce::String(bsc::DescribeDiagnostic(p.diagnostic));
+    refused_.clear();
+    refusedFile_ = source.getFileName();
+    *error       = source.getFileName() + ": " + juce::String(bsc::DescribeDiagnostic(p.diagnostic));
     return false;
   }
   LoadReport report;
   if (!processor_.LoadPresetState(*p.state, &report)) {
-    *error = source.getFileName() + ": its mode does not validate";
+    refused_.clear();
+    refusedFile_ = source.getFileName();
+    *error       = source.getFileName() + ": its mode does not validate";
     return false;
   }
+  StopWorkers("another document opened");  // a render of the document this one replaces
+  refused_.clear();
+  refusedFile_.clear();
   open_          = true;
   source_        = source;
   jsonFile_      = source.withFileExtension(".json");
   writesPackage_ = fromPackage || jsonFile_.withFileExtension(".bsp").existsAsFile();
+  // What Save would write for the document unedited and derived is the stamped canonical text
+  // (r.json, when nothing is pending): the file is that, or Save changes it.
+  if (fromPackage) {
+    juce::MemoryBlock beside;
+    canonical_ = jsonFile_.existsAsFile() && jsonFile_.loadFileAsData(beside) && beside.getSize() == r.json.size() &&
+                 std::memcmp(beside.getData(), r.json.data(), r.json.size()) == 0;
+  } else {
+    canonical_ = text == r.json;
+  }
   stampCurrent_  = doc->stamped && doc->soundRev == kSoundRevision &&
                   std::memcmp(doc->soundHash.bytes, r.soundHash.bytes, sizeof r.soundHash.bytes) == 0;
   detached_      = doc->detached;
@@ -423,7 +503,7 @@ void CurationSession::ApplyLeaves(const bsc::Document& d) {
   }
 }
 
-std::vector<std::string> CurationSession::SolvePositions(ParamId macro) {
+std::vector<std::string> CurationSession::SolvePositions(ParamId macro, ParamId fromLeaf) {
   std::vector<std::string> log;
   if (!open_ || side_ != Side::Working) return log;
   Refresh();
@@ -437,8 +517,12 @@ std::vector<std::string> CurationSession::SolvePositions(ParamId macro) {
     for (uint32_t k = 0; at != nullptr && k < t.macroCount; ++k) {
       const MacroDef& md = t.macros[k];
       if (md.id != static_cast<uint32_t>(macro)) continue;
+      // The target solved from: `fromLeaf`'s, else the first that is not detached and not a
+      // single value.
+      const bool fromGiven = static_cast<uint32_t>(fromLeaf) != 0u;
       for (uint32_t i = 0; i < md.count; ++i) {
         const MacroTarget& g = t.targets[md.first + i];
+        if (fromGiven && g.param != static_cast<uint32_t>(fromLeaf)) continue;
         if (IsDetached(static_cast<ParamId>(g.param)) || Bits(g.lo) == Bits(g.hi)) continue;
         const uint32_t before = Bits(*at);
         const uint32_t solved = bsc::SolvePosition(s.mode, md.id, i, d.LeafBits(g.param), before);
@@ -501,8 +585,9 @@ CurationSession::SaveResult CurationSession::WriteTo(const juce::File& json, boo
     Relint();
     return result;
   }
-  if (!WriteBytes(json, r.json.data(), r.json.size(), &error) ||
-      (withPackage && !WriteBytes(json.withFileExtension(".bsp"), r.package.data(), r.package.size(), &error))) {
+  bool mixed = false;
+  if (withPackage ? !WritePair(json, r.json, json.withFileExtension(".bsp"), r.package, &error, &mixed)
+                  : !WriteBytes(json, r.json.data(), r.json.size(), &error)) {
     result.message = message_ = error;
     return result;
   }
@@ -522,6 +607,7 @@ CurationSession::SaveResult CurationSession::WriteTo(const juce::File& json, boo
   jsonFile_      = json;
   writesPackage_ = withPackage;
   stampCurrent_  = true;
+  canonical_     = true;
   stored_        = std::move(stored);
   storedState_   = std::move(p.state);
   detached_      = stored_->detached;
@@ -623,6 +709,7 @@ void CurationSession::StartLevelMatch() {
       bsa::RenderRequest rq;
       rq.preset = presets[k];
       rq.input  = &in.audio;
+      rq.cancel = &cancel_;
       bsa::RenderResult rr;
       ok      = renderer.Render(rq, &rr);
       lufs[k] = ok ? bsa::Loudness(rr.out).Integrated(0, in.signalFrames) : 0.0;
@@ -689,6 +776,7 @@ bool CurationSession::StartRender(const RenderRequest& request, juce::String* er
   bsa::SuiteOptions options;
   options.metrics = true;
   options.wav     = true;
+  options.cancel  = &cancel_;
   options.outDir  = request.outDir.getFullPathName().toStdString();
   options.scripts.clear();
   if (request.allScripts) {
@@ -718,6 +806,14 @@ bool CurationSession::StartRender(const RenderRequest& request, juce::String* er
     } else {
       const bsa::SuiteResult res = bsa::RunSuite(renderer, *preset, {preset.get()}, options);
       s.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      if (res.cancelled) {
+        s.state   = RenderStatus::State::Failed;
+        s.message = "Stopped";
+        const std::lock_guard<std::mutex> lock(mutex_);
+        render_ = s;
+        w->done.store(true, std::memory_order_release);
+        return;
+      }
       s.renders = static_cast<int>(res.renders.size());
       s.summary = juce::String(bsa::Summary(*preset, res));
       for (const bsa::Check& c : res.checks) {

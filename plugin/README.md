@@ -83,7 +83,7 @@ The build never copies plugins into system folders.
    wrapper re-sends every parameter after an overflow.
 6. **Render audition…** (the Test input panel's last row) renders the test input through the
    current preset into a WAV file (companion §4.9): the loaded file when **File loop** is
-   selected, otherwise 10 s of `dsp/`'s plucks test signal, then 4 s of silence for the trails.
+   selected, otherwise 10 s of `dsp/`'s plucks test signal; then 10 s of silence for the trails.
    The input goes through `ConditionInput24` (the codec's 24-bit grid) and the input mode, and
    a separate engine renders it from the exact-restart state (`Init`, then
    `LoadPreset(…, Exact)`) at 48 kHz in the pedal's 48-frame blocks; the In and Out levels are
@@ -93,7 +93,8 @@ The build never copies plugins into system folders.
    so a comparison finds the first differing second), the sound revision and the toolchain. A
    render of the test signal or of a 48 kHz file is identical on every conforming build; a file
    at another rate is converted by linear interpolation, and the recipe says the render is
-   reproducible on this machine only.
+   reproducible on this machine only. The test signal is `bspc render`'s S0 input, so a stereo
+   render of it has the hash of the same preset's `S0.engaged.plucks`.
 
 ## Curate a preset (the Pedal view)
 
@@ -102,7 +103,8 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
 1. **Open...** (Ctrl+O) a schema-1 preset document (`.json`) or a package (`.bsp`). It compiles
    through the compiler library and plays at once: a Spillover load with Trails while audio
    runs, Exact before anything has played. A document that does not read or compile is refused
-   with the compiler's findings, and the open one stays.
+   with the compiler's findings, and the open one stays with its own (the refused file's
+   findings show in **Compile · lint** while no document is open).
 2. **The eight knobs** are the pedal's: Activity, Repeats, Shape, Time, Space and Filter move
    the mode's macros (titled with its display names, the knob's own name and target count
    below), Mix the wet/dry leaf, and Loop Level waits for the looper. Under each knob: the
@@ -115,13 +117,18 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
    leaf is detached). Edit any leaf there; one a macro targets turns amber when it is off the
    macro's value, since **Save** derives it from the knob's position. Right-click a targeted leaf
    to **detach** it (Save keeps your value, written to `editor.detached`) or to **solve** that
-   macro's position from it. **Solve positions** does the latter for every macro.
+   macro's position from it: the position whose value lands nearest the leaf, the leaf kept and
+   the macro's other targets moved to that position. **Solve positions** solves every macro from
+   its first target that is not detached.
 4. **Compile · lint** lists, live, what Save would hit: the compiler's errors, the lint findings
    (factory rules for a `factory.` id) and the leaves derive will change.
 5. **Save** (Ctrl+S) writes canonical JSON stamped with this build's sound revision and hash,
    and the `.bsp` beside it when one is there (or the document came from one), then plays what it
-   wrote. **Save as...** writes elsewhere; **Revert** re-opens from disk. A document that does
-   not compile is written as JSON only.
+   wrote; the pair is written together or not at all. **Save as...** writes elsewhere; **Revert**
+   re-opens from disk. A document that does not compile is written as JSON only. What Save
+   writes is what `bspc derive` and `bspc stamp` would: the state line says **Saved** only when
+   that is the file as it is (byte for byte), and otherwise how Save would change it (unsaved
+   changes, leaves it would derive, a stale stamp to renew).
 6. **A stored / B working** (key B) compares the version on disk with your edits, both loaded
    with Trails; the knobs lock while A plays. **Match level** renders both offline on the input
    class's test signal (**Attack**: Plucks, **Pad**: SoftNotes), measures K-weighted loudness
@@ -130,6 +137,7 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
    S0 or (**S0-S11**) all twelve, with the objective pre-screen, into
    `Music/Brainscape audition/<id>/` (WAVs, recipes, `audition.json`); **Show** opens the folder,
    and the status line's tooltip holds the pre-screen summary. `bspc render` makes the same bits.
+   Opening another document, closing it or closing the plugin stops a render at its next block.
 
 The document stays open while the editor is closed. A DAW's session (BSWS v1) holds leaves
 only, so recalling one closes the document and plays the default mode.
@@ -201,9 +209,12 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   host macro moves at three block patterns with the leaf mirrors following the fan-out, an
   undefined macro, expression fan-out, the effect volume across loads, Init and sessions, and the
   transport-start restart with a mode; the curation session (an unchanged document saving back
-  byte for byte, a macro move, a derived and a detached leaf, solve position, A/B, a session
-  recall, refused documents, a package saved as a pair, level matching, the one-click render),
-  and the pedal knob's pickup.
+  byte for byte, every example and corpus document saved unedited as derive and stamp write it,
+  a macro move, a derived and a detached leaf, solve position for every macro and from a chosen
+  leaf, A/B, a session recall, refused documents that leave the open one's findings, a package
+  saved as a pair or not at all, level matching, the one-click render, a render stopped by
+  closing the plugin or opening another document), the knobs' names from the open document,
+  the pedal knob's pickup, and the test-signal audition's hash against `bspc render`'s S0.
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
   `build/plugin/plugin/screenshots/`: both views with no document and with a scratch copy of
   `compiler/tests/data/engram.json` open (a knob waiting for pickup, a hand-edited leaf, Shift, A
