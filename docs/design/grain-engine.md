@@ -604,6 +604,19 @@ the trade is visible.
 
 ## 8. CPU budget
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** Measured with DWT on the owner's Daisy
+> Seed Rev7, the costs exceed this table, and the worst case does not fit the budget. With the
+> engine's code in ITCM and warm caches, the nominal row (64 voices at unity rate, 20 ms grains,
+> every post stage) costs 7,774 cycles/sample on average and 9,915 in its worst block (99.1 %);
+> the pessimistic configuration costs 9,062 on average and 13,554 at worst with 20 ms grains
+> (135.5 %), and 11,958 and 16,847 with 1 ms grains (168.5 %). By difference in the pessimistic
+> configuration, 64 voices against 1 cost 6,549 cycles/sample (grain render row: ~4,000), the post
+> delay 319 (~60), the filter 200 (70), modulation 192 (60), the reverb 559 (800) and feedback
+> taming 68 (~200); a birth costs at most 6,203 cycles (the `ScheduleGrain` row: ~530
+> cycles/sample at 1 ms grains). "Even the pessimistic case stays inside budget", below, does not
+> hold. A fix is under design, with owner decisions pending. The figures and their sources are in
+> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.
+
 Worst case, 10,000 cycles/sample @ 48 kHz / 480 MHz. All figures derived, **not measured**;
 DWT counters gate every stage (§10). The v1 table's two systematic errors are fixed: the
 cache-miss model is **rate-dependent** (misses/grain/sample = r/8 for interleaved stereo
