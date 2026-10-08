@@ -351,10 +351,10 @@ HISTORY_CASES = [
 # `short hash` and subject ({merge} for CI's merge commit): "listing", the summary's list of
 # introduced revisions and their mints, exactly; "present" and "absent", text that must and
 # must not be in the report or the error.
-UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: parity and host render "
-              "r6's, so each revision commit must have passed them as the pull request's head (profile §5.12). "
-              "sound-rev-render also renders each, on Linux GCC and the emulated M7 only, at every commit at it a "
-              "later revision is built on.")
+UNRENDERED = ("is checked here by its key and the commit that wrote it, not rendered: parity renders r6's, and "
+              "sound-rev-render renders each on every parity leg, at every commit at it a later revision is built "
+              "on. While branch protection requires sound-rev-render, that covers them; until then, each revision "
+              "commit must have passed parity and host as the pull request's head (profile §5.12).")
 EXPECT = {
     "a bump, its mint in the next commit, then the next revision":
         {"listing": ["- r2: {b2}", "  - minted at {m2}", "- r3: {r3}", "  - minted at {r3}"]},

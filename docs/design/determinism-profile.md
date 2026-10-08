@@ -940,24 +940,33 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > keys the file to the revision it was built with, so a file keyed to another revision than its
 > commit's mints nothing. A commit that introduces a number the base already has (a parallel
 > line's claim) fails until the line is renumbered on top of the base. The gate checks a lower
-> revision's golden file by its key and the commit that wrote it, and parity and host render
-> only the head's, so each revision commit is pushed and passes parity and host as the pull
-> request's head before the next revision's commit is pushed. `sound-rev-render.yml` also
-> renders the lower revisions, on two of those toolchains. For each revision below the head's,
-> the gate's `--list-revisions` names every commit at that revision that a commit at another
-> revision has as a parent (the next revision's bump, or a merge into a later one, so a side
-> line merged after the next bump counts), and the job builds each one's own harness and checks
-> its golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks and
-> {48, 1, 127, 32}) and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole
-> corpus). It passes at once when the pull request introduces at most one revision, and fails
-> when a listed commit cannot be built or checked or its golden file is not keyed to its
-> revision. It does not replace the per-commit rule, required or not: §6.1 asks every x86 leg
-> and the emulated M7 to agree with a golden file, and the job has neither Clang, arm64, MSVC
-> nor AppleClang, nor the M7's other block sizes, the hostile FP environment or the parity
-> stream. The walk needs the whole history: `sound-rev.yml` checks out with `fetch-depth: 0`,
-> and the gate fails on a shallow clone or a missing object rather than pass. The rule holds on
-> `main` only for pull requests merged with a merge commit; a squash merge would land several
-> revisions as one commit that skips numbers.
+> revision's golden file by its key and the commit that wrote it, and parity renders only the
+> head's; `sound-rev-render.yml` renders every lower revision on every parity leg. For each
+> revision below the head's, the gate's `--list-revisions` names every commit at that revision
+> that a commit at another revision has as a parent (the next revision's bump, or a merge into
+> a later one, so a side line merged after the next bump counts), and one job per leg of
+> parity's `parity-host` (GCC and Clang on Linux x64, GCC on Linux arm64, MSVC with SSE2 and
+> with AVX2, AppleClang on the pinned and the latest macOS) and `parity-m7` (the Cortex-M7
+> under the pinned qemu-arm) builds each one's own harness as parity builds it on that leg and
+> makes every render parity makes there against that commit's golden file: 48 and 512-frame
+> blocks and the hostile FP environment on every host leg, and on Linux GCC also the other
+> block sizes and patterns, random sizes, split event delivery and fresh engines; on the M7,
+> 48 and 512-frame blocks, {48, 1, 127, 32}, random sizes, the hostile FPSCR, the parity image's
+> stream and the forced-flush control (§6.1 asks every x86 leg and the emulated M7 to agree
+> with a golden file). One job named `sound-rev-render` requires the listing and every leg:
+> it passes at once when the pull request introduces at most one revision, and fails when a
+> listed commit cannot be built or checked on any leg or its golden file is not keyed to its
+> revision. While branch protection requires `sound-rev-render`, a pull request may push
+> several revisions at once; until the owner requires it, each revision commit is pushed and
+> passes parity and host as the pull request's head before the next revision's commit is
+> pushed. The head alone still gets `parity-negative-control` (a contracting build must miss
+> the golden file), `host.yml`'s tests, and the checks that read no golden file (the static
+> audits, the decoder fuzzers, `bspc-roundtrip`), which check the code the pull request lands;
+> `parity-summary`'s comparison of the legs gates nothing that each leg's check against the
+> same golden file does not, but the negative control. The walk needs the whole history:
+> `sound-rev.yml` checks out with `fetch-depth: 0`, and the gate fails on a shallow clone or a
+> missing object rather than pass. The rule holds on `main` only for pull requests merged with
+> a merge commit; a squash merge would land several revisions as one commit that skips numbers.
 
 ### 5.13 Shared deterministic test-signal generator
 

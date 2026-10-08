@@ -1,37 +1,48 @@
 name: sound-rev-render
 
-# Renders every sound revision a pull request introduces below its head's (determinism-profile.md
-# §5.12, companion-app.md §3.4). sound-rev.yml's gate checks such a revision's golden file only
-# by its key and the commit that wrote it, and parity.yml and host.yml render only the head's.
-# This job asks the gate for the lower revisions (--list-revisions: for each, every commit at that
-# revision that a commit at another revision has as a parent, the next revision's bump or a merge
-# into a later one, so a side line merged after the next bump is rendered too), checks each of
-# those commits out in a worktree of its own and runs that commit's own golden harness in
-# --mode check against that commit's own golden.json (tools/ci/render_revisions.py): Linux GCC
-# at 48-frame blocks with ablations on (the mint's run), at 512-frame blocks and at the mixed
-# pattern {48, 1, 127, 32}, and the Cortex-M7 oracle built with the pinned arm-none-eabi
-# toolchain at 48-frame blocks over the whole corpus under the pinned qemu-arm (parity-m7's
-# installers and caches). A pull request that introduces at most one revision passes after the
-# listing, in seconds, with no toolchain installed; a listed commit that cannot be checked out,
-# built or checked, or whose golden file is not keyed to its revision, fails the job, and so does
-# a listing the gate cannot make (a history it cannot read).
-# What it does not cover: parity's Clang, arm64, MSVC (SSE2 and AVX2) and AppleClang legs, the
-# M7 at other block sizes, the other block patterns, the hostile FP environment, the parity
-# stream, and host.yml's tests. So it does not replace the rule that each revision commit is
-# pushed and passes parity and host as the pull request's head before the next one is pushed,
-# required or not; it renders the lower revisions mechanically on the two toolchains it has,
-# whoever pushed what.
-# Cost: the listing takes seconds. Each commit it renders adds two harness builds and four
-# renders, run --jobs (the runner's 4 vCPUs) at a time, the M7's first; the M7's is the
-# longest. Measured in Docker on 4 CPUs (GCC 11, binfmt qemu-arm) for step 4's r4, r5 and r6
-# (one commit each): builds 3-4 s each, host renders 45-50 s per revision, M7 renders 164-187 s
-# each, 206 s for all three. The M7's quick set took 109 s against the whole corpus's 162 s at
-# r4, so the job keeps the whole corpus. On GitHub's runner parity-m7 renders r3's corpus in
-# 208 s, so expect about 7 minutes for three revisions (estimated) and a few seconds for the rest.
+# Renders every sound revision a pull request introduces below its head's on every parity leg
+# (determinism-profile.md §5.12, companion-app.md §3.4). sound-rev.yml's gate checks such a
+# revision's golden file only by its key and the commit that wrote it, and parity.yml renders
+# only the head's. Here the list job asks the gate for the lower revisions (--list-revisions: for
+# each, every commit at that revision that a commit at another revision has as a parent, the next
+# revision's bump or a merge into a later one, so a side line merged after the next bump is
+# rendered too), and one render job per leg of parity.yml's parity-host and parity-m7 checks each
+# of those commits out in a worktree of its own, builds that commit's own harness as parity builds
+# it on that leg (its runner, compiler, CXXFLAGS and CMake options; parity-m7's pinned
+# arm-none-eabi and qemu-arm installers and caches) and makes every render parity makes on that
+# leg, in --mode check against that commit's own golden.json (tools/ci/render_revisions.py):
+# 48-frame blocks with ablations, 512-frame blocks and a hostile caller FP environment on every
+# host leg, and on linux-x64-gcc also the other block sizes and patterns, random sizes, split
+# event delivery and fresh engines; on the M7, 48 and 512-frame blocks, {48, 1, 127, 32}, random
+# sizes, a hostile caller FPSCR, the parity image's stream and the forced-flush control.
+# test_render_revisions.py, which the list job runs first, fails when those legs, runners or
+# renders drift from parity.yml's.
+# The job named sound-rev-render requires the listing and every leg: it passes when the pull
+# request introduces at most one revision (the render legs are skipped, nothing is installed)
+# or when every leg rendered every listed commit; a listed commit that cannot be checked out,
+# built or checked on any leg, or whose golden file is not keyed to its revision, fails it, and
+# so does a listing the gate cannot make (a history it cannot read).
+# The rule (profile §5.12): while branch protection requires sound-rev-render, a pull request
+# may push several revisions at once, since every revision below the head's is then rendered on
+# every parity leg; until the owner requires it, each revision commit is pushed and passes
+# parity and host as the pull request's head before the next is pushed. Head-only still: the
+# checks that do not render a revision's golden file on a parity leg (the static audits, the
+# decoder fuzzers, bspc-roundtrip, parity-negative-control, parity-summary's cross-leg report
+# comparison, and host.yml's tests), which check the code the pull request lands.
+# Cost: the listing takes seconds, and so does the whole workflow when it lists nothing. Each
+# listed commit adds, on every leg, one harness build and that leg's renders, run --jobs (the
+# runner's vCPUs) at a time, the longest first: 3 renders on six host legs, 18 on
+# linux-x64-gcc and 7 on the M7, whose leg is the longest. The legs run in parallel. Measured
+# for step 4's r4, r5 and r6 (38-43 presets): MSVC SSE2 and AVX2 69 and 70 s (Windows), GCC 11
+# 193 s, Clang 14 53 s and the M7 1031 s (Docker on 4 CPUs). On GitHub, estimated from parity's
+# own times (parity-m7 renders r3's 33 presets one after another in about 17 min): about
+# 17-20 min for the M7 leg, which bounds the workflow, 2-4 min for each host leg, and about 40
+# runner-minutes in all for a push that carries three revisions below its head's.
 # It runs on description edits too ("edited"), since the listing depends on the pull request's
 # base and changing the base fires only that event: a stale result from the old base would
-# otherwise stand. A description edit therefore renders again, and a newer event cancels a render
-# in progress. Label edits (which re-run sound-rev.yml) do not change the listing and do not run it.
+# otherwise stand. A description edit therefore renders again, and a newer event cancels a run
+# in progress. Label edits (which re-run sound-rev.yml) do not change the listing and do not
+# run it.
 
 on:
   pull_request:
@@ -45,52 +56,144 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sound-rev-render:
-    name: sound-rev-render
+  list:
+    name: sound-rev-render (list)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    outputs:
+      count: ${{ steps.list.outputs.count }}
+      listing: ${{ steps.list.outputs.listing }}
     steps:
       # The pull request's merge commit, its first parent (the base) and the whole history,
       # which the gate's walk reads.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Self-test the render script (its fail-closed paths, and its legs and renders against parity.yml)
+        run: python3 tools/ci/test_render_revisions.py
       - name: List the sound revisions below the head's
         id: list
         run: >
           python3 tools/ci/render_revisions.py list --base HEAD^1 --head HEAD
           --listing "$RUNNER_TEMP/revisions.json" --github-output "$GITHUB_OUTPUT"
-      # Everything below runs unless the listing says 0; a count that is missing runs it, and the
-      # render then fails without a listing.
+
+  # parity.yml's parity-host matrix (leg and runner; render_revisions.py sets each leg's CXX and
+  # CXXFLAGS as that matrix does) and parity-m7's runner.
+  render:
+    name: sound-rev-render (${{ matrix.leg }})
+    needs: list
+    # A count that is missing runs the legs, and they then fail without a listing.
+    if: needs.list.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux-x64-gcc
+            os: ubuntu-24.04
+          - leg: linux-x64-clang
+            os: ubuntu-24.04
+          - leg: linux-arm64-gcc
+            os: ubuntu-24.04-arm
+          - leg: windows-x64-msvc
+            os: windows-2022
+          - leg: windows-x64-msvc-avx2
+            os: windows-2022
+          - leg: macos-arm64-appleclang
+            os: macos-14
+          - leg: macos-arm64-appleclang-latest
+            os: macos-latest
+          - leg: m7-qemu
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      LEG: ${{ matrix.leg }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The listing goes through a file: it holds only commit ids and numbers, and render_revisions.py
+      # refuses anything else, and one for another commit than this checkout.
+      - name: Read the listing
+        id: listing
+        env:
+          LISTING: ${{ needs.list.outputs.listing }}
+        run: |
+          PY=python3; if [ "$RUNNER_OS" = Windows ]; then PY=python; fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          printf '%s\n' "$LISTING" > "$RUNNER_TEMP/revisions.json"
+          "$PY" tools/ci/render_revisions.py check --listing "$RUNNER_TEMP/revisions.json" --head HEAD \
+            --github-output "$GITHUB_OUTPUT"
+      # Nothing below runs, and nothing is installed, when the listing has nothing to render.
       - name: Cache the pinned arm-none-eabi toolchain
-        if: steps.list.outputs.count != '0'
+        if: matrix.leg == 'm7-qemu' && steps.listing.outputs.count != '0'
         uses: actions/cache@v4
         with:
           path: ~/arm-gnu-toolchain
           key: arm-gnu-toolchain-10.3-2021.10-x86_64-linux
       - name: Install the pinned arm-none-eabi toolchain (10.3-2021.10, checksum-verified)
-        if: steps.list.outputs.count != '0'
+        if: matrix.leg == 'm7-qemu' && steps.listing.outputs.count != '0'
         run: bash tools/ci/install_arm_toolchain.sh "$HOME/arm-gnu-toolchain"
       - name: Cache the pinned qemu-arm
-        if: steps.list.outputs.count != '0'
+        if: matrix.leg == 'm7-qemu' && steps.listing.outputs.count != '0'
         uses: actions/cache@v4
         with:
           path: ~/qemu-arm
           key: qemu-arm-10.2.3-ubuntu-24.04
       - name: Install the pinned qemu-arm (10.2.3, version-checked)
-        if: steps.list.outputs.count != '0'
+        if: matrix.leg == 'm7-qemu' && steps.listing.outputs.count != '0'
         run: bash tools/ci/install_qemu_arm.sh "$HOME/qemu-arm"
-      - name: Render each revision at the commits the gate lists (host GCC and the emulated M7)
-        if: steps.list.outputs.count != '0'
+      # Worktrees under the runner's temporary directory, whose path is short on Windows too.
+      - name: Render each revision at the commits the gate lists, as parity renders this leg
+        if: steps.listing.outputs.count != '0'
         run: >
-          python3 tools/ci/render_revisions.py render --listing "$RUNNER_TEMP/revisions.json"
-          --work "$RUNNER_TEMP/sound-rev-render" --out sound-rev-render --jobs "$(nproc)"
-          --cxx g++ --emulator "qemu-arm -cpu cortex-m7" --summary "$GITHUB_STEP_SUMMARY"
+          "$PY" tools/ci/render_revisions.py render --leg "$LEG" --head HEAD
+          --listing "$RUNNER_TEMP/revisions.json" --work "$RUNNER_TEMP/sr" --out sound-rev-render
+          --summary "$GITHUB_STEP_SUMMARY"
       - name: Upload the reports, logs and the WAV files of mismatching presets
-        if: ${{ always() && steps.list.outputs.count != '0' }}
+        if: ${{ always() && steps.listing.outputs.count != '0' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sound-rev-render
+          name: sound-rev-render-${{ matrix.leg }}
           path: sound-rev-render/
           if-no-files-found: warn
           retention-days: 14
+
+  # The check branch protection requires: the listing, and every render leg passed (or none ran,
+  # because the pull request introduces at most one revision).
+  sound-rev-render:
+    name: sound-rev-render
+    needs: [list, render]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the listing and every render leg
+        env:
+          LIST: ${{ needs.list.result }}
+          COUNT: ${{ needs.list.outputs.count }}
+          RENDER: ${{ needs.render.result }}
+        run: |
+          {
+            echo "# sound-rev-render"
+            echo
+            echo "- Listing: $LIST; revisions below the head's: ${COUNT:-none listed}"
+            echo "- Render legs (parity.yml's seven parity-host legs and the emulated M7): $RENDER"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$LIST" != success ]; then
+            verdict="the listing job did not succeed ($LIST)"
+          elif [ "$RENDER" = success ]; then
+            verdict=""
+          elif [ "$RENDER" = skipped ] && [ "$COUNT" = 0 ]; then
+            verdict=""
+          else
+            verdict="the render legs did not all pass ($RENDER, ${COUNT:-no} revision(s) listed)"
+          fi
+          if [ -n "$verdict" ]; then
+            echo "::error title=sound-rev-render::$verdict"
+            printf '\n**FAIL:** %s\n' "$verdict" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          printf '\nPASS\n' >> "$GITHUB_STEP_SUMMARY"
+          echo PASS

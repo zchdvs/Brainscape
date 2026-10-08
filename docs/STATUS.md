@@ -464,20 +464,25 @@ revisions. It walks every commit the pull request adds and fails a commit that l
 revision or skips a number, a revision two commits introduce or one the base already has, and a
 revision no commit at that revision minted; the walk needs the whole history, so the job checks
 out with `fetch-depth: 0` and the gate fails on a shallow clone. It checks a golden file below
-the head's revision by its key and the commit that wrote it, not by rendering it (parity and
-host render the head's), so each revision commit is pushed and passes parity and host as the
-pull request's head before the next one. `sound-rev-render.yml` also renders the lower
-revisions, on two of those toolchains: the gate's `--list-revisions` names, for each revision
-below the head's, every commit at that revision that a commit at another revision has as a
-parent (the next revision's bump, or a merge into a later one, so a side line merged after the
-next bump is rendered too), and the job builds each one's own harness in a worktree and checks
-its golden file on Linux GCC (48-frame blocks with ablations, 512-frame blocks,
-{48, 1, 127, 32}) and on the Cortex-M7 under the pinned qemu-arm (48-frame blocks, the whole
-corpus); with at most one revision it passes after the listing, and a listed commit it cannot
-build or check, or whose golden file is not keyed to its revision, fails it. It has none of
-parity's Clang, arm64, MSVC or AppleClang legs, so it does not replace the per-commit rule,
-required or not (Known gaps). The rule holds on `main` only for pull requests merged with a
-merge commit (Known gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull request
+the head's revision by its key and the commit that wrote it, not by rendering it (parity renders
+the head's); `sound-rev-render.yml` renders every lower revision on every parity leg: the gate's
+`--list-revisions` names, for each revision below the head's, every commit at that revision that
+a commit at another revision has as a parent (the next revision's bump, or a merge into a later
+one, so a side line merged after the next bump is rendered too), and one job per leg of
+`parity-host` (Linux x64 GCC and Clang, Linux arm64 GCC, MSVC SSE2 and AVX2, AppleClang pinned
+and latest) and `parity-m7` builds each one's own harness in a worktree as parity builds it on
+that leg and makes every render parity makes there against that commit's golden file (on every
+host leg 48 and 512-frame blocks and the hostile FP environment; on Linux GCC also the other
+block sizes, random sizes, split delivery and fresh engines; on the M7 its block sizes, the
+hostile FPSCR, the parity stream and the forced-flush control). The job `sound-rev-render`
+requires the listing and every leg: with at most one revision it passes after the listing, and
+a listed commit that cannot be built or checked on any leg, or whose golden file is not keyed to
+its revision, fails it. While branch protection requires `sound-rev-render`, a pull request may
+push several revisions at once; until the owner requires it, each revision commit is pushed and
+passes parity and host as the pull request's head before the next is pushed (Known gaps). The
+head alone still gets `parity-negative-control`, `host.yml`'s tests and the checks that read no
+golden file. The rule holds on `main` only for pull requests merged with a merge commit (Known
+gaps). Its package rule (mode-compiler.md §8.3, lane G) fails a pull request
 that changes a committed package's `soundHash` or `controlHash` (a golden preset's, a corpus or
 factory package's in `dsp/tests/golden/presets/MANIFEST` or `firmware/factory/MANIFEST`) without
 the "package-change" label and a `Package-change: <cause>` line in its description, and counts a
@@ -756,11 +761,11 @@ committed document on the seven host legs, each set against its required `MANIFE
 manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compiler audit runs
 its source ban in `parity-audits` and its import check on the GCC and Clang legs),
 `sound-rev.yml` (the sound-revision gate with the package rule), `sound-rev-render.yml` (each
-revision a pull request carries below its head's, rendered on Linux GCC and the emulated M7 at
-every commit at it a later revision is built on; not yet run on GitHub), `nightly.yml` (the
-number code's exhaustive round trip on x86-64 and arm64, and 30 minutes of libFuzzer from a kept
-corpus) and `plugin.yml` (every format on three OSes, Release and Debug). Everything but lane
-G's additions first ran on GitHub on 2026-10-06 (Known gaps).
+revision a pull request carries below its head's, rendered on every parity leg, parity-host's
+seven and the emulated M7, at every commit at it a later revision is built on; not yet run on
+GitHub), `nightly.yml` (the number code's exhaustive round trip on x86-64 and arm64, and 30
+minutes of libFuzzer from a kept corpus) and `plugin.yml` (every format on three OSes, Release
+and Debug). Everything but lane G's additions first ran on GitHub on 2026-10-06 (Known gaps).
 
 ## How it was built (methodology)
 
@@ -820,19 +825,26 @@ records live in [docs/design/reviews/](design/reviews/).
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
   steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks.
-  `sound-rev-render` (`sound-rev-render.yml`, one job of that name) is not required either: it
-  renders each sound revision a pull request carries below its head's, on Linux GCC and the
-  emulated M7, at every commit at it a later revision is built on, and has run only locally, in
-  Docker on 4 CPUs: step 4's r4, r5 and r6 passed every run in 206 s; a pull request whose r4
-  golden file had one hash altered and whose r5 did not compile failed all four of r4's runs and
-  both of r5's builds; and the two histories its review found passing fail it now (an unminted
-  engine change at r4 under the r5 bump, beside a side line at r4 merged after that bump; and an
-  r4 whose last commit took its golden file back to the base's). It covers two of parity's
-  toolchains (an r4 commit whose engine diverged only under MSVC passed it), so required or not, a
-  pull request that carries several revisions pushes each revision commit and lets parity and host
-  pass it as the head before pushing the next; required, it makes the GCC and M7 renders of the
-  lower revisions a check rather than a promise. It also runs on description edits, since its
-  listing depends on the base and a base change fires only that event. Only
+  `sound-rev-render` (`sound-rev-render.yml`: the job of that name requires its listing job and
+  its eight render legs, `sound-rev-render (<leg>)`, so requiring it requires them all) is not
+  required either: it renders each sound revision a pull request carries below its head's on
+  every parity leg, `parity-host`'s seven and the emulated M7, each with every render parity
+  makes on it, at every commit at it a later revision is built on. It has run only locally:
+  step 4's r4, r5 and r6 passed every run on MSVC SSE2 and AVX2 (Windows, 69 and 70 s), GCC 11
+  (54 runs, 193 s), Clang 14 (53 s) and the emulated M7 (21 runs, 1031 s), the last three in
+  Docker on 4 CPUs; an r4 whose golden file had one hash altered failed its three MSVC runs and
+  an r5 that did not compile failed its MSVC build; and the gate's self-test keeps the listing of
+  the two states the review of its first version found unrendered (an unminted engine change at
+  r4 under the r5 bump, beside a side line at r4 merged after that bump; and an r4 whose last
+  commit took its golden file back to the base's), which failed that version's GCC and M7 runs.
+  `test_render_revisions.py` (57 cases, in the listing job) requires its legs, runners and renders
+  to be parity.yml's and every fail-closed path to fail. Linux arm64 and the two macOS legs cannot
+  run here: the pull request's CI is their first run. While the owner requires it, a pull
+  request may push several revisions at once; until then, a pull request that carries several
+  revisions pushes each revision commit and lets parity and host pass it as the head before
+  pushing the next. The head alone still gets `parity-negative-control`, `host.yml`'s tests and
+  the checks that read no golden file. It also runs on description edits, since its listing
+  depends on the base and a base change fires only that event. Only
   collaborators can apply the "sound-neutral" label, so today only the owner can waive the path
   trigger; the same holds for the "package-change" label, which the owner creates in the
   repository before the first package lands. Caveats: every gate runs the pull request's own
@@ -1050,14 +1062,16 @@ records live in [docs/design/reviews/](design/reviews/).
   image's at 91.2%, so the next wave moves cold engine code (`Validate` first) out of ITCM. The
   four revisions are one commit each, each minting its own golden file: since pull request #7 the
   sound-revision gate checks them commit by commit, so one pull request may carry all four (with
-  the package-change label for 4, 6 and 7, above). Parity and host render only the head's golden
-  file, so each revision commit passes them as the pull request's head before the next is pushed:
-  the pull request opens at r4's commit and pushes r5's, r6's and r7's in turn, then the rest.
-  `sound-rev-render` also renders 4, 5 and 6 at their own commits, the ones the next revision is
-  built on (here in Docker, GCC 11 and the emulated M7: all three match their golden files at 48
-  and 512-frame blocks, at {48, 1, 127, 32} and on the M7's 48-frame grid, 38, 40 and 43 presets,
-  from the M7 archives [Internal sound revisions 4–7](#internal-sound-revisions-47-wave-1)
-  records). The review's fixes and these docs follow the last of them, with no bump. Nothing lane
+  the package-change label for 4, 6 and 7, above). Parity renders only the head's golden file,
+  and `sound-rev-render` renders 4, 5 and 6 on every parity leg at their own commits, the ones the
+  next revision is built on; until the owner requires that check, each revision commit passes
+  parity and host as the pull request's head before the next is pushed: the pull request opens at
+  r4's commit and pushes r5's, r6's and r7's in turn, then the rest. Here all three match their
+  golden files, 38, 40 and 43 presets, in every render parity makes on MSVC SSE2 and AVX2
+  (Windows), GCC 11, Clang 14 and the emulated M7 (Docker), the M7 from the archives
+  [Internal sound revisions 4–7](#internal-sound-revisions-47-wave-1) records; Linux arm64 and
+  macOS first render them on GitHub. The review's fixes and these docs follow the last of them,
+  with no bump. Nothing lane
   F added has run on GitHub yet; here GCC 11, Clang 14 and the emulated M7 reproduce each revision
   (lane F's review). A local check that review added: `audit_symbols.py --toolchain arm` on the
   Windows M7 oracle's archive, which needs no Docker (it caught `__aeabi_ul2f` at 6).

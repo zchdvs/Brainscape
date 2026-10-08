@@ -43,12 +43,13 @@ request's own commits and the merge commit, not those already in the base), and 
     one, or on a line without the revision) mints nothing. A commit that introduces a revision
     the base already has (a parallel line claimed its number) fails: renumber on top of the
     base. The head going below the base fails too. A golden file below the head's revision is
-    checked here by its key and the commit that wrote it, not rendered: parity.yml and host.yml
-    render the head's, so each revision commit is pushed and passes parity and host as the pull
-    request's head before the next revision's commit is pushed. sound-rev-render.yml also
-    renders each lower revision, on Linux GCC and the emulated Cortex-M7 only, at every commit
-    at it that a later revision is built on (--list-revisions names them); it does not replace
-    that rule, since parity and host cover toolchains it does not;
+    checked here by its key and the commit that wrote it, not rendered: parity.yml renders the
+    head's, and sound-rev-render.yml renders each lower revision on every parity leg (parity-host's
+    seven and the emulated Cortex-M7, with every render parity makes on each) at every commit at
+    it that a later revision is built on (--list-revisions names them). While branch protection
+    requires sound-rev-render, a pull request may push several revisions at once; until the owner
+    requires it, each revision commit is pushed and passes parity and host as the pull request's
+    head before the next revision's commit is pushed;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
 
@@ -477,10 +478,10 @@ def main():
     unrendered = [f"r{r}" for r in sorted(introduced) if r < head_rev]
     if unrendered:
         notes.append(f"The golden file of {', '.join(unrendered)} is checked here by its key and the commit that "
-                     f"wrote it, not rendered: parity and host render r{head_rev}'s, so each revision commit must "
-                     f"have passed them as the pull request's head (profile §5.12). sound-rev-render also renders "
-                     f"each, on Linux GCC and the emulated M7 only, at every commit at it a later revision is "
-                     f"built on.")
+                     f"wrote it, not rendered: parity renders r{head_rev}'s, and sound-rev-render renders each on "
+                     f"every parity leg, at every commit at it a later revision is built on. While branch "
+                     f"protection requires sound-rev-render, that covers them; until then, each revision commit "
+                     f"must have passed parity and host as the pull request's head (profile §5.12).")
     if changed and not bumped:
         failures.append(f"{len(changed)} golden hash(es) changed without a kSoundRevision bump (hard "
                         f"trigger, profile §5.12; no label overrides it)."
