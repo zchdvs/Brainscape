@@ -19,8 +19,10 @@ namespace brainscape::blobtest {
 // kSoundRevision 2, the same tree gives revision 2's digest. Re-minted at sound revision 4: the
 // samples' soundRev and kSupportedModeFeatures (source selection), which the verdicts read; at
 // 5 for the same two (pitch sets); at 6 for the soundRev and the Leaf rows 29 and 30, which
-// CTRL's and MACR's targets may name; and at 7 for the soundRev and the Leaf row 31.
-const char* const kFuzzDigest = "ba5744ed337433c94e2274f86991a56d57d061258576ad1f5b11023e896773ba";
+// CTRL's and MACR's targets may name; and at 7 for the soundRev and the Leaf row 31. Re-minted
+// at 7 again when the samples' Reserved target moved from row 30 (a Leaf since 6) to row 32
+// (W3), so DecodePreset's UnsupportedTarget is reached again (51 decode codes).
+const char* const kFuzzDigest = "c49c145f723e6dd68b8f4f2a8b9ff61d8b569f8d71b2ffc57bc677a59fed7b68";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
@@ -113,6 +115,30 @@ const Fixture kFixtures[] = {
      "a sound-revision-2 package: every r2 leaf, onsets on marks, custom macros, CTRL with "
      "expression assignments on a macro and a leaf, META. Loads exact, with no missing ID, on "
      "every later build: a leaf a later revision adds is not missing from it (sinceRev, §7.3)",
+     PresetError::None, 0},
+    // Since sound revision 7 the roles the wave-1 fixtures played (newer content, named, not a
+    // corrupt package) are held by a later wave's leaf and a W2 feature.
+    {"w3-leaf-macro-target.bsp",
+     "39bfe2a476f4966e09bd8240b304663136f2050f5d49726ab1870ea42f48b6cb",
+     PresetError::None, 0, 1, false, 0,
+     "macro activity targeting layer0.level_db (ID 32), a wave-3 leaf and a Reserved row here: "
+     "decodes (macro targets are ValidateMode's), and ValidateMode names it UnsupportedTarget, "
+     "newer content rather than a corrupt one. Its verdict changes in the W3 pull request that "
+     "makes ID 32 a Leaf row",
+     PresetError::UnsupportedTarget, 32},
+    {"w3-leaf-expression.bsp",
+     "853027ef0352490614f2d0e81f601e6674cee325b50c911c27edafe2881ee923",
+     PresetError::UnsupportedTarget, 32, 0, false, 0,
+     "an expression assignment on layer0.level_db (ID 32), a wave-3 leaf and a Reserved row "
+     "here: rejected as UnsupportedTarget, named, as an unknown chunk is UnsupportedFeature. Its "
+     "verdict changes in the W3 pull request that makes ID 32 a Leaf row",
+     PresetError::None, 0},
+    {"w2-step-table.bsp",
+     "29ce4419ac2c528a449569cb3217e0895de9921f184d47fe1c6933faad179326",
+     PresetError::UnsupportedFeature, kModeFeatureSteps, 0, false, 0,
+     "a wave-2 package (a step table of four steps, shuffled): rejected as UnsupportedFeature, "
+     "named, until W2 plays step tables (mode-compiler.md §7.5). Its verdict changes in that "
+     "pull request",
      PresetError::None, 0},
 };
 const size_t kFixtureCount = sizeof kFixtures / sizeof kFixtures[0];
@@ -255,6 +281,37 @@ Bytes MakeFixture(size_t index) {
       const auto  r2   = R2State();
       const Bytes meta = MetaFor(r2->mode, "fixture.r2", "Frozen r2", PresetFamily::Reverie, 1, 1);
       return Package(*r2, &meta);
+    }
+    case 15:
+      // Activity's second target, layer0.position.spray_ms, becomes layer0.level_db, -12 to 0 dB.
+      s->mode.macros.targets[1] = MacroTarget{32, -12.0f, 0.0f, 0.0f, 1.0f, 2.0f};
+      return R1Package(*s);
+    case 16: {
+      // As case 13: built on a Leaf row whose range holds both ends (layer0.pitch.transpose_st,
+      // ID 8), the target then rewritten.
+      s->control.exprCount      = 2;
+      s->control.expressions[1] = ExpressionAssignment{8, -12.0f, 0.0f, 1.0f};
+      Bytes        b = R1Package(*s);
+      const size_t x = FindSection(b, kTagCtrl) + 8 + 4 + 8 * s->control.macroCount + 16;
+      if (Rd32(&b[x]) != 8u) return Bytes();
+      Wr32(&b[x], 32);
+      Rehash(b);
+      return b;
+    }
+    case 17: {
+      s->mode.schedule.stepOrder = StepOrder::Shuffle;
+      s->mode.steps.countMax     = 4;
+      for (uint32_t i = 0; i < 4; ++i) {
+        StepEntry& e = s->mode.steps.entries[i];
+        e.slot       = static_cast<uint8_t>(i);
+        e.ratioIdx   = 0;
+        e.flags      = static_cast<uint8_t>(i == 3u ? 1u : 0u);
+        e.posSel     = 120.0f * static_cast<float>(i);
+        e.gain       = 1.0f;
+        e.prob       = i == 2u ? 0.5f : 1.0f;
+      }
+      s->mode.features = RequiredModeFeatures(s->mode);
+      return R1Package(*s);
     }
     default: return Bytes();
   }

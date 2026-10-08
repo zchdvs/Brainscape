@@ -664,7 +664,7 @@ FuzzResult Fuzz(uint64_t iterations, uint64_t seed) {
       0x7F800000u, 0xFF800000u, 0x7FC00000u, 0x00000001u, 0x00800000u, 0x80000000u, 0x3F800000u,
       0x3D800000u, 0x41800000u, 69u,         76u,         77u,         128u,        2000u,
       kTagStat,    kTagMode,    kTagCtrl,    kTagMeta,    kTagJson,    kChunkPset,  kChunkMacr,
-      kChunkDuck,  30u};  // 30: layer0.decay_ms, a later wave's leaf (UnsupportedTarget)
+      kChunkDuck,  32u};  // 32: layer0.level_db, a later wave's leaf (UnsupportedTarget, W3)
   const std::vector<Bytes> seeds = Seeds();
   std::vector<SeedMode>    seedModes(seeds.size());
   for (size_t i = 0; i < seeds.size(); ++i) {

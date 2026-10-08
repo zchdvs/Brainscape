@@ -341,7 +341,7 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
 TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
   using namespace brainscape;
   // Source selection (sound revision 4, §7.5 R9): any subset of the sources this build plays,
-  // the empty set included (lint L5 says it is silent until triggered).
+  // the empty set included (lint L5 says it never plays a grain, an error for --factory).
   struct Case {
     const char* json;
     uint8_t     sources;
@@ -429,6 +429,35 @@ TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
                Parse(R"([{"st": 0}, {"st": 1}, {"st": 2}, {"st": 3}, {"st": 4}, {"st": 5},
                         {"st": 6}, {"st": 7}, {"st": 8}])")),
           "E7", "/layers/0/pitch/set");
+}
+
+TEST_CASE("compile: wave 1 is E6 on a build without it, naming W1", "[compile]") {
+  using namespace brainscape;
+  // Sound revision 3's features (onset and mark positioning): what a build that lacks wave 1
+  // says of its vocabulary, the source-selection and pitch-set messages. This build plays them.
+  CompileOptions r3;
+  r3.read.supportedFeatures = kModeFeatureOnset | kModeFeatureMarkPosition;
+  struct Case {
+    const char* path;
+    const char* json;
+    const char* message;
+  };
+  const Case cases[] = {
+      {"scheduler.sources", R"(["periodic", "footswitch"])",
+       "leaving out `midi_note` needs W1 (source selection)"},
+      {"scheduler.sources", R"(["onset"])", "needs W1 (source selection)"},
+      {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", "needs W1 (pitch sets)"},
+      {"layers[0].pitch.select", R"("random")", "needs W1 (pitch sets)"},
+  };
+  for (const Case& c : cases) {
+    INFO(c.path << " = " << c.json);
+    const std::string          text  = With(c.path, Parse(c.json));
+    const std::vector<Finding> f     = Refused(text, "E6", nullptr, r3);
+    bool                       named = false;
+    for (const Finding& x : f) named = named || x.message.find(c.message) != std::string::npos;
+    REQUIRE(named);
+    Ok(text);
+  }
 }
 
 TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {

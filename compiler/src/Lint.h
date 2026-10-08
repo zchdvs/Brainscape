@@ -12,7 +12,8 @@
 namespace bsc {
 
 struct LintOptions {
-  // `lint --factory` (CI over firmware/factory/): L4 and L7-L9 are errors.
+  // `lint --factory` (CI over firmware/factory/): L4, L7-L9 and L5's empty source set are
+  // errors.
   bool factory = false;
 };
 
@@ -24,7 +25,8 @@ struct LintOptions {
 //   L4 a targeted leaf (not under editor.detached) shows another value than its macro gives at
 //      the stored position, which is what "further than its display resolution" means here:
 //      the display text (FormatPlain) differs; or a macro position is omitted (compiled 0.5);
-//   L5 no free-running source (periodic, clock) and no onset: silent until triggered;
+//   L5 no free-running source (periodic, clock) and no onset: silent until triggered; or no
+//      source at all: the mode never plays a grain;
 //   L6 mark positioning with decay_ms 0 holds the last note;
 //   L7 a macro targets a Shift-secondary leaf (post.mod.depth, post.mod.rate_hz,
 //      post.reverb.time, post.reverb.mode, post.filter.res);

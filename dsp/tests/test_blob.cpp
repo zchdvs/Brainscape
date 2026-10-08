@@ -1375,7 +1375,7 @@ TEST_CASE("Re-encoding into an existing package: pedal-side edits", "[blob][enco
 // ── Frozen fixtures and the fuzzer ────────────────────────────────────────────────────────
 
 TEST_CASE("Frozen fixtures: their bytes and verdicts", "[blob][fixtures]") {
-  REQUIRE(kFixtureCount == 15u);
+  REQUIRE(kFixtureCount == 18u);
   for (size_t i = 0; i < kFixtureCount; ++i) {
     const Fixture&    f    = kFixtures[i];
     const std::string path = std::string(BRAINSCAPE_FROZEN_FIXTURES) + "/" + f.file;

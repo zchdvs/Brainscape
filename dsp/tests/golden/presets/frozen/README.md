@@ -27,6 +27,9 @@ overwrite one.
 | `no-ctrl.bsp` | decodes | no CTRL section (`control.present` 0) |
 | `w1-leaf-macro-target.bsp` | decodes; `ValidateMode`: `UnsupportedTarget`, ID 30 (revisions 2-5); validates since revision 6, loads inexact | a macro target on `layer0.decay_ms`, a wave-1 leaf (a Reserved row until sound revision 6 made it a Leaf, mode-compiler.md §7.5 R11): newer content, named, not a corrupt package |
 | `w1-leaf-expression.bsp` | `UnsupportedTarget`, ID 30 (revisions 2-5); decodes and validates since revision 6, loads inexact | an expression assignment on the same leaf, which CTRL's rules refused at decode, named, until it became a Leaf row |
+| `w3-leaf-macro-target.bsp` | decodes; `ValidateMode`: `UnsupportedTarget`, ID 32 (since revision 7, when it was added); its verdict changes in W3 | a macro target on `layer0.level_db` (-12 to 0 dB), a wave-3 leaf and a Reserved row: the role `w1-leaf-macro-target.bsp` held until revision 6 |
+| `w3-leaf-expression.bsp` | `UnsupportedTarget`, ID 32 (since revision 7); its verdict changes in W3 | an expression assignment on the same leaf, refused at decode, named: the role `w1-leaf-expression.bsp` held until revision 6 |
+| `w2-step-table.bsp` | `UnsupportedFeature`, step tables (since revision 7); its verdict changes in W2 | a wave-2 package (four steps, shuffled), built from the revision-1 recipe: the role `future-pitch-set.bsp` held until revision 5 |
 
 The recipes in `Fixtures.cpp` spell out each revision's leaves rather than reading the build's
 table, so `--write-fixtures` and the `[fixtures]` test keep rebuilding the committed bytes.
