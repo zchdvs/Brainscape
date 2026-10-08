@@ -105,7 +105,6 @@ class DocumentPanel final : public juce::Component {
   void Note(const juce::String& text, juce::Colour colour);
   static void StyleToggle(juce::TextButton& b, juce::Colour on);
 
-  BrainscapeProcessor& processor_;
   CurationSession&     session_;
   juce::Label          name_, file_, state_, note_, render_;
   juce::TextButton     open_{"Open..."}, save_{"Save"}, saveAs_{"Save as..."}, revert_{"Revert"};

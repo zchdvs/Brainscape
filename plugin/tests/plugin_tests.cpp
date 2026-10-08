@@ -1843,7 +1843,8 @@ TEST_CASE("the effect volume is a device setting: kept across loads, re-prepares
     b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
     REQUIRE(Bits(b->EffectVolume().Plain()) == Bits(-3.0f));
     const ModeState mode = b->CurrentMode();
-    REQUIRE(std::memcmp(&mode.mode, &ModeState{}.mode, sizeof(ModeBlob)) == 0);
+    const ModeState none{};
+    REQUIRE(std::memcmp(&mode.mode, &none.mode, sizeof(ModeBlob)) == 0);
     REQUIRE(Bits(b->Macro(ParamId::MacroTime).Plain()) == Bits(0.5f));
     const Stereo got = RenderProcessor(*b, in, {}, {{480}});
     auto         leaves = std::make_unique<PresetState>();
