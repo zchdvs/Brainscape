@@ -59,6 +59,12 @@ defects, mark-positioned modes holding their note forever and onset-only modes b
 impossible (record §2.2). CLOCK, the largest feature, gets its own design pass. The owner
 may reorder (Q2).
 
+> **Update (2026-10-08, CLOCK design pass).** The pass is [clock.md](clock.md), draft v1. It
+> splits W2: its tempo core (tap, MIDI clock, host tempo and transport as events 6–10, the stored
+> performance state, CLOCK grain births and tempo-synced times, as two sound revisions) lands
+> before step tables, mark index and walk, global reverse and trigger velocity. Its owner
+> decisions carry provisional answers (its §11.5).
+
 ### 1.3 Terms
 
 | Term | Meaning |
@@ -258,6 +264,16 @@ glissando is glide, and its per-grain gain is the step's `gain` (record §3, ite
 internal|midi|host, tempo_us_per_quarter: 200000–3000000}`, default `{false, free, 1/4,
 internal, 500000}`. Tempo is integer microseconds per quarter (companion §6.2), keeping
 floating point out of the compiler. Freeze is never stored. Until W2, other values are E6.
+
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §2.4, §5.1 and §11.1 amend
+> this section and §2.3's `scheduler.subdiv` row (provisional, its D3, D7 and D14). The six
+> subdivisions are rate multipliers of the tapped quarter (1/4 is a whole-note grid), re-coded so
+> code 0 is `tap`, the default: §2.3's "default `1/4`" becomes `tap`, and no package changes,
+> every stored byte being 0. `scheduler.subdiv` is withdrawn, SCHD's byte reserved, so the
+> preset's performance state holds the one stored subdivision. `tempo_source` is withdrawn, its
+> STAT byte reserved: the source is a device setting, and a byte in STAT would split
+> `sound_hash` between presets that sound the same. The divisions of `base_sync`, modulator
+> `sync` and `post.delay.sync` are clock.md §5.2's sixteen note values.
 
 ### 2.7 Validation of a document
 
@@ -987,6 +1003,16 @@ an optional fourth argument. `kFastCutFrames` = 128 is in `Engine.h` beside
 differed by content. `LoadReport.unsupported` counts stored performance fields away from their
 defaults; `applied` is false for an invalid mode.
 
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §4.1 fixes the W2 rows'
+> payloads before their numbers become permanent: Tempo's `id` is **ns** per quarter
+> (200,000,000–3,000,000,000, unsigned; presets keep µs, ×1000 exact), so a host tempo does not
+> drift 4 ms an hour against the host; Transport's `id` is its kind (stop, start, continue,
+> locate) with an AtNextTick flag, and its `value` a position in 24-ppqn ticks, which carries
+> MIDI Song Position (×6) and the host's position, so no separate event is needed; Subdivision's
+> `id` packs a field (subdivision or time mode) and a code. Every other value is +0, and an
+> invalid payload is ignored and counted, never clamped. GlobalReverse (11) stays with the rest
+> of W2.
+
 ### 7.5 Wave 1 and shared rules
 
 **Trigger sources (R9).** Without `periodic` there are no free-running births, and the
@@ -1698,6 +1724,9 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
 
 1. **(owner)** Approve the in-house number code and not vendoring `fast_float` (§6.5).
 2. **(owner)** W1 before CLOCK (recommended) or CLOCK first, as companion §8.1 has it (§1.2).
+   Provisionally answered for W1 first (STATUS.md, sound revisions 4–7, 2026-10-07), as built;
+   reversible before the first public release. [clock.md](clock.md) §11.5 D1 (provisional,
+   2026-10-08) keeps W2 after the first set's knob ratings and starts its tempo core first.
 3. **(owner)** Clear the factory, family and knob display names (§11.2).
 4. **(owner)** `wet_trim_db` wet only with the cutoff wet kill and Shift+Mix as a separate
    effect volume device setting (recommended), or a whole-output trim (§3.8, §4.2).
@@ -1705,13 +1734,19 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
    setting only, as companion §6.2 implies.
 6. **(owner)** Reserve `perf.loop_level` now (recommended) or with the looper (companion Q29).
 7. In Tempo mode, does the Time knob still reach `macro.time`? Decided in the CLOCK pull request.
+   Answered by [clock.md](clock.md) §6.4 (provisional, its D5, 2026-10-08): no; in Subdiv and
+   Tempo time modes the knob sends Subdivision or Tempo events, and `macro.time` stays reachable
+   by expression, MIDI and hosts in every mode; in the third time mode, Free, the knob is
+   `macro.time` as today.
 8. **(owner)** After a load: pickup (recommended, engine §6) or "knobs follow" (§3.5).
 9. **(owner)** DI clips committed as integer FLAC (about 10 MB, *estimated*) or kept outside
    git with recorded hashes (§11.3).
 10. A base-delay glide, so Time sweeps on grain delays bend pitch instead of splicing? The
     listening pass decides.
 11. Tempo-exact grain feedback (W2): compensate the 10.67 ms FIFO in the base delay, or route
-    rhythmic repeats through the post delay, as Engram does?
+    rhythmic repeats through the post delay, as Engram does? Answered by [clock.md](clock.md)
+    §6.2 (provisional, its D6, 2026-10-08): through the post delay; `base_sync` places the first
+    grain tap exactly, grain feedback keeps its one-FIFO pass, and lint L12 says so.
 12. **(owner)** The host model (§3.6): (b) only macros, Mix, effect volume and performance
     rows automatable (recommended), or (a) leaves automatable with unreported fan-out; with
     companion Q17's numeric-ID policy, before §4.5's gate.

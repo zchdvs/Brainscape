@@ -894,6 +894,16 @@ On the pedal, pot (after soft takeover), footswitch and MIDI events are stamped 
 (hysteresis). Macro fan-out and expression curves run in `dsp/` on DetMath inside the guard,
 relying on `PowF`'s edge rules at 0 and 1 and asserting finite leaves.
 
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) specifies the tempo events
+> (Tap 6, Tempo 7, ClockTick 8, Transport 9, Subdivision 10) and keeps this section's rules:
+> tap averaging and MIDI-clock following run in `dsp/` in integer arithmetic on the frames where
+> events applied, and change state only at event frames, so they are block-split invariant
+> without internal deadlines (a lost clock is applied at the next event, which gives the same
+> bits). On the pedal every event is stamped two 48-frame blocks after the block it was captured
+> in, still on the block grid, and the control loop alone pushes; a log records each event's
+> applied frame, because a late stamp applies at the next block's start and the engine only ever
+> sees that frame (clock.md §4.5).
+
 ### 5.12 Sound revision constant
 
 Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/SoundRevision.h`.

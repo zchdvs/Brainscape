@@ -526,6 +526,16 @@ keeps the ring, so it neither silences old audio nor makes bounces reproducible.
 
 ### 4.10 Events are applied at exact frames
 
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §4 adds the tempo events
+> (Tap, Tempo, ClockTick, Transport, Subdivision) and amends two bullets below for the pedal.
+> Every pedal producer stamps an event two blocks after the block in which it was captured (an
+> interrupt for MIDI bytes and the tap switch, the control loop otherwise), and the control loop,
+> the queue's single producer, pushes stamps that never fall; interrupts hand their bytes and taps
+> to the loop through their own rings. A session log records the frame where each event
+> **applied**, not its stamp, since a late event applies at the next block's start. The plugin
+> turns the host's tempo and transport into those events itself (clock.md §4.4), and its
+> Standalone feeds device MIDI clock through the same translator the pedal uses (§4.3 there).
+
 `SetParam` ignores its sample offset and applies at the next `Process` (`Engine.h:90-96`), which
 made 48- and 512-frame renders differ; splitting at the event's frame made them identical
 (*measured* [preset], [challenge]). So every event the app generates (scripted UI edits, MIDI,
@@ -773,6 +783,15 @@ and the UI says so. A new leaf must default to a value that leaves existing pres
 bit-identical, so it can land as "sound-neutral" (§6.5); otherwise it bumps the revision.
 
 ### 6.2 What a preset captures, and what it deliberately excludes
+
+> **Update (2026-10-08, CLOCK design pass).** The table's "tempo source" and the exclusions'
+> "clock source" contradicted each other. [clock.md](clock.md) §2.4 and §3.6 resolve it as the
+> exclusions say, the Microcosm's way (provisional, its D3): the tempo source is a device
+> setting ("receive MIDI clock" on the pedal, the Tempo source in the plugin), and STAT's
+> `tempo_source` byte is reserved and must be 0, so presets that sound the same keep one
+> `sound_hash`. A preset stores its time mode, subdivision and tempo as an integer µs per
+> quarter; whether a Spillover load recalls that tempo is the device setting
+> `global.tempo_recall` (Keep by default), and an Exact load always plays it.
 
 | Captured | Section |
 |---|---|
