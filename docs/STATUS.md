@@ -115,29 +115,46 @@ No engine change: the set plays at sound revision 7.
 - **Checks.** Every document is canonical, stamped at revision 7, derived (each targeted leaf is
   its macro's value at the stored position) and passes `bspc lint --factory` with no finding;
   `bspc-roundtrip` now runs the factory lint over `firmware/factory/` on every leg, as design §2.7
-  says CI does. The objective pre-screen (`bspc render --script all --metrics`, the 14 as one set
-  so S10 and S11 cross it, the reserves as another) passes every check on all 18: on Plucks and
-  Strums the wet sits −2.0 to +0.1 LU from the dry and the engaged output +1.1 to +2.8 LU over
-  bypass, stored peaks −1.2 to −5.5 dBFS, every sweep and S11 render at or under 0 dBFS, every
-  tail finite, Clicks at most 1.2 times the static's step. It took seven iterations, each recorded
-  with its reason in `AUDITION.md` (`ratings.py note`, new): Shape made audible (most modes now
-  take it towards fewer, longer, swelled grains), S11's corners and the other modes' positions
-  brought under full scale (lower Repeats maxima, two- and three-voice floors, trims and stored
-  Mix), the tap modes' single rectangular grain replaced by four Hann grains a quarter-grain apart
-  so Activity and Time crossfade instead of splicing.
-- **Input classes, a finding.** Every mode is attack class except Runaway (pad, self-oscillating);
-  Shards needs attacks. The clouds and Lull began as pad modes, but on SoftNotes (−12.1 LUFS, peaks
-  −7.2 dBFS) their noise-like wet, with an 11–13 dB crest, cannot sit within 2 LU of the dry
-  (Level) without the engaged output passing −1 dBFS (Peak), and Lull's stored peak moved by up to
-  2.9 dB with one voice more or less. As attack modes they pass, and their SoftNotes peaks are
-  reported, not judged: 7 of the 14 stored renders on SoftNotes clip (up to +1.4 dBFS). Whether a
-  hot sustained input needs headroom the modes do not have is for the listening pass, with a DI
-  pad.
+  says CI does (and skips a `renders/` directory there). The objective pre-screen (the commands in
+  [firmware/factory/README.md](../firmware/factory/README.md): the 14 as one set in the design's
+  order, so S10 and S11 cross it, the reserves as another, written to `build/`) passes every check
+  on all 18: the attack modes' wet sits −2.0 to +0.1 LU from the dry on Plucks and Strums and their
+  engaged output +0.9 to +1.9 LU over bypass, the pad modes' −1.1 to 0.0 and +0.9 to +1.7 LU on
+  SoftNotes; stored peaks −1.07 to −3.92 dBFS on Plucks, Strums and SoftNotes for every mode; every
+  sweep and S11 render on the class input at or under 0 dBFS (the tightest −0.01 dBFS, Halation at
+  Pinhole's positions); every tail finite; Clicks at most 1.19 times the static's step; Activity's
+  births per second rising by 2.7 to 10 times from 0 to 1. The packages and the documents compiled
+  in memory give the same 1,488 render hashes. Each iteration is recorded with its reason in
+  `AUDITION.md` (`ratings.py note`): Shape made audible (most modes take it towards fewer, longer,
+  swelled grains; Engram, Retrograde, Updraft and two reserves with births dropping out at its
+  top), S11's corners and the other modes' positions brought under full scale (lower Repeats
+  maxima, voice floors, trims and stored Mix), the tap modes' single rectangular grain replaced by
+  Hann grains a quarter-grain apart so Activity and Time crossfade instead of splicing.
+- **Input classes and the review.** Lull and the clouds (Murmuration, Halation, Undertow,
+  Afterimage) and Runaway are pad class, the rest attack class; Shards needs attacks; nothing is
+  declared self-oscillating (Runaway's tail ends, 8.4 s). The first pass had moved the clouds and
+  Lull to attack class on the reading that Level and Peak could not both pass on SoftNotes, which
+  hid 7 of the 14 clipping on SoftNotes at their stored positions (up to +1.4 dBFS). The review
+  found the reading wrong (SoftNotes peaks 2.7 dB under Plucks; Level is measured at Mix 1, so a
+  lower stored Mix lowers the peak alone): the stored Mix now holds every mode under −1 dBFS on
+  all three inputs (Murmuration, Halation, Undertow, Déjà Vu and Kaleido at 0.3, Lull and Refrain
+  0.35, Updraft 0.4), and the tooling judges the stored Peak on all three whatever the class. It
+  also found Activity's response unjudged and dead in the echoic modes (Callback's births flat at
+  40 per second; the audition now reads `Engine::Stats()` and judges births per second at five
+  Activity positions), Undertow's Repeats moving nothing (its grain feedback decorrelated by
+  spray; it now moves the post delay's feedback, S7's tail 2.3 to 9.3 s) and Pinhole's Repeats
+  stored at its maximum. The tooling now reports a Repeats knob whose tail at 1 is under 1.5 times
+  its tail at 0 as "listen": Updraft (its climb leaves the audio band), Refrain and the reserves
+  Afterimage, Runaway, Downdraft and Recurrence. An attack mode's sweeps and S11 are judged on
+  Plucks only, and on SoftNotes several corners still pass full scale (up to +2.5 dBFS): an output
+  limiter, or judging every input there, is the owner's question.
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
-  stored positions on Plucks and SoftNotes and one macro sweep, plus a bypass reference per input,
-  48 kHz 16-bit stereo, with a manifest (what to listen for, render hashes, pre-screen numbers) and
-  a blank ratings log. The files are 7 s, not 8: 44 files of 8 s are 67.6 MB, over the set's 60 MB
-  cap (59.1 MB at 7 s).
+  stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
+  class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
+  reference per input, 48 kHz 16-bit stereo, each file fading out over its last 50 ms, with a
+  manifest (what to listen for, render hashes, every pre-screen check, which files cut a tail). The
+  owner rates in `firmware/factory/AUDITION.md` only. The files are 7 s, not 8: 44 files of 8 s are
+  67.6 MB, over the set's 60 MB cap (59.1 MB at 7 s).
 - **What remains for step 4**: the owner's listening pass and ratings (`ratings.py rate` on the
   full S0–S11 renders), the exit criteria (10 keepers, one per family, every knob 3 or more), the
   keepers joining the golden corpus, display names and Q3's name check, and DI clips (Q9).
@@ -981,15 +998,18 @@ records live in [docs/design/reviews/](design/reviews/).
   see end is measured on a 60 s probe and only a steady fall over its last 30 s extrapolates;
   Clicks score each step against the steps around it, on SoftNotes, where a step can show (on
   Plucks the dry's attacks under the Mix law make 4 times the static's largest step
-  unreachable), so an attack mode renders S1–S6 and S11 twice; Activity is reported, and fails
-  only when it moves nothing measured, since the engine reports no voices or births. The
+  unreachable), so an attack mode renders S1–S6 and S11 twice; Activity is judged on the
+  engine's births per second (`Engine::Stats()`) at five stored positions; the stored Peak is
+  judged on Plucks, Strums and SoftNotes whatever the class; a Repeats knob that barely lengthens
+  S7's tail is named for listening. Shape's response is read from 2 s windows of the engaged output
+  and moves by up to about 5 % and 0.5 dB with the grains' random draws alone, so a Shape near its
+  threshold passes or fails by draw. The
   compiler's example `engram.json` fails Clicks (its grains are hard-edged at Contour 0, window
   sustain 1 and smoothness 0, and Smear's spray and Contour's first move splice them: step
   scores 42 and 12 times the static's) and Combinations (`S11.corner-a0r1s1t1` peaks at
   +0.77 dBFS): examples, not factory modes; the factory set meets the same checks and passes
-  them (step 4). The engine now counts births, burst births, skips, repeat passes and steals
-  (`Engine::Stats()`, wave 1), but the audition does not read them yet: the Load check still logs
-  the input's onsets, not the design's births per second.
+  them (step 4). The engine reports no count of sounding voices, so Load logs births per second
+  (and steals), not voices.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs

@@ -1621,12 +1621,25 @@ the class render measurably, which window-only Shapes did not once the dry plays
 most modes take Shape towards fewer, longer, swelled grains, with skew below 1 (a grain ending
 at full level is a step). S11 at the corners and at the other modes' positions found one
 coherent voice with Repeats at its maximum over full scale, so the Repeats maxima, voice floors,
-trims and stored Mix were set against it. And the input class decides which checks a mode can
-pass: on SoftNotes a noise-like wet within 2 LU of the dry puts the engaged output over −1 dBFS,
-so the cloud modes and Lull are attack class (Runaway, self-oscillating, is the one pad mode)
-and their SoftNotes peaks, up to +1.4 dBFS, are reported for the listening pass, not judged.
-The tap modes (Engram, Callback, Pinhole) read through four Hann grains a quarter-grain apart
-instead of one rectangular grain, so their Activity and Time no longer splice.
+trims and stored Mix were set against it. The tap modes (Engram, Callback, Pinhole) read through
+Hann grains a quarter-grain apart instead of one rectangular grain, so their Activity and Time no
+longer splice.
+
+As built, after review (2026-10-07; the owner's sign-off pending on the readings marked *): the
+cloud modes, Lull and Runaway are pad class and the rest attack class. A first pass made the
+clouds and Lull attack class on the reading that Level and Peak could not both pass on SoftNotes;
+that was wrong (SoftNotes peaks 2.7 dB under Plucks, and Level is measured at Mix 1, so a lower
+stored Mix lowers the Peak alone) and hid 7 stored renders clipping on SoftNotes; the stored Mix
+now holds them under −1 dBFS. The tooling reads three checks more strictly than the table: Peak at
+the stored positions on Plucks, Strums and SoftNotes for every mode, whatever its class (*);
+Response (Activity) from the engine's births per second at Activity 0, 0.25, 0.5, 0.75 and 1,
+monotonic and changed by a quarter (`Engine::Stats()`; the echoic modes add voices or overlap with
+Activity); and a Repeats knob's tail, S7's at 1 against at 0, reported for listening under 1.5
+times (*; Updraft's octave climb leaves the band, so its tail cannot grow much). Sweeps and S11 are
+judged on the class input as above, so an attack mode at an extreme corner can still pass full
+scale on a sustained chord (up to +2.5 dBFS on SoftNotes): an output safety limiter, or judging
+every input there too, is the owner's question (*). `firmware/factory/AUDITION.md` records each
+change and its numbers.
 
 ### 11.4 What waits
 
