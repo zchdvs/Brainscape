@@ -21,11 +21,11 @@ name: sound-rev
 # introduce, one the base already has, a gap in the numbers and a revision no commit at that
 # revision minted. It checks a lower revision's golden file by its key, not by rendering it:
 # parity renders the head's, and sound-rev-render.yml renders each lower one on every parity leg
-# (parity-host's seven and the emulated M7, with every render parity makes on each) at every
-# commit at it a later revision is built on. While branch protection requires sound-rev-render,
-# a pull request may push several revisions at once; until the owner requires it, each revision
-# commit is pushed and passes parity and host as the pull request's head before the next is
-# pushed. The walk needs the whole history (fetch-depth: 0); on a shallow
+# (parity-host's seven and the emulated M7, with every render that commit's own parity.yml makes
+# on each) at every commit at it a later revision is built on. While branch protection requires
+# sound-rev-render, a pull request may push several revisions at once; until the owner requires
+# it, each revision commit is pushed and passes parity and host as the pull request's head before
+# the next is pushed. The walk needs the whole history (fetch-depth: 0); on a shallow
 # clone or a missing object the gate fails rather than pass. The rule holds on main only for
 # pull requests merged with a merge commit: a squash merge of one that carries r2 and r3 lands
 # one commit that raises the revision by two, which no check reads (docs/STATUS.md, Known gaps).

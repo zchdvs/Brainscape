@@ -944,19 +944,27 @@ Add `constexpr uint32_t brainscape::kSoundRevision` in `dsp/include/brainscape/S
 > head's; `sound-rev-render.yml` renders every lower revision on every parity leg. For each
 > revision below the head's, the gate's `--list-revisions` names every commit at that revision
 > that a commit at another revision has as a parent (the next revision's bump, or a merge into
-> a later one, so a side line merged after the next bump counts), and one job per leg of
-> parity's `parity-host` (GCC and Clang on Linux x64, GCC on Linux arm64, MSVC with SSE2 and
-> with AVX2, AppleClang on the pinned and the latest macOS) and `parity-m7` (the Cortex-M7
-> under the pinned qemu-arm) builds each one's own harness as parity builds it on that leg and
-> makes every render parity makes there against that commit's golden file: 48 and 512-frame
-> blocks and the hostile FP environment on every host leg, and on Linux GCC also the other
-> block sizes and patterns, random sizes, split event delivery and fresh engines; on the M7,
-> 48 and 512-frame blocks, {48, 1, 127, 32}, random sizes, the hostile FPSCR, the parity image's
-> stream and the forced-flush control (§6.1 asks every x86 leg and the emulated M7 to agree
-> with a golden file). One job named `sound-rev-render` requires the listing and every leg:
-> it passes at once when the pull request introduces at most one revision, and fails when a
-> listed commit cannot be built or checked on any leg or its golden file is not keyed to its
-> revision. While branch protection requires `sound-rev-render`, a pull request may push
+> a later one, so a side line merged after the next bump counts). One job per leg of the
+> head's `parity-host` (GCC and Clang on Linux x64, GCC on Linux arm64, MSVC with SSE2 and with
+> AVX2, AppleClang on the pinned and the latest macOS), rendering every listed commit, and one
+> job per listed commit on `parity-m7`'s runner (the Cortex-M7 under the pinned qemu-arm) build
+> each commit's own harness as that commit's own `parity.yml` builds it on the leg and make
+> every render that `parity.yml` makes there, against that commit's golden file: what parity
+> would have checked had the commit been the head. `tools/ci/parity_plan.py` reads `parity.yml`
+> and fails on any shape it does not know, and a commit whose `parity.yml` does not run a leg
+> gets the head's renders there. At present that is 48 and 512-frame blocks and the hostile FP
+> environment on every host leg, and on Linux GCC also the other block sizes and patterns,
+> random sizes, split event delivery and fresh engines; on the M7, 48 and 512-frame blocks,
+> {48, 1, 127, 32}, random sizes, the hostile FPSCR, the parity image's stream and the
+> forced-flush control (§6.1 asks every x86 leg and the emulated M7 to agree with a golden
+> file). The runners and the pinned M7 toolchain are the head's: every golden file must
+> reproduce on them too. One job named `sound-rev-render` waits for the listing and every
+> render job: it passes when the pull request introduces at most one revision, and fails when
+> a listed commit cannot be built or checked on any leg or its golden file is not keyed to its
+> revision. It has no `needs`, so its check is pending from the start of every run and a base
+> change or a reopen (which keep the head commit) cannot leave an older run's result standing;
+> it is the one to require, not the listing or a leg, which a pull request with at most one
+> revision skips. While branch protection requires `sound-rev-render`, a pull request may push
 > several revisions at once; until the owner requires it, each revision commit is pushed and
 > passes parity and host as the pull request's head before the next revision's commit is
 > pushed. The head alone still gets `parity-negative-control` (a contracting build must miss

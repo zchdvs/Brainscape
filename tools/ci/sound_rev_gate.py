@@ -45,11 +45,11 @@ request's own commits and the merge commit, not those already in the base), and 
     base. The head going below the base fails too. A golden file below the head's revision is
     checked here by its key and the commit that wrote it, not rendered: parity.yml renders the
     head's, and sound-rev-render.yml renders each lower revision on every parity leg (parity-host's
-    seven and the emulated Cortex-M7, with every render parity makes on each) at every commit at
-    it that a later revision is built on (--list-revisions names them). While branch protection
-    requires sound-rev-render, a pull request may push several revisions at once; until the owner
-    requires it, each revision commit is pushed and passes parity and host as the pull request's
-    head before the next revision's commit is pushed;
+    seven and the emulated Cortex-M7, with every render that commit's own parity.yml makes on
+    each) at every commit at it that a later revision is built on (--list-revisions names them).
+    While branch protection requires sound-rev-render, a pull request may push several revisions
+    at once; until the owner requires it, each revision commit is pushed and passes parity and
+    host as the pull request's head before the next revision's commit is pushed;
   * the head's golden file is keyed to another revision than the head's kSoundRevision:
     a bump regenerates it with the harness's --mode mint.
 

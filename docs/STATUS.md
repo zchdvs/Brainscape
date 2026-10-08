@@ -468,15 +468,20 @@ the head's revision by its key and the commit that wrote it, not by rendering it
 the head's); `sound-rev-render.yml` renders every lower revision on every parity leg: the gate's
 `--list-revisions` names, for each revision below the head's, every commit at that revision that
 a commit at another revision has as a parent (the next revision's bump, or a merge into a later
-one, so a side line merged after the next bump is rendered too), and one job per leg of
+one, so a side line merged after the next bump is rendered too). One job per leg of the head's
 `parity-host` (Linux x64 GCC and Clang, Linux arm64 GCC, MSVC SSE2 and AVX2, AppleClang pinned
-and latest) and `parity-m7` builds each one's own harness in a worktree as parity builds it on
-that leg and makes every render parity makes there against that commit's golden file (on every
-host leg 48 and 512-frame blocks and the hostile FP environment; on Linux GCC also the other
-block sizes, random sizes, split delivery and fresh engines; on the M7 its block sizes, the
-hostile FPSCR, the parity stream and the forced-flush control). The job `sound-rev-render`
-requires the listing and every leg: with at most one revision it passes after the listing, and
-a listed commit that cannot be built or checked on any leg, or whose golden file is not keyed to
+and latest) renders every listed commit and one job per listed commit renders it on
+`parity-m7`'s runner: each builds the commit's own harness in a worktree as that commit's own
+`parity.yml` builds it on the leg and makes every render that `parity.yml` makes there against
+the commit's golden file, what parity would have checked with the commit as the head
+(`tools/ci/parity_plan.py` reads `parity.yml` and fails on any shape it does not know; a commit
+whose `parity.yml` does not run a leg gets the head's renders there; today on every host leg 48
+and 512-frame blocks and the hostile FP environment, on Linux GCC also the other block sizes,
+random sizes, split delivery and fresh engines, on the M7 its block sizes, the hostile FPSCR, the
+parity stream and the forced-flush control). The job `sound-rev-render`, which has no `needs` so
+that its check is pending from the start of every run, lists the revisions itself and waits for
+the listing and every render job: with at most one revision it passes after the listing, and a
+listed commit that cannot be built or checked on any leg, or whose golden file is not keyed to
 its revision, fails it. While branch protection requires `sound-rev-render`, a pull request may
 push several revisions at once; until the owner requires it, each revision commit is pushed and
 passes parity and host as the pull request's head before the next is pushed (Known gaps). The
@@ -762,8 +767,8 @@ manifests identical, `blob-libfuzzer` fuzzes the decoder for 90 s, and the compi
 its source ban in `parity-audits` and its import check on the GCC and Clang legs),
 `sound-rev.yml` (the sound-revision gate with the package rule), `sound-rev-render.yml` (each
 revision a pull request carries below its head's, rendered on every parity leg, parity-host's
-seven and the emulated M7, at every commit at it a later revision is built on; not yet run on
-GitHub), `nightly.yml` (the number code's exhaustive round trip on x86-64 and arm64, and 30
+seven and the emulated M7, at every commit at it a later revision is built on, with the renders
+that commit's own parity.yml makes; not yet run on GitHub in this form), `nightly.yml` (the number code's exhaustive round trip on x86-64 and arm64, and 30
 minutes of libFuzzer from a kept corpus) and `plugin.yml` (every format on three OSes, Release
 and Debug). Everything but lane G's additions first ran on GitHub on 2026-10-06 (Known gaps).
 
@@ -825,26 +830,41 @@ records live in [docs/design/reviews/](design/reviews/).
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
   steps of jobs already required, and `nightly.yml`'s jobs are not pull-request checks.
-  `sound-rev-render` (`sound-rev-render.yml`: the job of that name requires its listing job and
-  its eight render legs, `sound-rev-render (<leg>)`, so requiring it requires them all) is not
-  required either: it renders each sound revision a pull request carries below its head's on
-  every parity leg, `parity-host`'s seven and the emulated M7, each with every render parity
-  makes on it, at every commit at it a later revision is built on. It has run only locally:
-  step 4's r4, r5 and r6 passed every run on MSVC SSE2 and AVX2 (Windows, 69 and 70 s), GCC 11
-  (54 runs, 193 s), Clang 14 (53 s) and the emulated M7 (21 runs, 1031 s), the last three in
-  Docker on 4 CPUs; an r4 whose golden file had one hash altered failed its three MSVC runs and
-  an r5 that did not compile failed its MSVC build; and the gate's self-test keeps the listing of
-  the two states the review of its first version found unrendered (an unminted engine change at
-  r4 under the r5 bump, beside a side line at r4 merged after that bump; and an r4 whose last
-  commit took its golden file back to the base's), which failed that version's GCC and M7 runs.
-  `test_render_revisions.py` (57 cases, in the listing job) requires its legs, runners and renders
-  to be parity.yml's and every fail-closed path to fail. Linux arm64 and the two macOS legs cannot
-  run here: the pull request's CI is their first run. While the owner requires it, a pull
-  request may push several revisions at once; until then, a pull request that carries several
-  revisions pushes each revision commit and lets parity and host pass it as the head before
-  pushing the next. The head alone still gets `parity-negative-control`, `host.yml`'s tests and
-  the checks that read no golden file. It also runs on description edits, since its listing
-  depends on the base and a base change fires only that event. Only
+  `sound-rev-render` (`sound-rev-render.yml`) is not required either. Require only the job of
+  that name, never `sound-rev-render (list)` or a `sound-rev-render (<leg>)` job: a pull request
+  with at most one revision skips the render jobs as one job whose name is not expanded, so a
+  required one would never report, and the job `sound-rev-render` already requires the listing
+  and every render job. That job has no `needs`, so its check is pending from the start of every
+  run (a base change or a reopen keeps the head commit, and behind `needs` the older run's result
+  would stand until the renders finish); it lists the revisions itself and reads the run's jobs
+  from the GitHub API until they finish. It renders each sound revision a pull request carries
+  below its head's on every parity leg, one job per `parity-host` leg and one emulated-M7 job per
+  listed commit, at every commit at it a later revision is built on, each with the renders that
+  commit's own `parity.yml` makes on the leg (`tools/ci/parity_plan.py` reads it, so a render or
+  harness option the head adds later does not reach an older revision; a commit whose
+  `parity.yml` does not run a leg gets the head's renders there); the runners and the pinned M7
+  toolchain are the head's. In this form it has run only locally: step 4's r4, r5 and r6 passed
+  every run on MSVC SSE2 and AVX2 (Windows, 71 and 70 s), GCC 11 (54 runs, 191 s), Clang 14
+  (54 s) and the emulated M7 (7 runs per commit, one process per commit as its jobs run: 329,
+  337 and 375 s for r4, r5 and r6, each archive the one recorded above), the last three in
+  Docker on 4 CPUs; a run with an r4 whose golden file had one hash altered and an r5 that did
+  not compile failed the r4's three MSVC runs and the r5's build and passed r6; and the gate's
+  self-test keeps the listing of the two states the review of its first version found
+  unrendered (an unminted engine change at r4 under the r5 bump, beside a side line at r4 merged
+  after that bump; and an r4 whose last commit took its golden file back to the base's), which
+  failed that version's GCC and M7 runs. `test_render_revisions.py` (130
+  cases, in the listing job) checks the YAML reader against PyYAML and the reading of
+  `parity.yml` against a recorded plan, that the reader refuses 21 kinds of `parity.yml` change
+  it cannot follow, that the workflow repeats parity's setup steps, the required job's verdicts
+  over the run's jobs (re-runs included), a commit subject a Windows console cannot print, and
+  every fail-closed path. The required job's reads of the GitHub API were tried on an earlier
+  parity run of this repository, but the job itself first runs on GitHub, as do Linux arm64 and
+  the two macOS legs, which cannot run here. While the owner requires it, a pull request may
+  push several revisions at once; until then, a pull request that carries several revisions
+  pushes each revision commit and lets parity and host pass it as the head before pushing the
+  next. The head alone still gets `parity-negative-control`, `host.yml`'s tests and the checks
+  that read no golden file. It also runs on description edits, since its listing depends on the
+  base and a base change fires only that event. Only
   collaborators can apply the "sound-neutral" label, so today only the owner can waive the path
   trigger; the same holds for the "package-change" label, which the owner creates in the
   repository before the first package lands. Caveats: every gate runs the pull request's own
