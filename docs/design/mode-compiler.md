@@ -1614,6 +1614,20 @@ corpus. Echoic modes' Time ratings stay provisional until W2. Static recipes can
 to tune character, but no rating counts before macros exist, because the knobs are the
 product (engine §1).
 
+As built (step 4's first set, 2026-10-07, sound revision 7): the 14 modes of §11.1 and four
+reserves are in `firmware/factory/` and pass every pre-screen check; `AUDITION.md` records each
+iteration's reason (`ratings.py note`). Three readings changed the recipes. Shape had to move
+the class render measurably, which window-only Shapes did not once the dry plays at unity, so
+most modes take Shape towards fewer, longer, swelled grains, with skew below 1 (a grain ending
+at full level is a step). S11 at the corners and at the other modes' positions found one
+coherent voice with Repeats at its maximum over full scale, so the Repeats maxima, voice floors,
+trims and stored Mix were set against it. And the input class decides which checks a mode can
+pass: on SoftNotes a noise-like wet within 2 LU of the dry puts the engaged output over −1 dBFS,
+so the cloud modes and Lull are attack class (Runaway, self-oscillating, is the one pad mode)
+and their SoftNotes peaks, up to +1.4 dBFS, are reported for the listening pass, not judged.
+The tap modes (Engram, Callback, Pinhole) read through four Hann grains a quarter-grain apart
+instead of one rectangular grain, so their Activity and Time no longer splice.
+
 ### 11.4 What waits
 
 | Microcosm family | Waits for |
