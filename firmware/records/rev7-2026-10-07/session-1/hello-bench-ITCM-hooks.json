@@ -1,0 +1,138 @@
+{
+ "type": "hello",
+ "image": "bench",
+ "format": "brainscape-hil/1",
+ "soundRevision": 1,
+ "build": {
+  "commit": "a91aa8ad64c7",
+  "dirty": false,
+  "appType": "BOOT_QSPI",
+  "libDaisy": "v9.0.0 08087203debc646d3710ec8caa35bac6cf20ab5e",
+  "toolchain": "arm-none-eabi-gcc 10.3.1 20210824 (release)",
+  "engineArchiveSha256": "4f4ddaa3583e46f29b84a008f5a80ad0938cacf05f2e961f70b1595ebf69da58",
+  "hooksArchiveSha256": "da7b4f2e9b44aef70f52ab404b95f9d1015a9bd0996c462ed26c521cd1875a4f",
+  "engineToolchain": {
+   "compiler": "gcc",
+   "version": "10.3.1 20210824 (release)",
+   "target": "armv7e-m-none",
+   "fpFlags": "-fno-fast-math -ffp-contract=off -fno-math-errno -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -ffp-contract=off -fno-math-errno",
+   "fpFlagsHash": "b5dd86f24f5deffa"
+  }
+ },
+ "board": {
+  "version": "Daisy Seed 1.2 / rev7 (PCM3060; PD5 strap)",
+  "rev7": true,
+  "sysclkHz": 480000000,
+  "hclkHz": 240000000,
+  "bootRegion": "QSPI flash",
+  "bootloader": "Daisy bootloader >= v6.1",
+  "audio": {
+   "sampleRate": 48000,
+   "saiRate48k": true,
+   "blockSize": 48,
+   "bitDepth": 24,
+   "codec": "PCM3060 (hardware mode, reset on PB11)"
+  },
+  "cpuid": "0x411FC271",
+  "idcode": "0x20036450"
+ },
+ "fp": {
+  "fpscr": "0x00000010",
+  "fpdscr": "0x00000000",
+  "fpccr": "0xC0000078"
+ },
+ "cpu": {
+  "ccr": "0x00070200",
+  "icache": true,
+  "dcache": true,
+  "mpuCtrl": "0x00000005",
+  "mpu": [
+   {
+    "region": 0,
+    "rbar": "0x30000000",
+    "rasr": "0x030C001D"
+   },
+   {
+    "region": 1,
+    "rbar": "0xC0000001",
+    "rasr": "0x03030033"
+   },
+   {
+    "region": 2,
+    "rbar": "0x38800002",
+    "rasr": "0x030C0017"
+   }
+  ],
+  "qspi": {
+   "cr": "0x01400001",
+   "dcr": "0x00160100",
+   "ccr": "0x1F18EDEB"
+  },
+  "memFunctions": {
+   "source": "firmware/platform/MemFunctions.c (word-wise)",
+   "memset": "0x0000AAE1",
+   "in": "ITCM"
+  }
+ },
+ "lastFault": null,
+ "uptimeMs": 132761,
+ "memory": {
+  "image": {
+   "start": "0x90040000",
+   "bytes": 221068
+  },
+  "text": {
+   "start": "0x9004AF20",
+   "bytes": 174608
+  },
+  "data": {
+   "start": "0x2402A400",
+   "bytes": 1572
+  },
+  "bss": {
+   "start": "0x2402AA28",
+   "bytes": 37800
+  },
+  "dtcmArenas": {
+   "start": "0x20000000",
+   "bytes": 33792
+  },
+  "axiArenas": {
+   "start": "0x24000000",
+   "bytes": 173056
+  },
+  "d2Dma": {
+   "start": "0x30000000",
+   "bytes": 16384
+  },
+  "sdramArenas": {
+   "start": "0xC0000000",
+   "bytes": 18941792
+  },
+  "heap": {
+   "start": "0xC1210760",
+   "bytes": 48167072,
+   "used": 143412
+  },
+  "stackTop": "0x20020000",
+  "hot": {
+   "start": "0x20002400",
+   "bytes": 24576
+  },
+  "engine": {
+   "start": "0x20000800",
+   "bytes": 7168
+  },
+  "warm": {
+   "start": "0x24008400",
+   "bytes": 139264
+  },
+  "bulk": {
+   "start": "0xC0110760",
+   "bytes": 17825792
+  }
+ },
+ "target": "brainscape_bench_hooks",
+ "engineCode": "ITCM",
+ "hooks": true
+}

@@ -373,6 +373,12 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 
 ### 3.8 Conforming builds and supported targets
 
+> **Update (2026-10-07, Rev7 silicon record).** The Cortex-M7 conforms on silicon too: on the
+> owner's Daisy Seed Rev7 the parity image rendered the golden corpus bit for bit at sound
+> revision 1 (28 presets) and revision 3 (33 presets, its 18 packages matching `MANIFEST`), each
+> at `maxBlockSize` 512 and 48 and with FZ, DN and round toward zero in the caller's FPSCR
+> ([the silicon record](reviews/rev7-silicon-record.md) §2).
+
 x86-64 (SSE2 or AVX2; MSVC, GCC, Clang) conforms (**measured** [prototype]), as does the
 Cortex-M7 under QEMU (**measured**; silicon pending, §6.6). AArch64 (AppleClang, GCC) is
 expected to; the first CI run settles it. Native Windows ARM64 is not a v1 target (companion
@@ -502,6 +508,18 @@ the dependency.
 
 ### 4.2 The denormal decision: gradual underflow everywhere
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** Both measurements are taken
+> ([the silicon record](reviews/rev7-silicon-record.md) §3.7). (a) At FZ = 0 a subnormal costs the
+> M7 nothing: dependent `vmul` and `vadd`/`vsub` chains with subnormal operands and results run at
+> 3.00–3.01 cycles per instruction, as normal ones do (`vdiv` 18.00 and `vsqrt` 14.00 either way).
+> (b) The rule passes on both silent tails: the worst silent-tail block at FZ = 0 is 1.002× that
+> at FZ = 1 on the golden tail and 0.999× on 2 s of noise then 120 s of silence through the
+> pessimistic configuration at feedback 0.95 (rule: at most 1.2×); 0 of 120,000 blocks raise IDC
+> or UFC at FZ = 1 (rule: at most 0.5 %); both golden-tail renders equal the golden hash, and the
+> noise tail's FZ = 1 render equals its FZ = 0 render. **Keep gradual underflow**, as decided; no
+> wider flush is needed. Measured on revision 1's engine; the bench has not run at a later
+> revision.
+
 **Decision:** IEEE gradual underflow on every target (FTZ, DAZ and FZ off), plus a
 deterministic in-code flush of recursive state (§4.3). Renders with flushing forced on must
 still equal the golden hash (§6.4). The evidence disagreed (record §4.2). Why (**measured**
@@ -542,6 +560,14 @@ flags are set.
   on coverage and needs this decision reopened.
 
 ### 4.3 Deterministic flush of recursive state
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** The engine flushes with a bit test
+> (`detail/FlushTiny.h`: `|x| < 1e-20f` decided on the bit pattern, the same answer as the two
+> compares below for every input). On the M7 it costs 2.02 cycles per site over eight independent
+> one-poles and 4.03 on one recursive one-pole, so 91–181 cycles per sample (0.9–1.8 %) at 45
+> sites, against the 150–250 estimated below; the two compares cost 7.99–10.15 cycles per site,
+> 359–457 per sample (3.6–4.6 %). The bit test is the cheaper form on the M7 too (§8.3 Q5;
+> [the silicon record](reviews/rev7-silicon-record.md) §3.8).
 
 Under gradual underflow a decaying one-pole locks onto a permanent subnormal: the tamer's DC
 blocker sits at `0x000001DD` from sample 92,623, and at a different normal value under FTZ
@@ -732,6 +758,14 @@ stay well above that.
 of §2.1, for every preset (D2 needs no freeze), so both sides read the same ring contents.
 
 ### 5.8 Exact restart API
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** `Restart` after 2 s of rendering takes
+> 22,645,866 cycles, 47.18 ms (an Exact load 47.17 ms, `ClearHistory` 47.13 ms); clearing 16 MiB
+> of SDRAM alone takes 44.97 ms, with the firmware's `memset` and with an 8-register `STM` loop,
+> the core's floor without DMA. The measurement sits at the estimate's low end: an Exact load
+> mutes the wet path for 47 audio blocks of 1 ms. On an engine that has rendered nothing since,
+> `Restart` takes 9,279 cycles, less than `Reset`'s 20,487. The watermark is not built, so Q9
+> stays open ([the silicon record](reviews/rev7-silicon-record.md) §3.6).
 
 Add `void Engine::Restart() noexcept`, not real-time safe (like `Init`, with `Process`
 stopped). It returns a running engine to the post-`Init` state but **keeps parameter values**:
@@ -1073,6 +1107,14 @@ semihosting. The image is built but not yet run.
 
 ### 6.6 Hardware-in-the-loop
 
+> **Update (2026-10-07, Rev7 silicon record).** The first sessions ran on the owner's Rev7 over
+> USB serial, not yet on a HIL runner. The parity image matched the golden corpus at revisions 1
+> and 3 in three configurations each, rendering at 2.66× realtime at revision 1 and 2.57× at
+> revision 3 (estimated below at 1.3–3.1×), and the DWT bench ran at revision 1. The renders run
+> in the main loop, so the interrupt `FPDSCR` (§6.5) is still untested on silicon, as are the
+> SDRAM march test, the hot soak and the errata review
+> ([the silicon record](reviews/rev7-silicon-record.md) §2).
+
 This starts after bring-up. The **firmware render mode** ships in the production image; in
 v1 it mutes live audio and reuses the live engine with the full 2²² ring (companion §9.2 item
 6), since a scratch engine costs about 4.7 MiB of SDRAM plus a second DTCM and AXI SRAM arena,
@@ -1120,6 +1162,12 @@ bring-up (§8.3 Q6); GCC 13.2 becomes the drift leg; pin QEMU likewise; require 
 
 ### 7.1 Costs and effort
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** Code placement is measured: with the
+> engine's code (and `mem*`) executing in place from QSPI instead of ITCM, the mean block costs
+> 1.045–1.210× as much with warm caches and 1.259–1.697× with cold ones, and the nominal row's
+> worst warm block reaches 112.5 % of the budget (99.1 % from ITCM). The requirement below stands,
+> and the images meet it ([the silicon record](reviews/rev7-silicon-record.md) §3.4).
+
 On x86, DetMath costs nothing measurable and contraction-off 11–13 % against a contracted
 AVX2 build, still about 80× realtime (**measured** [prototype]). On the M7, contraction-off
 adds 3–17 % to inner-loop instruction counts (**measured**) and an **estimated** 1 % CPU at 16
@@ -1146,6 +1194,16 @@ mode compiler, factory curation, the GUI.
 
 ### 7.2 Effect on the grain-engine CPU budget
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** Measured, and **the budget is not met**.
+> With the engine's code in ITCM and warm caches, the nominal row costs 7,774 cycles/sample on
+> average (77.7 %) and 9,915 in its worst block (99.1 %; 10,028, 100.3 %, with cold caches); the
+> pessimistic configuration costs 9,062 on average and 13,554 at worst with 20 ms grains (90.6 %,
+> 135.5 %) and 11,958 and 16,847 with 1 ms grains (119.6 %, 168.5 %), against the 32–41 % and
+> 77–78 % estimated below; the corpus's `dense_1ms` peaks at 118.6 %. Of the costs this section
+> adds, the flush is 0.9–1.8 % (§4.3) and subnormals cost nothing extra (§4.2); contraction off is
+> inside every figure and not isolated. A fix is under design, with owner decisions pending
+> ([the silicon record](reviews/rev7-silicon-record.md) §3.2–§3.5).
+
 The CPU budget of `grain-engine.md` §8 is derived and assumes contracted FMAs. With this profile
 (**estimated**): nominal 2,950–3,700 → about 3,200–4,050 cycles/sample (+≈100 contraction,
 +150–250 flush, +≈20 DetMath), 32–41 % of the 10,000-cycle budget (480 MHz / 48 kHz);
@@ -1153,6 +1211,15 @@ pessimistic 6,800 → about 7,700–7,800 (+≈430, +150–250, +≈300), 77–7
 DWT gates every number.
 
 ### 7.3 The explicit-FMA option
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** The rule's condition is met: contraction
+> off threatens the budget at 64 voices, the worst warm pessimistic block at 168.5 % (p99.9 160.9
+> %), 169.0 % with cold caches. Explicit FMA is therefore a candidate, to build and measure before
+> adopting; no build with contraction on or with explicit FMA exists yet, so the bench measures
+> contraction off only, inside every figure. On §7.2's estimate of about +430 cycles/sample for
+> contraction off at the pessimistic row, FMA alone cannot bring those blocks under the deadline;
+> it is weighed with the CPU budget's fix, which is under design
+> ([the silicon record](reviews/rev7-silicon-record.md) §3.9).
 
 `detmath::Fma(a, b, c)` at chosen hot sites (`__builtin_fmaf`, `std::fma`), with contraction
 off elsewhere, is bit-exact everywhere because IEEE-754 defines fused multiply-add exactly:
@@ -1233,6 +1300,16 @@ Each risk is stated with its mitigation.
 
 ### 8.3 Open questions
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** From
+> [the silicon record](reviews/rev7-silicon-record.md) §4. Q1 is settled: no subnormal penalty at
+> FZ = 0, and §4.2's rule passes (keep gradual underflow). Q5 is answered for the forms measured:
+> the engine's bit test, 0.9–1.8 % of the budget, is cheaper than the two compares. Q9's `Restart`
+> half is measured (47.18 ms); the watermark and the default load mode remain. Q2 remains: there
+> is no contraction-on or explicit-FMA build, and the births suite bounds a birth at 6,203 cycles
+> at most (48 voices at 1 ms grains, ring locality included), which does not decide kernels
+> against tables. In §8.2, risk 1 is retired, risk 10's mute is 47.2 ms, and risk 2 came true: the
+> measured cost exceeds the budget (§7.2).
+
 | # | Question | Settled by |
 |---|---|---|
 | 1 | What does a subnormal operation cost on the M7? (Gates §4.2.) | DWT tests (a) and (b) of §4.2 |
@@ -1249,6 +1326,16 @@ Each risk is stated with its mitigation.
 | 12 | Embed historical engine revisions in the app? Recommended: no; prompt a firmware update. | Product decision |
 
 ### 8.4 Implementation plan
+
+> **Update (2026-10-07, Rev7 silicon record).** Part of step 13's hardware-gated work is done on
+> the owner's Daisy Seed Rev7 ([the silicon record](reviews/rev7-silicon-record.md) §4):
+> `FPDSCR` is 0 at boot in every image's hello; the DWT pass measured subnormals, the flush, a
+> bound on the cost of a birth at the maximum birth rate, the `Restart` clear and ITCM
+> placement, with contraction off inside every figure; and §4.2 is decided (keep gradual
+> underflow). Still open in step 13: render mode, the HIL runner, the engine SPSC queue, builds
+> with contraction on and with explicit FMA (§7.3), kernels against tables, the watermark and the
+> default load mode, and the CPU budget's fix, which is under design with owner decisions
+> pending.
 
 The merged milestone sequence is companion §8.1; the profile's steps fall into it as below.
 Every sound-changing change lands before revision 1 is **published** (§1.5).

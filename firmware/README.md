@@ -36,10 +36,22 @@ changes only how Mix blends: the dry stays at unity up to the knob's middle and 
 unity from it, instead of a linear crossfade, so `set mix 0` is still the clean pass-through and
 `set mix 1` the wet alone. The corpus is version 8, `golden.json` re-minted for it, and its
 packages are re-stamped (their sound and control hashes unchanged). At revision 3 the five images
-build and their engine archives equal the M7 oracle's, built on Windows and on Linux alike; the
+build and their engine archives equal the M7 oracle's, built on Windows and on Linux alike. The
 emulated checks of §9 (the golden check and the parity stream under `qemu-arm`) were cut off
-part-way when Docker stopped, every hash that arrived matching the file, and are still to run in
-full.
+part-way locally when Docker stopped, every hash that arrived matching the file. CI's `parity-m7`
+job then passed the golden check at blocks of 48 and 512, {48, 1, 127, 32}, random pattern 1,
+from a hostile caller and under the forced-flush control, and the parity stream at
+`maxBlockSize` 48 in the image's placement, on pull requests #6 and #7 and on `main` at
+`4090270`, with the same archive `1d6fe1dc…`. The Rev7 ran the stream at 512 and from a hostile
+caller on the chip (§6); 1-frame blocks have not run in full on the M7 at revision 3.
+
+**On the board** (2026-10-07). Two sessions on the owner's Rev7: at revision 1 the parity image
+and the three bench images, at revision 3 the parity image. Every parity run passed, and the
+bench found the worst-case CPU budget not met (§4, "Session 1"). The captures, with the commands
+that re-check them, are in [`records/rev7-2026-10-07/`](records/rev7-2026-10-07/README.md), and
+what they settle in
+[docs/design/reviews/rev7-silicon-record.md](../docs/design/reviews/rev7-silicon-record.md).
+The live image has not run yet.
 
 ## 1. What to flash, in order
 
@@ -112,9 +124,11 @@ without the web page.
    flash"** and bootloader **"Daisy bootloader >= v6.1"** (an image written elsewhere does not
    start at all).
 
-Flash order for the bench session: `brainscape_parity.bin` → run the parity check →
+Flash order for a bench session: `brainscape_parity.bin` → run the parity check →
 `brainscape_bench.bin` → `brainscape_bench_xip.bin` → `brainscape_bench_hooks.bin` (each with
-`bench_report.py`) → `brainscape_live.bin`.
+`bench_report.py`) → `brainscape_live.bin`. Session 1 (2026-10-07, revision 1) ran the first
+four; session 2 (revision 3) the parity image alone. Commit each session's logs under
+[`records/`](records/rev7-2026-10-07/README.md), as captured.
 
 **Troubleshooting.** Windows: if Connect lists nothing in DFU mode, the STM32 DFU device has no
 WinUSB driver bound; Electrosmith's documentation covers binding one (Zadig). Linux: WebUSB needs
@@ -168,9 +182,10 @@ the pedal's memory placement (Hot arena and Engine object in DTCM, Warm in AXI S
 restarted with `LoadPreset(…, Exact)` for every render, 48-frame blocks, the integer test signal as
 input, events through the engine's `EventQueue`, the packages decoded from the image's own copies —
 the golden harness's own code
-([`dsp/tests/golden/ParityStream.h`](../dsp/tests/golden/ParityStream.h)), not a copy. It takes
-roughly 4–9 minutes (the profile estimates 1.3–3.1× realtime); the stream carries DWT cycles per
-preset, so the tool prints the measured realtime factor too. It ends with
+([`dsp/tests/golden/ParityStream.h`](../dsp/tests/golden/ParityStream.h)), not a copy. On the Rev7 at
+revision 3 it rendered the 709 s of audio in 276 s, 2.57× realtime (the profile estimated
+1.3–3.1×); the stream carries DWT cycles per preset, so the tool prints the measured realtime
+factor too. It ends with
 
 ```text
 VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match MANIFEST (sound revision 3, whole corpus)
@@ -271,6 +286,32 @@ budget. It prints the worst pessimistic block (warm and cold, `pess_events` incl
 480,000-cycle deadline and a verdict; a polyphony above 64 voices would need its own row. Kernels
 against tables, and the watermark half of Q9, stay open.
 
+**Session 1** (2026-10-07, sound revision 1, images from `a91aa8ad64c7`). The three builds each
+ran `run` complete (no run INCOMPLETE, 0 bytes dropped); the logs are in
+[`records/rev7-2026-10-07/session-1/`](records/rev7-2026-10-07/README.md), and
+[the silicon record](../docs/design/reviews/rev7-silicon-record.md) §3 has the tables. With the
+engine's code in ITCM:
+
+- **The worst-case budget is not met.** Worst warm block: `nominal` 99.1 % (100.3 % cold),
+  `pess_render` 135.5 %, `pess_births` 168.5 %, `pess_events` 146.3 %, `dense_1ms` 118.6 %;
+  the others peak at 41.4 % (`default`), 54.4 % (`tail_post_fb`), 84.6 %
+  (`pitch_reverse_spray`) and 48.3 % (`max_delay_spray_rev_up24`). These are the engine's
+  cycles alone, with interrupts off around each call. A fix is under design, with owner
+  decisions pending.
+- **§7.3's rule:** contraction off threatens the budget, so explicit FMA is a candidate, to build
+  and measure before adopting.
+- **§4.2's rule:** a subnormal operand or result costs nothing at FZ = 0 (1.00× the normal
+  latency), and both tails pass (silent-tail worst block FZ = 0 / FZ = 1 1.002 and 0.999, 0 of
+  120,000 blocks flagged at FZ = 1, the renders equal): keep gradual underflow.
+- **The flush:** the engine's bit test costs 2.02–4.03 cycles per site, 0.9–1.8 % of the budget at
+  45 sites; the two compares would cost 3.6–4.6 %.
+- **`Restart`** after rendering 47.18 ms (an Exact load 47.17 ms), of which the 16 MiB clear at
+  the `STM` floor is 44.97 ms; `Init` 50.14 ms.
+- **XIP against ITCM:** the mean grows 1.045–1.210× warm and 1.259–1.697× cold, and the nominal
+  row reaches 112.5 %: the engine stays in ITCM.
+
+The bench has not run at revision 2 or 3.
+
 ## 5. Image C: live audio
 
 ### Wiring a bare Rev7 at line level
@@ -329,31 +370,44 @@ and `marks` build their load. The presets and structures are checked on every ho
 
 ## 6. Hardware checklist
 
-- [ ] `info` (any image): `"rev7": true`, board "Daisy Seed 1.2 / rev7 (PCM3060; PD5 strap)",
+Ticked items passed on the owner's Rev7 on 2026-10-07 (session 1 at sound revision 1, session 2
+at revision 3; [`records/rev7-2026-10-07/`](records/rev7-2026-10-07/README.md)). A new image or
+revision runs them again.
+
+- [x] `info` (any image): `"rev7": true`, board "Daisy Seed 1.2 / rev7 (PCM3060; PD5 strap)",
       `sysclkHz` 480000000, boot region "QSPI flash", bootloader "Daisy bootloader >= v6.1",
       `"lastFault": null`, `cpu.icache` and `cpu.dcache` true, `cpu.memFunctions.in` "ITCM" (all
-      but `bench_xip`).
-- [ ] `fp`: FPSCR `0x00000000` and **FPDSCR `0x00000000`** (written before any constructor runs,
-      so every interrupt handler's FP context starts from the profile word).
-- [ ] `audio`: sample rate 48000, block 48, bit depth 24, codec "PCM3060 (hardware mode…)".
-- [ ] `build.engineArchiveSha256` equals the `parity-m7` CI job's archive hash for the same commit,
+      but `bench_xip`). Every hello of both sessions.
+- [x] `fp`: FPSCR `0x00000000` and **FPDSCR `0x00000000`** (written before any constructor runs,
+      so every interrupt handler's FP context starts from the profile word). FPDSCR in every
+      hello; FPSCR `0x00000000` in each session's first parity hello, and in the others only the
+      cumulative IXC flag (`0x00000010`) and, after a run, the C flag (`0x20000010`).
+- [x] `audio`: sample rate 48000, block 48, bit depth 24, codec "PCM3060 (hardware mode…)".
+- [x] `build.engineArchiveSha256` equals the `parity-m7` CI job's archive hash for the same commit,
       and `build.dirty` is false (`--expect-archive build/fw/firmware/engine-archives.sha256`
-      checks the hash).
-- [ ] Parity: `run`, `run pedal`, `run hostile` all `VERDICT: PASS` (never `FAIL (TRANSPORT)`); the
-      final `idle` line shows `"droppedBytes":0`.
-- [ ] Bench: `run` on all three bench builds, none INCOMPLETE; keep the logs (`--save`) for the
+      checks the hash). Revision 1 `4f4ddaa3…` (CI run 37564718440, on a documentation commit
+      on top of the images' `a91aa8ad64c7`), revision 3 `1d6fe1dc…` (CI run 37700307648, on the
+      images' `4090270`), both from clean trees.
+- [x] Parity: `run`, `run pedal`, `run hostile` all `VERDICT: PASS` (never `FAIL (TRANSPORT)`); the
+      final `idle` line shows `"droppedBytes":0`. Both sessions: 28 of 28 presets at revision 1,
+      33 of 33 and 18 packages at revision 3.
+- [x] Bench: `run` on all three bench builds, none INCOMPLETE; keep the logs (`--save`) for the
       decisions of profile §8.3 (Q1 subnormals and the §4.2 rule, Q5 flush form, the `Restart`
-      half of Q9, §7.3's explicit-FMA rule) and §7.1 (ITCM against XIP).
+      half of Q9, §7.3's explicit-FMA rule) and §7.1 (ITCM against XIP). Session 1, revision 1
+      (§4, "Session 1"); not yet at revision 3.
 - [ ] Live: clean pass-through at `set mix 0`; presets switch without clicks (Spillover, and
       `preset N cut`) and with a mute (exact); `onset on` and `marks on` audibly change the
       texture (grains born on each pluck; grains read from the plucks' attacks) and `stats`
       counts each as a mode switch; `macro time 0.9` lengthens the delay; `cutoff 40` and
       `volume -24` take the wet down, never the dry; `stats` mean and peak under 100 % for every
-      preset and structure.
+      preset and structure. Expect the glitch preset to fail the last: its corpus preset,
+      `dense_1ms`, peaked at 118.6 % on the bench.
 - [ ] Look for USB dropouts during a long render (a `resync` line, a nonzero `droppedBytes`) and
       for audio clicks while typing commands (the USB interrupts run below the audio DMA's
-      priority).
+      priority). The long renders are done: no `resync` and 0 bytes dropped in any parity or
+      bench run; the clicks need the live image.
 - [ ] If the LED ever shows two long flashes: reconnect, `info`, and keep the `lastFault` line.
+      Not seen so far: `"lastFault": null` in every hello.
 
 ## 7. Building
 
@@ -435,9 +489,11 @@ own `.dtcmram_bss`/`.sdram_bss` names produce 17 MiB object files) and the linke
 ([`linker/seed_h750.ld.in`](linker/seed_h750.ld.in), derived from libDaisy's) routes to their regions
 and checks: region overflow, 32 KiB left for the stack in DTCM, and the heap's minimum. Every image
 also checks `PlanMemory` against the arenas at boot, and the host test `firmware_arena_plan` does on
-every ctest run. The heap peaks near 250 KiB in a parity run (measured under QEMU), so it is in
-SDRAM; the firmware's `_sbrk` refuses to grow before the SDRAM is initialized, and newlib's malloc
-lock masks interrupts because libDaisy's USB stack allocates inside the USB interrupt.
+every ctest run. The heap peaks near 250 KiB in a parity run (measured under QEMU; on the Rev7 the
+break stood at 224,904 bytes after the first whole-corpus run at revision 1 and at 290,856 after
+the second, and at 290,856 after the first at revision 3), so it is in SDRAM;
+the firmware's `_sbrk` refuses to grow before the SDRAM is initialized, and newlib's malloc lock
+masks interrupts because libDaisy's USB stack allocates inside the USB interrupt.
 
 ### Platform layer ([`platform/`](platform/))
 
@@ -521,7 +577,9 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `Renderer(cfg, Placement)`, a second renderer over the same storage), matches the revision-2
   `golden.json` on all 33 presets, with their package hashes, and `MANIFEST` on all 18 packages,
   with `maxBlockSize` 48 and 512, and the hostile FP run on the quick set, checked by
-  `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull request). On the host the
+  `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull request). At revision 3
+  that job matched the revision-3 file and `MANIFEST` at 48 (pull requests #6 and #7, `main` at
+  `4090270`), and the Rev7 at 48 and 512 and from a hostile caller (§6). On the host the
   same check is the ctests `golden_parity_stream_mb512` and `_mb48`.
 - `parity_check.py` was run on 17 damaged streams at revision 1 (lost, spliced, truncated and
   renamed lines, a missing `parity-end`, a `resync` notice, device captures without or with a lossy
@@ -535,7 +593,9 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `lone_busy`.
 - Not verifiable without the board: anything electrical, the bootloader handoff, the fault
   handler's LED and reset, USB enumeration and throughput, the SAI/codec path, and every cycle
-  count.
+  count. The Rev7 has since shown the bootloader handoff, USB enumeration, whole-corpus streams
+  without a lost byte and the cycle counts (§4, §6); the fault handler has not fired, and the
+  SAI/codec path waits for the live image.
 
 ## 10. Dependencies and licensing
 
