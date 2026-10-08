@@ -18,6 +18,7 @@
 #include "TestInput.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
+#include "brainscape/Preset.h"
 
 namespace brainscape::plugin {
 
@@ -32,6 +33,15 @@ struct ModeState {
   ControlState     control;
   PerformanceState performance;
   uint32_t         soundRev = 0;  // the package's sound_rev, 0 when not from a package
+};
+
+// Where the preset the wrapper plays came from, for the editor's header and the session: the
+// factory package it is (FactoryModes.h, by index; -1 for a document file, an unnamed state or
+// the default mode), its name ("" for the default mode and unnamed states) and family.
+struct PresetSource {
+  int          factory = -1;
+  juce::String name;
+  PresetFamily family  = PresetFamily::None;
 };
 
 // The one AudioProcessor behind every format and the companion app (companion §2.1),
@@ -104,8 +114,12 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // Exact when nothing has played since the last Init or restart. The leaf mirrors take its
   // leaves (a leaf it lacks, its default), the macro mirrors its CTRL positions, which are
   // pickup references never re-applied (§3.5), and freeze goes off. Refused, with nothing
-  // changed, when its mode is invalid; *report says how faithfully it loads.
-  bool LoadPresetState(const PresetState& state, LoadReport* report = nullptr);
+  // changed, when its mode is invalid; *report says how faithfully it loads. `source` says
+  // what it is (CurrentSource): a session saved while a factory package plays restores it.
+  bool LoadPresetState(const PresetState& state, LoadReport* report = nullptr,
+                       const PresetSource& source = {});
+  // What the last load or session restore played, by name (any thread but the audio thread).
+  PresetSource CurrentSource() const;
   // What the wrapper plays now, as a preset: the leaf mirrors, the current mode, and CTRL with
   // the macro mirrors as its positions. Not on the audio thread.
   std::unique_ptr<PresetState> CurrentPreset() const;
@@ -236,6 +250,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // held while another lock is taken.
   ModeState          mode_;
   mutable std::mutex modeMutex_;
+  PresetSource       source_;  // what mode_ came from: under controlMutex_
 
   // Two slots at most: the live engine and, while the restart option is on, the spare. The
   // audio thread swaps the two pointers at a transport start; slots are allocated and
@@ -250,7 +265,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   // Guards prepare/state calls against each other; never taken on the audio thread.
   // Restore generations advance only under it.
-  std::mutex controlMutex_;
+  mutable std::mutex controlMutex_;
 
   // State restores travel as a unit (companion §4.7): a sequence lock over one slot that
   // also holds the restore's generation. The audio thread applies one as a Spillover load

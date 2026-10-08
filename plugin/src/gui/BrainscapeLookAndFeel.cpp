@@ -25,6 +25,17 @@ juce::Colour palette::GroupAccent(ParamGroup group) {
   return kText;
 }
 
+juce::Colour palette::FamilyAccent(PresetFamily family) {
+  switch (family) {
+    case PresetFamily::Echoic:  return juce::Colour(0xFF68D391);  // the post delay's green
+    case PresetFamily::Reverie: return juce::Colour(0xFF7F9CF5);  // the grains' blue
+    case PresetFamily::Recall:  return juce::Colour(0xFFB794F4);  // the pitch's violet
+    case PresetFamily::Misfire: return juce::Colour(0xFFF687B3);  // the modulation's pink
+    case PresetFamily::None: break;
+  }
+  return kTextFaint;
+}
+
 juce::Font UiFont(float height, bool bold) {
 #if JUCE_WINDOWS
   const juce::String name = bold ? "Segoe UI Semibold" : "Segoe UI";

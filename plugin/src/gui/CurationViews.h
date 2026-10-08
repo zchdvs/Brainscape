@@ -94,15 +94,17 @@ class DocumentPanel final : public juce::Component {
   void SetScale(float scale);
   void paint(juce::Graphics&) override;
   void resized() override;
-  // Commands the editor's keys also reach.
+  // Commands the editor's keys and the Modes menu also reach. Save on a factory mode (built in,
+  // no file) is Save as.
   void ChooseOpen();
   void Save();
   void ToggleSide();
+  // The note line: the last command's outcome (the Modes menu's too).
+  void Note(const juce::String& text, juce::Colour colour);
 
  private:
   void ChooseSaveAs();
   void StartRender();
-  void Note(const juce::String& text, juce::Colour colour);
   static void StyleToggle(juce::TextButton& b, juce::Colour on);
 
   CurationSession&     session_;

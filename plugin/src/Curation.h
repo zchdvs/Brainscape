@@ -17,6 +17,7 @@
 namespace brainscape::plugin {
 
 class BrainscapeProcessor;
+struct PresetSource;
 
 // The curation slice (docs/design/mode-compiler.md §9.1, §11.3): one preset document open in
 // the app, auditioned live through the processor, edited with the macro knobs and the raw
@@ -43,11 +44,24 @@ class CurationSession {
   // False, with *error and RefusedFindings(), when it does not read, compile or load; the open
   // document stays then, with its own findings.
   bool Open(const juce::File& file, juce::String* error);
-  // Re-opens the source from disk, dropping unsaved changes.
+  // Opens package `index` of the factory set built into the plugin (FactoryModes.h, the
+  // editor's Modes menu) as Open opens its .bsp: the same bytes, the same document, the same
+  // load. It has no file: Save refuses it (Save as writes a copy, and that copy is what plays
+  // and saves from then on), Revert opens the built-in package again.
+  bool OpenFactory(size_t index, juce::String* error);
+  // Re-opens the source from disk (or the built-in package), dropping unsaved changes.
   bool Revert(juce::String* error);
+  // Closes the document; what plays keeps playing. A document closed here is not reopened
+  // until something loads again (Refresh).
   void Close();
   bool HasDocument() const { return open_; }
+  // The factory package the open document is, or -1 (a document file, or none open).
+  int  FactoryIndex() const { return open_ ? factory_ : -1; }
+  // Where the document came from, for the views: its file's name, or "firmware/factory/
+  // lull.bsp (built in)" for a factory package.
+  juce::String SourceLabel() const;
   // Where Save writes: the .json (for a .bsp source, the .json beside it), and the package.
+  // None for a factory package.
   juce::File DocumentFile() const { return jsonFile_; }
   juce::File PackageFile() const { return jsonFile_.withFileExtension(".bsp"); }
   juce::File SourceFile() const { return source_; }
@@ -62,7 +76,9 @@ class CurationSession {
   // Message thread, from the editor's timer: rebuilds the working document from the mirrors when
   // a leaf, a position or the detached set changed, and re-lints it. Returns whether anything
   // changed. When the processor plays another mode than the document (a host recalled a
-  // session), the document is closed.
+  // session), the document is closed. With no document open, a factory mode the processor plays
+  // (a session restored it, BrainscapeProcessor::CurrentSource) opens as the stored version,
+  // without a load, once per load: the views then show what plays.
   bool Refresh();
   // The working document's content differs from the stored one (leaves, positions, detached).
   bool Dirty() const { return dirty_; }
@@ -175,8 +191,21 @@ class CurationSession {
  private:
   struct Worker;  // a job on its own thread
 
-  bool LoadText(const std::string& text, const juce::File& source, bool fromPackage,
-                const std::vector<uint8_t>* package, juce::String* error);
+  // Where a document comes from: a file, or a factory package (no file).
+  struct Origin {
+    juce::File file;
+    int        factory = -1;
+  };
+  juce::String Label(const Origin& origin) const;
+  // A package's document (its JSON section, or rebuilt), as Open reads a .bsp.
+  bool OpenPackage(std::vector<uint8_t> bytes, const Origin& origin, juce::String* error);
+  // Reads, compiles and plays a document (`play`), or, not playing, opens it as what the
+  // processor already plays (its mode must be the one playing).
+  bool LoadText(const std::string& text, const Origin& origin, bool fromPackage,
+                const std::vector<uint8_t>* package, juce::String* error, bool play = true);
+  bool AdoptPlaying();
+  void CloseDocument();
+  PresetSource Source() const;  // what the open document is, for the processor's loads
   void RebuildWorking();
   void Relint();
   std::unique_ptr<bsc::Document> SaveDocument(std::vector<std::string>* derived) const;
@@ -192,6 +221,8 @@ class CurationSession {
   BrainscapeProcessor&               processor_;
   bool                               open_ = false;
   juce::File                         source_, jsonFile_;
+  int                                factory_     = -1;  // the factory package open, or -1
+  uint32_t                           adoptSerial_ = 0;   // the processor's load AdoptPlaying saw
   bool                               writesPackage_ = false;
   bool                               stampCurrent_  = false;
   bool                               canonical_     = false;  // the .json on disk is r.json
