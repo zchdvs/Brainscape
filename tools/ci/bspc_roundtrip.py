@@ -37,7 +37,8 @@ Document sets:
                              its .bsp, and MANIFEST; frozen/ is exempt (never rebuilt or
                              re-stamped)
   firmware/factory           the factory presets: each .json beside its .bsp, and MANIFEST;
-                             linted with `bspc lint --factory`
+                             linted with `bspc lint --factory`; renders/ is skipped (audition
+                             renders written there by mistake; .gitignore keeps them out)
 """
 import argparse
 import os
@@ -50,7 +51,7 @@ import tempfile
 SETS = [
     ("compiler/tests/data", False, (), False),
     ("dsp/tests/golden/presets", True, ("frozen",), False),
-    ("firmware/factory", True, (), True),
+    ("firmware/factory", True, ("renders",), True),
 ]
 MANIFEST = "MANIFEST"
 HASHES = 195  # three 64-digit hashes and their spaces, then the path
@@ -195,6 +196,8 @@ SELF_TEST_CASES = [
     ("a document without its package", {F + "b.json": "{}\n"}, "no committed package beside it"),
     ("a package without its document", {F + "b.bsp": "BSP\0"}, "a committed package without its document"),
     ("a MANIFEST without documents", {F + "a.json": None, F + "a.bsp": None}, "but no documents"),
+    ("audition renders left in the factory directory are skipped",
+     {F + "renders/factory.a/S0.engaged.plucks.json": "{}\n"}, None),
     ("bspc fails", {F + "fail.json": "{}\n", F + "fail.bsp": "BSP\0"}, "bspc roundtrip exit 1"),
     ("a factory document fails the factory lint",
      {F + "lintfail.json": "{}\n", F + "lintfail.bsp": "BSP\0"}, "bspc lint --factory exit 1"),

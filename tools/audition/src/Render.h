@@ -62,6 +62,13 @@ struct RenderResult {
   uint64_t               onsets  = 0;  // ConsumeOnsetCount over the render
   // The same per 1 s of the render, each block's count in the second it starts in.
   std::vector<uint32_t>  onsetSeconds;
+  // Engine::Stats() over the render (from the Exact load on): grains born from every source, of
+  // them bursts' later grains, and triggered grains that took a sounding voice; births also per
+  // 1 s of the render, as onsetSeconds.
+  uint64_t               births      = 0;
+  uint64_t               burstBirths = 0;
+  uint64_t               steals      = 0;
+  std::vector<uint32_t>  birthSeconds;
   uint32_t               events  = 0;  // events delivered
   std::string            error;        // why a render failed
 };

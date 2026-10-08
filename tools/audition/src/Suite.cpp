@@ -47,6 +47,14 @@ constexpr double kShapeBrightPct = 5.0;   // Response: Shape moves the brightnes
 constexpr double kShapeEnvDb     = 1.0;   //   or the envelope's variation by 1 dB
 constexpr double kDeadLevelLu    = 0.1;   // Response: an Activity that moves no proxy, its level
                                           //   within 0.1 LU of the reference too, is dead
+// Response (Activity), "changes event density ... monotonically": the births per second of S1's
+// rungs (Activity at 0 ... 1) change by a quarter from one end to the other, and no rung goes
+// against that direction by more than 5 % of the rung before it (jitter's spread).
+constexpr double kActivityRatio  = 1.25;
+constexpr double kBirthTolPct    = 5.0;
+// Response (Repeats), reported for the listening pass, not judged (the design's Repeats rule asks
+// only for a tail that does not shorten): S7's tail at maximum against its tail at 0.
+constexpr double kRepeatsTailRatio = 1.5;
 
 const char* MacroShort(ParamId m) {
   switch (m) {
@@ -69,6 +77,7 @@ const char* RoleName(Role r) {
     case Role::SweepRef: return "sweep-reference";
     case Role::Sweep: return "sweep";
     case Role::RepeatsRung: return "repeats-rung";
+    case Role::ActivityRung: return "activity-rung";
     case Role::Freeze: return "freeze";
     case Role::Triggers: return "triggers";
     case Role::Load: return "load";
@@ -171,6 +180,15 @@ struct Tally {
 
 double TailKey(const Metrics& m) {
   return m.tailFinite ? m.tailSeconds : std::numeric_limits<double>::infinity();
+}
+
+// Grains born per second while the input sounds (Engine::Stats(), the render's first span
+// seconds).
+double BirthsPerSecond(const Rendered& r) {
+  const size_t seconds = std::max<size_t>(1, (r.metrics.span + kRate - 1) / kRate);
+  uint64_t     n       = 0;
+  for (size_t k = 0; k < seconds && k < r.birthSeconds.size(); ++k) n += r.birthSeconds[k];
+  return static_cast<double>(n) / static_cast<double>(seconds);
 }
 
 Check Make(const char* name, const Verdicts& v, const char* noneVerdict = "n/a",
@@ -294,6 +312,20 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
         out.push_back(d);
         firstSweep = false;
       }
+    }
+  }
+
+  if (wants("S1") && MacroDefined(st, ParamId::MacroActivity)) {
+    // Response (Activity): Activity stored at each rung over the class input, its births per
+    // second (Engine::Stats()); the tail adds nothing to them.
+    for (const float rung : kActivityRungs) {
+      Planned p    = Base("S1", "S1.activity-" + PosText(rung) + "." + cn, Role::ActivityRung, cls);
+      p.tailFrames = 0;
+      p.positions  = {{ParamId::MacroActivity, rung}};
+      p.position   = rung;
+      p.variant    = "macro.activity stored at " + PosText(rung) + "; the input without its silence";
+      p.writeWav   = false;
+      out.push_back(p);
     }
   }
 
@@ -429,15 +461,20 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     checks.push_back(Make("Denormals", denormal));
   }
 
-  // S0 on the class inputs: Peak, Level, Engaged, Tail.
+  // S0: Peak on Plucks, Strums and SoftNotes whatever the class (kPeakVectors); Level, Engaged
+  // and Tail on the class inputs.
   Verdicts peak, level, engaged, tail;
+  for (const Vector in : kPeakVectors) {
+    const std::string vn = VectorName(in);
+    const Rendered*   e  = Find(rs, "S0.engaged." + vn);
+    if (e != nullptr && e->ok) peak.Add(e->metrics.peakDbfs <= kPeakStoredDbfs, vn + " " + Peak(e->metrics));
+  }
   for (const Vector in : inputs) {
     const std::string vn  = VectorName(in);
     const Rendered*   e   = Find(rs, "S0.engaged." + vn);
     const Rendered*   w   = Find(rs, "S0.wet." + vn);
     const double      dry = DryLevel(in);
     if (e != nullptr && e->ok) {
-      peak.Add(e->metrics.peakDbfs <= kPeakStoredDbfs, vn + " " + Peak(e->metrics));
       const double d = e->metrics.loudness - dry;
       engaged.Add(Round1(d) >= kEngagedLowLu && Round1(d) <= kEngagedHighLu, vn + " " + Lu(d) + " LU");
       const bool        finite = e->metrics.tailFinite;
@@ -479,6 +516,7 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
   Verdicts           sweeps, clicks, repeats;
   Tally              moved;  // Peak during sweeps and S11, on the class input
   std::vector<Check> response;
+  std::string        activityFeatures;  // the Activity sweep's proxies, beside its births
   for (const Rendered& r : rs) {
     if (r.plan.role != Role::Sweep || !r.ok || r.plan.vector != cls) continue;
     const std::string m = MacroShort(r.plan.macro);
@@ -535,9 +573,9 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
       const bool dead = q.heard == q.refHeard && std::fabs(q.brightnessPct) < kShapeBrightPct &&
                         std::fabs(q.envelopeDb) < kShapeEnvDb && lo <= hi && std::fabs(lo) <= kDeadLevelLu &&
                         std::fabs(hi) <= kDeadLevelLu;
-      const std::string d = (dead ? std::string("moves nothing measured: ") : std::string()) + features +
-                            ", level " + range + "; onsets the detector hears per second from 0 to 1: " + seq +
-                            " (the stored position: " + refSeq + ")";
+      activityFeatures = features + ", level " + range + "; onsets the detector hears per second from 0 to 1: " +
+                         seq + " (the stored position: " + refSeq + ")";
+      const std::string d = (dead ? std::string("moves nothing measured: ") : std::string()) + activityFeatures;
       response.push_back({"Response (Activity)", dead ? "FAIL" : "info", d});
     }
   }
@@ -585,8 +623,49 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
         const double d = rungs.back()->metrics.loudness - stored->metrics.loudness;
         repeats.Add(Round1(d) <= kRepeatsMaxLu, "at maximum " + Lu(d) + " LU over the stored position");
       }
+      // Whether Repeats lengthens the tail at all: reported, and named for the listening pass
+      // when the tail at maximum is under 1.5 times the tail at 0.
+      const double t0 = TailKey(rungs.front()->metrics), t1 = TailKey(rungs.back()->metrics);
+      const bool   longer = t1 > t0 && t1 >= kRepeatsTailRatio * t0;  // no tail at either end: listen
+      std::string  d = "S7's tail at Repeats 1 against 0: " + TailText(rungs.back()->metrics) + " against " +
+                      TailText(rungs.front()->metrics);
+      if (std::isfinite(t1) && t0 > 0) d += Fmt(" (%.2fx)", t1 / t0);
+      if (!longer) d += "; under 1.5x: Repeats barely lengthens the tail";
+      response.push_back({"Response (Repeats)", longer ? "pass" : "listen", d});
     }
     checks.push_back(Make("Repeats", repeats));
+  }
+
+  {  // Response (Activity): S1's rungs' births per second, monotonic and changed by a quarter.
+    std::vector<const Rendered*> rungs;
+    for (const Rendered& r : rs) {
+      if (r.plan.role == Role::ActivityRung && r.ok) rungs.push_back(&r);
+    }
+    if (rungs.size() >= 2) {
+      std::vector<double> b;
+      std::string         seq;
+      for (const Rendered* r : rungs) {
+        b.push_back(BirthsPerSecond(*r));
+        seq += (seq.empty() ? "" : " ") + Fmt("%.1f", b.back());
+      }
+      const bool rising = b.back() >= b.front();
+      bool       mono   = true;
+      for (size_t i = 1; i < b.size(); ++i) {
+        const double tol = b[i - 1] * kBirthTolPct / 100.0;
+        if (rising ? b[i] < b[i - 1] - tol : b[i] > b[i - 1] + tol) mono = false;
+      }
+      const double lo = std::min(b.front(), b.back()), hi = std::max(b.front(), b.back());
+      const bool   changed = hi > 0 && hi >= kActivityRatio * lo;
+      std::string  d = "births per second on " + cn + " at Activity 0, 0.25, 0.5, 0.75 and 1: " + seq;
+      if (b.front() > 0) d += Fmt(" (%.2fx)", b.back() / b.front());
+      if (!mono) d += "; not monotonic";
+      if (!changed) d += "; the density changes by under a quarter";
+      if (!activityFeatures.empty()) d += "; " + activityFeatures;
+      response.erase(std::remove_if(response.begin(), response.end(),
+                                    [](const Check& c) { return c.name == "Response (Activity)"; }),
+                     response.end());
+      response.insert(response.begin(), Check{"Response (Activity)", mono && changed ? "pass" : "FAIL", d});
+    }
   }
 
   {  // S11: Combinations hold Peak and Tail (on the class input) and Clicks (on SoftNotes, against
@@ -659,7 +738,7 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     report("S0", [&](const Rendered& r) {
       return r.plan.script == "S0" &&
              (r.plan.role != Role::Engaged ||
-              std::find(inputs.begin(), inputs.end(), r.plan.vector) == inputs.end());
+              std::find(std::begin(kPeakVectors), std::end(kPeakVectors), r.plan.vector) == std::end(kPeakVectors));
     });
     for (const char* script : {"S7", "S8", "S9", "S10"}) {
       report(script, [&](const Rendered& r) { return r.plan.script == script; });
@@ -671,14 +750,30 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     checks.push_back({"Peak (other)", d.empty() ? "n/a" : "info", d.empty() ? "nothing to report" : d});
   }
 
-  {
-    const Rendered* e = Find(rs, "S0.engaged." + cn);
-    std::string d = "voices and births per second are not observable through the engine's API";
-    if (e != nullptr && e->ok) {
-      d += "; onsets on " + cn + ": " +
-           std::to_string(e->onsets) + Fmt(" (%.1f per second)", static_cast<double>(e->onsets) * kRate /
-                                                                  static_cast<double>(std::max<size_t>(1, e->metrics.span)));
+  {  // Load: births per second (Engine::Stats()); the engine reports no count of sounding voices.
+    std::string d;
+    for (const Vector in : inputs) {
+      const Rendered* e = Find(rs, "S0.engaged." + std::string(VectorName(in)));
+      if (e == nullptr || !e->ok) continue;
+      d += (d.empty() ? "" : "; ") + std::string(VectorName(in)) + " at the stored positions " +
+           Fmt("%.1f births per second", BirthsPerSecond(*e)) + " while the input sounds (" +
+           std::to_string(e->births) + " in the render, " + std::to_string(e->steals) + " steals), " +
+           std::to_string(e->onsets) +
+           Fmt(" onsets (%.1f per second)", static_cast<double>(e->onsets) * kRate /
+                                                static_cast<double>(std::max<size_t>(1, e->metrics.span)));
     }
+    double      most = -1;
+    std::string at;
+    for (const Rendered& r : rs) {
+      if (r.plan.role != Role::Combination || !r.ok || r.plan.vector != cls) continue;
+      const double b = BirthsPerSecond(r);
+      if (b > most) {
+        most = b;
+        at   = r.plan.name;
+      }
+    }
+    if (most >= 0) d += (d.empty() ? "" : "; ") + Fmt("most in S11 %.1f per second (", most) + at + ")";
+    d += (d.empty() ? "" : "; ") + std::string("sounding voices are not observable through the engine's API");
     checks.push_back({"Load", "info", d});
   }
   for (Check& c : response) checks.push_back(std::move(c));
@@ -871,7 +966,10 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
       brainscape::LoadReport check;
       rd->exact = rd->exact && brainscape::CheckPreset(*variant, &check);
     }
-    rd->onsets = rr->onsets;
+    rd->onsets       = rr->onsets;
+    rd->births       = rr->births;
+    rd->steals       = rr->steals;
+    rd->birthSeconds = rr->birthSeconds;
     if (!rd->ok) return variant;
     rd->hashes  = HashRender(rr->out);
     rd->metrics = Measure(rr->out, in.input.signalFrames);

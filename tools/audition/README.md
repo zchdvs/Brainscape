@@ -78,7 +78,7 @@ Strums), a pad mode's SoftNotes. DI clips join later, outside git and keyed by t
 | Script | Renders |
 | --- | --- |
 | S0 | The stored preset on every vector; the wet alone (Mix 1) on Plucks, Strums and SoftNotes; the class render again on a fresh request and in a mixed block pattern (determinism) |
-| S1–S6 | Activity, Repeats, Shape, Time, Space, Filter: each macro from its stored position to 0, to 1 and back over 16 s at constant speed, one `MacroMove` per 48-frame block, the class input looped for the whole sweep; beside them the stored preset on the same looped input (the sweeps' reference, named under S1), and the first sweep again in 512-frame blocks. An attack mode's reference and sweeps again on SoftNotes, for the Clicks check (`S3.shape.soft_notes`) |
+| S1–S6 | Activity, Repeats, Shape, Time, Space, Filter: each macro from its stored position to 0, to 1 and back over 16 s at constant speed, one `MacroMove` per 48-frame block, the class input looped for the whole sweep; beside them the stored preset on the same looped input (the sweeps' reference, named under S1), and the first sweep again in 512-frame blocks. An attack mode's reference and sweeps again on SoftNotes, for the Clicks check (`S3.shape.soft_notes`). S1 also stores Activity at 0, 0.25, 0.5, 0.75 and 1 over the class input's 10 s, without the silence (`S1.activity-0.25.plucks`, no WAV): Response (Activity)'s births |
 | S7 | Repeats stored at 0, 0.25, 0.5, 0.75 and 1, each on the class input and then 20 s of silence |
 | S8 | Freeze engaged at 4 s and released at 14 s |
 | S9 | A footswitch trigger every 0.5 s from 1.25 s to 8.75 s |
@@ -106,7 +106,7 @@ part of a render's identity.
 | Renders | every render rendered and every load was exact |
 | Determinism | the repeated and re-blocked renders give the same hash as their originals |
 | Finite, Denormals | no NaN, infinite or subnormal sample in any render |
-| Peak | ≤ −1 dBFS on the class inputs at stored positions, unrounded |
+| Peak | ≤ −1 dBFS at stored positions on Plucks, Strums and SoftNotes whatever the class, unrounded (Readings) |
 | Level | the wet alone (Mix 1) within ±2 LU of the dry on the class inputs |
 | Engaged | the stored preset from 1 LU below to 4 LU above the dry on the class inputs |
 | Tail | the time to −70 dBFS after the input stops is finite, measured on a 60 s probe when the render does not see it end (Readings), unless the mode is declared self-oscillating |
@@ -117,8 +117,9 @@ part of a render's identity.
 | Combinations | every S11 render on the class input holds Peak (≤ 0 dBFS) and Tail, and every one on SoftNotes Clicks (against S0's render on SoftNotes); the worst cases are named |
 | Peak (moved) | every sweep and S11 render on the class input ≤ 0 dBFS, unrounded |
 | Response (Shape) | Shape from 0 to 1 moves the brightness by 5 % or the envelope's variation by 1 dB, each against the reference at the same time |
-| Response (Activity) | reported: the brightness, the envelope's variation, the level and the onset density the engine's own detector hears in the output, from 0 to 1 and across the rising leg; FAIL when none of them moves (the same onsets, brightness under 5 %, envelope under 1 dB, level within 0.1 LU of the reference): a dead knob |
-| Peak (other), Load | reported: peaks of S0's other vectors, of S7–S10 and of the Clicks renders on SoftNotes, onsets per second on the class input |
+| Response (Activity) | the grains born per second (`Engine::Stats()`) while the input sounds, at S1's five Activity rungs, change by at least a quarter from Activity 0 to 1 and monotonically: no rung more than 5 % against the direction of the one before it. Beside them, reported: the brightness, the envelope's variation, the level and the onsets the engine's own detector hears across the Activity sweep (without rungs, as when S1 is not rendered, a knob that moves none of these fails as dead) |
+| Response (Repeats) | reported, not judged: S7's tail at Repeats 1 against its tail at 0; under 1.5 times the verdict is "listen", a knob the listening pass should check |
+| Peak (other), Load | reported: peaks of S0's other vectors, of S7–S10 and of the Clicks renders on SoftNotes; births per second at the stored positions on the class inputs (with the render's births, steals and onsets) and the most in any S11 render |
 
 ### Readings
 
@@ -154,9 +155,29 @@ waveform scores under 2 at any pitch, so a pitch or density change is no click, 
 in one scores in the tens. A static render that scores under 2 is taken to score 2. A mode
 documented as needing attacks may play little on SoftNotes, and its clicks show less there.
 
-The engine does not report voices or births, so the Load check logs the input's onset count
-and Activity's response is judged through the output: information, except a knob that moves
-nothing measured.
+Peak is judged on Plucks, Strums and SoftNotes for every mode, not only on its class inputs:
+§11.3 judges a mode on its class, but a player holds a chord into an attack mode and picks into a
+pad mode at the stored positions, and the codec clips either. (SoftNotes is not the hot input:
+its dry peaks at −7.2 dBFS, Plucks' at −4.5 dBFS; a sustained, noise-like wet at the Level
+check's loudness is what reaches full scale, and a lower stored Mix lowers it without moving
+Level, which is measured at Mix 1.) The sweeps and S11 are judged on the class input, as §11.3
+says; on SoftNotes an attack mode's are reported under Peak (other).
+
+Activity's "event density or voice count" is read from the engine's grain births
+(`Engine::Stats()`, which the render returns per second): the engine reports no count of
+sounding voices, and births move with the voice count of a free-running mode (its births are
+the voices over a voice's life). The rungs hold Activity still over the same input, so the
+births differ by Activity alone. Jitter alone takes a few per cent per rung off a free-running
+mode's births (the reviewed Engram's Activity, spray, jitter and spread with no density term,
+measured 40.0, 38.8, 37.9, 37.1 and 35.4 per second, 12 % in all): a quarter is beyond that, and
+the 5 % allowance against the direction keeps it from failing a knob whose density rises. The Response features (brightness, envelope) are measured over 2 s windows of a
+mix in which the dry plays at unity: they move by up to about 5 % and 0.5 dB with the grains'
+random draws alone, so a Shape near the threshold passes or fails with any change that moves
+those draws.
+
+The S7 tail ratio for Repeats is reported because §11.3's Repeats rule asks only that the tail
+not shorten: a Repeats knob whose feedback the mode's spray decorrelates, or whose repeats leave
+the audio band (an octave climb), can hold its tail flat across the range and pass.
 
 ## The ratings log
 

@@ -84,6 +84,8 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
   if (!result->load.applied) return fail("the preset did not load (an invalid mode)");
   impl_->queue->Clear();       // the Exact load restarted the engine: a new timeline
   engine.ConsumeOnsetCount();  // zeroed by the restart; read so the count starts here
+  const Engine::GrainStats first = engine.Stats();  // the counts run on: the render's are deltas
+  uint64_t                 born  = first.births;
 
   const Stereo   in     = Conditioned(*rq.input, rq.mode);
   const size_t   frames = in.Frames();
@@ -91,6 +93,7 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
   out.l.assign(frames, 0.f);
   out.r.assign(frames, 0.f);
   result->onsetSeconds.assign((frames + kRate - 1) / kRate, 0u);
+  result->birthSeconds.assign((frames + kRate - 1) / kRate, 0u);
 
   uint32_t seq       = 0;
   size_t   next      = 0;  // the next script event to push
@@ -131,8 +134,15 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
     const uint32_t onsets = engine.ConsumeOnsetCount();
     result->onsets += onsets;
     result->onsetSeconds[pos / kRate] += onsets;
+    const uint64_t births = engine.Stats().births;
+    result->birthSeconds[pos / kRate] += static_cast<uint32_t>(births - born);
+    born = births;
     pos += n;
   }
+  const Engine::GrainStats last = engine.Stats();
+  result->births      = last.births - first.births;
+  result->burstBirths = last.burstBirths - first.burstBirths;
+  result->steals      = last.steals - first.steals;
   // Retire the last block's events, so no staged preset is referenced after the render.
   impl_->queue->PopBlock(static_cast<int64_t>(frames), 0, impl_->blockEvents.data(), 0);
   impl_->queue->Clear();

@@ -167,6 +167,12 @@ TEST_CASE("the shared render is the engine's from the exact-restart state, in an
   CHECK(got.onsets > 0u);
   CHECK(got.onsetSeconds[0] + got.onsetSeconds[1] + got.onsetSeconds[2] == got.onsets);
   CHECK(got.onsetSeconds[2] == 0u);
+  // Engine::Stats() over the render: the free-running scheduler's births, per second too, and
+  // counted from the load (a second render on the same engine counts the same).
+  REQUIRE(got.birthSeconds.size() == 3u);
+  CHECK(got.births > 0u);
+  CHECK(uint64_t{got.birthSeconds[0]} + got.birthSeconds[1] + got.birthSeconds[2] == got.births);
+  CHECK(got.birthSeconds[2] > 0u);  // periodic: it runs on in the silence
   for (const std::vector<uint32_t>& pattern :
        {std::vector<uint32_t>{48}, std::vector<uint32_t>{512}, std::vector<uint32_t>{1},
         kMixedPattern}) {
@@ -174,6 +180,7 @@ TEST_CASE("the shared render is the engine's from the exact-restart state, in an
     RenderResult again;
     REQUIRE(r.Render(rq, &again));  // the same engine, restarted by the Exact load
     CHECK(SameBits(again.out, want));
+    CHECK(again.births == got.births);
   }
   Renderer fresh;
   RenderResult other;
@@ -544,7 +551,17 @@ TEST_CASE("the scripts' plan") {
   CHECK(skipped.empty());
   CHECK(Count(plan, "S0") == 9u);
   // An attack mode's sweeps and S11 again on SoftNotes, for the Clicks check.
-  CHECK(Count(plan, "S1") == 4u);  // the reference and the sweep, on plucks and soft_notes
+  // The reference and the sweep, on plucks and soft_notes, and Activity's five rungs on plucks.
+  CHECK(Count(plan, "S1") == 4u + 5u);
+  const Planned* arung = Named(plan, "S1.activity-0.75.plucks");
+  REQUIRE(arung != nullptr);
+  CHECK(arung->role == Role::ActivityRung);
+  CHECK(arung->tailFrames == 0u);
+  CHECK_FALSE(arung->writeWav);
+  REQUIRE(arung->positions.size() == 1u);
+  CHECK(arung->positions[0].first == ParamId::MacroActivity);
+  CHECK(arung->positions[0].second == 0.75f);
+  CHECK(Named(plan, "S1.activity-0.75.soft_notes") == nullptr);  // the class input only
   for (const char* s : {"S2", "S3", "S4", "S5", "S6"}) CHECK(Count(plan, s) == 2u);
   for (const char* s : {"S8", "S9"}) CHECK(Count(plan, s) == 1u);
   CHECK(Count(plan, "S7") == 5u);
@@ -591,7 +608,8 @@ TEST_CASE("the scripts' plan") {
   pad.declare.inputClass = InputClass::Pad;
   const std::vector<Planned> alone = Plan(pad, {&pad}, all);
   CHECK(Named(alone, "S1.activity.soft_notes") != nullptr);
-  CHECK(Count(alone, "S1") == 2u);  // the class input is the Clicks input
+  CHECK(Count(alone, "S1") == 2u + 5u);  // the class input is the Clicks input
+  CHECK(Named(alone, "S1.activity-0.soft_notes") != nullptr);
   const Planned* fromDefault = Named(alone, "S10.fastcut.from-default.soft_notes");
   REQUIRE(fromDefault != nullptr);
   CHECK(fromDefault->from == nullptr);
@@ -649,11 +667,24 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
   rs.push_back(make("S0", "S0.engaged.saturation", Role::Engaged, dp, 6.0));
   rs.back().plan.vector = Vector::Saturation;
   cs = PreScreen(preset, rs);
-  CHECK(verdict(cs, "Peak") == "pass");  // judged on the class inputs only
+  CHECK(verdict(cs, "Peak") == "pass");  // judged on Plucks, Strums and SoftNotes only
   CHECK(verdict(cs, "Peak (other)") == "info");  // the other vectors and the wet: reported
   for (const Check& c : cs) {
     if (c.name == "Peak (other)") CHECK(c.detail.find("6.0 dBFS (S0.engaged.saturation)") != std::string::npos);
   }
+  rs.pop_back();
+  // A sustained input at the stored positions is judged whatever the class: an attack mode
+  // that clips on SoftNotes fails Peak.
+  rs.push_back(make("S0", "S0.engaged.soft_notes", Role::Engaged, DryLevel(Vector::SoftNotes), -0.5));
+  rs.back().plan.vector = Vector::SoftNotes;
+  cs = PreScreen(preset, rs);
+  CHECK(verdict(cs, "Peak") == "FAIL");
+  CHECK(verdict(cs, "Engaged") == "pass");  // levels stay on the class inputs
+  for (const Check& c : cs) {
+    if (c.name == "Peak") CHECK(c.detail.find("soft_notes -0.50 dBFS (FAIL)") != std::string::npos);
+  }
+  rs.back().metrics.peakDbfs = -1.0;
+  CHECK(verdict(PreScreen(preset, rs), "Peak") == "pass");
   rs.pop_back();
   rs[0].metrics.loudness = dp + 4.06;
   rs[1].metrics.loudness = ds - 1.0;
@@ -804,13 +835,69 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
       rs.push_back(r);
     }
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "pass");
+    CHECK(verdict(PreScreen(preset, rs), "Response (Repeats)") == "pass");  // 5 s against 1 s
+    rs.back().metrics.tailSeconds = 1.49;  // under 1.5 times the tail at 0: named, not judged
+    cs = PreScreen(preset, rs);
+    CHECK(verdict(cs, "Response (Repeats)") == "listen");
+    CHECK(verdict(cs, "Repeats") == "FAIL");  // and shorter than the rung before it
+    CHECK_FALSE(verdict(cs, "Response (Repeats)") == "FAIL");
+    for (int i = 0; i < 5; ++i) rs[rs.size() - 1 - i].metrics.tailSeconds = 0.0;  // no tail at all
+    CHECK(verdict(PreScreen(preset, rs), "Response (Repeats)") == "listen");
+    for (int i = 0; i < 5; ++i) rs[rs.size() - 5 + i].metrics.tailSeconds = 1.0 + i;
+    rs.back().metrics.tailSeconds = 5.0;
     rs.back().metrics.tailFinite = false;  // an unending tail at maximum is the largest
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "pass");
+    CHECK(verdict(PreScreen(preset, rs), "Response (Repeats)") == "pass");
     rs.back().metrics.loudness = stored + 10.06;
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "FAIL");
     rs.back().metrics.loudness = stored + 8.0;
     rs[rs.size() - 2].metrics.loudness = stored + 8.6;  // falls by 0.6 LU
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "FAIL");
+  }
+  SECTION("Activity's response: births per second at S1's rungs") {
+    auto rung = [&](float pos, uint32_t perSecond) {
+      Rendered r = make("S1", "S1.activity-" + std::to_string(pos) + ".plucks", Role::ActivityRung, -18.0, -3.0);
+      r.plan.position = pos;
+      r.metrics.span  = kSignalFrames;
+      r.birthSeconds.assign(10, perSecond);
+      r.births = 10u * perSecond;
+      return r;
+    };
+    const size_t first = rs.size();
+    for (const auto& [pos, n] : std::vector<std::pair<float, uint32_t>>{{0.f, 40}, {0.25f, 40}, {0.5f, 44}, {0.75f, 48}, {1.f, 50}}) {
+      rs.push_back(rung(pos, n));
+    }
+    cs = PreScreen(preset, rs);
+    CHECK(verdict(cs, "Response (Activity)") == "pass");  // 40 to 50: 1.25x, never falling
+    for (const Check& c : cs) {
+      if (c.name == "Response (Activity)") CHECK(c.detail.find("40.0 40.0 44.0 48.0 50.0 (1.25x)") != std::string::npos);
+    }
+    rs[first + 4].birthSeconds.assign(10, 49);  // 1.225x: under a quarter
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "FAIL");
+    rs[first + 4].birthSeconds.assign(10, 60);
+    rs[first + 3].birthSeconds.assign(10, 41);  // 48 to 41, over 5 % against the direction
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "FAIL");
+    rs[first + 3].birthSeconds.assign(10, 42);  // 44 to 42: within 5 %
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "pass");
+    for (size_t k = 0; k < 5; ++k) rs[first + k].birthSeconds.assign(10, 40);  // flat: a knob that adds no grains
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "FAIL");
+    const uint32_t falling[5] = {80, 70, 60, 50, 40};  // fewer grains as Activity rises: monotonic
+    for (size_t k = 0; k < 5; ++k) rs[first + k].birthSeconds.assign(10, falling[k]);
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "pass");
+    const uint32_t none[5] = {0, 0, 0, 0, 0};  // a mode with no births at all
+    for (size_t k = 0; k < 5; ++k) rs[first + k].birthSeconds.assign(10, none[k]);
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "FAIL");
+    // Load: births per second over the input's seconds, from S0's class renders.
+    rs[0].metrics.span = kSignalFrames;
+    rs[0].birthSeconds.assign(20, 0);
+    for (size_t k = 0; k < 10; ++k) rs[0].birthSeconds[k] = 12;
+    rs[0].births = 150;
+    for (const Check& c : PreScreen(preset, rs)) {
+      if (c.name == "Load") {
+        CHECK(c.verdict == "info");
+        CHECK(c.detail.find("plucks at the stored positions 12.0 births per second") != std::string::npos);
+      }
+    }
   }
   SECTION("combinations hold peak, tail and clicks") {
     Rendered soft = make("S0", "S0.engaged.soft_notes", Role::Engaged, -20.0, -6.0);

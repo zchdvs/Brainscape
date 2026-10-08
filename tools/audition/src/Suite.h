@@ -19,7 +19,9 @@
 //           0, to 1 and back over 16 s, one MacroMove per 48-frame block, the class input looped
 //           for the whole script; beside them the stored preset on the same looped input, the
 //           sweeps' reference (in S1). An attack mode's sweeps and reference are rendered on
-//           SoftNotes too, for the Clicks check (kClickVector)
+//           SoftNotes too, for the Clicks check (kClickVector). S1 also holds Activity at 0,
+//           0.25, 0.5, 0.75 and 1 over the class input's 10 s (no tail): the births per second
+//           Response (Activity) judges
 //   S7      Repeats at 0, 0.25, 0.5, 0.75 and 1 (the design's "at maximum"), each over the class
 //           input and then 20 s of silence: the Repeats rule's level and tail
 //   S8      freeze engaged at 4 s, released at 14 s, over the class input
@@ -70,6 +72,10 @@ inline constexpr Vector   kClickVector      = Vector::SoftNotes;
 inline constexpr uint32_t kSweepFrames      = 16 * kRate;
 inline constexpr uint32_t kRepeatsTail      = 20 * kRate;
 inline constexpr float    kRepeatsRungs[5]  = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+inline constexpr float    kActivityRungs[5] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+// The vectors a mode's stored positions must not clip on, whatever its class: a player holds a
+// chord into an attack mode and picks into a pad mode (the Peak check; README.md, "Readings").
+inline constexpr Vector   kPeakVectors[3]   = {Vector::Plucks, Vector::Strums, Vector::SoftNotes};
 inline constexpr uint32_t kFreezeOn         = 4 * kRate, kFreezeOff = 14 * kRate;
 inline constexpr uint32_t kLoadFrame        = 5 * kRate;
 // The determinism check's second block pattern (any pattern must render the same bits).
@@ -81,6 +87,7 @@ enum class Role : uint8_t {
   SweepRef,     // S1: the stored preset on the looped input, no events
   Sweep,        // S1-S6
   RepeatsRung,  // S7
+  ActivityRung, // S1: Activity stored at a rung, for its births per second
   Freeze,       // S8
   Triggers,     // S9
   Load,         // S10
@@ -105,7 +112,7 @@ struct Planned {
   std::vector<uint32_t>           blockPattern{kPedalBlock};
   brainscape::ParamId             macro    = brainscape::ParamId::MacroActivity;
   float                           stored   = 0;  // the macro's stored position (sweeps)
-  float                           position = 0;  // S7's rung
+  float                           position = 0;  // S7's and S1's rungs
   std::string                     repeatOf;      // Determinism: the render it repeats
   bool                            writeWav = true;
 };
@@ -119,9 +126,10 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
                           std::vector<std::string>* skipped = nullptr);
 
 // Activity's and Shape's response, measured by RunSuite from a class sweep's audio against the
-// reference's at the same time (the pre-screen judges it): the brightness and the envelope's
-// variation from position 0 to 1, and for Activity the onsets the engine's own detector hears per
-// second of the rising leg, the sweep's and the reference's.
+// reference's at the same time: the brightness and the envelope's variation from position 0 to 1,
+// and for Activity the onsets the engine's own detector hears per second of the rising leg, the
+// sweep's and the reference's. The pre-screen judges Shape on it; Activity it judges on S1's
+// rungs' births per second and reports these beside them.
 struct Response {
   bool                  measured      = false;
   double                brightnessPct = 0;
@@ -137,13 +145,17 @@ struct Rendered {
   bool         ok = false;
   bool         exact = false;
   uint64_t     onsets = 0;
+  uint64_t     births = 0, steals = 0;  // Engine::Stats() over the render (RenderResult)
+  std::vector<uint32_t> birthSeconds;   // births per 1 s of the render
   std::string  error;
   std::string  wavPath, recipePath;  // relative to the preset's directory, or empty
 };
 
 struct Check {
   std::string name;
-  std::string verdict;  // "pass", "FAIL", "info", "n/a", "declared"
+  // "pass", "FAIL", "info", "n/a", "declared", or "listen": not judged, but named for the
+  // listening pass (a measurement the design does not judge that suggests a weak knob)
+  std::string verdict;
   std::string detail;
 };
 
