@@ -2610,6 +2610,69 @@ TEST_CASE("the Modes menu lists the set by family, the reserves in a submenu, an
   REQUIRE(asked);
 }
 
+// Unsaved edits in the open document go only when the curator says so: the menu asks
+// (onAskDiscard, an OK/Cancel box in the editor), and until then nothing loads, even for the mode
+// already ticked; Discard opens the mode chosen. Without edits it opens at once.
+TEST_CASE("the Modes menu asks before it drops unsaved edits") {
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  ModeMenu         menu(*proc);
+  int              asks = 0;
+  juce::String     askedFor;
+  std::function<void()> discard;
+  menu.onAskDiscard = [&](const juce::String& mode, std::function<void()> d) {
+    ++asks;
+    askedFor = mode;
+    discard  = std::move(d);
+  };
+  int chosen    = 0;
+  menu.onChosen = [&](bool opened, const juce::String&) { chosen += opened ? 1 : 0; };
+
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));  // nothing open: no question
+  REQUIRE(asks == 0);
+  REQUIRE(chosen == 1);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE_FALSE(s.Dirty());
+  size_t reserve = 0;
+  while (!Factory(reserve).reserve) ++reserve;
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + static_cast<int>(reserve)));  // unedited: no question
+  REQUIRE(asks == 0);
+  REQUIRE(chosen == 2);
+  REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+
+  // An edit: the menu asks, and nothing loads until Discard.
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE(s.Dirty());
+  const uint32_t serial = proc->LoadSerial();
+  for (const int item : {Lull(), static_cast<int>(reserve)}) {  // another mode, and the one ticked
+    REQUIRE(menu.Choose(ModeMenu::kFactoryItem + item));
+    REQUIRE(asks > 0);
+    REQUIRE(askedFor == juce::String::fromUTF8(Factory(static_cast<size_t>(item)).name));
+    REQUIRE(discard != nullptr);
+    REQUIRE(chosen == 2);
+    REQUIRE(proc->LoadSerial() == serial);
+    REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+    REQUIRE(s.Dirty());
+    REQUIRE(proc->CurrentSource().factory == static_cast<int>(reserve));
+  }
+  REQUIRE(asks == 2);
+  // Cancel is not calling it; Discard opens what was chosen last.
+  discard();
+  REQUIRE(chosen == 3);
+  REQUIRE(proc->LoadSerial() != serial);
+  REQUIRE(s.FactoryIndex() == static_cast<int>(reserve));
+  REQUIRE(proc->CurrentSource().factory == static_cast<int>(reserve));
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE_FALSE(s.Dirty());
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  REQUIRE(asks == 2);
+  REQUIRE(s.FactoryIndex() == Lull());
+}
+
 // The menu's path (ModeMenu::Choose, CurationSession::OpenFactory) against Open on the committed
 // .bsp, each on a processor that has been playing: the same state unit, a Spillover load with
 // Trails at the next block's first frame, the same mirrors, the same document, the same output

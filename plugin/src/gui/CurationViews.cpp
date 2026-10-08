@@ -431,6 +431,21 @@ void MacroPanel::resized() {
 
 // ── DocumentPanel ────────────────────────────────────────────────────────────────────────
 
+juce::ScopedMessageBox AskDiscard(const CurationSession& session, const juce::String& replacement,
+                                  juce::Component* parent, std::function<void()> discard) {
+  const juce::String name =
+      session.HasDocument() ? juce::String::fromUTF8(session.Stored().name.c_str()) : juce::String("The document");
+  const juce::String keep = session.FactoryIndex() >= 0 ? "Save as... keeps them in a copy." : "Save keeps them.";
+  const auto options = juce::MessageBoxOptions::makeOptionsOkCancel(
+      juce::MessageBoxIconType::WarningIcon, "Discard unsaved edits to " + name + "?",
+      name + " has unsaved edits (knob positions, leaves, detached leaves). Opening " + replacement +
+          " drops them. " + keep,
+      "Discard", "Cancel", parent);
+  return juce::AlertWindow::showScopedAsync(options, [then = std::move(discard)](int result) {
+    if (result != 0 && then) then();  // 1: Discard, 0: Cancel or closed
+  });
+}
+
 void DocumentPanel::StyleToggle(juce::TextButton& b, juce::Colour on) {
   b.setClickingTogglesState(false);
   b.setColour(juce::TextButton::buttonOnColourId, on);
@@ -538,14 +553,26 @@ void DocumentPanel::ChooseOpen() {
   chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                         [safe = juce::Component::SafePointer<DocumentPanel>(this)](const juce::FileChooser& fc) {
                           if (safe == nullptr || fc.getResult() == juce::File()) return;
-                          juce::String error;
-                          if (safe->session_.Open(fc.getResult(), &error)) {
-                            safe->Note(safe->session_.LastMessage(), palette::kText);
-                          } else {
-                            safe->Note(error, palette::kBad);
-                          }
-                          safe->Refresh();
+                          safe->OpenChosen(fc.getResult());
                         });
+}
+
+void DocumentPanel::OpenChosen(const juce::File& file) {
+  std::function<void()> openFile = [safe = juce::Component::SafePointer<DocumentPanel>(this), file] {
+    if (safe == nullptr) return;
+    juce::String error;
+    if (safe->session_.Open(file, &error)) {
+      safe->Note(safe->session_.LastMessage(), palette::kText);
+    } else {
+      safe->Note(error, palette::kBad);
+    }
+    safe->Refresh();
+  };
+  if (session_.HasDocument() && session_.Dirty()) {
+    askBox_ = AskDiscard(session_, file.getFileName(), this, std::move(openFile));
+  } else {
+    openFile();
+  }
 }
 
 void DocumentPanel::Save() {

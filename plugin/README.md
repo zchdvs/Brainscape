@@ -107,7 +107,9 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
    Spillover load with Trails while audio runs, Exact before anything has played, the knobs
    waiting for pickup, and its document open below. The header names what plays and its
    family. A factory mode has no file: **Save** is **Save as...**, which writes a copy (that copy
-   is then what plays and saves), and **Revert** re-opens the built-in package.
+   is then what plays and saves), and **Revert** re-opens the built-in package. While the open
+   document has unsaved edits, choosing a mode (even the one playing) or a file to open asks
+   first: **Discard** drops the edits and opens it, **Cancel** keeps them and what plays.
 1. **Open...** (Ctrl+O) a schema-1 preset document (`.json`) or a package (`.bsp`). It compiles
    through the compiler library and plays at once: a Spillover load with Trails while audio
    runs, Exact before anything has played. A document that does not read or compile is refused
@@ -230,7 +232,8 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   the pedal knob's pickup, and the test-signal audition's hash against `bspc render`'s S0.
   The factory set: every embedded package against `MANIFEST` (byte for byte the committed
   `.bsp`, its hashes computed and decoded, META's id, name and family, validation), the Modes
-  menu's structure, every mode loaded through the menu against its `.bsp` opened from a file on
+  menu's structure, its question before it drops unsaved edits (nothing loads until Discard),
+  every mode loaded through the menu against its `.bsp` opened from a file on
   a playing processor (the same output bit for bit, a Spillover load with Trails, the same
   mirrors and document), Save as and Revert of a built-in mode, and sessions with the `FMOD`
   block (an Exact restore saved back byte for byte, a recall over an open document, readers

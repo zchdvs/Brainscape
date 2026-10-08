@@ -1328,7 +1328,8 @@ time from `firmware/factory/MANIFEST` and the committed packages (`plugin/EmbedF
 `plugin/src/FactoryModes.*`; the build fails when a package's header does not carry MANIFEST's
 hashes, the tests when its bytes do not): the set by family, the reserves in a submenu.
 Choosing a mode opens its package in the session as opening the `.bsp` does (the same bytes,
-document and load); a built-in document saves only as a copy. It stands in for the Factory bank
+document and load); a built-in document saves only as a copy. While the open document has
+unsaved edits, the menu and Open ask before replacing it. It stands in for the Factory bank
 until the library exists.
 
 ### 9.2 Load modes, parameters and session state

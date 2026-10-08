@@ -14,7 +14,8 @@ namespace brainscape::plugin {
 // Choosing a mode opens its package in the curation session exactly as opening its .bsp does
 // (CurationSession::OpenFactory): the processor plays it as a state restore does, a Spillover
 // load with Trails while audio runs (Exact before anything has played), the knobs wait for
-// pickup, and the curation views show its document.
+// pickup, and the curation views show its document. Unsaved edits in the open document are
+// dropped only after the curator confirms (AskDiscard).
 class ModeMenu final : public Scalable<juce::Button> {
  public:
   explicit ModeMenu(BrainscapeProcessor& processor);
@@ -24,7 +25,9 @@ class ModeMenu final : public Scalable<juce::Button> {
   // The menu the button shows: a factory mode's item id is kFactoryItem + its index.
   juce::PopupMenu BuildMenu() const;
   // An item chosen from the menu: a factory mode opens and plays (onChosen hears how it went),
-  // kOpenItem asks onOpenFile. Returns whether the id was one of the menu's.
+  // kOpenItem asks onOpenFile. Returns whether the id was one of the menu's. While the open
+  // document has unsaved edits (CurationSession::Dirty), the mode opens only once onAskDiscard
+  // says so, even the mode already ticked.
   bool Choose(int itemId);
 
   // What the header shows: the mode's name and the caption above it ("MODE · REVERIE"); not
@@ -38,6 +41,10 @@ class ModeMenu final : public Scalable<juce::Button> {
 
   std::function<void(bool opened, const juce::String& message)> onChosen;
   std::function<void()>                                         onOpenFile;
+  // Asked before a factory mode replaces a document with unsaved edits: `mode` names the mode
+  // chosen, and `discard` opens it; not calling it keeps the edits and what plays. Unset, an
+  // OK/Cancel box asks (AskDiscard, CurationViews.h).
+  std::function<void(const juce::String& mode, std::function<void()> discard)> onAskDiscard;
 
   static constexpr int kFactoryItem = 1;
   static constexpr int kOpenItem    = 10000;
@@ -46,7 +53,15 @@ class ModeMenu final : public Scalable<juce::Button> {
   void clicked() override;
 
  private:
+  // Button's other clicked(const ModifierKeys&) stays visible: hidden, GCC's -Woverloaded-virtual
+  // (JUCE's warning set) fails the -Werror build. JUCE's own buttons do the same.
+  using juce::Button::clicked;
+
+  // Opens and plays factory package `index` (CurationSession::OpenFactory) and tells onChosen.
+  void Open(size_t index);
+
   BrainscapeProcessor& processor_;
+  juce::ScopedMessageBox askBox_;  // the discard question, while it is up
   juce::String         name_, caption_, family_;
   juce::Colour         accent_;
   bool                 named_ = false;  // a mode with a name plays (not the default mode)

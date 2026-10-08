@@ -269,6 +269,7 @@ int main(int argc, char* argv[]) {
   ok &= SnapshotModesMenu(*editor, dir, "editor-modes-menu");
   const int runaway = FindFactory("factory.runaway");
   ok &= runaway >= 0 && editor->Modes().Choose(ModeMenu::kFactoryItem + runaway);
+  ok &= proc.CurrentSource().factory == runaway;  // Lull unedited: no discard question
   Play(proc, 48000.0, 0.5);
   ok &= Snapshot(*editor, dir, "editor-pedal-reserve", BrainscapeEditor::kDefaultWidth,
                  BrainscapeEditor::kDefaultHeight);

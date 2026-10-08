@@ -8,6 +8,7 @@
 #include "../Curation.h"
 #include "../FactoryModes.h"
 #include "BrainscapeLookAndFeel.h"
+#include "CurationViews.h"
 
 namespace brainscape::plugin {
 
@@ -42,7 +43,8 @@ ModeMenu::ModeMenu(BrainscapeProcessor& processor)
     : Scalable<juce::Button>("Modes"), processor_(processor), accent_(palette::kTextFaint) {
   setTitle("Modes");
   setTooltip("The factory modes, by family, and the reserves: choosing one plays it as opening its .bsp does "
-             "(a Spillover load with Trails while audio runs) and opens it in the curation view.");
+             "(a Spillover load with Trails while audio runs) and opens it in the curation view, asking first "
+             "when the open document has unsaved edits.");
   Refresh();
 }
 
@@ -129,12 +131,30 @@ bool ModeMenu::Choose(int itemId) {
   }
   const int index = itemId - kFactoryItem;
   if (index < 0 || static_cast<size_t>(index) >= FactoryCount()) return false;
+  const CurationSession& session = processor_.Curation();
+  if (!session.HasDocument() || !session.Dirty()) {
+    Open(static_cast<size_t>(index));
+    return true;
+  }
+  // Unsaved edits: they go only when the curator says so.
+  std::function<void()> discard = [safe = juce::Component::SafePointer<ModeMenu>(this), index] {
+    if (safe != nullptr) safe->Open(static_cast<size_t>(index));
+  };
+  const juce::String mode = juce::String::fromUTF8(Factory(static_cast<size_t>(index)).name);
+  if (onAskDiscard) {
+    onAskDiscard(mode, std::move(discard));
+  } else {
+    askBox_ = AskDiscard(session, mode, this, std::move(discard));
+  }
+  return true;
+}
+
+void ModeMenu::Open(size_t index) {
   CurationSession& session = processor_.Curation();
   juce::String     error;
-  const bool       opened = session.OpenFactory(static_cast<size_t>(index), &error);
+  const bool       opened = session.OpenFactory(index, &error);
   Refresh();
   if (onChosen) onChosen(opened, opened ? session.LastMessage() : error);
-  return true;
 }
 
 void ModeMenu::clicked() {
