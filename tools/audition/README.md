@@ -106,7 +106,7 @@ part of a render's identity.
 | Renders | every render rendered and every load was exact |
 | Determinism | the repeated and re-blocked renders give the same hash as their originals |
 | Finite, Denormals | no NaN, infinite or subnormal sample in any render |
-| Peak | ≤ −1 dBFS at stored positions on Plucks, Strums and SoftNotes whatever the class, unrounded (Readings) |
+| Peak | ≤ −1 dBFS at stored positions on the class inputs, unrounded; the other inputs' stored peaks are reported under Peak (other) (Readings) |
 | Level | the wet alone (Mix 1) within ±2 LU of the dry on the class inputs |
 | Engaged | the stored preset from 1 LU below to 4 LU above the dry on the class inputs |
 | Tail | the time to −70 dBFS after the input stops is finite, measured on a 60 s probe when the render does not see it end (Readings), unless the mode is declared self-oscillating |
@@ -119,7 +119,7 @@ part of a render's identity.
 | Response (Shape) | Shape from 0 to 1 moves the brightness by 5 % or the envelope's variation by 1 dB, each against the reference at the same time |
 | Response (Activity) | the grains born per second (`Engine::Stats()`) while the input sounds, at S1's five Activity rungs, change by at least a quarter from Activity 0 to 1 and monotonically: no rung more than 5 % against the direction of the one before it. Beside them, reported: the brightness, the envelope's variation, the level and the onsets the engine's own detector hears across the Activity sweep (without rungs, as when S1 is not rendered, a knob that moves none of these fails as dead) |
 | Response (Repeats) | reported, not judged: S7's tail at Repeats 1 against its tail at 0; under 1.5 times the verdict is "listen", a knob the listening pass should check |
-| Peak (other), Load | reported: peaks of S0's other vectors, of S7–S10 and of the Clicks renders on SoftNotes; births per second at the stored positions on the class inputs (with the render's births, steals and onsets) and the most in any S11 render |
+| Peak (other), Load | reported: the stored peaks on Plucks, Strums and SoftNotes outside the class, each by name (an attack mode's SoftNotes, a pad mode's Plucks and Strums), and the highest of S0's other vectors and wet renders, of S7–S10 and of the Clicks renders on SoftNotes; births per second at the stored positions on the class inputs (with the render's births, steals and onsets) and the most in any S11 render |
 
 ### Readings
 
@@ -155,13 +155,16 @@ waveform scores under 2 at any pitch, so a pitch or density change is no click, 
 in one scores in the tens. A static render that scores under 2 is taken to score 2. A mode
 documented as needing attacks may play little on SoftNotes, and its clicks show less there.
 
-Peak is judged on Plucks, Strums and SoftNotes for every mode, not only on its class inputs:
-§11.3 judges a mode on its class, but a player holds a chord into an attack mode and picks into a
-pad mode at the stored positions, and the codec clips either. (SoftNotes is not the hot input:
-its dry peaks at −7.2 dBFS, Plucks' at −4.5 dBFS; a sustained, noise-like wet at the Level
-check's loudness is what reaches full scale, and a lower stored Mix lowers it without moving
-Level, which is measured at Mix 1.) The sweeps and S11 are judged on the class input, as §11.3
-says; on SoftNotes an attack mode's are reported under Peak (other).
+Peak is judged on the class inputs, as §11.3 says. A player still holds a chord into an attack
+mode and picks into a pad mode, and the codec clips either, so the stored peaks on the other
+inputs of Plucks, Strums and SoftNotes are reported under Peak (other), each by name ("soft_notes
+at the stored positions -1.91 dBFS"), never as a failure. The review of 2026-10-07 judged all
+three for every mode; the owner judged that too strict (2026-10-08), and its stored Mix values,
+which the owner listened at, stay. (SoftNotes is not the hot input: its dry peaks at −7.2 dBFS,
+Plucks' at −4.5 dBFS; a sustained, noise-like wet at the Level check's loudness is what reaches
+full scale, and a lower stored Mix lowers it without moving Level, which is measured at Mix 1.)
+The sweeps and S11 are judged on the class input too; on SoftNotes an attack mode's are reported
+under Peak (other).
 
 Activity's "event density or voice count" is read from the engine's grain births
 (`Engine::Stats()`, which the render returns per second): the engine reports no count of

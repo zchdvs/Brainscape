@@ -1626,21 +1626,25 @@ trims and stored Mix were set against it. The tap modes (Engram, Callback, Pinho
 Hann grains a quarter-grain apart instead of one rectangular grain, so their Activity and Time no
 longer splice.
 
-As built, after review (2026-10-07; the owner's sign-off pending on the readings marked *): the
-cloud modes, Lull and Runaway are pad class and the rest attack class. A first pass made the
-clouds and Lull attack class on the reading that Level and Peak could not both pass on SoftNotes;
-that was wrong (SoftNotes peaks 2.7 dB under Plucks, and Level is measured at Mix 1, so a lower
-stored Mix lowers the Peak alone) and hid 7 stored renders clipping on SoftNotes; the stored Mix
-now holds them under −1 dBFS. The tooling reads three checks more strictly than the table: Peak at
-the stored positions on Plucks, Strums and SoftNotes for every mode, whatever its class (*);
-Response (Activity) from the engine's births per second at Activity 0, 0.25, 0.5, 0.75 and 1,
-monotonic and changed by a quarter (`Engine::Stats()`; the echoic modes add voices or overlap with
-Activity); and a Repeats knob's tail, S7's at 1 against at 0, reported for listening under 1.5
-times (*; Updraft's octave climb leaves the band, so its tail cannot grow much). Sweeps and S11 are
-judged on the class input as above, so an attack mode at an extreme corner can still pass full
-scale on a sustained chord (up to +2.5 dBFS on SoftNotes): an output safety limiter, or judging
-every input there too, is the owner's question (*). `firmware/factory/AUDITION.md` records each
-change and its numbers.
+As built, after review (2026-10-07) and the owner's answers (2026-10-08): the cloud modes, Lull
+and Runaway are pad class and the rest attack class. A first pass made the clouds and Lull attack
+class on the reading that Level and Peak could not both pass on SoftNotes; that was wrong
+(SoftNotes peaks 2.7 dB under Plucks, and Level is measured at Mix 1, so a lower stored Mix lowers
+the Peak alone) and hid 7 stored renders clipping on SoftNotes; the stored Mix now holds them
+under −1 dBFS, and the owner, who listened at those values, finds the pad modes' level (Mix 0.3 to
+0.35) about right. The review read three checks more strictly than the table, and the owner kept
+two: Response (Activity) from the engine's births per second at Activity 0, 0.25, 0.5, 0.75 and
+1, monotonic and changed by a quarter (`Engine::Stats()`; the echoic modes add voices or overlap
+with Activity); and a Repeats knob's tail, S7's at 1 against at 0, reported for listening under
+1.5 times (Updraft's octave climb leaves the band, so its tail cannot grow much). The third, Peak
+at the stored positions on Plucks, Strums and SoftNotes for every mode, the owner found too
+strict: Peak is judged on the class inputs, as the table says, and the other inputs' stored peaks
+are reported (Peak (other)), never failed; at the stored Mix they all sit under −1 dBFS anyway.
+Sweeps and S11 are judged on the class input as above, so an attack mode at an extreme corner can
+still pass full scale on a sustained chord (up to +2.5 dBFS on SoftNotes): the owner wants an
+output safety limiter, a sound revision of its own, not yet built. All 14 modes are "keep",
+pending the owner's knob ratings in the curation slice. `firmware/factory/AUDITION.md` records
+each change, its numbers and the owner's answers.
 
 ### 11.4 What waits
 

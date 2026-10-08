@@ -461,20 +461,16 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     checks.push_back(Make("Denormals", denormal));
   }
 
-  // S0: Peak on Plucks, Strums and SoftNotes whatever the class (kPeakVectors); Level, Engaged
-  // and Tail on the class inputs.
+  // S0 on the class inputs: Peak, Level, Engaged, Tail. The other inputs of kPeakVectors are
+  // reported under Peak (other), not judged.
   Verdicts peak, level, engaged, tail;
-  for (const Vector in : kPeakVectors) {
-    const std::string vn = VectorName(in);
-    const Rendered*   e  = Find(rs, "S0.engaged." + vn);
-    if (e != nullptr && e->ok) peak.Add(e->metrics.peakDbfs <= kPeakStoredDbfs, vn + " " + Peak(e->metrics));
-  }
   for (const Vector in : inputs) {
     const std::string vn  = VectorName(in);
     const Rendered*   e   = Find(rs, "S0.engaged." + vn);
     const Rendered*   w   = Find(rs, "S0.wet." + vn);
     const double      dry = DryLevel(in);
     if (e != nullptr && e->ok) {
+      peak.Add(e->metrics.peakDbfs <= kPeakStoredDbfs, vn + " " + Peak(e->metrics));
       const double d = e->metrics.loudness - dry;
       engaged.Add(Round1(d) >= kEngagedLowLu && Round1(d) <= kEngagedHighLu, vn + " " + Lu(d) + " LU");
       const bool        finite = e->metrics.tailFinite;
@@ -721,9 +717,16 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
   }
 
   {  // Other peaks: reported, not judged (§11.3 judges the class inputs at stored positions, the
-     // sweeps and S11): S0 on the other vectors and at Mix 1, S7-S10, and the Clicks renders.
+     // sweeps and S11): the stored positions on kPeakVectors' other inputs, each named; S0 on the
+     // other vectors and at Mix 1, S7-S10, and the Clicks renders.
     std::string d;
-    auto        report = [&](const std::string& label, auto&& pick) {
+    for (const Vector in : kPeakVectors) {
+      if (std::find(inputs.begin(), inputs.end(), in) != inputs.end()) continue;
+      const std::string vn = VectorName(in);
+      const Rendered*   e  = Find(rs, "S0.engaged." + vn);
+      if (e != nullptr && e->ok) d += (d.empty() ? "" : "; ") + vn + " at the stored positions " + Peak(e->metrics);
+    }
+    auto report = [&](const std::string& label, auto&& pick) {
       Tally t;
       for (const Rendered& r : rs) {
         if (r.ok && r.plan.role != Role::Determinism && pick(r)) {

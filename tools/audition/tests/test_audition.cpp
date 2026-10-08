@@ -667,24 +667,58 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
   rs.push_back(make("S0", "S0.engaged.saturation", Role::Engaged, dp, 6.0));
   rs.back().plan.vector = Vector::Saturation;
   cs = PreScreen(preset, rs);
-  CHECK(verdict(cs, "Peak") == "pass");  // judged on Plucks, Strums and SoftNotes only
+  CHECK(verdict(cs, "Peak") == "pass");  // judged on the class inputs only
   CHECK(verdict(cs, "Peak (other)") == "info");  // the other vectors and the wet: reported
   for (const Check& c : cs) {
     if (c.name == "Peak (other)") CHECK(c.detail.find("6.0 dBFS (S0.engaged.saturation)") != std::string::npos);
   }
   rs.pop_back();
-  // A sustained input at the stored positions is judged whatever the class: an attack mode
-  // that clips on SoftNotes fails Peak.
-  rs.push_back(make("S0", "S0.engaged.soft_notes", Role::Engaged, DryLevel(Vector::SoftNotes), -0.5));
-  rs.back().plan.vector = Vector::SoftNotes;
+  // Peak is judged on the class inputs only (the owner's decision, 2026-10-08): an attack mode
+  // that clips only on SoftNotes passes, its stored peak there reported under Peak (other) by
+  // name, never as a failure.
+  rs.push_back(make("S0", "S0.engaged.soft_notes", Role::Engaged, DryLevel(Vector::SoftNotes), 0.5));
+  rs.back().plan.vector         = Vector::SoftNotes;
+  rs.back().metrics.overFull    = 3;
+  cs = PreScreen(preset, rs);
+  CHECK(verdict(cs, "Peak") == "pass");
+  CHECK(verdict(cs, "Peak (other)") == "info");
+  for (const Check& c : cs) {
+    CHECK_FALSE(c.verdict == "FAIL");
+    if (c.name == "Peak") CHECK(c.detail.find("soft_notes") == std::string::npos);
+    if (c.name == "Peak (other)") {
+      CHECK(c.detail.rfind("soft_notes at the stored positions 0.50 dBFS, 3 samples over full scale", 0) == 0);
+    }
+  }
+  // A class input that clips still fails, with the other input still reported.
+  rs[1].metrics.peakDbfs = -0.5;
   cs = PreScreen(preset, rs);
   CHECK(verdict(cs, "Peak") == "FAIL");
-  CHECK(verdict(cs, "Engaged") == "pass");  // levels stay on the class inputs
+  CHECK(verdict(cs, "Peak (other)") == "info");
   for (const Check& c : cs) {
-    if (c.name == "Peak") CHECK(c.detail.find("soft_notes -0.50 dBFS (FAIL)") != std::string::npos);
+    if (c.name == "Peak") {
+      CHECK(c.detail.find("strums -0.50 dBFS (FAIL)") != std::string::npos);
+      CHECK(c.detail.find("soft_notes") == std::string::npos);
+    }
+    if (c.name == "Peak (other)") CHECK(c.detail.find("soft_notes at the stored positions 0.50 dBFS") != std::string::npos);
   }
-  rs.back().metrics.peakDbfs = -1.0;
-  CHECK(verdict(PreScreen(preset, rs), "Peak") == "pass");
+  rs[1].metrics.peakDbfs = -3.0;
+  {  // A pad mode: judged on SoftNotes; Plucks and Strums reported.
+    Preset pad              = preset;
+    pad.declare.inputClass  = InputClass::Pad;
+    rs[0].metrics.peakDbfs  = 0.5;  // plucks over full scale: reported
+    cs = PreScreen(pad, rs);
+    CHECK(verdict(cs, "Peak") == "FAIL");  // soft_notes, its class input, at +0.50 dBFS
+    for (const Check& c : cs) {
+      if (c.name == "Peak") CHECK(c.detail.find("soft_notes 0.50 dBFS, 3 samples over full scale (FAIL)") != std::string::npos);
+      if (c.name == "Peak (other)") {
+        CHECK(c.detail.rfind("plucks at the stored positions 0.50 dBFS; strums at the stored positions -3.00 dBFS", 0) == 0);
+      }
+    }
+    rs.back().metrics.peakDbfs = -1.0;
+    rs.back().metrics.overFull = 0;
+    CHECK(verdict(PreScreen(pad, rs), "Peak") == "pass");  // plucks' clip does not fail it
+    rs[0].metrics.peakDbfs = -1.04;
+  }
   rs.pop_back();
   rs[0].metrics.loudness = dp + 4.06;
   rs[1].metrics.loudness = ds - 1.0;

@@ -73,8 +73,9 @@ inline constexpr uint32_t kSweepFrames      = 16 * kRate;
 inline constexpr uint32_t kRepeatsTail      = 20 * kRate;
 inline constexpr float    kRepeatsRungs[5]  = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
 inline constexpr float    kActivityRungs[5] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
-// The vectors a mode's stored positions must not clip on, whatever its class: a player holds a
-// chord into an attack mode and picks into a pad mode (the Peak check; README.md, "Readings").
+// The played inputs whose stored-position peaks the pre-screen names one by one: Peak judges the
+// class inputs among them, Peak (other) reports the rest, which a player may still play into the
+// mode (a chord into an attack mode, picking into a pad mode; README.md, "Readings").
 inline constexpr Vector   kPeakVectors[3]   = {Vector::Plucks, Vector::Strums, Vector::SoftNotes};
 inline constexpr uint32_t kFreezeOn         = 4 * kRate, kFreezeOff = 14 * kRate;
 inline constexpr uint32_t kLoadFrame        = 5 * kRate;

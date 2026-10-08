@@ -38,9 +38,9 @@ is not met**: a fix is under design, with owner decisions pending
 ([the silicon record](design/reviews/rev7-silicon-record.md)); revisions 4 to 7 have not run on
 the board. **Step 4's first factory set is authored and pre-screened** (see
 [Step 4: the first factory set](#step-4-the-first-factory-set)): 14 modes and 4 reserves in
-`firmware/factory/`, every one passing the objective pre-screen at revision 7; the owner's
-listening pass is next. The preset
-jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull requests #5
+`firmware/factory/`, every one passing the objective pre-screen at revision 7; the owner has
+heard it (2026-10-08) and keeps all 14, the knob ratings in the app's curation view next. The
+preset jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull requests #5
 (run 37658865968), #6 (run 37693138971) and #7 (run 37701943741); wave 1, lanes E and D and the
 factory set have not yet run on GitHub.
 
@@ -54,7 +54,7 @@ factory set have not yet run on GitHub.
 | `dsp/` core: onset detector + trigger layer | ✅ Shipped & hardened |
 | Determinism profile (sample-identical pedal ↔ desktop) | 🚧 Internal sound revision 1 minted and gating ([determinism-profile.md](design/determinism-profile.md) §8.4 steps 1–9 and most of step 10; what step 10 still lacks is under [Known gaps](#known-gaps-and-deferred-work)). Next: the rest of step 10 and the nightly full-system emulation leg. The hardware measurements are taken (Rev7, revision 1, [record](design/reviews/rev7-silicon-record.md)): gradual underflow stays; explicit FMA (now a candidate under §7.3's rule), kernels or tables and the default load mode stay open beside the CPU budget's fix |
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters under host model (b) with the macro, expression and effect-volume parameters, Restart on transport start, offline audition; lane D's curation slice (mode-compiler.md §9.1): a preset document or package opened, played with its mode, edited with the pedal's eight knobs (pickup, Shift) and the raw leaves, saved as canonical JSON through the compiler (derive, solve position, the compiler's errors and lint), A/B against the stored version with level matching, and a one-click render through `tools/audition`; no library, session v2 or device link yet |
-| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it, and wave 1 at sound revisions 4–7 (lane F: trigger sources, bursts, intermittency, pitch sets, micro-loop repeat and decay, voice count); lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash and the authoring history); and lane D's curation slice in the app (above). Step 4's first factory set ([firmware/factory](../firmware/factory/README.md): 14 modes in all four families and 4 reserves, every one passing the pre-screen at revision 7) awaits the owner's listening pass. Next: that pass, then W2's CLOCK |
+| Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it, and wave 1 at sound revisions 4–7 (lane F: trigger sources, bursts, intermittency, pitch sets, micro-loop repeat and decay, voice count); lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash and the authoring history); and lane D's curation slice in the app (above). Step 4's first factory set ([firmware/factory](../firmware/factory/README.md): 14 modes in all four families and 4 reserves, every one passing the pre-screen at revision 7) is heard: the owner keeps all 14 (2026-10-08), the knob ratings pending. Next: those ratings, then W2's CLOCK |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 29 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
@@ -127,9 +127,9 @@ No engine change: the set plays at sound revision 7.
   order, so S10 and S11 cross it, the reserves as another, written to `build/`) passes every check
   on all 18: the attack modes' wet sits −2.0 to +0.1 LU from the dry on Plucks and Strums and their
   engaged output +0.9 to +1.9 LU over bypass, the pad modes' −1.1 to 0.0 and +0.9 to +1.7 LU on
-  SoftNotes; stored peaks −1.07 to −3.92 dBFS on Plucks, Strums and SoftNotes for every mode; every
-  sweep and S11 render on the class input at or under 0 dBFS (the tightest −0.01 dBFS, Halation at
-  Pinhole's positions); every tail finite; Clicks at most 1.19 times the static's step; Activity's
+  SoftNotes; stored peaks on the class inputs −1.07 to −3.87 dBFS, and on the other inputs
+  (reported, not judged) −1.11 to −7.18 dBFS; every sweep and S11 render on the class input at or
+  under 0 dBFS (the tightest −0.01 dBFS, Halation at Pinhole's positions); every tail finite; Clicks at most 1.19 times the static's step; Activity's
   births per second rising by 2.7 to 10 times from 0 to 1. The packages and the documents compiled
   in memory give the same 1,488 render hashes. Each iteration is recorded with its reason in
   `AUDITION.md` (`ratings.py note`): Shape made audible (most modes take it towards fewer, longer,
@@ -145,7 +145,8 @@ No engine change: the set plays at sound revision 7.
   found the reading wrong (SoftNotes peaks 2.7 dB under Plucks; Level is measured at Mix 1, so a
   lower stored Mix lowers the peak alone): the stored Mix now holds every mode under −1 dBFS on
   all three inputs (Murmuration, Halation, Undertow, Déjà Vu and Kaleido at 0.3, Lull and Refrain
-  0.35, Updraft 0.4), and the tooling judges the stored Peak on all three whatever the class. It
+  0.35, Updraft 0.4), and the review had the tooling judge the stored Peak on all three whatever
+  the class (the owner's answers, below, returned it to the class inputs). It
   also found Activity's response unjudged and dead in the echoic modes (Callback's births flat at
   40 per second; the audition now reads `Engine::Stats()` and judges births per second at five
   Activity positions), Undertow's Repeats moving nothing (its grain feedback decorrelated by
@@ -153,8 +154,15 @@ No engine change: the set plays at sound revision 7.
   stored at its maximum. The tooling now reports a Repeats knob whose tail at 1 is under 1.5 times
   its tail at 0 as "listen": Updraft (its climb leaves the audio band), Refrain and the reserves
   Afterimage, Runaway, Downdraft and Recurrence. An attack mode's sweeps and S11 are judged on
-  Plucks only, and on SoftNotes several corners still pass full scale (up to +2.5 dBFS): an output
-  limiter, or judging every input there, is the owner's question.
+  Plucks only, and on SoftNotes several corners still pass full scale (up to +2.5 dBFS).
+- **The owner's answers (2026-10-08)**, from the listening page, recorded in `AUDITION.md`
+  (`ratings.py note --set`): all 14 modes keep, pending the knob ratings, which the owner gives in
+  the app's curation view; the pad modes' level at Mix 0.3–0.35 is about right; an output safety
+  limiter is wanted, as a sound revision of its own (not yet built); and of the review's stricter
+  checks, Activity judged on births and Repeats' "listen" stay, while Peak on every input was too
+  strict: Peak is judged on the class inputs again and the other inputs' stored peaks are reported
+  under Peak (other), never failed. No recipe or stored Mix changed; the re-run pre-screen gives
+  the same 1,488 render hashes and all 18 pass, every other input's stored peak under −1 dBFS.
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -162,9 +170,10 @@ No engine change: the set plays at sound revision 7.
   manifest (what to listen for, render hashes, every pre-screen check, which files cut a tail). The
   owner rates in `firmware/factory/AUDITION.md` only. The files are 7 s, not 8: 44 files of 8 s are
   67.6 MB, over the set's 60 MB cap (59.1 MB at 7 s).
-- **What remains for step 4**: the owner's listening pass and ratings (`ratings.py rate` on the
-  full S0–S11 renders), the exit criteria (10 keepers, one per family, every knob 3 or more), the
-  keepers joining the golden corpus, display names and Q3's name check, and DI clips (Q9).
+- **What remains for step 4**: the owner's knob ratings, in the app's curation view, and the
+  ratings rows (`ratings.py rate` on the full S0–S11 renders), the exit criteria (10 keepers, one
+  per family, every knob 3 or more), the keepers joining the golden corpus, display names and Q3's
+  name check, and DI clips (Q9).
 
 ## Internal sound revisions 4–7: wave 1
 
@@ -1127,8 +1136,8 @@ records live in [docs/design/reviews/](design/reviews/).
   Plucks the dry's attacks under the Mix law make 4 times the static's largest step
   unreachable), so an attack mode renders S1–S6 and S11 twice; Activity is judged on the
   engine's births per second (`Engine::Stats()`) at five stored positions; the stored Peak is
-  judged on Plucks, Strums and SoftNotes whatever the class; a Repeats knob that barely lengthens
-  S7's tail is named for listening. Shape's response is read from 2 s windows of the engaged output
+  judged on the class inputs, the other inputs' stored peaks reported by name (the owner's
+  decision, 2026-10-08); a Repeats knob that barely lengthens S7's tail is named for listening. Shape's response is read from 2 s windows of the engaged output
   and moves by up to about 5 % and 0.5 dB with the grains' random draws alone, so a Shape near its
   threshold passes or fails by draw. The
   compiler's example `engram.json` fails Clicks (its grains are hard-edged at Contour 0, window
@@ -1205,9 +1214,10 @@ Steps 1–4 need no hardware.
 4. **First factory modes through the app's offline audition** — burning down the feel risk.
    *Done:* the first set authored and pre-screened ([Step 4](#step-4-the-first-factory-set)): 14
    modes and 4 reserves in `firmware/factory/`, every one passing the pre-screen at revision 7,
-   with the owner's audition set rendered. *Next:* the owner's listening pass (the factory set's
-   **feel**, which only the owner's ears can judge), ratings and the exit criteria; then the
-   keepers join the golden corpus. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   with the owner's audition set rendered; the owner has heard it (2026-10-08) and keeps all 14.
+   *Next:* the owner's knob ratings in the curation view (the factory set's **feel**, which only
+   the owner's ears can judge) and the exit criteria; then the keepers join the golden corpus. The
+   output safety limiter the owner asked for comes as a sound revision of its own. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
