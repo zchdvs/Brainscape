@@ -31,7 +31,8 @@ revision 3 and carry the corpus's packages. On the owner's Rev7 (2026-10-07) the
 rendered the golden corpus bit for bit at sound revisions 1 and 3, and the DWT pass (revision 1)
 showed that **the worst-case CPU budget is not met**: a fix is under design, with owner decisions
 pending ([the silicon record](design/reviews/rev7-silicon-record.md)). The preset
-jobs that mode-compiler lane G added to CI have not yet run on GitHub.
+jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull requests #5
+(run 37658865968), #6 (run 37693138971) and #7 (run 37701943741).
 
 | Phase | State |
 | --- | --- |
@@ -47,7 +48,7 @@ jobs that mode-compiler lane G added to CI have not yet run on GitHub.
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 3 ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-3 corpus from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–169.0 %, the corpus's `dense_1ms` at 118.6 %; a fix is under design, owner decisions pending. Not yet run on the board: the live image, the bench at revision 3 |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 3 ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-3 corpus from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending. Not yet run on the board: the live image, the bench at revision 3 |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -591,7 +592,7 @@ records live in [docs/design/reviews/](design/reviews/).
   worst-case CPU budget not met**: with the engine's code in ITCM and warm caches, the nominal
   64-voice row peaks at 99.1 % of the 480,000-cycle block (100.3 % cold), the pessimistic rows at
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
-  `dense_1ms`, a live-image preset, at 118.6 %; only the lighter configurations stay under 85 %.
+  `dense_1ms`, a live-image preset, at 118.6 %.
   A fix is under design, with owner decisions pending; none of it is in this tree. Still to run
   on the board: the live image's checks and the bench at revision 3. The images use libDaisy's
   ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
@@ -611,7 +612,8 @@ records live in [docs/design/reviews/](design/reviews/).
   §5.12 and §6.1 require, and, from mode-compiler lane G, `compiler/`, `tools/bspc/`,
   `firmware/factory/` and the root `.gitattributes` (mode-compiler.md §8.1, §8.3; the golden
   corpus's packages sit under `dsp/`).
-  Lane G adds eight checks for the owner to require once they have run: `bspc-roundtrip` on
+  Lane G adds eight checks, which have run and passed (Mode compiler lane G's open ends), for
+  the owner to require: `bspc-roundtrip` on
   `linux-x64-gcc`, `linux-x64-clang`, `linux-arm64-gcc`, `windows-x64-msvc`,
   `windows-x64-msvc-avx2`, `macos-arm64-appleclang` and `macos-arm64-appleclang-latest` (each
   named `bspc-roundtrip (<leg>)`) and `blob-libfuzzer (linux-x64-clang)`; its other checks are
@@ -751,10 +753,15 @@ records live in [docs/design/reviews/](design/reviews/).
   and CODEOWNERS for `compiler/`, `tools/bspc/`, `firmware/factory/` and `.gitattributes`. The
   compiler's digests, like the number code's hashes, are measured on x86-64 only until those
   legs first run on GitHub. `render` waits for lane E's `tools/audition/`.
-- **Mode compiler lane G's open ends.** Nothing lane G added has run on GitHub: its first run is
-  the gate for the number code's and the compiler's digests on arm64 and macOS (above), and for
-  `bspc`'s non-ASCII file names and the import check on macOS, which no host here offered;
-  locally the new steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
+- **Mode compiler lane G's open ends.** Lane G's jobs have run on GitHub since pull request #5:
+  its first run (37657240905) aborted `compiler_number_hashes` on the two Linux GCC legs at a
+  fortified buffer in the test's random generator (fixed in `7f20481`), and its second
+  (37658865968) and those of #6 and #7 (37693138971, 37701943741) passed all eight jobs,
+  `compiler_number_hashes` and `bspc roundtrip` on linux-arm64 and both macOS legs included.
+  Those runs were the gate for the number code's and the compiler's digests on arm64 and macOS
+  (above), and for `bspc`'s non-ASCII file names and the import check on macOS, which no host
+  here offered; the "provisional" and "x86-64 only" wording above predates them. Locally the new
+  steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
   later lanes must write for the package rule: lane C's harness puts `soundHash` and

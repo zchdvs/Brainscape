@@ -657,6 +657,12 @@ budget").
 > exported `EvalMacro` and `EvalExpression`, `ValidateMode` without a sample rate, and
 > `Engine::ModeSwitches()`; `ActiveModeInfo` is not built.
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** `ClearHistory` is measured on the owner's
+> Daisy Seed Rev7 at 22,622,276 cycles, 47.13 ms (`Restart` 47.18 ms); clearing 16 MiB of SDRAM
+> alone takes 44.97 ms at the core's floor without DMA. The listing's "est. ~45-160 ms" and the
+> note below that calls the range an estimate predate it
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
+
 ```cpp
 namespace brainscape {
 
@@ -972,6 +978,14 @@ do not vendor.
     mark, measured from the live head, so freeze has no effect on `POS_MARK` grains,
     measured) waits on a listening test.
     The app-side risks are in [companion-app.md](companion-app.md).
+
+> **Update (2026-10-07, Rev7 silicon record).** Three of risk 13's items are measured on the
+> owner's Daisy Seed Rev7 ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md)).
+> The M7 cost: the worst case does not fit the budget (pessimistic worst block 135.5–168.5 %
+> with warm caches, against the 77–78 % estimated; §8's update has the figures), and a fix is
+> under design, with owner decisions pending (silicon record §3.2–§3.3). Subnormal timing: a
+> subnormal costs the M7 nothing at FZ = 0 (silicon record §3.7). Emulation against silicon: the
+> chip rendered the golden corpus bit for bit at sound revisions 1 and 3 (silicon record §2).
 
 ## 13. Provenance
 

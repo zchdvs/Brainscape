@@ -1,8 +1,8 @@
 # Daisy Seed Rev7, 2026-10-07: the captures
 
 The device streams of the first two sessions on the owner's Daisy Seed Rev7, as the host tools
-saved them (CRLF line ends; `.gitattributes` keeps every byte). What they show, and what each
-settles in the designs, is in
+saved them, with session 1's bench report and its images' archive hashes (CRLF line ends;
+`.gitattributes` keeps every byte). What they show, and what each settles in the designs, is in
 [docs/design/reviews/rev7-silicon-record.md](../../../docs/design/reviews/rev7-silicon-record.md).
 Every image reports the same board: "Daisy Seed 1.2 / rev7 (PCM3060; PD5 strap)", CPUID
 `0x411FC271`, 480 MHz, booted from QSPI flash by the Daisy bootloader, libDaisy v9.0.0 and
@@ -23,6 +23,8 @@ Every image was built from `a91aa8ad64c7` (a clean tree), engine archive
 | `bench-bench-XIP.log` | The DWT pass, `run`, engine code executing in place from QSPI | `brainscape_bench_xip` |
 | `bench-bench-ITCM-hooks.log` | The DWT pass, `run`, on the engine built with the FP guard's test hooks: FZ = 1 renders and the IDC/UFC flag census | `brainscape_bench_hooks` |
 | `hello-bench-ITCM.json`, `hello-bench-XIP.json`, `hello-bench-ITCM-hooks.json` | Each bench image's `info` reply, saved on its own just before its run: build, board, FP and cache registers, memory map | the bench image named |
+| `bench-all.md` | The report `bench_report.py` wrote from the three bench logs in the session (`--markdown`), which the silicon record quotes | — |
+| `engine-archives.sha256` | The two archive hashes the images carry (each hello's `engineArchiveSha256` and `hooksArchiveSha256`), in the firmware build's `engine-archives.sha256` format, for `--expect-archive` | — |
 
 An earlier run of `brainscape_bench_xip` was interrupted; its partial log is not kept.
 
@@ -40,17 +42,14 @@ then, from this repository's root:
 python ../brainscape-a91aa8/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-1/parity-rev7-run.log --run "run" --expect-archive 4f4ddaa3583e46f29b84a008f5a80ad0938cacf05f2e961f70b1595ebf69da58
 python ../brainscape-a91aa8/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-1/parity-rev7-run-pedal.log --run "run pedal" --expect-archive 4f4ddaa3583e46f29b84a008f5a80ad0938cacf05f2e961f70b1595ebf69da58
 python ../brainscape-a91aa8/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-1/parity-rev7-run-hostile.log --run "run hostile" --expect-archive 4f4ddaa3583e46f29b84a008f5a80ad0938cacf05f2e961f70b1595ebf69da58
-python ../brainscape-a91aa8/tools/hil/bench_report.py --log firmware/records/rev7-2026-10-07/session-1/bench-bench-ITCM.log --log firmware/records/rev7-2026-10-07/session-1/bench-bench-XIP.log --log firmware/records/rev7-2026-10-07/session-1/bench-bench-ITCM-hooks.log --expect-archive 4f4ddaa3583e46f29b84a008f5a80ad0938cacf05f2e961f70b1595ebf69da58
+python ../brainscape-a91aa8/tools/hil/bench_report.py --log firmware/records/rev7-2026-10-07/session-1/bench-bench-ITCM.log --log firmware/records/rev7-2026-10-07/session-1/bench-bench-XIP.log --log firmware/records/rev7-2026-10-07/session-1/bench-bench-ITCM-hooks.log --expect-archive firmware/records/rev7-2026-10-07/session-1/engine-archives.sha256 --markdown ../bench-all.md
 ```
 
 Each parity check ends `VERDICT: PASS - 28 preset(s) match golden.json bit for bit (sound
-revision 1, whole corpus)`, exit 0. The bench report exits 0 with no run INCOMPLETE; given one
-hash, `--expect-archive` checks the two shipping-archive runs and notes that the hooks run's
-archive is not checked. Given instead the firmware build's two-line
-`build/fw/firmware/engine-archives.sha256` from those images (the hash above and
-`da7b4f2e…  libbrainscape_dsp_fpenv_hooks.a`), it checks all three and prints the report the
-session printed, byte for byte. Each hello file holds what the first line of its bench log
-holds, pretty-printed, but for `uptimeMs` (taken about a second earlier).
+revision 1, whole corpus)`, exit 0. The bench report checks all three runs' archives against
+`engine-archives.sha256` and exits 0 with no run INCOMPLETE, and the `../bench-all.md` it writes
+equals the committed `bench-all.md` byte for byte. Each hello file holds what the first line of
+its bench log holds, pretty-printed, but for `uptimeMs` (taken about a second earlier).
 
 ## Session 2: sound revision 3 (`session-2/`)
 

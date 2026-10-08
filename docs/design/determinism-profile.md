@@ -1327,6 +1327,16 @@ Each risk is stated with its mitigation.
 
 ### 8.4 Implementation plan
 
+> **Update (2026-10-07, Rev7 silicon record).** Part of step 13's hardware-gated work is done on
+> the owner's Daisy Seed Rev7 ([the silicon record](reviews/rev7-silicon-record.md) §4):
+> `FPDSCR` is 0 at boot in every image's hello; the DWT pass measured subnormals, the flush, a
+> bound on the cost of a birth at the maximum birth rate, the `Restart` clear and ITCM
+> placement, with contraction off inside every figure; and §4.2 is decided (keep gradual
+> underflow). Still open in step 13: render mode, the HIL runner, the engine SPSC queue, builds
+> with contraction on and with explicit FMA (§7.3), kernels against tables, the watermark and the
+> default load mode, and the CPU budget's fix, which is under design with owner decisions
+> pending.
+
 The merged milestone sequence is companion §8.1; the profile's steps fall into it as below.
 Every sound-changing change lands before revision 1 is **published** (§1.5).
 

@@ -9,6 +9,9 @@
 # Packages are bytes: never converted, never diffed as text.
 *.bsp binary
 # Silicon records (firmware/records/): device captures, kept byte for byte as the host tools saved
-# them (CRLF on the owner's Windows machine). No commit or checkout may convert them.
+# them (CRLF on the owner's Windows machine), with the report and archive hashes saved beside them.
+# No commit or checkout may convert them.
 /firmware/records/**/*.log -text
 /firmware/records/**/*.json -text
+/firmware/records/**/*.sha256 -text
+/firmware/records/**/session-*/*.md -text

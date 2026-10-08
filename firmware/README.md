@@ -38,9 +38,12 @@ unity from it, instead of a linear crossfade, so `set mix 0` is still the clean 
 packages are re-stamped (their sound and control hashes unchanged). At revision 3 the five images
 build and their engine archives equal the M7 oracle's, built on Windows and on Linux alike. The
 emulated checks of §9 (the golden check and the parity stream under `qemu-arm`) were cut off
-part-way locally when Docker stopped, every hash that arrived matching the file; CI's `parity-m7`
-job then passed them on pull requests #6 and #7 and on `main` at `4090270`, with the same archive
-`1d6fe1dc…`.
+part-way locally when Docker stopped, every hash that arrived matching the file. CI's `parity-m7`
+job then passed the golden check at blocks of 48 and 512, {48, 1, 127, 32}, random pattern 1,
+from a hostile caller and under the forced-flush control, and the parity stream at
+`maxBlockSize` 48 in the image's placement, on pull requests #6 and #7 and on `main` at
+`4090270`, with the same archive `1d6fe1dc…`. The Rev7 ran the stream at 512 and from a hostile
+caller on the chip (§6); 1-frame blocks have not run in full on the M7 at revision 3.
 
 **On the board** (2026-10-07). Two sessions on the owner's Rev7: at revision 1 the parity image
 and the three bench images, at revision 3 the parity image. Every parity run passed, and the
@@ -291,8 +294,10 @@ engine's code in ITCM:
 
 - **The worst-case budget is not met.** Worst warm block: `nominal` 99.1 % (100.3 % cold),
   `pess_render` 135.5 %, `pess_births` 168.5 %, `pess_events` 146.3 %, `dense_1ms` 118.6 %;
-  under 85 % only `default` (41.4 %), `tail_post_fb` (54.4 %), `pitch_reverse_spray` (84.6 %) and
-  `max_delay_spray_rev_up24` (48.3 %). A fix is under design, with owner decisions pending.
+  the others peak at 41.4 % (`default`), 54.4 % (`tail_post_fb`), 84.6 %
+  (`pitch_reverse_spray`) and 48.3 % (`max_delay_spray_rev_up24`). These are the engine's
+  cycles alone, with interrupts off around each call. A fix is under design, with owner
+  decisions pending.
 - **§7.3's rule:** contraction off threatens the budget, so explicit FMA is a candidate, to build
   and measure before adopting.
 - **§4.2's rule:** a subnormal operand or result costs nothing at FZ = 0 (1.00× the normal
@@ -485,7 +490,8 @@ own `.dtcmram_bss`/`.sdram_bss` names produce 17 MiB object files) and the linke
 and checks: region overflow, 32 KiB left for the stack in DTCM, and the heap's minimum. Every image
 also checks `PlanMemory` against the arenas at boot, and the host test `firmware_arena_plan` does on
 every ctest run. The heap peaks near 250 KiB in a parity run (measured under QEMU; on the Rev7 the
-break stood at 290,856 bytes after a whole-corpus run, at revisions 1 and 3), so it is in SDRAM;
+break stood at 224,904 bytes after the first whole-corpus run at revision 1 and at 290,856 after
+the second, and at 290,856 after the first at revision 3), so it is in SDRAM;
 the firmware's `_sbrk` refuses to grow before the SDRAM is initialized, and newlib's malloc lock
 masks interrupts because libDaisy's USB stack allocates inside the USB interrupt.
 
@@ -571,7 +577,9 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `Renderer(cfg, Placement)`, a second renderer over the same storage), matches the revision-2
   `golden.json` on all 33 presets, with their package hashes, and `MANIFEST` on all 18 packages,
   with `maxBlockSize` 48 and 512, and the hostile FP run on the quick set, checked by
-  `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull request). On the host the
+  `parity_check.py` (CI's `parity-m7` job runs the 48 case on every pull request). At revision 3
+  that job matched the revision-3 file and `MANIFEST` at 48 (pull requests #6 and #7, `main` at
+  `4090270`), and the Rev7 at 48 and 512 and from a hostile caller (§6). On the host the
   same check is the ctests `golden_parity_stream_mb512` and `_mb48`.
 - `parity_check.py` was run on 17 damaged streams at revision 1 (lost, spliced, truncated and
   renamed lines, a missing `parity-end`, a `resync` notice, device captures without or with a lossy

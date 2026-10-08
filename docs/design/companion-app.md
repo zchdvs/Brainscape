@@ -480,6 +480,13 @@ option and PARITY. On the pedal it costs about **45–160 ms** (*estimated*; rec
 the clearing implementation's golden hashes) and a DMA2D fill, are proposed but not yet
 prototyped, and are evaluated before the default load mode is chosen (§10.2 Q20).
 
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** `Restart` is measured on the owner's
+> Daisy Seed Rev7: 47.18 ms after 2 s of rendering (an Exact load 47.17 ms), of which clearing
+> 16 MiB of SDRAM at the core's floor without DMA is 44.97 ms; 0.02 ms on an engine that has
+> rendered nothing since. The default load mode no longer waits on the measurement, only on the
+> two alternatives above, neither yet prototyped, and the owner's choice
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
+
 **Offline audition render:** a separate `Engine` on a worker thread, canonical configuration,
 `LoadPreset(Exact)`; input decoded with `juce::AudioFormatManager`, converted once to 48 kHz if
 needed, passed through `ConditionInput24` and the input mode; 48-frame blocks until the
@@ -878,6 +885,12 @@ The mode schema and `modes::Compile` get their own design document (merged step 
 | Cost | ≈45–160 ms on the pedal (*estimated*, §4.9), or none if the restart watermark (§4.9, not yet prototyped) proves out | a stamped event, no large clears (§6.1) |
 | Pedal | global setting "Exact preset load" | recommended default, pending the DWT measurement of `Restart` (§10.2 Q20) |
 | App | audition, offline render, PARITY, plugin restart option | live monitoring of a pedal set to Spillover |
+
+> **Update (2026-10-07, Rev7 bench, sound revision 1).** The Exact load's cost is measured:
+> 47.17 ms on the owner's Daisy Seed Rev7, so the wet path mutes for about 47 ms (§4.9). The
+> pedal's default no longer waits on that measurement, only on §4.9's two alternatives (the
+> watermark and a DMA2D fill, neither yet prototyped) and the owner's choice (§10.2 Q20;
+> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.6).
 
 **Neither mode makes live playing comparable to the app**; Exact's value is a defined start state
 for PARITY and audition, so the pedal default is a user-experience choice. Spillover is
@@ -1326,7 +1339,28 @@ and visibility (§3.2); 10 iPlug2 and contract #7 (§1.1); 11 block-split fix sc
 14. **Shipping friction:** unsigned macOS plugins fail confusingly; notarization costs $99/yr;
     Windows signing eligibility is unconfirmed.
 
+> **Update (2026-10-07, Rev7 silicon record).** From the owner's Daisy Seed Rev7
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md)). Risk 1: the parity image
+> rendered the golden corpus bit for bit at sound revisions 1 and 3, at `maxBlockSize` 512 and
+> 48 and from a hostile caller (silicon record §2); the audio interrupt's FPU state is still
+> untested on silicon. Risk 2 is measured, and came true: with the engine's code in ITCM and warm
+> caches, the nominal row's worst block takes 99.1 % of the budget (100.3 % cold) and the
+> pessimistic rows' 135.5–168.5 % (136.2–169.0 % cold), against the 77–78 % estimated above; the
+> flush costs 0.9–1.8 %, and contraction off is inside every figure. Explicit FMA is a candidate
+> under profile §7.3's rule, to build and measure before adopting, and ITCM placement is
+> confirmed (silicon record §3.2–§3.5, §3.9). A fix for the budget is under design, with owner
+> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6).
+
 ### 10.2 Open questions
+
+> **Update (2026-10-07, Rev7 silicon record).** Q13's DWT pass ran on the owner's Daisy Seed Rev7,
+> not a Seed3 ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3–§4): profile
+> §8.3 Q1 is settled (no subnormal penalty at FZ = 0; gradual underflow stays) and Q5 answered
+> (the engine's bit-test flush, 0.9–1.8 % of the budget), `Restart` takes 47.18 ms, and the
+> parity image rendered at 2.66× realtime at sound revision 1 and 2.57× at revision 3 (silicon
+> record §2). Q2 and the watermark remain: there is no contraction-on or explicit-FMA build, and
+> the watermark is not built. Q20 no longer waits on the `Restart` measurement, only on §4.9's
+> watermark and DMA2D alternatives.
 
 **Legal review** (licence-text readings, not legal advice):
 

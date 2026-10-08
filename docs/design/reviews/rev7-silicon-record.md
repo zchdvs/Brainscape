@@ -7,7 +7,8 @@
 > in [`firmware/records/rev7-2026-10-07/`](../../../firmware/records/rev7-2026-10-07/README.md),
 > whose README gives the command that re-checks each one; this record cites them as
 > `session-1/<file>:<line>`, or `:<line>` in the log its paragraph names. Report figures are what `tools/hil/bench_report.py` and
-> `parity_check.py` print from those logs (the README's commands reproduce them). Every number
+> `parity_check.py` print from those logs (the README's commands reproduce them; session 1's
+> bench report is committed beside its logs as `session-1/bench-all.md`). Every number
 > here is **measured** (DWT cycles of the 480 MHz core) unless marked *estimated* or *derived*,
 > as the profile marks its own.
 
@@ -62,8 +63,8 @@ The bench images were not run at revision 3, and neither session ran the live im
 CI's `parity-m7 (qemu-arm cortex-m7)` job passed on pull request #6 (run 37693138971, head
 `78c8ba2`) and #7 (run 37701943741, head `aca8d9d`), and on `main` at `4090270`, the commit
 session 2's image was built from (run 37700307648). Its log reports the archive
-`libbrainscape_dsp.a 1d6fe1dc41f02fd9…` under QEMU 10.2.3 at commit `2e7e8b7e` (the hash the
-device reports) and, in check mode against the revision-3 file, "every rendered
+`libbrainscape_dsp.a 1d6fe1dc41f02fd9…` (the hash the device reports) under QEMU 10.2.3 at
+commit `2e7e8b7e` and, in check mode against the revision-3 file, "every rendered
 preset matches" at blocks of 48 and 512, the pattern {48, 1, 127, 32}, random pattern 1, from a
 hostile caller and under the forced-flush control; the parity stream at `maxBlockSize` 48 in the
 parity image's placement gives the same `PASS - 33 … 18 package(s) match MANIFEST` verdict, and
@@ -160,16 +161,18 @@ within 0.7 % (`bench-bench-ITCM-hooks.log:44-61`; its `nominal` cold maximum is 
 
 ### 3.3 The worst-case budget is not met
 
-Against the deadline (100 %) and a ceiling of 85 % that leaves the rest of each block to the
-interrupts, USB and the control loop (the ceiling itself is among the decisions pending, §5):
+Against the deadline (100 % of the block):
 
 - **Over 100 % in their worst block:** `pess_render` (135.5 % warm, 136.2 % cold), `pess_births`
   (168.5 %, 169.0 %), `pess_events` (146.3 %, 147.9 %), `dense_1ms` (118.6 %, 119.7 %), and
   `nominal` with cold caches (100.3 %). `pess_births` is over on average (119.6 %, 120.4 %), and
   every one of these but `nominal` is over at p99.
-- **Over 85 %, under 100 %:** `nominal` warm (p99 97.9 %, p99.9 98.8 %, max 99.1 %).
-- **Under 85 % throughout:** `default` (41.8 % at most), `tail_post_fb` (54.4 %),
-  `pitch_reverse_spray` (84.8 %) and `max_delay_spray_rev_up24` (48.3 %).
+- **Under 100 % throughout:** `nominal` warm (p99 97.9 %, p99.9 98.8 %, max 99.1 %), `default`
+  (41.8 % at most), `tail_post_fb` (54.4 %), `pitch_reverse_spray` (84.8 %) and
+  `max_delay_spray_rev_up24` (48.3 %).
+
+These are the engine's cycles alone (§3.1); how much of each block the audio interrupt, USB and
+the control loop need is among the decisions pending (§5).
 
 `dense_1ms` is a corpus preset and the live image's 1 ms glitch slot, and `nominal` is engine §8's
 nominal row, so the overrun is not confined to stress configurations. Silence does not help: the
@@ -332,9 +335,11 @@ From each image's hello (`session-1/hello-bench-*.json`, `session-1/parity-rev7-
 The sizes equal firmware §7's table (revision 1's in brackets there, revision 3's parity image).
 `PlanMemory` at `maxBlockSize` 48 asks, at revision 1, Hot 16,768 of its 24,576-byte arena,
 Warm 129,680 of 139,264, Bulk 17,545,216 of 17,825,792 and the Engine object 6,656 of its 7,168-byte
-slot (`session-1/bench-bench-ITCM.log:3`). The heap's break stood at 290,856 bytes after a
-whole-corpus parity run, at both revisions (`session-1/parity-rev7-run-pedal.log:45`,
-`session-2/parity-r3-run.log:69`), against firmware §7's 250 KiB measured under QEMU.
+slot (`session-1/bench-bench-ITCM.log:3`). The heap's break, against firmware §7's 250 KiB
+measured under QEMU: at revision 1 it stood at 224,904 bytes after the first whole-corpus parity
+run and at 290,856 after the second and third (`session-1/parity-rev7-run.log:45`,
+`parity-rev7-run-pedal.log:45`, `parity-rev7-run-hostile.log:45`); at revision 3 at 290,856
+after the first and after each later run (`session-2/parity-r3-run*.log:69`).
 
 ## 4. What the record settles in the design
 
@@ -353,10 +358,10 @@ whole-corpus parity run, at both revisions (`session-1/parity-rev7-run-pedal.log
 
 ## 5. What stays open
 
-- **The CPU budget.** Only the light configurations stay under 85 %, and five exceed the
-  deadline in their worst block (§3.3). A fix is under design, with owner decisions pending
-  (among them the ceiling of §3.3); none of it is in this tree, and it will need its own bench
-  session.
+- **The CPU budget.** Five configurations exceed the deadline in their worst block, and the
+  nominal row comes within 1 % of it with warm caches (§3.3). A fix is under design, with owner
+  decisions pending (among them how much of each block the interrupts, USB and the control loop
+  keep); none of it is in this tree, and it will need its own bench session.
 - **The bench at revision 3.** Revisions 2 and 3 changed the engine (modes, the Mix law); the
   figures above are revision 1's.
 - **The live image** (firmware §6): pass-through, switches, structures, macros, the `stats`
