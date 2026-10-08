@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -50,6 +51,9 @@ struct RenderRequest {
   // Block sizes from frame 0, repeated; each in 1..kMaxBlock. Any pattern renders the same bits
   // (the engine's contract); the pedal's is {48}.
   std::vector<uint32_t>          blockPattern{kPedalBlock};
+  // Read before every block: once true, the render stops and fails ("cancelled"). It changes no
+  // bits of a render it lets finish.
+  const std::atomic<bool>*       cancel = nullptr;
 };
 
 struct RenderResult {

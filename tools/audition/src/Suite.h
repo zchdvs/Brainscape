@@ -18,7 +18,8 @@
 //   S1-S6   Activity, Repeats, Shape, Time, Space, Filter: each moved from its stored position to
 //           0, to 1 and back over 16 s, one MacroMove per 48-frame block, the class input looped
 //           for the whole script; beside them the stored preset on the same looped input, the
-//           sweeps' reference (in S1)
+//           sweeps' reference (in S1). An attack mode's sweeps and reference are rendered on
+//           SoftNotes too, for the Clicks check (kClickVector)
 //   S7      Repeats at 0, 0.25, 0.5, 0.75 and 1 (the design's "at maximum"), each over the class
 //           input and then 20 s of silence: the Repeats rule's level and tail
 //   S8      freeze engaged at 4 s, released at 14 s, over the class input
@@ -26,11 +27,14 @@
 //   S10     a Spillover load at 5 s from the previous mode of the set (loaded Exact at frame 0),
 //           with Trails and with FastCut
 //   S11     the preset at every other set member's stored positions, and at the 16 corners of
-//           Activity x Repeats x Shape x Time (the others stored), over the class input
+//           Activity x Repeats x Shape x Time (the others stored), over the class input, and for
+//           an attack mode over SoftNotes too (the Clicks part of Combinations)
 //
 // A script's positions are stored ones: each targeted leaf is EvalMacro at its position (the
 // derive rule, §3.5), so a combination plays as if saved there. The class input is Plucks for an
-// attack mode and SoftNotes for a pad mode (§11.3's input classes).
+// attack mode and SoftNotes for a pad mode (§11.3's input classes). A tail the class renders of
+// S0, S7 and S11 do not see end is measured on a probe, the same request with 60 s of silence
+// (Metrics.h, MeasureTail).
 namespace bsa {
 
 enum class InputClass : uint8_t { Attack, Pad };
@@ -59,6 +63,10 @@ inline constexpr brainscape::ParamId kSweepMacros[6] = {
     brainscape::ParamId::MacroShape,    brainscape::ParamId::MacroTime,
     brainscape::ParamId::MacroSpace,    brainscape::ParamId::MacroFilter};
 
+// Clicks are judged on SoftNotes, the smooth vector, whatever the class: a sample step shows
+// there, while on Plucks the dry's own attacks and the wet's replays of them hide one (the dry
+// plays at unity under the Mix law).
+inline constexpr Vector   kClickVector      = Vector::SoftNotes;
 inline constexpr uint32_t kSweepFrames      = 16 * kRate;
 inline constexpr uint32_t kRepeatsTail      = 20 * kRate;
 inline constexpr float    kRepeatsRungs[5]  = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
@@ -110,10 +118,22 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
                           const std::vector<std::string>& scripts,
                           std::vector<std::string>* skipped = nullptr);
 
+// Activity's and Shape's response, measured by RunSuite from a class sweep's audio against the
+// reference's at the same time (the pre-screen judges it): the brightness and the envelope's
+// variation from position 0 to 1, and for Activity the onsets the engine's own detector hears per
+// second of the rising leg, the sweep's and the reference's.
+struct Response {
+  bool                  measured      = false;
+  double                brightnessPct = 0;
+  double                envelopeDb    = 0;
+  std::vector<uint32_t> heard, refHeard;
+};
+
 struct Rendered {
   Planned      plan;
   RenderHashes hashes;
   Metrics      metrics;
+  Response     response;
   bool         ok = false;
   bool         exact = false;
   uint64_t     onsets = 0;
@@ -132,6 +152,7 @@ struct SuiteResult {
   std::vector<Check>       checks;
   std::vector<std::string> skipped;
   bool                     ok = false;  // every render rendered
+  bool                     cancelled = false;  // SuiteOptions::cancel stopped it
   bool                     Failed() const;  // a render failed or a check says FAIL
 };
 
@@ -141,6 +162,9 @@ struct SuiteOptions {
   bool                     wav       = true;   // 16-bit WAVs (S11: only the worst cases)
   size_t                   worstWavs = 3;      // S11's worst cases written per measure
   std::string              outDir;             // the preset's renders go to outDir/<id>/
+  // Read between renders and inside each (RenderRequest::cancel): once true, the suite stops,
+  // writes nothing more and returns cancelled.
+  const std::atomic<bool>* cancel = nullptr;
 };
 
 // Renders the plan, hashes and measures every render, runs the pre-screen when asked, and writes

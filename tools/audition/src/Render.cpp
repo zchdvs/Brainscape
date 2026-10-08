@@ -96,6 +96,10 @@ bool Renderer::Render(const RenderRequest& rq, RenderResult* result) {
   size_t   next      = 0;  // the next script event to push
   size_t   blockIdx  = 0;
   for (size_t pos = 0; pos < frames;) {
+    if (rq.cancel != nullptr && rq.cancel->load(std::memory_order_relaxed)) {
+      impl_->queue->Clear();  // no staged preset stays referenced
+      return fail("cancelled");
+    }
     const auto n = static_cast<uint32_t>(
         std::min<size_t>(rq.blockPattern[blockIdx++ % rq.blockPattern.size()], frames - pos));
     const auto end = static_cast<int64_t>(pos + n);

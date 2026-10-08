@@ -27,51 +27,116 @@ double Lufs(double meanSquare) {
   return meanSquare > 0 ? -0.691 + 10.0 * std::log10(meanSquare) : kSilentDb;
 }
 
-// The tail of a render that ends above -70 dBFS (Metrics.h, kTailFitFrames): a least-squares line
-// through the 100 ms peak envelope, in dB against seconds, over the render's last 5 s or its
-// silent part, whichever is shorter. A fall of at least kMinDecayDbPerS is extended to -70 dBFS.
-void Extrapolate(const Stereo& s, Metrics* m) {
-  const size_t frames = s.Frames();
-  const size_t silent = frames > m->span ? frames - m->span : 0;
-  const size_t fit    = std::min<size_t>(kTailFitFrames, silent);
-  if (fit < kTailFitMinFrames) return;  // too short to fit: unending as far as the render shows
-  std::vector<double> t, y;
-  for (size_t a = frames - fit; a + kSubBlock <= frames; a += kSubBlock) {
-    double peak = 0;
-    for (size_t i = a; i < a + kSubBlock; ++i) {
-      for (const float x : {s.l[i], s.r[i]}) {
-        if (std::isfinite(x)) peak = std::max(peak, std::fabs(static_cast<double>(x)));
-      }
-    }
-    if (peak <= 0) continue;  // exact silence between repeats carries no level
-    t.push_back(static_cast<double>(a + kSubBlock / 2 - m->span) / kRate);
-    y.push_back(Db20(peak));
-  }
-  if (t.size() < 5) return;
+// A least-squares line through (t, y): its slope and its value at `at`.
+struct Line {
+  double slope = 0, at = 0;
+};
+Line Fit(const std::vector<double>& t, const std::vector<double>& y, size_t from, size_t to, double at) {
   double mt = 0, my = 0;
-  for (size_t k = 0; k < t.size(); ++k) {
+  for (size_t k = from; k < to; ++k) {
     mt += t[k];
     my += y[k];
   }
-  mt /= static_cast<double>(t.size());
-  my /= static_cast<double>(t.size());
+  const auto n = static_cast<double>(to - from);
+  mt /= n;
+  my /= n;
   double sty = 0, stt = 0;
-  for (size_t k = 0; k < t.size(); ++k) {
+  for (size_t k = from; k < to; ++k) {
     sty += (t[k] - mt) * (y[k] - my);
     stt += (t[k] - mt) * (t[k] - mt);
   }
-  const double slope  = stt > 0 ? sty / stt : 0.0;  // dB per second
-  m->tailDecayDbPerS  = -slope;
-  if (slope > -kMinDecayDbPerS) return;  // flat, rising or too slow: unending
-  const double tEnd  = static_cast<double>(silent) / kRate;
-  const double yEnd  = my + slope * (tEnd - mt);  // the line's level at the render's end
-  m->tailFinite      = true;
-  if (yEnd <= kTailDbfs) return;  // the line has already reached -70 dBFS: the measured time
-  m->tailSeconds   = tEnd + (yEnd - kTailDbfs) / -slope;
-  m->tailEstimated = true;
+  Line l;
+  l.slope = stt > 0 ? sty / stt : 0.0;
+  l.at    = my + l.slope * (at - mt);
+  return l;
+}
+
+// The frame after the last sample above -70 dBFS, or 0.
+size_t TailEnd(const Stereo& s) {
+  const double thr = std::pow(10.0, kTailDbfs / 20.0);
+  for (size_t i = s.Frames(); i-- > 0;) {
+    if (std::fabs(static_cast<double>(s.l[i])) > thr || std::fabs(static_cast<double>(s.r[i])) > thr) return i + 1;
+  }
+  return 0;
+}
+
+// Each sample step against the RMS of the steps around it (Metrics.h, kClickHalfWidth): the
+// largest score of either channel. Running sums in binary64 over the squared steps.
+void Clicks(const Stereo& s, Metrics* m) {
+  const size_t n = s.Frames();
+  const size_t h = kClickHalfWidth;
+  if (n < 2 * h + 3) return;
+  std::vector<double> d(n, 0.0), c(n + 1, 0.0);
+  for (int ch = 0; ch < 2; ++ch) {
+    const std::vector<float>& x = ch == 0 ? s.l : s.r;
+    for (size_t i = 1; i < n; ++i) {
+      const double v = static_cast<double>(x[i]) - static_cast<double>(x[i - 1]);
+      d[i]           = std::isfinite(v) ? v : 0.0;
+    }
+    for (size_t i = 0; i < n; ++i) c[i + 1] = c[i] + d[i] * d[i];
+    for (size_t i = h + 1; i + h + 1 < n; ++i) {
+      const double step = std::fabs(d[i]);
+      if (step < kClickStepFloor) continue;
+      const double around = (c[i] - c[i - h]) + (c[i + 1 + h] - c[i + 1]);
+      const double rms    = std::sqrt(std::max(0.0, around) / static_cast<double>(2 * h));
+      const double score  = step / std::max(rms, kClickRmsFloor);
+      if (score > m->click) {
+        m->click      = score;
+        m->clickFrame = i;
+        m->clickStep  = step;
+      }
+    }
+  }
 }
 
 }  // namespace
+
+void MeasureTail(const Stereo& probe, size_t span, Metrics* m) {
+  const size_t frames = probe.Frames();
+  span                = std::min(span, frames);
+  const size_t silent = frames - span;
+  m->tailProbeSeconds = static_cast<double>(silent) / kRate;
+  const size_t end    = TailEnd(probe);
+  m->tailEstimated    = false;
+  m->tailDecayDbPerS  = 0;
+  m->tailSeconds      = end > span ? static_cast<double>(end - span) / kRate : 0.0;
+  m->tailFinite       = frames - end >= kTailMargin;
+  if (m->tailFinite) return;  // it ended inside the probe: the measured time
+  // The probe's last kTailFitFrames (at most its silence) in 1 s windows: RMS level in dB.
+  const size_t fit = std::min<size_t>(kTailFitFrames, silent - silent % kRate);
+  std::vector<double> t, y;
+  double              lastPeak = 0, lastMs = 0;
+  for (size_t a = frames - fit; a + kRate <= frames; a += kRate) {
+    double acc = 0, peak = 0;
+    for (size_t i = a; i < a + kRate; ++i) {
+      for (const float x : {probe.l[i], probe.r[i]}) {
+        if (!std::isfinite(x)) continue;
+        acc += 0.5 * static_cast<double>(x) * x;
+        peak = std::max(peak, std::fabs(static_cast<double>(x)));
+      }
+    }
+    lastPeak = peak;
+    lastMs   = acc / kRate;
+    if (acc <= 0) continue;  // exact silence between repeats carries no level
+    t.push_back(static_cast<double>(a + kRate / 2 - span) / kRate);
+    y.push_back(10.0 * std::log10(acc / kRate));
+  }
+  if (t.size() < 10) return;  // too little to fit: unending as far as the probe shows
+  const double tEnd  = static_cast<double>(silent) / kRate;
+  const Line   all   = Fit(t, y, 0, t.size(), tEnd);
+  const Line   first = Fit(t, y, 0, t.size() / 2, tEnd);
+  const Line   last  = Fit(t, y, t.size() / 2, t.size(), tEnd);
+  m->tailDecayDbPerS = -all.slope;
+  if (all.slope > -kMinDecayDbPerS || first.slope > -kMinDecayDbPerS / 2 || last.slope > -kMinDecayDbPerS / 2) {
+    return;  // flat, rising, too slow, or a fall only one half shows: unending
+  }
+  // The peak level at the probe's end: the line plus the last second's crest (peak over RMS).
+  const double crest = lastPeak > 0 && lastMs > 0 ? Db20(lastPeak) - 10.0 * std::log10(lastMs) : 0.0;
+  const double peakEnd = all.at + crest;
+  m->tailFinite        = true;
+  m->tailEstimated     = true;
+  m->tailSeconds       = tEnd + std::max(0.0, peakEnd - kTailDbfs) / -all.slope;
+}
 
 double Db20(double amplitude) { return amplitude > 0 ? 20.0 * std::log10(amplitude) : kSilentDb; }
 
@@ -202,7 +267,7 @@ Metrics Measure(const Stereo& s, size_t span) {
   const auto end = static_cast<int64_t>(m.span);
   m.tailSeconds  = last + 1 > end ? static_cast<double>(last + 1 - end) / kRate : 0.0;
   m.tailFinite   = static_cast<int64_t>(m.frames) - (last + 1) >= static_cast<int64_t>(kTailMargin);
-  if (!m.tailFinite) Extrapolate(s, &m);
+  Clicks(s, &m);
   const Loudness k(s);
   m.loudness = k.Integrated(0, m.span);
   for (size_t from = 0; from / kSubBlock + kShortTermSubs <= k.SubBlocks(); from += kRate) {
@@ -219,6 +284,8 @@ std::string TailText(const Metrics& m) {
   } else if (m.tailEstimated) {
     std::snprintf(buf, sizeof buf, m.tailSeconds < 100 ? "about %.1f s (extrapolated)" : "about %.0f s (extrapolated)",
                   m.tailSeconds);
+  } else if (m.tailProbeSeconds > 0) {
+    std::snprintf(buf, sizeof buf, "%.2f s (%.0f s probe)", m.tailSeconds, m.tailProbeSeconds);
   } else {
     std::snprintf(buf, sizeof buf, "%.2f s", m.tailSeconds);
   }

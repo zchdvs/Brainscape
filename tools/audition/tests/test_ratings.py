@@ -225,6 +225,78 @@ class RatingsTest(unittest.TestCase):
         self.assertEqual(row["status"], "re-listen")
         self.assertEqual(row["relisten"][0]["why"], "gone")
 
+    def set_renders(self, pid, members):
+        """A preset's renders in a set, named as bspc render names them: S10 after the previous
+        member (the last for the first, "default" for a set of one), S11 after each other one."""
+        rs = [render(sc, "%s.x.plucks" % sc, pid) for sc in ratings.SCRIPTS if sc not in ("S10", "S11")]
+        i = members.index(pid)
+        prev = members[i - 1] if len(members) > 1 else "default"
+        rs += [render("S10", "S10.%s.from-%s.plucks" % (style, prev), pid) for style in ("trails", "fastcut")]
+        rs += [render("S11", "S11.at-%s.plucks" % o, pid + "/" + o) for o in members if o != pid]
+        rs += [render("S11", "S11.corner-a0r0s0t0.plucks", pid)]
+        return rs
+
+    def write_set(self, members):
+        shutil.rmtree(self.renders)
+        os.makedirs(self.renders)
+        for pid in members:
+            self.write_index(index(pid, renders=self.set_renders(pid, members)))
+
+    def test_the_set_changing_retires_renders_and_the_ratings_carry(self):
+        # The review's cases: a mode dropped from the set, one added, and a rating made on a
+        # render of one mode alone, each followed by a full-set render whose hashes all held.
+        self.run_cli("init", "--log", self.log)
+        four = ["factory.alpha", "factory.bravo", "factory.charlie", "factory.echo"]
+        self.write_set(four)
+        for pid in four:
+            self.assertEqual(self.rate(pid)[0], 0)
+        rc, out = self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        self.assertIn("0 changes", out)
+        # (b) bravo dropped: the others carry, their renders at or from bravo retired.
+        self.write_set(["factory.alpha", "factory.charlie", "factory.echo"])
+        rc, out = self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("re-listen", out)
+        log = self.log_json()["presets"]
+        for pid in ("factory.alpha", "factory.charlie", "factory.echo"):
+            self.assertEqual(log[pid]["status"], "rated", pid)
+        self.assertEqual(log["factory.alpha"]["retired_renders"], ["S11.at-factory.bravo.plucks"])
+        self.assertEqual(log["factory.charlie"]["retired_renders"],
+                         ["S10.fastcut.from-factory.bravo.plucks", "S10.trails.from-factory.bravo.plucks",
+                          "S11.at-factory.bravo.plucks"])
+        self.assertEqual(log["factory.charlie"]["new_renders"],
+                         ["S10.fastcut.from-factory.alpha.plucks", "S10.trails.from-factory.alpha.plucks"])
+        # The dropped mode's rating is unchecked: not rendered, so not counted.
+        self.assertEqual(log["factory.bravo"]["status"], "unchecked")
+        self.assertIn("Renders retired with the set", read(self.log))
+        # (c) delta added before echo: echo's S10 now loads from delta.
+        five = ["factory.alpha", "factory.bravo", "factory.charlie", "factory.delta", "factory.echo"]
+        self.write_set(five)
+        rc, out = self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        self.assertNotIn("re-listen", out)
+        log = self.log_json()["presets"]
+        self.assertEqual(log["factory.bravo"]["status"], "rated")  # back in the renders
+        self.assertEqual(log["factory.echo"]["status"], "rated")
+        self.assertIn("S10.trails.from-factory.charlie.plucks", log["factory.echo"]["retired_renders"])
+        self.assertIn("S11.at-factory.delta.plucks", log["factory.echo"]["new_renders"])
+        self.assertEqual(log["factory.delta"]["status"], "unrated")
+        # A render of one mode alone (the app's one-click render), then the full set.
+        self.write_set(["factory.alpha"])
+        self.assertEqual(self.rate("factory.alpha")[0], 0)
+        self.write_set(five)
+        rc, out = self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        row = self.log_json()["presets"]["factory.alpha"]
+        self.assertEqual(row["status"], "rated", out)
+        self.assertEqual(row["retired_renders"], ["S10.fastcut.from-default.plucks",
+                                                  "S10.trails.from-default.plucks"])
+        # A render that is not named after the set still re-listens when it goes.
+        rs = [r for r in self.set_renders("factory.alpha", five) if r["name"] != "S8.x.plucks"]
+        self.write_index(index("factory.alpha", renders=rs))
+        self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        row = self.log_json()["presets"]["factory.alpha"]
+        self.assertEqual(row["status"], "re-listen")
+        self.assertEqual([(x["render"], x["why"]) for x in row["relisten"]], [("S8.x.plucks", "gone")])
+
     def test_determinism_renders_are_not_rated(self):
         self.run_cli("init", "--log", self.log)
         rs = [render(s, "%s.x" % s, "v1") for s in ratings.SCRIPTS]
@@ -257,6 +329,61 @@ class RatingsTest(unittest.TestCase):
         rc, out = self.run_cli("exit", "--log", self.log)
         self.assertEqual(rc, 1)
         self.assertIn("9 of at least 10", out)
+
+    def test_exit_counts_only_current_keepers(self):
+        # The review's cases: a keeper the renders lack, and one rated at an older sound revision,
+        # do not count; a knob the mode leaves undefined is not asked for.
+        self.run_cli("init", "--log", self.log)
+        families = ["recall", "reverie", "misfire", "echoic"]
+        for i in range(10):
+            pid = "factory.m%d" % i
+            self.write_index(index(pid, family=families[i % 4]))
+            self.rate(pid)
+        rc, out = self.run_cli("exit", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 0, out)
+        shutil.rmtree(os.path.join(self.renders, "factory.m9"))
+        rc, out = self.run_cli("exit", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 1)
+        self.assertIn("9 of at least 10", out)
+        self.assertIn("factory.m9 unchecked", out)
+        # carry records it, and the table's exit (which reads the log alone) agrees.
+        self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(self.log_json()["presets"]["factory.m9"]["status"], "unchecked")
+        self.assertEqual(self.run_cli("exit", "--log", self.log)[0], 1)
+        self.write_index(index("factory.m9", family="reverie"))
+        self.run_cli("carry", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(self.run_cli("exit", "--log", self.log, "--renders", self.renders)[0], 0)
+        # Rated at sound revision 2, rendered now at 3 with the same hashes: not counted until
+        # carried (the log's own exit) or re-rated.
+        log = self.log_json()
+        log["presets"]["factory.m8"]["rating"]["sound_rev"] = 2
+        ratings.save_log(self.log, log)
+        rc, out = self.run_cli("exit", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 0, out)  # the renders held: the carry moves it to 3, and it counts
+        log = self.log_json()
+        log["presets"]["factory.m8"]["rating"]["sound_rev"] = 2
+        r8 = index("factory.m8", family="echoic", rev=2)
+        r8["soundRevision"] = 3  # a stale stamp: the package says 2, the build is 3
+        self.write_index(r8)
+        ratings.save_log(self.log, log)
+        rc, out = self.run_cli("exit", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 1)
+        self.assertIn("factory.m8 rated at sound_rev 2, rendered at 3", out)
+        self.write_index(index("factory.m8", family="echoic"))
+        self.rate("factory.m8")
+        # A mode that leaves Filter undefined: five knobs rated, and the exit holds.
+        skipped = ["S6: macro.filter is undefined in this mode"]
+        rs = [render(sc, "%s.x" % sc, "v1") for sc in ratings.SCRIPTS if sc != "S6"]
+        self.write_index(index("factory.m7", family="misfire", renders=rs, skipped=skipped))
+        args = ["rate", "--log", self.log, "--renders", self.renders, "factory.m7", "--chord", "yes",
+                "--level", "ok", "--verdict", "keep"]
+        for k in ratings.KNOBS[:5]:
+            args += ["--knob", k + "=5"]
+        self.assertEqual(self.run_cli(*args)[0], 0)
+        self.assertEqual(self.log_json()["presets"]["factory.m7"]["rating"]["knobs_defined"], ratings.KNOBS[:5])
+        rc, out = self.run_cli("exit", "--log", self.log, "--renders", self.renders)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.run_cli(*(args + ["--knob", "filter=3"]))[0], 2)  # undefined: refused
 
     def test_first_difference(self):
         self.assertEqual(ratings.first_difference("aaaaaaaabbbbbbbb", "aaaaaaaacccccccc"), 1)

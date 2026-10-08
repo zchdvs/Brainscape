@@ -18,7 +18,11 @@ After a sound-revision bump or a re-stamp, `refresh` re-renders S0-S11 with `bsp
 `carry` compares: a rating whose renders all kept their hashes carries forward (its sound_rev and
 sound_hash move to the new ones and the move is recorded); any other row is marked "re-listen",
 naming each changed render and its first differing second. Renders the rating never heard (S11
-against a mode added to the set since) do not break the carry; they are listed as new.
+against a mode added to the set since, S10 from a new predecessor) do not break the carry; they
+are listed as new. Renders named after the rest of the set (S10's "from-<id>", S11's "at-<id>")
+that the set no longer makes, because a mode was added, dropped or reordered, are retired, not
+re-listened: they say nothing about this mode's sound. A rated row whose preset the renders lack
+is "unchecked" until a render has it again, and the exit criteria do not count it.
 
   ratings.py init     [--log LOG]
   ratings.py declare  [--log LOG] ID [--class attack|pad] [--self-oscillating | --no-self-oscillating]
@@ -36,6 +40,8 @@ table is not what the data block generates; exit: the criteria are not met); 2 u
 errors. Standard library only.
 """
 import argparse
+import copy
+import glob
 import hashlib
 import json
 import os
@@ -120,6 +126,7 @@ def new_row():
         "rating": None,
         "relisten": [],
         "new_renders": [],
+        "retired_renders": [],
     }
 
 
@@ -193,6 +200,18 @@ def script_order(script, name):
     return (SCRIPTS.index(script) if script in SCRIPTS else len(SCRIPTS), name)
 
 
+def set_dependent(script, name):
+    """A render named after another member of the set: S10 loads from the previous mode, S11 plays
+    another mode's stored positions. Adding, dropping or reordering modes retires it."""
+    return script == "S10" or name.startswith("S11.at-")
+
+
+def defined_knobs(index):
+    """The knobs the mode defines: a macro it leaves undefined is skipped (S1-S6)."""
+    return [k for k in KNOBS if not any(s.startswith("S%d:" % (KNOBS.index(k) + 1))
+                                        for s in index.get("skipped", []))]
+
+
 def renders_digest(records):
     """12 hex digits naming a rating's render set, for the table."""
     text = "".join("%s %s\n" % (name, records[name]["hash"]) for name in sorted(records))
@@ -217,21 +236,26 @@ def carry(log, found):
             continue
         index = found.get(pid)
         if index is None:
-            changes.append("%s: not rendered; the rating stands unchecked" % pid)
+            if row["status"] == "rated":
+                row["status"] = "unchecked"
+                changes.append("%s: not rendered: unchecked until a render has it" % pid)
             continue
         new = render_records(index)
-        relisten = []
+        relisten, retired = [], []
         for name in sorted(rating["renders"], key=lambda n: script_order(rating["renders"][n]["script"], n)):
             old = rating["renders"][name]
             cur = new.get(name)
-            if cur is None:
+            if cur is None and set_dependent(old["script"], name):
+                retired.append(name)  # the set changed, not this mode
+            elif cur is None:
                 relisten.append({"render": name, "script": old["script"], "from_second": 0, "why": "gone"})
             elif cur["hash"] != old["hash"]:
                 relisten.append({"render": name, "script": old["script"],
                                  "from_second": first_difference(old["seconds"], cur["seconds"]),
                                  "why": "changed"})
         added = sorted(n for n in new if n not in rating["renders"])
-        before = (row["status"], row["relisten"], row["new_renders"], rating["sound_rev"], rating["sound_hash"])
+        before = (row["status"], row["relisten"], row["new_renders"], row.get("retired_renders", []),
+                  rating["sound_rev"], rating["sound_hash"])
         if relisten:
             row["status"] = "re-listen"
             row["relisten"] = relisten
@@ -245,13 +269,20 @@ def carry(log, found):
                      "to_rev": rev, "to_hash": sh})
                 rating["sound_rev"], rating["sound_hash"] = rev, sh
         row["new_renders"] = added
-        after = (row["status"], row["relisten"], row["new_renders"], rating["sound_rev"], rating["sound_hash"])
+        row["retired_renders"] = retired
+        after = (row["status"], row["relisten"], row["new_renders"], row["retired_renders"],
+                 rating["sound_rev"], rating["sound_hash"])
         if before != after:
             if relisten:
                 changes.append("%s: re-listen: %s" % (pid, relisten_text(relisten)))
             else:
+                extra = []
+                if added:
+                    extra.append("%d new renders" % len(added))
+                if retired:
+                    extra.append("%d retired with the set" % len(retired))
                 changes.append("%s: carried forward to sound_rev %d%s" % (
-                    pid, rating["sound_rev"], ", %d new renders" % len(added) if added else ""))
+                    pid, rating["sound_rev"], ", " + ", ".join(extra) if extra else ""))
     return changes
 
 
@@ -266,21 +297,39 @@ def relisten_text(relisten, shown=3):
 # ── The exit criteria ───────────────────────────────────────────────────────────────────────
 
 def exit_report(log, found=None):
-    """(met, lines): §11.3's exit criteria over the log (and the latest pre-screens, if given)."""
+    """(met, lines): §11.3's exit criteria over the log. With the renders' indexes (`found`), a
+    keeper counts only when the renders have it, its rating carries onto them (every render it
+    heard kept its hash) and it was made at the build's sound revision; its latest pre-screen
+    decides the objective failures."""
+    notes = []
+    if found is not None:
+        log = copy.deepcopy(log)
+        carry(log, found)
     keeps = []
     for pid, row in sorted(log["presets"].items()):
         r = row.get("rating")
-        if r is not None and row["status"] == "rated" and r["verdict"] == "keep":
+        if r is None or r["verdict"] != "keep":
+            continue
+        if found is not None and pid in found and r["sound_rev"] != found[pid]["soundRevision"]:
+            notes.append("%s rated at sound_rev %d, rendered at %d" % (pid, r["sound_rev"],
+                                                                       found[pid]["soundRevision"]))
+            continue
+        if row["status"] == "rated":
             keeps.append((pid, row, r))
+        else:
+            notes.append("%s %s" % (pid, row["status"]))
     lines = []
     ok_count = len(keeps) >= EXIT_KEEPS
     lines.append("%s %d of at least %d modes kept" % ("ok  " if ok_count else "MISS", len(keeps), EXIT_KEEPS))
+    if notes:
+        lines.append("note keepers not counted: %s" % ", ".join(notes))
     families = {f: [pid for pid, row, _ in keeps if row["family"] == f] for f in FAMILIES}
     ok_fam = all(families[f] for f in FAMILIES)
     lines.append("%s a keeper in every family: %s" % ("ok  " if ok_fam else "MISS", ", ".join(
         "%s %d" % (f, len(families[f])) for f in FAMILIES)))
-    low = ["%s %s %d" % (pid, k, r["knobs"].get(k, 0)) for pid, _, r in keeps for k in KNOBS
-           if r["knobs"].get(k, 0) < EXIT_KNOB_MIN]
+    # Each knob the mode defines (the rating records them; an older rating, all six).
+    low = ["%s %s %d" % (pid, k, r["knobs"].get(k, 0)) for pid, _, r in keeps
+           for k in r.get("knobs_defined", KNOBS) if r["knobs"].get(k, 0) < EXIT_KNOB_MIN]
     lines.append("%s every kept mode's knobs rated %d or more%s" % (
         "ok  " if not low else "MISS", EXIT_KNOB_MIN, ": " + ", ".join(low) if low else ""))
     failing = []
@@ -339,6 +388,13 @@ def render_md(log):
         out += ["", "## Renders the ratings have not heard", ""]
         for pid, row in new:
             out.append("- `%s`: %s" % (pid, ", ".join(row["new_renders"])))
+    retired = [(pid, row) for pid, row in sorted(log["presets"].items()) if row.get("retired_renders")]
+    if retired:
+        out += ["", "## Renders retired with the set", "",
+                "Heard by a rating, named after a mode the set no longer has in that place; the",
+                "rating carries without them.", ""]
+        for pid, row in retired:
+            out.append("- `%s`: %s" % (pid, ", ".join(row["retired_renders"])))
     met, lines = exit_report(log)
     out += ["", "## Exit criteria", "", "Met." if met else "Not met.", ""]
     out += ["    " + line for line in lines]
@@ -404,11 +460,13 @@ def cmd_rate(a):
     if missing:
         raise UsageError("%s: the renders lack %s (bspc render --script all)" % (a.id, ", ".join(missing)))
     knobs = parse_knobs(a.knob)
-    defined = [k for k in KNOBS if not any(s.startswith("S%d:" % (KNOBS.index(k) + 1))
-                                           for s in index.get("skipped", []))]
+    defined = defined_knobs(index)
     unrated = [k for k in defined if k not in knobs]
     if unrated:
         raise UsageError("%s: rate every knob the mode defines (missing: %s)" % (a.id, ", ".join(unrated)))
+    extra = [k for k in knobs if k not in defined]
+    if extra:
+        raise UsageError("%s: the mode leaves %s undefined" % (a.id, ", ".join(extra)))
     failed = prescreen_failed(index)
     row = row_of(log, a.id)
     row["name"] = index["preset"]["name"]
@@ -424,6 +482,7 @@ def cmd_rate(a):
         "prescreen_failed": failed,
         "chord_finished": a.chord == "yes",
         "knobs": knobs,
+        "knobs_defined": defined,
         "level": a.level,
         "verdict": a.verdict,
         "notes": a.notes or "",
@@ -431,6 +490,7 @@ def cmd_rate(a):
     row["status"] = "rated"
     row["relisten"] = []
     row["new_renders"] = []
+    row["retired_renders"] = []
     save_log(a.log, log)
     print("%s: rated %s on %d renders (sound_rev %d)%s" % (
         a.id, a.verdict, len(row["rating"]["renders"]), row["rating"]["sound_rev"],
@@ -451,12 +511,40 @@ def cmd_carry(a):
     return 0
 
 
+def bspc_path(path):
+    """`--bspc` as subprocess can start it: absolute (Windows does not resolve a relative path
+    written with forward slashes), with `.exe` added on Windows when the name lacks it."""
+    path = os.path.abspath(path)
+    if os.name == "nt" and not os.path.exists(path) and os.path.exists(path + ".exe"):
+        path += ".exe"
+    if not os.path.isfile(path):
+        raise UsageError("no bspc at %s" % path)
+    return path
+
+
+def expand(documents):
+    """The documents, wildcards expanded (cmd and PowerShell pass `*.json` through as written)."""
+    out = []
+    for d in documents:
+        if any(c in d for c in "*?["):
+            matches = sorted(glob.glob(d))
+            if not matches:
+                raise UsageError("no file matches %s" % d)
+            out += matches
+        else:
+            out.append(d)
+    return out
+
+
 def cmd_refresh(a):
     load_log(a.log)
-    cmd = [a.bspc, "render", "--script", "all", "--metrics", "--declarations", a.log, "-o", a.renders]
+    cmd = [bspc_path(a.bspc), "render", "--script", "all", "--metrics", "--declarations", a.log, "-o", a.renders]
     if a.no_wav:
         cmd.append("--no-wav")
-    rc = subprocess.run(cmd + list(a.documents)).returncode
+    try:
+        rc = subprocess.run(cmd + expand(a.documents)).returncode
+    except OSError as e:
+        raise UsageError("cannot run %s: %s" % (cmd[0], e))
     if rc not in (0, 1):  # 1: a pre-screen check failed, which the rows record
         print("refresh: bspc render failed (exit %d)" % rc, file=sys.stderr)
         return 2

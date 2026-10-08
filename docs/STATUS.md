@@ -794,6 +794,18 @@ records live in [docs/design/reviews/](design/reviews/).
   test-signal vector, not the live input, and the one-click render writes through `fopen`, so a
   render folder whose path is not ASCII fails on Windows. A DAW session recall closes the open
   document, since session v1 cannot carry it.
+- **The audition tooling's readings** (lane E, `tools/audition`, its README's "Readings"). The
+  pre-screen reads the design's checks where they need a measurement: a tail the render does not
+  see end is measured on a 60 s probe and only a steady fall over its last 30 s extrapolates;
+  Clicks score each step against the steps around it, on SoftNotes, where a step can show (on
+  Plucks the dry's attacks under the Mix law make 4 times the static's largest step
+  unreachable), so an attack mode renders S1–S6 and S11 twice; Activity is reported, and fails
+  only when it moves nothing measured, since the engine reports no voices or births. The
+  compiler's example `engram.json` fails Clicks (its grains are hard-edged at Contour 0, window
+  sustain 1 and smoothness 0, and Smear's spray and Contour's first move splice them: step
+  scores 42 and 12 times the static's) and Combinations (`S11.corner-a0r1s1t1` peaks at
+  +0.77 dBFS): examples, not factory modes, but the first factory documents will meet the same
+  checks.
 - **Licensing, firmware side:** libDaisy's USB device/host code and its stock SD-card glue
   carry ST's SLA0044 licence, which forbids open-source redistribution, and libDaisy's
   `System` object links the USB interrupt handlers into every firmware. GPLv3 firmware needs

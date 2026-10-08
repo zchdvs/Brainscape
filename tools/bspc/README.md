@@ -13,6 +13,12 @@ cmake -B build && cmake --build build --config Release --target bspc
 build/tools/bspc/Release/bspc compile compiler/tests/data/engram.json   # writes engram.bsp
 ```
 
+File arguments are taken as written, except on Windows, where cmd and PowerShell pass a wildcard
+through unexpanded: there `bspc` expands `*` and `?` in an argument's last component itself, to
+the matching files in sorted order (case ignored, dot files only for a pattern that starts with a
+dot); a pattern that matches nothing stays as written and fails to read, and after `--` nothing
+is expanded.
+
 | Command | Does |
 | --- | --- |
 | `compile DOC.json [-o OUT.bsp]` | Compiles a document (default output: the document's name with `.bsp`). Errors E1–E12 stop it (§2.7). |

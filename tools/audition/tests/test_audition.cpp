@@ -3,6 +3,8 @@
 // their stamps; inputs, hashes, WAVs and the K-weighted loudness against known values; the
 // scripts' plan; the pre-screen's thresholds at their edges; and a suite written to disk.
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "Hash.h"
@@ -375,39 +378,129 @@ TEST_CASE("metrics: peak, tail, steps and the numbers checks") {
   CHECK((m.maxStepFrame == 300u || m.maxStepFrame == 301u));  // into or out of the 1.5
   CHECK(Round1(4.04) == Approx(4.0));
 
-  // A tail still sounding when the render ends: a fall of 6 dB per second from -6 dBFS reaches
-  // -70 dBFS about 10.7 s after the input stops, beyond the render's 4 s of silence.
-  auto decaying = [](double dbPerSecond, size_t silent) {
+  // A tail still sounding when the render ends is not finite until a probe measures it.
+  auto decaying = [](double dbPerSecond, size_t silent, double floorAmp = 0.0) {
     Stereo d = Sine(500.0, 0.5, kRate + silent);
     for (size_t i = kRate; i < d.Frames(); ++i) {
-      const double t = static_cast<double>(i - kRate) / kRate;
-      d.l[i] = d.r[i] = static_cast<float>(d.l[i] * std::pow(10.0, -dbPerSecond * t / 20.0));
+      const double t   = static_cast<double>(i - kRate) / kRate;
+      const double amp = std::max(0.5 * std::pow(10.0, -dbPerSecond * t / 20.0), floorAmp);
+      d.l[i] = d.r[i] = static_cast<float>(amp * std::sin(2.0 * kPi * 500.0 * static_cast<double>(i) / kRate));
     }
     return d;
   };
   m = Measure(decaying(6.0, 4 * kRate), kRate);
-  CHECK(m.tailFinite);
-  CHECK(m.tailEstimated);
-  CHECK(m.tailDecayDbPerS == Approx(6.0).margin(0.05));
-  CHECK(m.tailSeconds == Approx(64.0 / 6.0).margin(0.15));
-  CHECK(TailText(m).rfind("about 10.", 0) == 0);
-  // The fit spans the render's last 5 s at most: a 9 s silence fits its last 5 s.
-  m = Measure(decaying(6.0, 9 * kRate), kRate);
-  CHECK(m.tailEstimated);
-  CHECK(m.tailSeconds == Approx(64.0 / 6.0).margin(0.15));
-  // A fall slower than 0.2 dB per second is unending; so is a silence too short to fit.
-  m = Measure(decaying(0.1, 4 * kRate), kRate);
-  CHECK_FALSE(m.tailFinite);
-  CHECK(m.tailDecayDbPerS == Approx(0.1).margin(0.02));
-  m = Measure(decaying(6.0, kRate), kRate);
   CHECK_FALSE(m.tailFinite);
   CHECK_FALSE(m.tailEstimated);
-  // A fall that reaches -70 dBFS inside the last 0.5 s: the measured time, confirmed by the fit.
+  CHECK(m.tailSeconds == Approx(4.0).margin(0.01));
+  CHECK(TailText(m) == "unending (over 4.0 s)");
+  // A fall that reaches -70 dBFS inside the last 0.5 s is not measured either.
   m = Measure(decaying(30.0, 5 * kRate / 2), kRate);
+  CHECK_FALSE(m.tailFinite);
+  m = Measure(decaying(30.0, 3 * kRate), kRate);
   CHECK(m.tailFinite);
-  CHECK_FALSE(m.tailEstimated);
   CHECK(m.tailSeconds == Approx(64.0 / 30.0).margin(0.02));
   CHECK(Round1(-1.06) == Approx(-1.1));
+
+  // The probe: the same render with 60 s of silence (kTailProbeFrames).
+  // 6 dB per second: ends inside the probe, 10.7 s after the input.
+  Metrics t = Measure(decaying(6.0, 4 * kRate), kRate);
+  MeasureTail(decaying(6.0, kTailProbeFrames), kRate, &t);
+  CHECK(t.tailFinite);
+  CHECK_FALSE(t.tailEstimated);
+  CHECK(t.tailProbeSeconds == Approx(60.0));
+  CHECK(t.tailSeconds == Approx(64.0 / 6.0).margin(0.01));
+  CHECK(TailText(t).rfind("10.6", 0) == 0);
+  CHECK(TailText(t).find("(60 s probe)") != std::string::npos);
+  // 0.8 dB per second: still sounding at 60 s, extrapolated from the fitted fall (80 s).
+  MeasureTail(decaying(0.8, kTailProbeFrames), kRate, &t);
+  CHECK(t.tailFinite);
+  CHECK(t.tailEstimated);
+  CHECK(t.tailDecayDbPerS == Approx(0.8).margin(0.02));
+  CHECK(t.tailSeconds == Approx(64.0 / 0.8).margin(1.0));
+  CHECK(TailText(t).rfind("about 80", 0) == 0);
+  // Slower than 0.2 dB per second, flat, rising, or a fall that stops: unending.
+  MeasureTail(decaying(0.1, kTailProbeFrames), kRate, &t);
+  CHECK_FALSE(t.tailFinite);
+  CHECK(t.tailDecayDbPerS == Approx(0.1).margin(0.02));
+  CHECK(TailText(t) == "unending (over 60.0 s)");
+  MeasureTail(decaying(-0.3, kTailProbeFrames), kRate, &t);  // growing
+  CHECK_FALSE(t.tailFinite);
+  MeasureTail(decaying(1.0, kTailProbeFrames, 0.01), kRate, &t);  // falls to -40 dBFS, then holds
+  CHECK_FALSE(t.tailFinite);
+  // A sustained level whose 100 ms peaks wander by several dB (the review's case: a fit over a
+  // few seconds of peaks found a fall in it): unending.
+  Stereo wander = Sine(500.0, 0.5, kRate + kTailProbeFrames);
+  uint32_t seed = 12345u;
+  for (size_t a = kRate; a < wander.Frames(); a += kRate / 10) {
+    seed = seed * 1664525u + 1013904223u;
+    const double g = std::pow(10.0, (static_cast<double>(seed >> 8) / 16777216.0 - 0.5) * 6.0 / 20.0);
+    for (size_t i = a; i < std::min(a + kRate / 10, wander.Frames()); ++i) {
+      wander.l[i] = wander.r[i] = static_cast<float>(wander.l[i] * g);
+    }
+  }
+  MeasureTail(wander, kRate, &t);
+  CHECK_FALSE(t.tailFinite);
+  CHECK(std::fabs(t.tailDecayDbPerS) < kMinDecayDbPerS);
+}
+
+TEST_CASE("clicks: a step scored against the steps around it") {
+  // A smooth waveform scores under 2 at any pitch, so a pitch shift is no click.
+  for (const double hz : {220.0, 880.0, 3520.0}) {
+    const Metrics m = Measure(Sine(hz, 0.5, kRate), kRate);
+    CHECK(m.click > 1.0);
+    CHECK(m.click < 2.0);
+  }
+  // A splice (the waveform jumps 3.7 ms ahead) scores in the tens; a step under -40 dBFS is not
+  // scored.
+  auto jumped = [](double amplitude) {
+    Stereo s = Sine(220.0, amplitude, kRate);
+    for (size_t i = kRate / 2; i < s.Frames(); ++i) {
+      s.l[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * 220.0 * static_cast<double>(i + 177) / kRate));
+    }
+    return s;
+  };
+  Metrics m = Measure(jumped(0.5), kRate);
+  CHECK(m.click > 20.0);
+  CHECK(m.clickFrame == kRate / 2);
+  CHECK(m.clickStep > 0.1);
+  CHECK(Measure(jumped(0.004), kRate).click == 0.0);
+}
+
+TEST_CASE("clicks on a render: SoftNotes shows a splice that Plucks hides") {
+  // The review's case: under the Mix law the dry plays at unity, so a Plucks render's own
+  // attacks are the largest steps and the old 4x rule could not fail. On SoftNotes the static
+  // render is smooth; the same splice injected into each shows the difference.
+  const auto state = Package("macro_sweep.bsp");
+  Renderer   renderer;
+  auto       render = [&](Vector v) {
+    const Input   in = LoopedInput(v, kSweepFrames);
+    RenderRequest rq;
+    rq.preset = state.get();
+    rq.input  = &in.audio;
+    RenderResult r;
+    REQUIRE(renderer.Render(rq, &r));
+    return r.out;
+  };
+  auto splice = [](Stereo s, size_t at) {
+    for (size_t i = at; i + 300 < s.Frames(); ++i) {
+      s.l[i] = s.l[i + 300];
+      s.r[i] = s.r[i + 300];
+    }
+    return s;
+  };
+  const Stereo  soft = render(Vector::SoftNotes);
+  const Metrics ref  = Measure(soft, kSweepFrames);
+  CHECK(ref.click < 4.0);
+  int caught = 0;
+  for (const size_t at : {3 * kRate + 1234, 7 * kRate + 77, 11 * kRate + 4321, 13 * kRate + 999}) {
+    caught += Measure(splice(soft, at), kSweepFrames).click > 4.0 * std::max(ref.click, 2.0) ? 1 : 0;
+  }
+  CHECK(caught >= 3);
+  const Stereo  plucks = render(Vector::Plucks);
+  const Metrics pref   = Measure(plucks, kSweepFrames);
+  const Metrics pcut   = Measure(splice(plucks, 7 * kRate + 77), kSweepFrames);
+  CHECK(pref.maxStep > 0.5);                 // the dry's attacks
+  CHECK(pcut.maxStep < 4.0 * pref.maxStep);  // the old rule: no splice can fail it
 }
 
 TEST_CASE("macro positions applied as stored ones") {
@@ -450,11 +543,17 @@ TEST_CASE("the scripts' plan") {
   const std::vector<Planned>       plan = Plan(a, set, all, &skipped);
   CHECK(skipped.empty());
   CHECK(Count(plan, "S0") == 9u);
-  CHECK(Count(plan, "S1") == 2u);  // the reference and the sweep
-  for (const char* s : {"S2", "S3", "S4", "S5", "S6", "S8", "S9"}) CHECK(Count(plan, s) == 1u);
+  // An attack mode's sweeps and S11 again on SoftNotes, for the Clicks check.
+  CHECK(Count(plan, "S1") == 4u);  // the reference and the sweep, on plucks and soft_notes
+  for (const char* s : {"S2", "S3", "S4", "S5", "S6"}) CHECK(Count(plan, s) == 2u);
+  for (const char* s : {"S8", "S9"}) CHECK(Count(plan, s) == 1u);
   CHECK(Count(plan, "S7") == 5u);
   CHECK(Count(plan, "S10") == 2u);
-  CHECK(Count(plan, "S11") == 2u + 16u);
+  CHECK(Count(plan, "S11") == 2u * (2u + 16u));
+  CHECK(Named(plan, "S1.reference.soft_notes") != nullptr);
+  CHECK(Named(plan, "S4.time.soft_notes") != nullptr);
+  CHECK(Named(plan, "S11.corner-a1r0s1t0.soft_notes") != nullptr);
+  CHECK(Named(plan, "S11.at-factory.c.soft_notes") != nullptr);
   CHECK(std::count_if(plan.begin(), plan.end(), [](const Planned& p) { return p.role == Role::Determinism; }) == 3);
 
   const Planned* sweep = Named(plan, "S2.repeats.plucks");
@@ -492,6 +591,7 @@ TEST_CASE("the scripts' plan") {
   pad.declare.inputClass = InputClass::Pad;
   const std::vector<Planned> alone = Plan(pad, {&pad}, all);
   CHECK(Named(alone, "S1.activity.soft_notes") != nullptr);
+  CHECK(Count(alone, "S1") == 2u);  // the class input is the Clicks input
   const Planned* fromDefault = Named(alone, "S10.fastcut.from-default.soft_notes");
   REQUIRE(fromDefault != nullptr);
   CHECK(fromDefault->from == nullptr);
@@ -508,7 +608,7 @@ TEST_CASE("the scripts' plan") {
   REQUIRE(skipped.size() == 1u);
   CHECK(skipped[0].rfind("S5:", 0) == 0);
   CHECK(Count(part, "S5") == 0u);
-  CHECK(Count(part, "S1") == 1u);  // the sweeps' reference
+  CHECK(Count(part, "S1") == 2u);  // the sweeps' references, on plucks and soft_notes
   CHECK(Count(part, "S7") == 5u);
 }
 
@@ -524,6 +624,7 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
     r.metrics.loudness = loud;
     r.metrics.peakDbfs = peak;
     r.metrics.maxStep  = 0.1;
+    r.metrics.click    = 1.5;
     return r;
   };
   const double dp = DryLevel(Vector::Plucks), ds = DryLevel(Vector::Strums);
@@ -566,6 +667,10 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
   rs[2].metrics.loudness = dp;
   rs[0].metrics.peakDbfs = -0.94;
   CHECK(verdict(PreScreen(preset, rs), "Peak") == "FAIL");
+  rs[0].metrics.peakDbfs = -0.99;  // peaks are compared unrounded
+  CHECK(verdict(PreScreen(preset, rs), "Peak") == "FAIL");
+  rs[0].metrics.peakDbfs = -1.0;
+  CHECK(verdict(PreScreen(preset, rs), "Peak") == "pass");
   rs[0].metrics.peakDbfs = -3.0;
   rs[0].metrics.tailEstimated = true;  // still sounding at the render's end, but falling
   rs[0].metrics.tailSeconds   = 40.0;
@@ -625,23 +730,71 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
     rep.plan.macro  = ParamId::MacroRepeats;
     rep.plan.stored = 0.25f;  // the rising leg: 2 s to 10 s, windows 2..7
     for (size_t k = 0; k < 14; ++k) rep.metrics.shortTerm[k] = -18.0 + 0.5 * static_cast<double>(k);
-    rs.insert(rs.end(), {ref, act, space, rep});
+    // The Clicks renders: the reference and a sweep on SoftNotes.
+    Rendered kref = make("S1", "S1.reference.soft_notes", Role::SweepRef, -20.0, -6.0);
+    kref.plan.vector   = Vector::SoftNotes;
+    kref.metrics.click = 3.0;
+    Rendered kact      = make("S1", "S1.activity.soft_notes", Role::Sweep, -20.0, 3.0);  // peak: not judged
+    kact.plan.vector   = Vector::SoftNotes;
+    kact.plan.macro    = ParamId::MacroActivity;
+    kact.metrics.click = 12.0;
+    kact.metrics.maxStep = 1.9;
+    rs.insert(rs.end(), {ref, act, space, rep, kref, kact});
+    const size_t iAct = rs.size() - 5, iRep = rs.size() - 3, iKref = rs.size() - 2, iKact = rs.size() - 1;
     cs = PreScreen(preset, rs);
     CHECK(verdict(cs, "Sweeps") == "pass");
-    CHECK(verdict(cs, "Clicks") == "pass");
+    CHECK(verdict(cs, "Clicks") == "pass");  // 12.0 = 4x the reference's 3.0
     CHECK(verdict(cs, "Repeats") == "pass");
-    CHECK(verdict(cs, "Peak (moved)") == "pass");
-    rs[rs.size() - 3].metrics.shortTerm[5] = -18.0 + 3.06;
+    CHECK(verdict(cs, "Peak (moved)") == "pass");  // the class sweeps only
+    rs[iAct].metrics.shortTerm[5] = -18.0 + 3.06;
     CHECK(verdict(PreScreen(preset, rs), "Sweeps") == "FAIL");
-    rs[rs.size() - 3].metrics.shortTerm[5] = -18.0;
-    rs[rs.size() - 3].metrics.maxStep      = 0.401;
-    CHECK(verdict(PreScreen(preset, rs), "Clicks") == "FAIL");
-    rs[rs.size() - 3].metrics.maxStep = 0.4;
+    rs[iAct].metrics.shortTerm[5] = -18.0;
+    rs[iKact].metrics.click = 12.01;
+    cs = PreScreen(preset, rs);
+    CHECK(verdict(cs, "Clicks") == "FAIL");
+    rs[iKact].metrics.click   = 12.0;
+    rs[iAct].metrics.maxStep  = 5.0;  // the class sweep's steps are not the Clicks check's
+    rs[iAct].metrics.click    = 50.0;
     CHECK(verdict(PreScreen(preset, rs), "Clicks") == "pass");
-    rs.back().metrics.shortTerm[5] = rs.back().metrics.shortTerm[4] - 1.1;  // the rising leg falls
+    rs[iKref].metrics.click = 0.0;  // a static render with no scored step: the base is 2
+    CHECK(verdict(PreScreen(preset, rs), "Clicks") == "FAIL");
+    rs[iKact].metrics.click = 8.0;
+    CHECK(verdict(PreScreen(preset, rs), "Clicks") == "pass");
+    rs[iAct].metrics.peakDbfs = 0.01;
+    CHECK(verdict(PreScreen(preset, rs), "Peak (moved)") == "FAIL");  // over 0 dBFS, unrounded
+    rs[iAct].metrics.peakDbfs = -3.0;
+    rs[iRep].metrics.shortTerm[5] = rs[iRep].metrics.shortTerm[4] - 1.1;  // the rising leg falls
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "FAIL");
-    rs.back().metrics.shortTerm[5] = rs.back().metrics.shortTerm[4] - 0.9;  // within 1 LU
+    rs[iRep].metrics.shortTerm[5] = rs[iRep].metrics.shortTerm[4] - 0.9;  // within 1 LU
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "pass");
+    // Response: Shape judged; Activity reported, and judged only when nothing moves.
+    rs[iAct].response.measured      = true;
+    rs[iAct].response.brightnessPct = 0.0;
+    rs[iAct].response.envelopeDb    = 0.0;
+    rs[iAct].response.heard         = {5, 6, 6};
+    rs[iAct].response.refHeard      = {5, 6, 6};
+    rs[iAct].metrics.shortTerm.assign(14, -18.0);
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "FAIL");  // a dead knob
+    rs[iAct].response.heard = {5, 7, 6};
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "info");
+    rs[iAct].response.heard         = {5, 6, 6};
+    rs[iAct].metrics.shortTerm[6]   = -18.0 + 0.2;  // the level moves
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "info");
+    rs[iAct].metrics.shortTerm[6]   = -18.0;
+    rs[iAct].response.brightnessPct = 5.0;
+    CHECK(verdict(PreScreen(preset, rs), "Response (Activity)") == "info");
+    Rendered shape = act;
+    shape.plan.name             = "S3.shape.plucks";
+    shape.plan.macro            = ParamId::MacroShape;
+    shape.metrics.shortTerm.assign(14, -18.0);
+    shape.response.measured     = true;
+    shape.response.brightnessPct = 4.9;
+    shape.response.envelopeDb   = 0.9;
+    rs.push_back(shape);
+    CHECK(verdict(PreScreen(preset, rs), "Response (Shape)") == "FAIL");
+    rs.back().response.envelopeDb = -1.0;
+    CHECK(verdict(PreScreen(preset, rs), "Response (Shape)") == "pass");
+    rs.pop_back();
     // S7's ladder: levels and tails non-decreasing, at most +10 LU over the stored position.
     const double stored = rs[0].metrics.loudness;
     for (int i = 0; i < 5; ++i) {
@@ -660,20 +813,42 @@ TEST_CASE("the pre-screen's thresholds, at their edges") {
     CHECK(verdict(PreScreen(preset, rs), "Repeats") == "FAIL");
   }
   SECTION("combinations hold peak, tail and clicks") {
-    Rendered c = make("S11", "S11.corner-a1r1s1t1.plucks", Role::Combination, -18.0, 0.04);
+    Rendered soft = make("S0", "S0.engaged.soft_notes", Role::Engaged, -20.0, -6.0);
+    soft.plan.vector   = Vector::SoftNotes;
+    soft.metrics.click = 3.0;
+    rs.push_back(soft);
+    Rendered c = make("S11", "S11.corner-a1r1s1t1.plucks", Role::Combination, -18.0, 0.0);
     rs.push_back(c);
+    Rendered k = make("S11", "S11.corner-a1r1s1t1.soft_notes", Role::Combination, -20.0, 2.0);  // not judged
+    k.plan.vector   = Vector::SoftNotes;
+    k.metrics.click = 12.0;
+    rs.push_back(k);
+    const size_t iC = rs.size() - 2, iK = rs.size() - 1;
     CHECK(verdict(PreScreen(preset, rs), "Combinations") == "pass");
-    rs.back().metrics.peakDbfs = 0.06;
+    rs[iC].metrics.peakDbfs = 0.04;  // the review's case: +0.04 dBFS rounded to 0.0 passed
+    rs[iC].metrics.overFull = 3;
     cs = PreScreen(preset, rs);
     CHECK(verdict(cs, "Combinations") == "FAIL");
     CHECK(verdict(cs, "Peak (moved)") == "FAIL");
-    rs.back().metrics.peakDbfs   = -2.0;
-    rs.back().metrics.tailFinite = false;
+    for (const Check& x : cs) {
+      if (x.name == "Peak (moved)") CHECK(x.detail.find("0.04 dBFS, 3 samples over full scale") != std::string::npos);
+    }
+    rs[iC].metrics.peakDbfs   = -2.0;
+    rs[iC].metrics.overFull   = 0;
+    rs[iC].metrics.tailFinite = false;
     CHECK(verdict(PreScreen(preset, rs), "Combinations") == "FAIL");
     preset.declare.selfOscillating = true;
     CHECK(verdict(PreScreen(preset, rs), "Combinations") == "pass");
-    rs.back().metrics.maxStep = 0.41;  // over 4x S0's 0.1
-    CHECK(verdict(PreScreen(preset, rs), "Combinations") == "FAIL");
+    rs[iK].metrics.click = 12.1;  // over 4x S0's 3.0 on SoftNotes
+    cs = PreScreen(preset, rs);
+    CHECK(verdict(cs, "Combinations") == "FAIL");
+    for (const Check& x : cs) {
+      if (x.name == "Combinations") CHECK(x.detail.find("S11.corner-a1r1s1t1.soft_notes (step 4.0x") != std::string::npos);
+    }
+    rs[iK].metrics.click   = 3.0;
+    rs[iC].metrics.click   = 99.0;  // the class render's steps are not judged
+    rs[iC].metrics.maxStep = 1.9;
+    CHECK(verdict(PreScreen(preset, rs), "Combinations") == "pass");
   }
 }
 
@@ -744,6 +919,131 @@ TEST_CASE("a suite writes its renders, recipes and index") {
   REQUIRE(q.renders.size() == r.renders.size());
   for (size_t i = 0; i < q.renders.size(); ++i) CHECK(q.renders[i].hashes.whole == r.renders[i].hashes.whole);
   CHECK_FALSE(std::filesystem::exists(dir / "nowav" / "corpus.macro_sweep" / "S0.engaged.plucks.wav"));
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a tail the render does not see end is measured on a probe") {
+  // The review's case: feedback.amount over 1 sustains (or grows) for as long as it is heard,
+  // and the S0 render's 10 s of silence cannot show it; the probe's 60 s and its fit call it
+  // unending, and the Tail check fails.
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "bsa-tail-test";
+  std::filesystem::remove_all(dir);
+  // The review's seed `review.grow` on this package's mode: the grain feedback over 1 into a
+  // short post delay at 0.9.
+  auto grow = std::make_shared<PresetState>(*Package("macro_sweep.bsp"));
+  for (const auto& leaf : std::vector<std::pair<ParamId, float>>{{ParamId::Feedback, 1.1f},
+                                                                 {ParamId::DelayFb, 0.9f},
+                                                                 {ParamId::DelayMix, 1.f},
+                                                                 {ParamId::DelayTimeMs, 40.f},
+                                                                 {ParamId::Overlap, 0.f},
+                                                                 {ParamId::SprayMs, 0.f},
+                                                                 {ParamId::WindowSustain, 0.25f},
+                                                                 {ParamId::WindowSmooth, 1.f},
+                                                                 {ParamId::Mix, 0.35f},
+                                                                 {ParamId::Jitter, 0.f},
+                                                                 {ParamId::GrainSizeMs, 100.f},
+                                                                 {ParamId::PanSpread, 0.f},
+                                                                 {ParamId::ModRateHz, 0.6f},
+                                                                 {ParamId::ModDepth, 0.05f},
+                                                                 {ParamId::ReverbTime, 0.4f},
+                                                                 {ParamId::ReverbMix, 0.12f}}) {
+    SetLeaf(grow.get(), leaf.first, leaf.second);
+  }
+  Preset       preset = MakePreset(grow, "corpus.grow");
+  SuiteOptions o;
+  o.scripts = {"S0"};
+  o.metrics = true;
+  o.wav     = false;
+  o.outDir  = dir.u8string();
+  Renderer    renderer;
+  SuiteResult r = RunSuite(renderer, preset, {&preset}, o);
+  REQUIRE(r.ok);
+  auto find = [](const SuiteResult& x, const char* name) -> const Rendered* {
+    for (const Rendered& y : x.renders) {
+      if (y.plan.name == name) return &y;
+    }
+    return nullptr;
+  };
+  auto verdict = [](const SuiteResult& x, const char* name) {
+    for (const Check& c : x.checks) {
+      if (c.name == name) return c.verdict;
+    }
+    return std::string("missing");
+  };
+  const Rendered* e = find(r, "S0.engaged.plucks");
+  REQUIRE(e != nullptr);
+  CHECK_FALSE(e->metrics.tailFinite);
+  CHECK(e->metrics.tailProbeSeconds == Approx(60.0));
+  CHECK(e->metrics.tailSeconds > 59.0);
+  CHECK(e->metrics.tailDecayDbPerS < kMinDecayDbPerS);
+  CHECK(verdict(r, "Tail") == "FAIL");
+  // The probe measures; it is not one of the renders, so the hashes are the render's own.
+  const Rendered* silence = find(r, "S0.engaged.silence");
+  REQUIRE(silence != nullptr);
+  CHECK(silence->metrics.tailProbeSeconds == 0.0);  // no tail judged on Silence: no probe
+  RenderRequest rq;
+  rq.preset      = grow.get();
+  const Input in = VectorInput(Vector::Plucks);
+  rq.input       = &in.audio;
+  RenderResult again;
+  REQUIRE(renderer.Render(rq, &again));
+  CHECK(HashRender(again.out).whole == e->hashes.whole);
+  // Declared self-oscillating, the same tail passes.
+  preset.declare.selfOscillating = true;
+  CHECK(verdict(RunSuite(renderer, preset, {&preset}, o), "Tail") == "pass");
+  // Without the feedback the tail ends inside the render: no probe.
+  SetLeaf(grow.get(), ParamId::Feedback, 0.f);
+  SetLeaf(grow.get(), ParamId::DelayFb, 0.3f);
+  preset.declare.selfOscillating = false;
+  const SuiteResult q = RunSuite(renderer, preset, {&preset}, o);
+  const Rendered*   f = find(q, "S0.engaged.plucks");
+  REQUIRE(f != nullptr);
+  CHECK(f->metrics.tailFinite);
+  CHECK(f->metrics.tailProbeSeconds == 0.0);
+  CHECK(verdict(q, "Tail") == "pass");
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a cancelled render and suite stop") {
+  const auto        state = Package("macro_sweep.bsp");
+  std::atomic<bool> cancel{true};
+  Renderer          renderer;
+  const Input       in = VectorInput(Vector::Plucks);
+  RenderRequest     rq;
+  rq.preset = state.get();
+  rq.input  = &in.audio;
+  rq.cancel = &cancel;
+  RenderResult r;
+  CHECK_FALSE(renderer.Render(rq, &r));
+  CHECK(r.error == "cancelled");
+  cancel = false;
+  REQUIRE(renderer.Render(rq, &r));  // a flag never set changes nothing
+  rq.cancel = nullptr;
+  RenderResult plain;
+  REQUIRE(renderer.Render(rq, &plain));
+  CHECK(HashRender(plain.out).whole == HashRender(r.out).whole);
+  // A suite cancelled from another thread returns at once, cancelled, and writes no index.
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "bsa-cancel-test";
+  std::filesystem::remove_all(dir);
+  Preset       preset = MakePreset(state, "corpus.cancel");
+  SuiteOptions o;
+  for (const char* s : kScriptNames) o.scripts.push_back(s);
+  o.metrics = true;
+  o.wav     = false;
+  o.outDir  = dir.u8string();
+  o.cancel  = &cancel;
+  std::thread stopper([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    cancel = true;
+  });
+  const auto        start = std::chrono::steady_clock::now();
+  const SuiteResult s     = RunSuite(renderer, preset, {&preset}, o);
+  const double      took  = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  stopper.join();
+  CHECK(s.cancelled);
+  CHECK_FALSE(s.ok);
+  CHECK(took < 2.0);
+  CHECK_FALSE(std::filesystem::exists(dir / "corpus.cancel" / "audition.json"));
   std::filesystem::remove_all(dir);
 }
 

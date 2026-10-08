@@ -13,6 +13,8 @@
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
+
+#include <filesystem>
 #endif
 
 #include "Compile.h"
@@ -156,14 +158,57 @@ std::string Takes(const CommandSpec& c) {
   return std::string(c.name) + (out.empty() ? " takes no options" : " takes " + out);
 }
 
+#if defined(_WIN32)
+// cmd and PowerShell hand a wildcard over as written, where a POSIX shell expands it: `*` and `?`
+// in a file argument's last component expand here, to the matching files in sorted order (names
+// starting with a dot only when the pattern does, case ignored as Windows ignores it). A pattern
+// that matches nothing stays as written, and reading it fails.
+bool WildMatch(const char* p, const char* n) {
+  auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+  if (*p == '\0') return *n == '\0';
+  if (*p == '*') return WildMatch(p + 1, n) || (*n != '\0' && WildMatch(p, n + 1));
+  if (*n == '\0') return false;
+  return (*p == '?' || lower(*p) == lower(*n)) && WildMatch(p + 1, n + 1);
+}
+
+std::vector<std::string> ExpandWildcards(const std::string& arg) {
+  const size_t      slash   = arg.find_last_of("/\\");
+  const std::string dir     = slash == std::string::npos ? std::string() : arg.substr(0, slash + 1);
+  const std::string pattern = slash == std::string::npos ? arg : arg.substr(slash + 1);
+  if (pattern.find_first_of("*?") == std::string::npos || dir.find_first_of("*?") != std::string::npos) {
+    return {arg};
+  }
+  std::vector<std::string> out;
+  std::error_code          ec;
+  for (std::filesystem::directory_iterator it(std::filesystem::u8path(dir.empty() ? std::string(".") : dir), ec), end;
+       !ec && it != end; it.increment(ec)) {
+    if (!it->is_regular_file(ec)) continue;
+    const std::string name = it->path().filename().u8string();
+    if (name[0] == '.' && pattern[0] != '.') continue;
+    if (WildMatch(pattern.c_str(), name.c_str())) out.push_back(dir + name);
+  }
+  std::sort(out.begin(), out.end());
+  if (out.empty()) out.push_back(arg);
+  return out;
+}
+#endif
+
 bool Parse(const CommandSpec& c, int argc, char** argv, Args* a) {
   const std::vector<std::string> options = OptionsOf(c);
   std::vector<std::string>       seen;
   bool                           filesOnly = false;  // after "--"
   for (int i = 2; i < argc; ++i) {
     const std::string s = argv[i];
-    if (filesOnly || s.size() < 2 || s[0] != '-') {
+    if (filesOnly) {  // after "--": as written
       a->files.push_back(s);
+      continue;
+    }
+    if (s.size() < 2 || s[0] != '-') {
+#if defined(_WIN32)
+      for (std::string f : ExpandWildcards(s)) a->files.push_back(std::move(f));
+#else
+      a->files.push_back(s);
+#endif
       continue;
     }
     if (s == "--") {

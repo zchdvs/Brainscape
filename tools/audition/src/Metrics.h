@@ -19,12 +19,23 @@ inline constexpr double   kTailDbfs      = -70.0;   // the tail's end
 inline constexpr uint32_t kSubBlock      = kRate / 10;  // 100 ms: the gating blocks' hop
 inline constexpr uint32_t kTailMargin    = kRate / 2;   // a measured tail ends 0.5 s before the render
 inline constexpr uint32_t kShortTermSubs = 30;          // the 3 s short-term window, in sub-blocks
-// A tail still above -70 dBFS at the render's end is extrapolated from the 100 ms peak envelope of
-// the render's last kTailFitFrames (at most its silent part): a line fitted to it that falls by at
-// least kMinDecayDbPerS is extended to -70 dBFS, a slower fall, a flat or a rising one is unending.
-inline constexpr uint32_t kTailFitFrames   = 5 * kRate;
-inline constexpr uint32_t kTailFitMinFrames = 2 * kRate;  // shorter silent parts: not extrapolated
+// A tail still above -70 dBFS when the render ends (kTailMargin before it) is measured again on a
+// probe: the same request with kTailProbeFrames of silence after the input. When the probe's tail
+// ends inside it, that is the time; when it does not, the probe's last kTailFitFrames decide: the
+// RMS level of each 1 s window there, in dB, is fitted with a line, and a tail falls when the line
+// falls by at least kMinDecayDbPerS and so does each half's line by half that, so a fall the fit
+// finds in noise does not count. A falling tail is extended to -70 dBFS (its peak level, the RMS
+// line plus the last second's crest); a flat, rising or slower one is unending.
+inline constexpr uint32_t kTailProbeFrames = 60 * kRate;
+inline constexpr uint32_t kTailFitFrames   = 30 * kRate;
 inline constexpr double   kMinDecayDbPerS  = 0.2;
+// Clicks: a sample step scores against the steps around it, the RMS of the kClickHalfWidth steps
+// on each side (the step itself left out, the RMS floored at kClickRmsFloor, -80 dBFS); steps
+// under kClickStepFloor (-40 dBFS) are not scored. A smooth waveform scores under 2 whatever its
+// pitch; a discontinuity in it scores in the tens.
+inline constexpr uint32_t kClickHalfWidth = kRate / 1000;  // 1 ms
+inline constexpr double   kClickStepFloor = 0.01;
+inline constexpr double   kClickRmsFloor  = 1e-4;
 
 // K-weighted power per 100 ms sub-block (the sum over both channels of the mean square), the K
 // filter run from frame 0: every level below derives from it.
@@ -62,24 +73,33 @@ struct Metrics {
   uint64_t nonFinite    = 0;          // NaN or infinite samples
   uint64_t subnormal    = 0;          // nonzero samples below FLT_MIN
   double   loudness     = kSilentDb;  // integrated, over [0, span)
-  // From the span's end to the last sample above -70 dBFS. When the render ends above it, the
-  // extrapolated time (tailEstimated), or, for an unending tail, the time the render shows.
+  // From the span's end to the last sample above -70 dBFS. A tail the render does not see end is
+  // not finite until a probe (MeasureTail) measures or extrapolates it; for an unending tail, the
+  // time the render (or the probe) shows.
   double   tailSeconds  = 0;
-  bool     tailFinite   = true;       // measured, or extrapolated from a falling envelope
-  bool     tailEstimated = false;     // extrapolated: the render ends above -70 dBFS
-  double   tailDecayDbPerS = 0;       // the fitted fall of an extrapolated or unending tail
+  bool     tailFinite   = true;       // ended inside the render or its probe, or extrapolated
+  bool     tailEstimated = false;     // extrapolated from the probe's fitted fall
+  double   tailProbeSeconds = 0;      // the probe's silence, when one measured the tail
+  double   tailDecayDbPerS = 0;       // the probe's fitted fall, when it was fitted
   double   maxStep      = 0;          // the largest |x[n] - x[n-1]| of either channel
   size_t   maxStepFrame = 0;
+  double   click        = 0;          // the largest step score (kClickHalfWidth), 0 for none
+  size_t   clickFrame   = 0;
+  double   clickStep    = 0;          // that step
   SpanFeatures features;              // over [0, span)
   std::vector<double> shortTerm;      // 3 s windows every 1 s from frame 0, while they fit
 };
 
 Metrics Measure(const Stereo& s, size_t span);
+// The tail of `m`'s render from `probe`, the same request with a longer silence (kTailProbeFrames),
+// whose input sounds in the same `span`.
+void MeasureTail(const Stereo& probe, size_t span, Metrics* m);
 
-// A tail's text: "2.94 s", "about 146 s (extrapolated)" or "unending (over 10.0 s)".
+// A tail's text: "2.94 s", "41.20 s (60 s probe)", "about 146 s (extrapolated)" or
+// "unending (over 60.0 s)".
 std::string TailText(const Metrics& m);
 
 double Db20(double amplitude);  // 20 log10, kSilentDb for 0
-double Round1(double v);        // to 0.1, what the pre-screen compares
+double Round1(double v);        // to 0.1, what the pre-screen compares of levels
 
 }  // namespace bsa

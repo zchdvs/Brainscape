@@ -23,8 +23,8 @@ import ratings  # noqa: E402
 ARGS = None
 
 
-def run(*cmd):
-    p = subprocess.run(list(cmd), capture_output=True, text=True, encoding="utf-8")
+def run(*cmd, cwd=None):
+    p = subprocess.run(list(cmd), capture_output=True, text=True, encoding="utf-8", cwd=cwd)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -115,18 +115,56 @@ class RenderCliTest(unittest.TestCase):
         rc, text = self.bspc(self.engram, self.engram)
         self.assertEqual(rc, 2, text)  # one id twice
 
+    @unittest.skipUnless(os.name == "nt", "a POSIX shell expands wildcards itself")
+    def test_wildcards_expand_on_windows(self):
+        d = os.path.join(ARGS.work, "wild")
+        os.makedirs(d, exist_ok=True)
+        with open(self.engram, encoding="utf-8") as f:
+            doc = f.read()
+        for name, pid in (("b.json", "factory.wild_b"), ("a.json", "factory.wild_a")):
+            with open(os.path.join(d, name), "w", encoding="utf-8", newline="\n") as f:
+                f.write(doc.replace('"factory.engram"', '"%s"' % pid))
+        out = os.path.join(ARGS.work, "wildout")
+        rc, text = run(ARGS.bspc, "render", "--script", "S8", "--no-wav", "-o", out, "wild/*.JSON", cwd=ARGS.work)
+        self.assertEqual(rc, 0, text)
+        self.assertLess(text.index("factory.wild_a"), text.index("factory.wild_b"))  # sorted
+        rc, text = run(ARGS.bspc, "render", "--script", "S8", "--no-wav", "-o", out, "wild/*.bsp", cwd=ARGS.work)
+        self.assertEqual(rc, 2, text)
+        self.assertIn("cannot read wild/*.bsp", text)
+        rc, text = run(ARGS.bspc, "render", "--script", "S8", "--no-wav", "-o", out, "--", "wild/*.json",
+                       cwd=ARGS.work)
+        self.assertEqual(rc, 2, text)  # after "--", as written
+
     def test_declarations_and_the_carry_forward(self):
         log = os.path.join(ARGS.work, "factory", "AUDITION.md")
         rc, text = run(sys.executable, RATINGS, "init", "--log", log)
         self.assertEqual(rc, 0, text)
         rc, text = run(sys.executable, RATINGS, "declare", "--log", log, "factory.engram", "--class", "pad")
         self.assertEqual(rc, 0, text)
+        # refresh renders the set with bspc (all scripts, the pre-screen, the log's declarations)
+        # and carries: run as the README shows it, from the repository, with a relative --bspc
+        # in forward slashes and without ".exe", and the documents as a wildcard, which neither
+        # cmd nor PowerShell expands.
+        os.makedirs(os.path.join(ARGS.work, "set"), exist_ok=True)
+        shutil.copyfile(self.engram, os.path.join(ARGS.work, "set", "engram.json"))
+        relative = os.path.relpath(ARGS.bspc, ARGS.work).replace(os.sep, "/")
+        if relative.endswith(".exe"):
+            relative = relative[:-4]
+        rc, text = run(sys.executable, RATINGS, "refresh", "--log", log, "--renders", "all", "--bspc", relative,
+                       "--no-wav", "set/*.json", cwd=ARGS.work)
+        self.assertEqual(rc, 0, text)
+        self.assertIn("factory.engram: new row (unrated)", text)
         renders = os.path.join(ARGS.work, "all")
-        rc, text = self.bspc("--script", "all", "--metrics", "--no-wav", "--declarations", log, "-o", renders,
-                             self.engram)
-        self.assertIn(rc, (0, 1), text)
         index = load(os.path.join(renders, "factory.engram", "audition.json"))
-        self.assertEqual(rc == 1, index["prescreen"]["failed"])
+        self.assertTrue(index["prescreen"]["ran"])
+        rc, text = run(sys.executable, RATINGS, "refresh", "--log", log, "--renders", "all", "--bspc",
+                       "no/such/bspc", "set/*.json", cwd=ARGS.work)
+        self.assertEqual(rc, 2, text)
+        self.assertIn("no bspc at", text)
+        rc, text = run(sys.executable, RATINGS, "refresh", "--log", log, "--renders", "all", "--bspc", relative,
+                       "set/*.yaml", cwd=ARGS.work)
+        self.assertEqual(rc, 2, text)
+        self.assertIn("no file matches set/*.yaml", text)
         self.assertEqual(index["declare"]["class"], "pad")
         self.assertIn("S1.activity.soft_notes", [r["name"] for r in index["renders"]])
         self.assertEqual(len(index["scripts"]), 12)

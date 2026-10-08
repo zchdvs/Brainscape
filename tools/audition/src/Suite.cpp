@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -33,6 +34,10 @@ constexpr double kSweepLu        = 3.0;   // Sweeps: Activity, Shape and Time wi
 constexpr double kRepeatsMaxLu   = 10.0;  // Repeats: at most +10 LU at maximum
 constexpr double kFallbackLu     = 12.0;  // Fallback: SoftNotes within 12 dB of Plucks
 constexpr double kClickRatio     = 4.0;   // Clicks: no step above 4x the static render's largest
+// The tooling's reading of a "step" for Clicks (README.md, "Readings"): a step's score against
+// the steps around it (Metrics.h), on SoftNotes (kClickVector); a static render whose steps all
+// score under this is taken to score this, a smooth waveform's ceiling.
+constexpr double kClickBaseScore = 2.0;
 // The tooling's own tolerances, where the design says "non-decreasing" or "measurably" of
 // measurements that fluctuate with the input (README.md, "Readings").
 constexpr double kRisingTolLu    = 1.0;   // the Repeats sweep's rising leg, per 1 s window step
@@ -40,6 +45,8 @@ constexpr double kRungTolLu      = 0.5;   // S7's levels, rung to rung
 constexpr double kRungTolSeconds = 0.25;  // S7's tails, rung to rung
 constexpr double kShapeBrightPct = 5.0;   // Response: Shape moves the brightness by 5 %
 constexpr double kShapeEnvDb     = 1.0;   //   or the envelope's variation by 1 dB
+constexpr double kDeadLevelLu    = 0.1;   // Response: an Activity that moves no proxy, its level
+                                          //   within 0.1 LU of the reference too, is dead
 
 const char* MacroShort(ParamId m) {
   switch (m) {
@@ -78,6 +85,15 @@ std::string Fmt(const char* f, double v) {
 }
 std::string Lu(double v) { return Fmt("%+.1f", Round1(v)); }
 std::string Db(double v) { return v <= kSilentDb ? std::string("silent") : Fmt("%.1f", Round1(v)); }
+// Peaks are compared unrounded (a sample over full scale is clipped by the codec), so they print
+// to 0.01 dB, with the samples over full scale.
+std::string Peak(const Metrics& m) {
+  std::string t = m.peakDbfs <= kSilentDb ? std::string("silent") : Fmt("%.2f dBFS", m.peakDbfs);
+  if (m.overFull != 0) t += ", " + std::to_string(m.overFull) + (m.overFull == 1 ? " sample" : " samples") + " over full scale";
+  return t;
+}
+double      ClickBase(const Metrics& m) { return std::max(m.click, kClickBaseScore); }
+std::string ClickAt(const Metrics& m) { return Fmt(" at %.2f s", static_cast<double>(m.clickFrame) / kRate); }
 
 std::string PosText(float p) {
   char buf[32];
@@ -234,27 +250,32 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
     out.push_back(mixed);
   }
 
+  // The class input, then SoftNotes for the Clicks check when the class is another.
+  std::vector<Vector> sweepInputs = {cls};
+  if (cls != kClickVector) sweepInputs.push_back(kClickVector);
+
   bool anySweep = false;
   for (size_t i = 0; i < 6; ++i) anySweep = anySweep || wants(kScriptNames[i + 1]);
-  if (anySweep) {
-    Planned ref = Base("S1", "S1.reference." + cn, Role::SweepRef, cls);
+  for (size_t v = 0; anySweep && v < sweepInputs.size(); ++v) {
+    const std::string vn  = VectorName(sweepInputs[v]);
+    Planned           ref = Base("S1", "S1.reference." + vn, Role::SweepRef, sweepInputs[v]);
     ref.looped       = true;
     ref.signalFrames = kSweepFrames;
     ref.tailFrames   = 0;
     out.push_back(ref);
-    bool firstSweep = true;
+    bool firstSweep = v == 0;  // the determinism repeat: the class input's first sweep
     for (size_t i = 0; i < 6; ++i) {
       const char* script = kScriptNames[i + 1];
       if (!wants(script)) continue;
       const ParamId m      = kSweepMacros[i];
       const float   stored = StoredPosition(st, m);
       if (stored < 0) {
-        skip(std::string(script) + ": macro." + MacroShort(m) + " is undefined in this mode");
+        if (v == 0) skip(std::string(script) + ": macro." + MacroShort(m) + " is undefined in this mode");
         continue;
       }
       Planned s = ref;
       s.script  = script;
-      s.name    = std::string(script) + "." + MacroShort(m) + "." + cn;
+      s.name    = std::string(script) + "." + MacroShort(m) + "." + vn;
       s.role    = Role::Sweep;
       s.macro   = m;
       s.stored  = stored;
@@ -329,46 +350,49 @@ std::vector<Planned> Plan(const Preset& preset, const std::vector<const Preset*>
   }
 
   if (wants("S11")) {
-    for (const Preset* other : set) {
-      if (other == &preset) continue;
-      Planned p = Base("S11", "S11.at-" + PresetDir(*other) + "." + cn, Role::Combination, cls);
-      for (uint32_t id = static_cast<uint32_t>(ParamId::MacroActivity);
-           id <= static_cast<uint32_t>(ParamId::MacroAux2); ++id) {
-        const auto  m   = static_cast<ParamId>(id);
-        const float pos = StoredPosition(*other->state, m);
-        if (pos >= 0 && MacroDefined(st, m)) p.positions.push_back({m, pos});
-      }
-      p.variant  = "the macro positions " + other->identity.id + " stores";
-      p.writeWav = false;
-      out.push_back(p);
-    }
     const ParamId corners[4] = {ParamId::MacroActivity, ParamId::MacroRepeats, ParamId::MacroShape,
                                 ParamId::MacroTime};
     const char    letters[4] = {'a', 'r', 's', 't'};
-    for (uint32_t bits = 0; bits < 16; ++bits) {
-      std::string tag;
-      Planned     p;
-      for (int k = 0; k < 4; ++k) {
-        const float pos = ((bits >> (3 - k)) & 1u) != 0 ? 1.f : 0.f;
-        tag += letters[k];
-        tag += pos != 0.f ? '1' : '0';
-        if (MacroDefined(st, corners[k])) p.positions.push_back({corners[k], pos});
+    for (const Vector in : sweepInputs) {
+      const std::string vn = VectorName(in);
+      for (const Preset* other : set) {
+        if (other == &preset) continue;
+        Planned p = Base("S11", "S11.at-" + PresetDir(*other) + "." + vn, Role::Combination, in);
+        for (uint32_t id = static_cast<uint32_t>(ParamId::MacroActivity);
+             id <= static_cast<uint32_t>(ParamId::MacroAux2); ++id) {
+          const auto  m   = static_cast<ParamId>(id);
+          const float pos = StoredPosition(*other->state, m);
+          if (pos >= 0 && MacroDefined(st, m)) p.positions.push_back({m, pos});
+        }
+        p.variant  = "the macro positions " + other->identity.id + " stores";
+        p.writeWav = false;
+        out.push_back(p);
       }
-      Planned c   = Base("S11", "S11.corner-" + tag + "." + cn, Role::Combination, cls);
-      c.positions = p.positions;
-      c.variant   = "activity, repeats, shape and time at the corner " + tag;
-      c.writeWav  = false;
-      out.push_back(c);
+      for (uint32_t bits = 0; bits < 16; ++bits) {
+        std::string tag;
+        Planned     c = Base("S11", std::string(), Role::Combination, in);
+        for (int k = 0; k < 4; ++k) {
+          const float pos = ((bits >> (3 - k)) & 1u) != 0 ? 1.f : 0.f;
+          tag += letters[k];
+          tag += pos != 0.f ? '1' : '0';
+          if (MacroDefined(st, corners[k])) c.positions.push_back({corners[k], pos});
+        }
+        c.name     = "S11.corner-" + tag + "." + vn;
+        c.variant  = "activity, repeats, shape and time at the corner " + tag;
+        c.writeWav = false;
+        out.push_back(c);
+      }
     }
   }
   return out;
 }
 
 std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& rs) {
-  std::vector<Check>   checks;
-  const InputClass     ic      = preset.declare.inputClass;
-  const Vector         cls     = ClassVector(ic);
-  const std::string    cn      = VectorName(cls);
+  std::vector<Check>        checks;
+  const InputClass          ic     = preset.declare.inputClass;
+  const Vector              cls    = ClassVector(ic);
+  const std::string         cn     = VectorName(cls);
+  const std::string         kn     = VectorName(kClickVector);
   const std::vector<Vector> inputs = ClassInputs(ic);
 
   {  // Renders: each rendered, and loaded exactly what the package stores.
@@ -413,7 +437,7 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     const Rendered*   w   = Find(rs, "S0.wet." + vn);
     const double      dry = DryLevel(in);
     if (e != nullptr && e->ok) {
-      peak.Add(Round1(e->metrics.peakDbfs) <= kPeakStoredDbfs, vn + " " + Db(e->metrics.peakDbfs) + " dBFS");
+      peak.Add(e->metrics.peakDbfs <= kPeakStoredDbfs, vn + " " + Peak(e->metrics));
       const double d = e->metrics.loudness - dry;
       engaged.Add(Round1(d) >= kEngagedLowLu && Round1(d) <= kEngagedHighLu, vn + " " + Lu(d) + " LU");
       const bool        finite = e->metrics.tailFinite;
@@ -432,7 +456,6 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
   checks.push_back(Make("Tail", tail));
 
   {  // Fallback: an onset mode on SoftNotes within 12 dB of its Plucks level (wet against dry).
-    Verdicts        v;
     const Rendered* wp = Find(rs, "S0.wet.plucks");
     const Rendered* ws = Find(rs, "S0.wet.soft_notes");
     if (!OnsetMode(*preset.state)) {
@@ -450,18 +473,17 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     }
   }
 
-  // Sweeps, Repeats, Clicks: S1-S6 against the reference on the same looped input.
-  const Rendered* ref = Find(rs, "S1.reference." + cn);
-  Verdicts        sweeps, clicks, repeats;
-  Tally           moved;  // Peak during sweeps and S11
+  // Sweeps, Repeats and Response: the class sweeps against the reference on the same looped
+  // input.
+  const Rendered*    ref = Find(rs, "S1.reference." + cn);
+  Verdicts           sweeps, clicks, repeats;
+  Tally              moved;  // Peak during sweeps and S11, on the class input
+  std::vector<Check> response;
   for (const Rendered& r : rs) {
-    if (r.plan.role != Role::Sweep || !r.ok) continue;
+    if (r.plan.role != Role::Sweep || !r.ok || r.plan.vector != cls) continue;
     const std::string m = MacroShort(r.plan.macro);
-    moved.Add(r, Round1(r.metrics.peakDbfs) <= kPeakMovedDbfs, r.metrics.peakDbfs);
+    moved.Add(r, r.metrics.peakDbfs <= kPeakMovedDbfs, r.metrics.peakDbfs);
     if (ref == nullptr || !ref->ok) continue;
-    const double refStep = std::max(ref->metrics.maxStep, 1e-9);
-    clicks.Add(r.metrics.maxStep <= kClickRatio * refStep,
-               m + " " + Fmt("%.2fx", r.metrics.maxStep / refStep));
     // The level against the reference per 3 s window, where the reference sounds.
     std::vector<double> delta;
     double              lo = 1e9, hi = -1e9;
@@ -497,9 +519,44 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
       }
       if (n >= 2) repeats.Add(ok, std::string("S2's rising leg ") + (ok ? "does not fall" : "falls"));
     }
+    const Response& q = r.response;
+    if (!q.measured) continue;
+    const std::string features = m + " 0 to 1: brightness " + Fmt("%+.1f %%", q.brightnessPct) +
+                                 ", envelope variation " + Fmt("%+.2f dB", q.envelopeDb);
+    if (r.plan.macro == ParamId::MacroShape) {
+      const bool ok = std::fabs(q.brightnessPct) >= kShapeBrightPct || std::fabs(q.envelopeDb) >= kShapeEnvDb;
+      response.push_back({"Response (Shape)", ok ? "pass" : "FAIL", features});
+    } else if (r.plan.macro == ParamId::MacroActivity) {
+      // Reported: event density through the engine's own onset detector, beside the brightness,
+      // the envelope and the level; judged only when none of them moves (a dead knob).
+      std::string seq, refSeq;
+      for (size_t k = 0; k < q.heard.size(); ++k) seq += (k ? " " : "") + std::to_string(q.heard[k]);
+      for (size_t k = 0; k < q.refHeard.size(); ++k) refSeq += (k ? " " : "") + std::to_string(q.refHeard[k]);
+      const bool dead = q.heard == q.refHeard && std::fabs(q.brightnessPct) < kShapeBrightPct &&
+                        std::fabs(q.envelopeDb) < kShapeEnvDb && lo <= hi && std::fabs(lo) <= kDeadLevelLu &&
+                        std::fabs(hi) <= kDeadLevelLu;
+      const std::string d = (dead ? std::string("moves nothing measured: ") : std::string()) + features +
+                            ", level " + range + "; onsets the detector hears per second from 0 to 1: " + seq +
+                            " (the stored position: " + refSeq + ")";
+      response.push_back({"Response (Activity)", dead ? "FAIL" : "info", d});
+    }
   }
   checks.push_back(Make("Sweeps", sweeps));
-  if (!clicks.parts.empty()) clicks.parts.front() = "largest step against the static: " + clicks.parts.front();
+
+  // Clicks: each sweep on SoftNotes against the largest step score of its reference.
+  const Rendered* clickRef = Find(rs, "S1.reference." + kn);
+  for (const Rendered& r : rs) {
+    if (r.plan.role != Role::Sweep || !r.ok || r.plan.vector != kClickVector) continue;
+    if (clickRef == nullptr || !clickRef->ok) continue;
+    const double base = ClickBase(clickRef->metrics);
+    const bool   ok   = r.metrics.click <= kClickRatio * base;
+    clicks.Add(ok, std::string(MacroShort(r.plan.macro)) + " " + Fmt("%.2fx", r.metrics.click / base) +
+                       (ok ? std::string() : ClickAt(r.metrics)));
+  }
+  if (!clicks.parts.empty()) {
+    clicks.parts.front() = "largest step score on " + kn + " against the static's " +
+                           Fmt("%.1f", clickRef->metrics.click) + ": " + clicks.parts.front();
+  }
   checks.push_back(Make("Clicks", clicks));
 
   {  // S7: the Repeats ladder, level and tail non-decreasing, at most +10 LU at maximum.
@@ -532,46 +589,60 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     checks.push_back(Make("Repeats", repeats));
   }
 
-  {  // S11: Combinations hold Peak, Tail and Clicks; the worst cases are listed for listening.
-    const Rendered* e = Find(rs, "S0.engaged." + cn);
+  {  // S11: Combinations hold Peak and Tail (on the class input) and Clicks (on SoftNotes, against
+     // S0's render on it); the worst cases are listed for listening.
+    const Rendered* e = Find(rs, "S0.engaged." + kn);
     Tally           held;
-    const Rendered *worstPeak = nullptr, *worstTail = nullptr, *worstStep = nullptr;
+    const Rendered *worstPeak = nullptr, *worstTail = nullptr, *worstClick = nullptr;
     for (const Rendered& r : rs) {
       if (r.plan.role != Role::Combination || !r.ok) continue;
-      const Metrics& m = r.metrics;
-      moved.Add(r, Round1(m.peakDbfs) <= kPeakMovedDbfs, m.peakDbfs);
-      std::string why;
-      if (Round1(m.peakDbfs) > kPeakMovedDbfs) why += " peak " + Db(m.peakDbfs) + " dBFS";
-      if (!m.tailFinite && !preset.declare.selfOscillating) why += " unending tail";
-      const double refStep = e != nullptr && e->ok ? std::max(e->metrics.maxStep, 1e-9) : 0.0;
-      if (refStep > 0 && m.maxStep > kClickRatio * refStep) why += " step " + Fmt("%.1fx", m.maxStep / refStep);
-      held.Add(r, why.empty(), 0.0, why);
-      if (worstPeak == nullptr || m.peakDbfs > worstPeak->metrics.peakDbfs) worstPeak = &r;
-      if (worstTail == nullptr || TailKey(m) > TailKey(worstTail->metrics)) worstTail = &r;
-      if (worstStep == nullptr || m.maxStep > worstStep->metrics.maxStep) worstStep = &r;
+      const Metrics&           m = r.metrics;
+      std::vector<std::string> why;
+      if (r.plan.vector == cls) {
+        moved.Add(r, m.peakDbfs <= kPeakMovedDbfs, m.peakDbfs);
+        if (m.peakDbfs > kPeakMovedDbfs) why.push_back("peak " + Peak(m));
+        if (!m.tailFinite && !preset.declare.selfOscillating) why.push_back("unending tail");
+        if (worstPeak == nullptr || m.peakDbfs > worstPeak->metrics.peakDbfs) worstPeak = &r;
+        if (worstTail == nullptr || TailKey(m) > TailKey(worstTail->metrics)) worstTail = &r;
+      }
+      if (r.plan.vector == kClickVector) {
+        const double base = e != nullptr && e->ok ? ClickBase(e->metrics) : 0.0;
+        if (base > 0 && m.click > kClickRatio * base) why.push_back("step " + Fmt("%.1fx", m.click / base) + ClickAt(m));
+        if (worstClick == nullptr || m.click > worstClick->metrics.click) worstClick = &r;
+      }
+      std::string reasons;
+      for (const std::string& w : why) reasons += (reasons.empty() ? " (" : "; ") + w;
+      held.Add(r, why.empty(), 0.0, reasons.empty() ? reasons : reasons + ")");
     }
     if (held.n == 0) {
       checks.push_back({"Combinations", "n/a", "nothing to judge"});
     } else {
       std::string d = std::to_string(held.n - held.failed.size()) + " of " + std::to_string(held.n) + " hold";
       if (!held.failed.empty()) d += "; " + held.Failures();
-      d += "; worst: peak " + worstPeak->plan.name + " " + Db(worstPeak->metrics.peakDbfs) + " dBFS, tail " +
-           worstTail->plan.name + " " + TailText(worstTail->metrics) +
-           ", step " + worstStep->plan.name + Fmt(" %.3f", worstStep->metrics.maxStep);
+      d += "; worst:";
+      if (worstPeak != nullptr) {
+        d += " peak " + worstPeak->plan.name + " " + Peak(worstPeak->metrics) + ", tail " + worstTail->plan.name +
+             " " + TailText(worstTail->metrics);
+      }
+      if (worstClick != nullptr) {
+        d += std::string(worstPeak != nullptr ? "," : "") + " step score " + worstClick->plan.name +
+             Fmt(" %.1f", worstClick->metrics.click);
+      }
       checks.push_back({"Combinations", held.failed.empty() ? "pass" : "FAIL", d});
     }
   }
   if (moved.n == 0) {
     checks.push_back({"Peak (moved)", "n/a", "nothing to judge"});
   } else {
-    std::string d = std::to_string(moved.n) + " sweep and S11 renders, highest " + Db(moved.worst) +
-                    " dBFS (" + moved.worstName + ")";
+    const Rendered* w = Find(rs, moved.worstName);
+    std::string     d = std::to_string(moved.n) + " sweep and S11 renders on " + cn + ", highest " +
+                    (w != nullptr ? Peak(w->metrics) : Db(moved.worst) + " dBFS") + " (" + moved.worstName + ")";
     if (!moved.failed.empty()) d += "; over 0 dBFS: " + moved.Failures();
     checks.push_back({"Peak (moved)", moved.failed.empty() ? "pass" : "FAIL", d});
   }
 
   {  // Other peaks: reported, not judged (§11.3 judges the class inputs at stored positions, the
-     // sweeps and S11): S0 on the other vectors and at Mix 1, and S7-S10.
+     // sweeps and S11): S0 on the other vectors and at Mix 1, S7-S10, and the Clicks renders.
     std::string d;
     auto        report = [&](const std::string& label, auto&& pick) {
       Tally t;
@@ -593,6 +664,10 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     for (const char* script : {"S7", "S8", "S9", "S10"}) {
       report(script, [&](const Rendered& r) { return r.plan.script == script; });
     }
+    report("S1-S6 and S11 on " + kn, [&](const Rendered& r) {
+      return (r.plan.role == Role::Sweep || r.plan.role == Role::SweepRef || r.plan.role == Role::Combination) &&
+             r.plan.vector != cls;
+    });
     checks.push_back({"Peak (other)", d.empty() ? "n/a" : "info", d.empty() ? "nothing to report" : d});
   }
 
@@ -606,6 +681,7 @@ std::vector<Check> PreScreen(const Preset& preset, const std::vector<Rendered>& 
     }
     checks.push_back({"Load", "info", d});
   }
+  for (Check& c : response) checks.push_back(std::move(c));
   return checks;
 }
 
@@ -763,13 +839,24 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
   std::filesystem::create_directories(std::filesystem::u8path(dir), ec);
 
   std::map<InputKey, CachedInput> inputs;
-  auto render = [&](const Planned& p, Rendered* rd, RenderResult* rr) {
+  const Vector                    cls        = ClassVector(preset.declare.inputClass);
+  const std::vector<Vector>       classIns   = ClassInputs(preset.declare.inputClass);
+  auto                            cancelled  = [&] {
+    return options.cancel != nullptr && options.cancel->load(std::memory_order_relaxed);
+  };
+  // The renders whose tail a check judges: S0 on the class inputs, S7, and S11 on the class input.
+  auto tailJudged = [&](const Planned& p) {
+    return (p.role == Role::Engaged && std::find(classIns.begin(), classIns.end(), p.vector) != classIns.end()) ||
+           p.role == Role::RepeatsRung || (p.role == Role::Combination && p.vector == cls);
+  };
+  auto render = [&](const Planned& p, Rendered* rd, RenderResult* rr, bool probeTail) {
     const CachedInput&           in      = GetInput(inputs, p);
     std::shared_ptr<PresetState> variant = Variant(*preset.state, p);
     RenderRequest                rq;
     rq.input        = &in.input.audio;
     rq.events       = p.events;
     rq.blockPattern = p.blockPattern;
+    rq.cancel       = options.cancel;
     if (p.role == Role::Load) {
       rq.preset = p.from != nullptr ? p.from->state.get() : &DefaultPreset();
       rq.staged = {variant.get()};
@@ -788,6 +875,27 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
     if (!rd->ok) return variant;
     rd->hashes  = HashRender(rr->out);
     rd->metrics = Measure(rr->out, in.input.signalFrames);
+    if (probeTail && !rd->metrics.tailFinite && tailJudged(p) && p.tailFrames < kTailProbeFrames) {
+      // The tail outlasts the render: the same request with 60 s of silence measures it. The
+      // probe starts with the render itself (the same input bits, then more silence).
+      Planned longer    = p;
+      longer.tailFrames = kTailProbeFrames;
+      const CachedInput& pin = GetInput(inputs, longer);
+      RenderRequest      pq  = rq;
+      pq.input               = &pin.input.audio;
+      RenderResult pr;
+      const size_t n = rr->out.Frames();
+      if (!renderer.Render(pq, &pr)) {
+        rd->ok    = false;
+        rd->error = "the tail probe: " + pr.error;
+      } else if (pr.out.Frames() < n || std::memcmp(pr.out.l.data(), rr->out.l.data(), n * sizeof(float)) != 0 ||
+                 std::memcmp(pr.out.r.data(), rr->out.r.data(), n * sizeof(float)) != 0) {
+        rd->ok    = false;
+        rd->error = "the tail probe does not start with the render";
+      } else {
+        MeasureTail(pr.out, pin.input.signalFrames, &rd->metrics);
+      }
+    }
     return variant;
   };
 
@@ -832,22 +940,23 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
     }
   };
 
-  // Response features need the audio of the sweeps and their reference, kept per sweep.
-  std::vector<Check>    response;
+  // Response features need the audio of the class sweeps and their reference, kept per sweep.
   Stereo                refAudio;
   std::vector<uint32_t> refHeard;  // the reference's heard onsets, measured once
   for (const Planned& p : plans) {
+    if (cancelled()) break;
     Rendered     rd;
     RenderResult rr;
-    const std::shared_ptr<PresetState> loaded = render(p, &rd, &rr);
+    const std::shared_ptr<PresetState> loaded = render(p, &rd, &rr, true);
     if (!rd.ok) result.ok = false;
+    if (cancelled()) break;
     if (rd.ok && p.role != Role::Determinism) {
       const PresetState& asLoaded =
           p.role == Role::Load ? (p.from != nullptr ? *p.from->state : DefaultPreset()) : *loaded;
       writeFiles(p, &rd, rr, asLoaded, options.wav && p.writeWav);
     }
-    if (rd.ok && p.role == Role::SweepRef) refAudio = rr.out;
-    if (rd.ok && p.role == Role::Sweep && options.metrics && !refAudio.l.empty() &&
+    if (rd.ok && p.role == Role::SweepRef && p.vector == cls) refAudio = rr.out;
+    if (rd.ok && p.role == Role::Sweep && p.vector == cls && options.metrics && !refAudio.l.empty() &&
         (p.macro == ParamId::MacroShape || p.macro == ParamId::MacroActivity)) {
       // Response: features near position 0 and near 1, each against the reference at the same
       // time, so the looped input's own changes cancel.
@@ -857,41 +966,43 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
         const SpanFeatures a = Features(rr.out, f, t), b = Features(refAudio, f, t);
         return std::make_pair(a.brightnessHz / std::max(b.brightnessHz, 1e-9), a.envelopeVarDb - b.envelopeVarDb);
       };
-      const auto   z = at(8.0 * p.stored), o = at(8.0 * p.stored + 8.0);
-      const double bright = 100.0 * (o.first / std::max(z.first, 1e-9) - 1.0);
-      const double env    = o.second - z.second;
-      const std::string d = MacroShort(p.macro) + std::string(" 0 to 1: brightness ") + Fmt("%+.1f %%", bright) +
-                            ", envelope variation " + Fmt("%+.2f dB", env);
-      if (p.macro == ParamId::MacroShape) {
-        const bool ok = std::fabs(bright) >= kShapeBrightPct || std::fabs(env) >= kShapeEnvDb;
-        response.push_back({"Response (Shape)", ok ? "pass" : "FAIL", d});
-      } else {
+      const auto z = at(8.0 * p.stored), o = at(8.0 * p.stored + 8.0);
+      Response&  q = rd.response;
+      q.measured      = true;
+      q.brightnessPct = 100.0 * (o.first / std::max(z.first, 1e-9) - 1.0);
+      q.envelopeDb    = o.second - z.second;
+      if (p.macro == ParamId::MacroActivity) {
         // Event density as the pedal's own onset detector hears the output, per second of the
         // rising leg (0 to 1), beside the reference's: the engine reports no voices or births.
         if (refHeard.empty()) refHeard = HeardOnsets(renderer, refAudio);
         const std::vector<uint32_t> heard = HeardOnsets(renderer, rr.out);
-        const auto first = static_cast<size_t>(std::ceil(8.0 * p.stored));
-        std::string seq, refSeq;
+        const auto                  first = static_cast<size_t>(std::ceil(8.0 * p.stored));
         for (size_t k = first; k < first + 8 && k < heard.size() && k < refHeard.size(); ++k) {
-          seq += (seq.empty() ? "" : " ") + std::to_string(heard[k]);
-          refSeq += (refSeq.empty() ? "" : " ") + std::to_string(refHeard[k]);
+          q.heard.push_back(heard[k]);
+          q.refHeard.push_back(refHeard[k]);
         }
-        response.push_back({"Response (Activity)", "info",
-                            d + "; onsets the detector hears per second from 0 to 1: " + seq +
-                                " (the stored position: " + refSeq + ")"});
       }
     }
     result.renders.push_back(std::move(rd));
   }
+  if (cancelled()) {  // nothing more is written: the caller has gone
+    result.cancelled = true;
+    result.ok        = false;
+    return result;
+  }
 
   // S11's worst cases, written for listening: re-rendered (renders are deterministic).
   if (options.wav && options.worstWavs > 0) {
-    std::vector<size_t> combos;
+    // By peak and by tail on the class input; by step score on SoftNotes (the Clicks renders).
+    std::vector<size_t> combos, clickCombos;
     for (size_t i = 0; i < result.renders.size(); ++i) {
-      if (result.renders[i].plan.role == Role::Combination && result.renders[i].ok) combos.push_back(i);
+      const Rendered& r = result.renders[i];
+      if (r.plan.role != Role::Combination || !r.ok) continue;
+      if (r.plan.vector == cls) combos.push_back(i);
+      if (r.plan.vector == kClickVector) clickCombos.push_back(i);
     }
     std::vector<size_t> pick;
-    auto byPeak = combos, byTail = combos, byStep = combos;
+    auto byPeak = combos, byTail = combos, byStep = clickCombos;
     auto tailKey = [&](size_t i) {
       const Metrics& m = result.renders[i].metrics;
       return m.tailFinite ? m.tailSeconds : std::numeric_limits<double>::infinity();
@@ -901,7 +1012,7 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
     });
     std::stable_sort(byTail.begin(), byTail.end(), [&](size_t a, size_t b) { return tailKey(a) > tailKey(b); });
     std::stable_sort(byStep.begin(), byStep.end(), [&](size_t a, size_t b) {
-      return result.renders[a].metrics.maxStep > result.renders[b].metrics.maxStep;
+      return result.renders[a].metrics.click > result.renders[b].metrics.click;
     });
     for (const auto* list : {&byPeak, &byTail, &byStep}) {
       for (size_t k = 0; k < list->size() && k < options.worstWavs; ++k) {
@@ -912,20 +1023,22 @@ SuiteResult RunSuite(Renderer& renderer, const Preset& preset, const std::vector
     for (const size_t i : pick) {
       Rendered     again;
       RenderResult rr;
-      const std::shared_ptr<PresetState> loaded = render(result.renders[i].plan, &again, &rr);
+      const std::shared_ptr<PresetState> loaded = render(result.renders[i].plan, &again, &rr, false);
+      if (cancelled()) {
+        result.cancelled = true;
+        result.ok        = false;
+        return result;
+      }
       if (!again.ok || again.hashes.whole != result.renders[i].hashes.whole) {
         result.ok                = false;
         result.renders[i].error  = "the worst-case re-render differed";
         continue;
       }
-      writeFiles(result.renders[i].plan, &result.renders[i], rr, *loaded, true);
+      writeFiles(result.renders[i].plan, &result.renders[i], rr, *loaded, true);  // its metrics stand
     }
   }
 
-  if (options.metrics) {
-    result.checks = PreScreen(preset, result.renders);
-    for (Check& c : response) result.checks.push_back(c);
-  }
+  if (options.metrics) result.checks = PreScreen(preset, result.renders);
   WriteIndex(JoinPath(dir, "audition.json"), preset, result, options.metrics);
   if (options.metrics) WriteText(JoinPath(dir, "prescreen.txt"), Summary(preset, result));
   return result;

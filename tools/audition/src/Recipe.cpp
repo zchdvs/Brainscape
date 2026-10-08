@@ -221,8 +221,11 @@ std::string RecipeJson(const RecipeInput& in) {
     w.Key("tailFinite").Bool(m.tailFinite);
     w.Key("tailEstimated").Bool(m.tailEstimated);
     w.Key("tailDecayDbPerS").Double(m.tailDecayDbPerS, 2);
+    w.Key("tailProbeSeconds").Double(m.tailProbeSeconds, 1);
     w.Key("maxStep").Double(m.maxStep, 6);
     w.Key("maxStepFrame").Uint(m.maxStepFrame);
+    w.Key("stepScore").Double(m.click, 2);
+    w.Key("stepScoreFrame").Uint(m.clickFrame);
     w.Key("brightnessHz").Double(m.features.brightnessHz, 1);
     w.Key("envelopeVarDb").Double(m.features.envelopeVarDb, 2);
     std::string st = "[";
