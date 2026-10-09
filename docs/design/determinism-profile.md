@@ -907,7 +907,8 @@ relying on `PowF`'s edge rules at 0 and 1 and asserting finite leaves.
 > the block grid; the control loop alone pushes, and ring entries from before an Exact load's
 > reset are never stamped into the new timeline; a log records each event's applied frame,
 > because a late stamp applies at the next block's start and the engine only ever sees that frame
-> (clock.md §4.5).
+> (clock.md §4.5). The owner confirmed clock.md's decisions on 2026-10-09 (its §11.5), among them
+> the gap rule (D2) and the pedal's stamps (D20).
 
 ### 5.12 Sound revision constant
 

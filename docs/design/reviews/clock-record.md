@@ -1,15 +1,16 @@
 # CLOCK design pass — evidence record
 
-> The evidence behind [clock.md](../clock.md) (draft v2): the inputs, what each investigation
-> found and where, the probes the revision ran, where the sources disagreed and how the design
-> resolves it, the alternatives it rejected, and how the three reviews of draft v1 were disposed
-> of (§6). The design document is normative; this record is not. "Design §N" is clock.md,
-> "record §N" this file, "compiler §N" [mode-compiler.md](../mode-compiler.md), "engine §N"
-> [grain-engine.md](../grain-engine.md), "companion §N" [companion-app.md](../companion-app.md)
-> and "profile §N" [determinism-profile.md](../determinism-profile.md). Code is cited as
-> `path:line` at `claude/mode-compiler-impl` `343f33c` (sound revision 7); "LD" is the pinned
-> libDaisy v9.0.0, read in the Rev7 worktree's build tree, and "JUCE" the plugin build's 9.0
-> tree. Numbers are *measured*, *calculated* or *estimated*.
+> The evidence behind [clock.md](../clock.md) (draft v2, owner-approved on 2026-10-09): the
+> inputs, what each investigation found and where, the probes the revision ran, where the
+> sources disagreed and how the design resolves it, the alternatives it rejected, and how the
+> three reviews of draft v1 were disposed of (§6). The design document is normative; this
+> record is not. "Design §N" is clock.md, "record §N" this file, "compiler §N"
+> [mode-compiler.md](../mode-compiler.md), "engine §N" [grain-engine.md](../grain-engine.md),
+> "companion §N" [companion-app.md](../companion-app.md) and "profile §N"
+> [determinism-profile.md](../determinism-profile.md). Code is cited as `path:line` at
+> `claude/mode-compiler-impl` `343f33c` (sound revision 7); "LD" is the pinned libDaisy v9.0.0,
+> read in the Rev7 worktree's build tree, and "JUCE" the plugin build's 9.0 tree. Numbers are
+> *measured*, *calculated* or *estimated*.
 
 ---
 
@@ -95,7 +96,7 @@ resolves `docs/research/microcosm.md:112`.
 
 **Not documented anywhere searched:** tap averaging and timeout, Continue, Song Position, what
 happens when clock stops without a Stop, and what the Time knob does under clock. These are the
-design's own choices, each a provisional answer in design §11.5, taken from peers where they
+design's own choices, each an owner decision in design §11.5, taken from peers where they
 document them (§2.2).
 
 **Field reports** (Elektronauts 121669): posts #734 and #743, a stop and start realigns the beat;
@@ -358,8 +359,9 @@ constants freeze once, at its revision 8 (its D8); its event reserve is a 24k-cy
 Written 2026-10-08 from the survey and the three investigations of record §1, on branch
 `claude/clock-design` from `claude/mode-compiler-impl` at `343f33c`, as draft v1 (commit
 `ca09f3a`), and revised the same day into draft v2 after the three reviews (§6). The design's
-owner decisions (design §11.5) carry provisional answers, reversible before the first public
-release; its open questions (§11.8) are settled at T0b or by listening.
+owner decisions (design §11.5) carried provisional answers until 2026-10-09, when the owner
+confirmed every one as proposed and the design became owner-approved; its open questions (§11.8)
+are settled at T0b or by listening.
 
 ## 6. Review of draft v1 and its disposition
 

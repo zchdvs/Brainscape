@@ -14,12 +14,12 @@
 > estimator arithmetic; the code), summarised with their sources in §12. Numbers are
 > *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
 > `claude/mode-compiler-impl` `343f33c` (sound revision 7); "LD" is the pinned libDaisy v9.0.0
-> and "JUCE" the plugin build's fetched 9.0 tree. Status: **draft v2** (2026-10-08), revised
-> after three reviews of draft v1 (determinism and parity, the musician and the product, the
-> firmware and hardware); [the record](reviews/clock-record.md) ("record §N") keeps the
-> evidence, the probes and every finding's disposition. Nothing is built. The owner has not
-> answered the decisions of §11.5: each carries a provisional answer (2026-10-08), marked as
-> such and reversible before the first public release.
+> and "JUCE" the plugin build's fetched 9.0 tree. Status: **owner-approved design**
+> (2026-10-09): draft v2 (2026-10-08), revised after three reviews of draft v1 (determinism and
+> parity, the musician and the product, the firmware and hardware), with the answers to the 23
+> decisions of §11.5, which the owner confirmed as proposed on 2026-10-09;
+> [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
+> finding's disposition. Nothing is built.
 
 ---
 
@@ -62,7 +62,7 @@ designs, precisely enough to build and test:
 | Time signatures and bars | Not designed; grids align to position 0 of the transport in 24-ppqn ticks, so every grid up to a whole note is bar-aligned in 4/4 only |
 | Which panel gesture toggles the time mode, the LEDs | The control-surface design; §6.4 says what the gesture does |
 | The pedal's MIDI CC map | The firmware's MIDI design (compiler §1.2, deferred); §6.5 recommends the Microcosm's CCs |
-| The CPU budget's fix (the cost governor) | The CPU proposal under design; §9.6 says how CLOCK births enter it |
+| The CPU budget's fix (the cost governor) | The CPU proposal, its decisions confirmed by the owner on 2026-10-09; §9.6 says how CLOCK births enter it |
 
 ### 1.3 Terms
 
@@ -101,7 +101,7 @@ designs, precisely enough to build and test:
    run in `dsp/` on the frames where events applied (compiler §7.4), so a logged stream replays
    bit-identically on any build. Producers stamp, filter by device setting, and log.
 4. **Microcosm parity where the Microcosm documents its behaviour**, its peers' behaviour where
-   it is silent, every such choice a provisional answer in §11.5.
+   it is silent, every such choice an owner decision in §11.5.
 5. **Exact loads start from the stored state; producers carry the performance across them;
    Spillover loads never move the beat phase.** The engine's start state after an Exact load
    depends on the package alone, and the running tempo and the master's beat cross the load as
@@ -960,8 +960,9 @@ the step index is ⌊position / G⌋ modulo the step count, so patterns align to
 | Subdiv | a Subdivision event (field 0) when its zone changes, with hysteresis at zone edges | the knob's | expression, MIDI CC, hosts |
 | Tempo | Tempo events, exponential from 20 BPM (fully counter-clockwise) to 300 BPM: ns = round(3·10⁹ · 2^(−m·log₂15)) through DetMath's `Exp2D`, exported as `TempoNsFromKnob(m)` | forced to TAP | expression, MIDI CC, hosts |
 
-**Q7 (answered here, provisionally, D5):** in Subdiv and Tempo modes the Time knob never reaches
-`macro.time`; expression, MIDI and hosts still do, in every mode (compiler §3.1's lean).
+**Q7 (answered here, D5, which the owner confirmed on 2026-10-09):** in Subdiv and Tempo modes
+the Time knob never reaches `macro.time`; expression, MIDI and hosts still do, in every mode
+(compiler §3.1's lean).
 
 **The Tempo knob (D15)** is exponential, because equal turns then make equal tempo ratios, the
 "smooth acceleration and deceleration" of the Microcosm's Tempo mode (§12). Under external clock
@@ -1064,9 +1065,10 @@ real jumps crossfade. Draft v1 glided every change at the glide's 0.5 frame-per-
 tap from 120 to 90 BPM held a quarter-synced echo an octave flat for a third of a second and
 feedback recirculated it (record §6, P1).
 
-**`global.tempo_glide`** (row 86, a `Global` device setting, §10.4): **Off** (0, default,
-provisional until S12 is heard, §11.8) or **On** (1): jumps glide as in draft v1, the tape swoop
-Meris' TAP GLIDE and Thermae's GLIDE offer as a choice (§12). Drifts slew either way.
+**`global.tempo_glide`** (row 86, a `Global` device setting, §10.4): **Off** (0, the default by
+D22, which also has it checked by ear on S12, §11.8) or **On** (1): jumps glide as in draft v1,
+the tape swoop Meris' TAP GLIDE and Thermae's GLIDE offer as a choice (§12). Drifts slew either
+way.
 
 ### 7.2 Glide and slew
 
@@ -1404,7 +1406,7 @@ hand its tapped tempo on; draft v1 deferred both without listing the gap (record
   anyway. Under external clock the thru already forwards the master's clock and nothing is
   generated. No FA or FC: the pedal has no transport control, and receivers follow clock without
   Start, as §3.1's ClockFree does.
-- **The setting** is the Microcosm's four-way global choice; provisional default (D10): thru on,
+- **The setting** is the Microcosm's four-way global choice; default (D10): thru on,
   clock out off, so adding the pedal to a chain changes nothing downstream until asked.
 
 ### 9.6 Placement and CPU
@@ -1422,7 +1424,9 @@ withdrawn (record §6, H3). So:
 
 - **An entry gate for T1 and T2** (D1): today's use, minus what moves out, plus the CPU plan's
   additions, plus the tempo core's, leaves at least 8 KiB, tallied from the merged tree's map
-  once the CPU plan's FFT choice (its D4) is settled.
+  with the CPU plan's FFT choice, which the owner settled on 2026-10-09 (its D4: P1's 6.3 KB
+  rewrite now, P3's 1 KB one if the spare after wave 1, the plan's steps 4–5 and the governor
+  falls below 8 KB).
 - **Cold code moves out, not only `Validate`.** `Engine.cpp`'s main-thread-only API (`Init`, the
   Exact-load and `Restart` clears, `GetParam`, `ModeSwitches`, the accessors the console reads)
   goes to a translation unit kept out of ITCM, or the engine is placed by function with a
@@ -1615,23 +1619,28 @@ reproduce its hashes and counters, as at every wave-1 revision.
 | **T5** audition | S12, the beat-lock metric, the Lock row; re-rate the echoic modes' Time; Engram and Callback given a synced post delay by listening (§6.6) | `tools/audition/`, `firmware/factory/` | after T2 | 3–5 plus listening |
 | **T6** bench | DWT at revision N + 1 on the Rev7, with the CPU fix: hits with bursts, bunched ticks, the crossfade | `firmware/` | after T2, with the governor | 1–2 |
 
-**Order:** T0b now; the CPU plan's FFT choice settled and the ITCM gate passed (§9.6); the first
-set's knob ratings (`docs/STATUS.md:57`); T1, then T2, each one revision, with T3 and T4
-alongside; T4b; T5; T6; then the rest of W2 (steps, mark walk, global reverse, velocity) and
-step 4's rhythmic second set (compiler §11.4). **Total** about 30–48 engineer-days beyond this
-design (*estimated*). Draft v1's 22–38 left out the ITCM work, the producers' re-asserts, the
-epoch and UART recovery, MIDI out and the reviews' added tests; the survey's 25–45 included the
-design and golden coverage as separate lines, folded here into T1 and T2.
+**Order:** T0b now; the ITCM gate passed (§9.6), the CPU plan's FFT choice being settled
+(2026-10-09); the first set's knob ratings (`docs/STATUS.md:57`); T1, then T2, each one
+revision, with T3 and T4 alongside; T4b; T5; T6; then the rest of W2 (steps, mark walk, global
+reverse, velocity) and step 4's rhythmic second set (compiler §11.4). **Total** about 30–48
+engineer-days beyond this design (*estimated*). Draft v1's 22–38 left out the ITCM work, the
+producers' re-asserts, the epoch and UART recovery, MIDI out and the reviews' added tests; the
+survey's 25–45 included the design and golden coverage as separate lines, folded here into T1
+and T2.
 
 ### 11.5 Owner decisions
 
-Each answer is provisional (2026-10-08), adopted so the design is complete, and reversible before
-the first public release. D1–D11 are the status survey's eleven, with its recommendations
-amended where the evidence of §12 or the reviews required (D2, D4, D7, D8, D9, D10, D11); D12–D20
-are draft v1's, several amended by the reviews (D13, D15, D16, D17, D18, D20); D21–D23 are new in
-draft v2.
+The owner confirmed every answer below on 2026-10-09, as proposed and without amendment, so none
+is provisional any more. Each was first adopted provisionally (2026-10-08) so the design was
+complete; as with every owner answer in this design, each stays reversible before the first
+public release, and reversing one is an owner decision of its own and, where it changes the
+sound, a sound revision. The CPU proposal's decisions were confirmed the same day, its D4
+settling the FFT choice that D1's gate is tallied with (§9.6). D1–D11 are the status survey's
+eleven, with its recommendations amended where the evidence of §12 or the reviews required (D2,
+D4, D7, D8, D9, D10, D11); D12–D20 are draft v1's, several amended by the reviews (D13, D15, D16,
+D17, D18, D20); D21–D23 are new in draft v2.
 
-| # | Decision | Provisional answer | Consequence | § |
+| # | Decision | Answer (confirmed by the owner, 2026-10-09) | Consequence | § |
 |---|---|---|---|---|
 | D1 | Order | Keep W2 after the first set's knob ratings; start the breadboard (T0b) now; land the tempo core before steps, mark walk, global reverse and velocity; enter T1 and T2 only through the ITCM gate (8 KiB spare after the CPU plan) | Nothing here changes the sound before the ratings and the CPU plan's FFT choice; T0b's data arrives before the thresholds freeze | 11.4, 9.6 |
 | D2 | Sources and priority | The Microcosm's: Start and Continue switch to external clock at the next tick and set the position; Stop reverts to internal keeping tempo and phase, and cancels an armed Start; tap and the Tempo knob are ignored under a running master. Added: clock without transport is followed after 24 ticks while the master is not stopped; a second without a tick reverts to internal and clears the window in any source; a loss mid-song resumes ClockRunning after 24 ticks; host tempo is the wrapper's, which drops taps while following it | A clock box that never sends Start still locks; a cable knock costs a beat or two of free-running, not the rest of the set; tap is unavailable while a master runs | 3 |
@@ -1726,9 +1735,12 @@ Keep across loads through re-asserts; saving captures the performance); **mode-c
 re-coded default, the rate labels), §7.4 (the payloads), §12.3 (Q2 recorded as provisionally
 answered, Q7 and Q11 answered here); **determinism-profile.md** §5.11 (tempo events, the gap rule
 and the pedal's stamps); **docs/README.md** and **docs/STATUS.md** (this document). Draft v2
-revised the notes of draft v1's commit where its rules changed. The implementing pull requests
-amend the code comments that cite the old meanings (`Mode.h:86-97`, `PresetState.h:42-56`,
-`Engine.h:206-210`).
+revised the notes of draft v1's commit where its rules changed. On 2026-10-09 the owner's
+confirmation of §11.5 was recorded, dated, in the notes that called its answers provisional
+(grain-engine.md §4 and §6, companion-app.md §6.2, mode-compiler.md §1.2, §2.6 and §12.3, whose
+Q2 the confirmed D1 settles), in determinism-profile.md §5.11, in docs/README.md and
+docs/STATUS.md, and in the record. The implementing pull requests amend the code comments that
+cite the old meanings (`Mode.h:86-97`, `PresetState.h:42-56`, `Engine.h:206-210`).
 
 ## 12. Evidence
 

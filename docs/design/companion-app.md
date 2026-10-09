@@ -791,14 +791,15 @@ bit-identical, so it can land as "sound-neutral" (§6.5); otherwise it bumps the
 
 > **Update (2026-10-08, CLOCK design pass).** The table's "tempo source" and the exclusions'
 > "clock source" contradicted each other. [clock.md](clock.md) §2.4 and §3.6 resolve it as the
-> exclusions say, the Microcosm's way (provisional, its D3): the tempo source is a device
-> setting ("receive MIDI clock" on the pedal, the Tempo source in the plugin), and STAT's
-> `tempo_source` byte is reserved and must be 0, so presets that sound the same keep one
-> `sound_hash`. A preset stores its time mode, subdivision and tempo as an integer µs per
-> quarter, which saving a preset captures from the live performance (clock.md §10.3); whether a
-> load recalls that tempo is the device setting `global.tempo_recall`. Under Keep, the default,
-> the running tempo carries across every load: the engine's Exact load plays the stored tempo,
-> and the producer re-asserts the running one as a logged event at frame 0 (clock.md §2.5).
+> exclusions say, the Microcosm's way (its D3): the tempo source is a device setting ("receive
+> MIDI clock" on the pedal, the Tempo source in the plugin), and STAT's `tempo_source` byte is
+> reserved and must be 0, so presets that sound the same keep one `sound_hash`. A preset stores
+> its time mode, subdivision and tempo as an integer µs per quarter, which saving a preset
+> captures from the live performance (clock.md §10.3); whether a load recalls that tempo is the
+> device setting `global.tempo_recall`. Under Keep, the default, the running tempo carries
+> across every load: the engine's Exact load plays the stored tempo, and the producer re-asserts
+> the running one as a logged event at frame 0 (clock.md §2.5, its D4 and D17). The owner
+> confirmed these answers, with the rest of clock.md §11.5, on 2026-10-09.
 
 | Captured | Section |
 |---|---|

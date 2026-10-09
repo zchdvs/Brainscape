@@ -299,9 +299,9 @@ mode files; it bounds the staging ring, the guard clamps, and the worst-case cac
 > (its §6.3): an integer phasor in 24-ppqn ticks, quantised to the effective Subdiv, fed by tap,
 > MIDI clock and host tempo as stamped events. One sentence below changes: a CLOCK grid hit is
 > trigger-class, stealing the oldest voice at `voice_count`, and `overlap` no longer caps it (the
-> "don't-fire ceiling" under a `CLOCK` source is withdrawn; clock.md D13, provisional), because a
-> refused hit is a missing beat. `jitter` delays a hit by up to half a grid period without
-> accumulating; the grid itself never moves with births.
+> "don't-fire ceiling" under a `CLOCK` source is withdrawn; clock.md D13, confirmed by the owner
+> on 2026-10-09), because a refused hit is a missing beat. `jitter` delays a hit by up to half a
+> grid period without accumulating; the grid itself never moves with births.
 
 **Trigger vocabulary** — OR'd, Clouds' triple-trigger extended (grain-delay-theory.md §3.2;
 onset doc rec #8):
@@ -541,7 +541,7 @@ filter concurrency vs. tier capacity); `d_min_fb` when feedback > 0; grain-lengt
 > withdrawn: the preset's performance state holds the one stored subdivision, which the live
 > control overrides. The stage gesture toggles Subdiv and Tempo, as the Microcosm's does; a third
 > time mode, Free, authored in the preset, keeps the Time knob on `macro.time` for modes that are
-> not tempo-driven. All provisional (clock.md §11.5).
+> not tempo-driven. All confirmed by the owner on 2026-10-09 (clock.md §11.5, D7, D14 and D18).
 
 Two tiers over **one** parameter system (microcosm.md §13.1; preset doc recs #6–#7).
 
