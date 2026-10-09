@@ -17,7 +17,7 @@
 > revision 7, pull request #9, not merged). The session-1 captures are cited as the record cites
 > them, `session-1/<file>:<line>` under
 > [`firmware/records/rev7-2026-10-07/`](../../firmware/records/rev7-2026-10-07/README.md).
-> Status: **owner-approved design** (2026-10-09): the owner confirmed the thirteen decisions of
+> Status: **owner-approved design** (2026-10-08): the owner confirmed the thirteen decisions of
 > §9 as proposed. Steps 1 and 2 of §4, both bit-exact, are built at sound revision 3 (§4.1,
 > §4.2); nothing else is.
 
@@ -54,9 +54,10 @@ The plan has three layers.
    hygiene are built (steps 1 and 2). The grain-loop, birth and bookkeeping rewrites land on top of
    wave 1. Everyday presets drop to roughly 20–70 % in their worst block, but the pessimistic
    family stays at about 90–110 %.
-2. **A deterministic integer cost governor inside the engine, at sound revision 8.** It bounds the
-   cost of any 48 consecutive frames to 85 % for every input, provided its constants are measured
-   upper bounds. It is part of the sound, so the plugin plays exactly what the pedal plays.
+2. **A deterministic integer cost governor inside the engine, at sound revision 8** (or 9 if
+   CLOCK's tempo core lands first, §5.1). It bounds the cost of any 48 consecutive frames to 85 %
+   for every input, provided its constants are measured upper bounds. It is part of the sound, so
+   the plugin plays exactly what the pedal plays.
 3. **Shared constants.** The same constants drive a plugin "Seed load" meter and a compiler lint,
    so factory presets stay clear of the governor.
 
@@ -65,11 +66,12 @@ What the governor costs musically:
 - **Below its caps, nothing.** Output is bit-identical for default, nominal, density-max at unity
   pitch, `pitch_reverse_spray`, and 28 of the 33 corpus presets.
 - **At the corners, voices.** With conservative constants and no working PLD:
-  - +24 st with every post stage: 52 → about 30 voices.
-  - +12 st at density max: 63 → about 46.
-  - `dense_1ms`: 34 → about 31.
-- **With working PLD:** about 40, 56 and 32 respectively.
-- Bench session 2 sets the final numbers.
+  - +24 st with every post stage: 52 → about 28 voices.
+  - +12 st at density max: 63 → about 43.
+  - `dense_1ms`: 34 → about 30.
+- **With working PLD:** about 38, 52 and 31 respectively.
+- These are at the hop saving of the rewrite built (§4.1, §6). Bench session 2 sets the final
+  numbers.
 
 ---
 
@@ -195,7 +197,7 @@ births lanes. "After" means after plan steps 1–7 (*model*).
 | Birth, fixed part | ≈2,730, including a 400–700-cycle sweep and ~500–650 of DetMath and libgcc | ≈2,000–2,300 (*estimate*) | |
 | Birth, re-render | 74 per live voice | ≈0 | step 5 |
 | Refused scheduler attempt | one sweep, ≈650–700 | O(1) | step 6 |
-| Onset hop | ≈98,500 per hop | ≈38,000–51,000 (the two rewrites, *model*) | step 1 |
+| Onset hop | ≈98,500 per hop | ≈49,500 (P3's rewrite as built, *model*; 46,700–52,300 from its disassembly, §4.1) | step 1; P1's v2, not built, models at ≈38,500, and session 2 times both (§8.1) |
 | Post stages | modulation 192, delay 319, reverb 559, filter 200, feedback-on 68 (`bench-all.md:276-280`) | −0.5 to −3 points (*estimate*) | step 2 |
 
 The two birth fits agree. Model E's 4,524 + 43.4·V and the births lane's 2,730 + 74·V both give
@@ -219,7 +221,7 @@ plus calls, plus events. That sum is what the governor of §5 bounds.
 
 | # | Step | When | Output | Estimated saving (points of budget unless stated) | Effort | Risk |
 |---|---|---|---|---|---|---|
-| 1 | Onset hop analysis rewrite | now, on `main`, at revision 3: **built** (§4.1) | bit-exact | −10 to −12.6 in every hop block (*model*); −1.9 to −2.4 on the mean | 1 day + CI | low |
+| 1 | Onset hop analysis rewrite | now, on `main`, at revision 3: **built** (§4.1) | bit-exact | −10.2 in every hop block (*model*; −9.6 to −10.8 from the disassembly as built); −1.9 on the mean | 1 day + CI | low |
 | 2 | Post-chain hygiene | now: **built** (§4.2) | bit-exact | −0.5 to −3 with post stages on (*estimate*) | 2 days | low |
 | 3 | Merge wave 1 at revision 7, as built | when ready | – | – | – | – |
 | 4 | `RenderRun` restructure (prototype A) | after 3 | bit-exact | −19 to −23 on 64-voice presets; `pess_render` block 1482 −20.5 | 2–3 days (includes the wave-1 rebase) | low-medium |
@@ -258,10 +260,10 @@ changing a bit; both were host-run against the textbook form.
 `OnsetDetector.cpp/.h` are byte-identical on `main` and in wave 1, so this is the one step that
 cannot conflict with it.
 
-**D4 applied: P3's rewrite.** D4 takes P1's v2 unless the ITCM spare would fall below 8 KiB, and
-P3's otherwise. Measured in the firmware builds of both trees (bytes of `.itcm_text`; the region is
-65,536 bytes, of which `.itcm_text` may use 65,472 from its 64-byte offset; "spare" is what is
-left of the region):
+**D4 applied: P3's rewrite.** D4 takes P1's v2 unless the ITCM spare after wave 1, steps 4–5 and
+the governor would fall below 8 KB, and P3's then. Measured in the firmware builds of both trees
+(bytes of `.itcm_text`; the region is 65,536 bytes, of which `.itcm_text` may use 65,472 from its
+64-byte offset; "spare" is what is left of the region):
 
 | Tree, change | `live` | `parity` | `bench` | `bench_hooks` |
 |---|---|---|---|---|
@@ -277,15 +279,32 @@ left of the region):
 | W1 + steps 1–2 as built | 62,264 (3,208) | 60,184 (5,288) | 60,040 (5,432) | 60,512 (4,960) |
 
 P1's v2 grows `OnsetDetector.cpp`'s object from 1,792 to 9,804 bytes of code and constants, 8,012
-more (the proposal's 6.3 KB counted from 3,476 bytes, not the object's 1,792); on wave 1's tree the live
-image would need 69,920 bytes of a 65,536-byte region. Keeping 8 KiB spare with it would mean
-moving 12,576 bytes out of ITCM. The engine archive is compiled without `-ffunction-sections`, so
-the linker script (`firmware/linker/seed_h750.ld.in`, `firmware/CMakeLists.txt`'s `EXCLUDE_FILE`
-list) places whole objects, and of the objects in ITCM only `SoundRevision.cpp` (233 bytes) never
-runs in the audio path: `Validate.cpp` (8,612 bytes) and `blob/Mode.cpp` (1,468) run inside
-`Process` at every Spillover load (`ResolvePreset`, `dsp/src/Engine.cpp:314`, `:972-978`), and
-every other object runs in `Process` too. So code that never runs in the audio path cannot free
-that much, and D4's switch applies: **P3's rewrite**, now.
+more (the proposal's 6.3 KB counted from 3,476 bytes, not the object's 1,792), and every image's
+ITCM by 8,016; on wave 1's tree the live image would need 69,920 bytes of a 65,536-byte region, so
+it does not link.
+
+D4's own tally decides it. With P1's v2 in place of the rewrite built (7,456 bytes more), wave 1's
+live image would have 3,208 − 7,456 = −4,248 bytes spare, and after step 4 (3,752, §4.3) and the
+governor (about 2,300, §7.3) about −10,300, before step 5, which is not measured yet. Keeping G6's
+8 KiB (§8.3) would mean moving at least 18,500 bytes of engine code out of ITCM:
+
+- **Placed by object,** as today, almost none can leave. The engine archive is compiled without
+  `-ffunction-sections`, so the linker script (`firmware/linker/seed_h750.ld.in`,
+  `firmware/CMakeLists.txt`'s `EXCLUDE_FILE` list) places whole objects, and of the objects in
+  ITCM only `SoundRevision.cpp` (233 bytes) never runs in the audio path: `Validate.cpp` (8,612
+  bytes) and `blob/Mode.cpp` (1,468) run inside `Process` at every Spillover load
+  (`ResolvePreset`, `dsp/src/Engine.cpp:314`, `:972-978`), and every other object runs in
+  `Process` too.
+- **Placed by function** (§7.3), more can leave, but not that much. A static call graph of the
+  live image of wave 1 with steps 1–2, from the audio callback's entry points (`Engine::Process`,
+  `EventQueue::PopBlock`, `Engine::ConsumeOnsetCount`, `memset`) through direct branches and
+  code addresses in literal pools, leaves 16,016 of its 62,264 bytes of `.itcm_text` unreached
+  (*estimate*; the largest pieces are `PostChain::Init` 2,316, `Engine::Impl::Init` 1,556,
+  `PostChain::WarmFloats` 1,012 and `Engine::Engine` 568).
+
+So D4's switch applies at either granularity: **P3's rewrite**, now. With it the same tally is
+3,208 − 3,752 − 2,300 = −2,844 bytes before step 5, still short of G6; §7.3 says what leaves
+first. Session 2 still times both rewrites, in revision-3 images where P1's v2 fits (§8.1).
 
 **As built.** `dsp/src/OnsetDetector.cpp`'s `AnalyzeHop` is P3's form with two changes: the
 prototype's run-time fallback to the old loop (taken if the twiddles were not exactly 1, −0, 0 and
@@ -293,10 +312,26 @@ prototype's run-time fallback to the old loop (taken if the twiddles were not ex
 turns (`dsp/tests/test_detmath.cpp`); and the 7-bit bit-reversal table is a `constexpr` table in
 the object (128 bytes of ITCM) rather than a member built at `Init`, so the engine object's size
 does not change. That makes it 560 bytes of ITCM in the live image instead of the prototype's
-1,200 (above). Every value that reaches a magnitude is made by the same IEEE operations on the same
-operands as before; a skipped multiply by 1, −0, 0 or −1 changes only the sign of a zero, which a
-square erases, for finite operands, which the engine's ±2¹⁶ clamp on the detector input
-guarantees (`dsp/src/Engine.cpp:198`).
+1,200 (above).
+
+Every value that reaches a magnitude is the old form's value up to the sign of a zero, which the
+square erases: the same IEEE operations run on the same operands, except multiplies by 1, −0, 0
+and −1, which are skipped. A skipped multiply changes only the sign of a zero for a finite
+operand, and for NaN, which reaches every bin's magnitude in both forms. It is not neutral for
+±inf: the old form's inf·0 makes a NaN where the skip keeps the inf. So the rewrite is bit-exact
+because no infinity reaches it. The engine clamps the detector input to ±2¹⁶ (`kDetectorBound`,
+`dsp/src/Engine.cpp:198`, `:1069-1070`), whose two comparisons map ±inf to the bound, and under
+the bound |X[k]| stays below 2²⁵, so nothing overflows. NaN passes the comparisons, but the engine
+never sees it (profile §3.7). The clamp's comment now records this dependence: removing or
+loosening the clamp would break the rewrite's equivalence, not only the overflow it was added
+for.
+
+**Cost** (*model*). As built, `AnalyzeHop` is 1,012 bytes of code against the old form's 584. An
+in-order issue model of the M7 run over both as compiled (the bench images' disassembly; no cache
+misses) counts 61,593 instructions per hop against 91,098 and puts the new hop at 0.474–0.531 of
+the old across 48 sets of its parameters: about 46,700–52,300 cycles after the measured ~98,500,
+a saving of 9.6–10.8 points in every hop block. P3's own model gave −49,000 (−10.2 points), the
+figure this document uses; P1's −60,000 was for its v2. Session 2 measures it (§8.2).
 
 **Verification** (Windows, MSVC 19.40; GCC, Clang and the M7 under qemu run in CI):
 
@@ -342,8 +377,10 @@ same values. `PostChain.cpp` is identical on `main` and in wave 1.
   `BulkFloats` is unchanged, so the arena plan is too (`firmware_arena_plan` and the host
   memory-plan test pass); the `PostChain` object is 12 bytes smaller on the M7.
 
-The saving is unmeasured until bench session 2's variant; the live image's ITCM fell by 72 bytes
-(136 on wave 1's tree). Verified with step 1, by the same golden runs.
+The saving is unmeasured. Session 2 measures it as a whole-block A/B: image 1b, which is image 1
+built without step 2, runs the post-stage configurations beside image 1 (§8.1). The live image's
+ITCM fell by 72 bytes (136 on wave 1's tree). Verified with step 1, by the same golden runs; on
+the device, image 1's hashes against the host and qemu renders check steps 1–2 (§8.3, G1).
 
 ### 4.3 Steps 4–8
 
@@ -424,6 +461,16 @@ Two models: P1's Tier 1 (its worst-case model and benched-block table) and P3's 
 (its "gov off" rows). They disagree by up to 14 points on birth-heavy blocks; session 2 settles
 it.
 
+P1's figures assumed its v2's hop, 38,000 cycles; P3's probe charges 51,000. With P3's rewrite
+built (about 49,500, §4.1), every P1 figure is about 2.4 points low, since every worst block here
+is a hop block. The legal-corner rows below are P1's worst-case model re-run with the built hop
+(106.9–108.1 % across the as-built range, 130.7–131.9 % with the flood; its no-birth floor in a
+hop window rises from 83.4 % to 85.8 %). In the other rows the end of each range that P3's probe
+did not give is P1's and still reads about 2.4 points low: P3's are 30, 69, 71, 92, 94, 94 and
+96 % (`default` to `pess_births`, without the 48-voice row), so P1's are the lower ends of
+`default`, `nominal`, `dense_1ms`, `pess_render` and the noise tail, and the upper ends of
+`pess_events` and `pess_births`.
+
 | Worst block | Today | After steps 1–7 |
 |---|---|---|
 | default | 41.4 % | 19–30 % |
@@ -434,8 +481,8 @@ it.
 | `pess_render` | 135.5 % | 90–94 % |
 | noise tail | 143.1 % | 93–94 % |
 | `pess_births` | 168.5 % | 96–110 % |
-| legal corner, scheduler births only | ~196 % (*model*) | 105–115 % |
-| legal corner with a trigger flood | – | about 129 % |
+| legal corner, scheduler births only | ~196 % (*model*) | 108–115 % (105 % at v2's hop) |
+| legal corner with a trigger flood | – | about 131 % (129 % at v2's hop) |
 
 Steps 1–7 fix every everyday and corpus preset. They do not fix the pessimistic family or the
 legal corner. That is why step 11 exists.
@@ -506,6 +553,14 @@ The governor combines four sources:
 (`Granular.cpp:98`, `detail/GrainMath.h:26-27`), so a deferred grain takes the draws of the frame it
 is born at. Wave 1's pitch cycle advances only on admitted births.
 
+> **CLOCK** (2026-10-08). The CLOCK design ([clock.md](clock.md) §6.3, §9.6, §11.3; on
+> `claude/clock-design` until it merges), owner-approved the same day as this one, amends step 3
+> with its D13. CLOCK hits are trigger-class and come after onset, so the order is manual or MIDI,
+> onset, clock, burst, scheduler. A clock hit not admitted within 48 frames of its frame
+> (`kClockLateFrames`) is dropped and counted, where the other trigger sources keep the pending cap
+> of 8. The governor is sound revision 8 only if it lands before CLOCK's tempo core (lane T1);
+> otherwise it is 9, and the 48-frame cap belongs to whichever of the two lands second.
+
 ### 5.2 Proof of the bound
 
 Three invariants hold:
@@ -532,23 +587,22 @@ fade (P2), and is carried in S.
 | Term | Cycles per 48 frames | Basis |
 |---|---|---|
 | Measured non-grain worst block (1 voice, every post stage, hop) | 227,040 | `session-1/bench-all.md:283` (4,730 c/smp); `bench-bench-ITCM.log:70` |
-| − step 1's hop saving | −49,000 to −60,000 | *model* (−49,000 for the rewrite built, §4.1) |
+| − step 1's hop saving | −49,000 | *model*, the rewrite built (§4.1); P1's v2 would have saved −60,000 |
 | − post stages, now charged through P(f) | −60,960 | 1,270 c/smp, `bench-all.md:276-279` |
 | + event reserve | +24,000 | placeholder; session 2 measures it, multiplied by the producer cap |
 | + per-voice calls and governor overhead | +7,000 | P2's estimate |
-| **= S** | **≈137,000–148,000** | |
-| **48·R0 + Cmax** | **≈260,000–271,000** | 408,000 − S |
+| **= S** | **≈148,000** (137,000 at P1's saving) | |
+| **48·R0 + Cmax** | **≈260,000** (271,000) | 408,000 − S |
 
-The resulting R values:
+The resulting R values, R = (408,000 − S − Cmax)/48 − 1,270 (R0 less the post stages' ΣK_s):
 
-- Cmax 7,500 and c_b 2,500 give R ≈ 3,990–4,220.
-- Cmax 13,500 and c_b 4,500 give R ≈ 3,860–4,090.
+- Cmax 7,500 and c_b 2,500 give R ≈ 3,989 (4,218 at P1's saving).
+- Cmax 13,500 and c_b 4,500 give R ≈ 3,864 (4,093).
 - The weights in the host runs below are P2's estimates for the post-speed-pack code: worst leg,
   +15 %, every ring line missing. That is unity 54; Hermite 119/128/145 and linear 70/79/96 by
   rate class. With PLD working they are 48; 113/115/121 and 64/66/72.
 
-With step 1 built as P3's rewrite (−49k, *model*), S sits at the top of its range until session 2
-times the hop.
+§6 uses the values for the rewrite built. Session 2 times the hop and sets S.
 
 ### 5.4 Preconditions, which session 2 must establish
 
@@ -601,11 +655,12 @@ times the hop.
 **Steps 1–10 have none.** Every output bit is identical, and on-device hash checks gate it.
 
 **The governor (step 11).** The table gives mean sounding voices from host runs of the bench
-configurations on the revision-3 engine, plus one calculated row. The columns:
+configurations on the revision-3 engine, plus one calculated row. The columns use §5.3's R for
+the rewrite built (−49,000 cycles per hop):
 
-- **A:** F1r. Conservative weights, c_b 4,500, Cmax 13,500, R 4,093, refund on.
-- **B:** F2r. The same weights, c_b 2,500, Cmax 7,500, R 4,218.
-- **C:** F5r. B with the weights that apply if PLD works.
+- **A:** F3r. Conservative weights, c_b 4,500, Cmax 13,500, R 3,864, refund on.
+- **B:** F4r. The same weights, c_b 2,500, Cmax 7,500, R 3,989.
+- **C:** F6r. B with the weights that apply if PLD works.
 - **D:** P3's probe with mean weights. This is **not a valid bound** and is shown only as the
   optimistic end.
 
@@ -618,26 +673,31 @@ to the means. "=" means bit-identical output.
 | nominal (64 unity voices, 20 ms, post moderate) | 62.8 | = | = | = | = |
 | density max at unity (64 voices) | 62.7 | = | = | = | = |
 | `pitch_reverse_spray` | 35.9 | = | = | = | = |
-| density max, +12 st | 62.7 | 44.9 | 45.9 | 55.7 | 56.5 |
-| Murmuration at Activity max (calculated from the V_eff rule: overlap 0.95, spread 25 cents, reverse; [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) §2.2 at W1; two fewer voices if onset triggering is on) | ≈55 | 46 | 47 | = | = |
-| `dense_1ms` (the live "glitch" slot) | 34.4 | 24.6 | 31.4 | 32.3 | = |
-| 48 voices, 1 ms, no post stages | 47.0 | 27.4 | 37.2 | 42.1 | = |
-| pessimistic at r = 1, every post stage | 58.7 | 44.3 | 46.5 | 51.0 | = |
-| `pess_events` | 59.4 | 40.3 | 41.7 | 50.2 | 56.0 |
-| `pess_render` (+24 st, every post stage) | 52.2 | 28.9 | 29.7 | 40.2 | 43.3 |
-| noise tail (+24 st, every post stage, fb 0.95) | 58.8 | 32.3 | 33.1 | 45.4 | 46.6\* |
-| `pess_births` (+24 st, every post stage, 1 ms) | 34.4 | 15.8 | 20.8 | 24.7 | 31.3 |
-| legal corner: 64 voices, 1.33 ms, +24 st, every post stage | 63.0 | 21.7 | 27.6 | 33.5 | 36.0 |
+| density max, +12 st | 62.7 | 41.9 | 42.9 | 51.7 | 56.5 |
+| Murmuration at Activity max (calculated from the V_eff rule: overlap 0.95, spread 25 cents, reverse; [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) §2.2 at W1; one or two fewer voices if onset triggering is on) | ≈55 | 43 | 44 | 53 | = |
+| `dense_1ms` (the live "glitch" slot) | 34.4 | 23.2 | 30.4 | 31.4 | = |
+| 48 voices, 1 ms, no post stages | 47.0 | 26.4 | 36.2 | 40.1 | = |
+| pessimistic at r = 1, every post stage | 58.7 | 41.8 | 43.2 | 48.2 | = |
+| `pess_events` | 59.4 | 37.6 | 39.1 | 47.5 | 56.0 |
+| `pess_render` (+24 st, every post stage) | 52.2 | 26.9 | 27.9 | 37.9 | 43.3 |
+| noise tail (+24 st, every post stage, fb 0.95) | 58.8 | 30.5 | 31.4 | 42.5 | 46.6\* |
+| `pess_births` (+24 st, every post stage, 1 ms) | 34.4 | 15.0 | 20.0 | 23.2 | 31.3 |
+| legal corner: 64 voices, 1.33 ms, +24 st, every post stage | 63.0 | 19.7 | 25.6 | 31.5 | 36.0 |
 
-Sources: the refund probe's runs of the bench configurations under F1r, F2r and F5r, and P3's
-pack-only probe (\* its no-marks pessimistic run).
+Sources: the refund probe's runs of the bench configurations under F3r, F4r and F6r, and P3's
+pack-only probe (\* its no-marks pessimistic run). At P1's −60,000 (R 4,093 and 4,218: the runs
+F1r, F2r and F5r, the proposal's figures) A, B and C kept 0.8–4 more voices in every row that
+binds (for example 44.9, 45.9 and 55.7 at +12 st, and 28.9, 29.7 and 40.2 in `pess_render`), and
+Murmuration capped at 46 and 47 in A and B and not at all in C.
 
 **Corpus.**
 
-- In A and B, 28 of 33 corpus presets stay bit-identical. Five change: `freeze_retoggle_spill` from
+- In B, 28 of 33 corpus presets stay bit-identical. Five change: `freeze_retoggle_spill` from
   9 s, `dense_1ms` from 0 s, `automation_offgrid` from 6 s, `spillover_chain` from 5 s,
   `exact_load_mid` from 7 s.
-- In C, 30 of 33 stay identical.
+- In A, 27 of 33: the same five (`automation_offgrid` from 3 s) and `lone_changes` from 13 s.
+- In C, 30 of 33: `freeze_retoggle_spill`, `dense_1ms` and `spillover_chain` change.
+- At P1's saving, A and B kept 28 and C 30.
 - Without the post refund, `pitch_reverse_spray` also changes (in the refund probe's F1 run and
   P2's S2 run). The refund is what keeps it.
 - Wave 1's own corpus has not been checked yet.
@@ -664,7 +724,7 @@ pack-only probe (\* its no-marks pessimistic run).
 
 **For scale.** Clouds caps grains at 40 mono or 32 stereo, with grains of 32 ms or longer (the
 constraints lane, from the upstream source). Even column A keeps 64 unity voices at nominal
-settings and about 29 voices at +24 st with every post stage.
+settings and about 27 voices at +24 st with every post stage.
 
 **Levers that recover density, in order of cost:**
 
@@ -679,6 +739,8 @@ settings and about 29 voices at +24 st with every post stage.
 7. Coupling the voice cap to the enabled post stages. Enabling a stage would then need a
    fade-steal.
 
+Levers 5–7, with explicit FMA, are the sound-changing reserve D10 holds back: not now.
+
 ---
 
 ## 7. Fit with wave 1 and the factory set
@@ -690,7 +752,8 @@ settings and about 29 voices at +24 st with every post stage.
 - Wave 1 then merges at revision 7.
 - Steps 4–8 rebase onto it. Wave 1 changes `Granular.cpp`, `Engine.cpp` and `Granular.h` by 416
   insertions and 81 deletions.
-- The governor is sound revision 8. Bumps are cheap before publication (profile §5.12), and every
+- The governor is sound revision 8, or 9 if CLOCK's tempo core lands first (§5.1's note). Bumps
+  are cheap before publication (profile §5.12), and every
   sound change must land before revision 1 is published (profile §8.4).
 
 ### 7.2 What wave 1 adds, and how the plan handles it
@@ -719,7 +782,10 @@ live image 3,632 bytes of ITCM, and 3,208 with steps 1–2. Step 4 adds about 3.
 the governor's prototype about 2.3 KB, and step 5 an amount not yet measured; G6 (§8) asks for 8 KB
 spare. So **steps 4, 5 and 11 cannot land in ITCM until cold code leaves it**, and D4's tally
 (the spare after wave 1, steps 4–5 and the governor) is below 8 KB even with P3's rewrite; it stays
-P3's.
+P3's. With P3's, keeping G6 after step 4 and the governor means moving about 11.0 KB out, plus
+step 5's share; placed by function, about 16 KB of the live image's ITCM is never reached from the
+audio callback (*estimate*, §4.1), so cold code can cover it, which it could not for P1's v2's
+18.5 KB.
 
 What can leave, by what it costs:
 
@@ -750,16 +816,16 @@ the merged tree.
   - zero governor engagements at S0–S10;
   - ledger peak ≤ 70 % at S0;
   - S11 corners listed.
-- **Authoring continues now,** guided by the shadow meter. The listening pass is best run at
-  revision 8. Rows whose render hashes hold across the bump carry forward without a re-listen
-  (compiler §11.3).
-- **Recipes against column B:**
+- **Authoring continues now,** guided by the shadow meter. The listening pass is best run at the
+  governor's revision. Rows whose render hashes hold across the bump carry forward without a
+  re-listen (compiler §11.3).
+- **Recipes against column B** (§6, at the rewrite built; P1's saving's figures in brackets):
   - The default Activity range (overlap 0.25–0.85, a target of at most 39.3 voices; compiler §3.2)
-    is capped only at its extreme of +24 st with every post stage. There the cap is 39, or 37 with
-    onset triggering on (H = 200).
-  - Murmuration at Activity 0.95 (about 55 voices) caps at 47 in column B and is uncapped in
-    column C.
-  - The live "glitch" slot thins from 34 to 31 voices.
+    is capped only at its extreme of +24 st with every post stage. There the cap is 36, or 35 with
+    onset triggering on (H = 200) (39, 37).
+  - Murmuration at Activity 0.95 (about 55 voices) caps at 44 in column B and at 53 in column C
+    (47, uncapped).
+  - The live "glitch" slot thins from 34 to 30 voices (31).
 
 ---
 
@@ -767,17 +833,26 @@ the merged tree.
 
 ### 8.1 Images
 
-All images are ITCM builds of wave 1 plus the plan:
+Images 1–5 are ITCM builds of wave 1 plus the plan. Image 6 is at revision 3, because P1's v2
+does not fit wave 1's ITCM even in the bench image (§4.1):
 
 1. **bench-r7:** wave 1 as merged, with steps 1–2. This is the new baseline; session 1 measured
-   revision 1.
+   revision 1. Its hashes must equal the host and qemu renders: the on-device check of steps 1–2.
+   - **1b, bench-r7-nostep2:** image 1 built without step 2 (`801e6c2` reverted), for step 2's
+     whole-block A/B on the configurations with post stages on (§4.2). Hashes must equal image 1's.
 2. **bench-r7-fast:** steps 4–8, with the shadow ledger and per-block logging. Every
    per-configuration SHA-256 must equal image 1's: a free on-device bit-exactness check.
 3. **bench-r7-fast-pld:** image 2 plus PLD. Hashes must equal image 1's.
-4. **bench-r8-gov:** the governor with provisional constants. Hashes must equal the host and qemu
-   renders.
+4. **bench-r8-gov:** the governor with provisional constants (r9 if CLOCK's tempo core took
+   revision 8, §5.1). Hashes must equal the host and qemu renders.
 5. **The live image** on image 2's engine. A FIFO variant is built only if the owner wants to
    evaluate D9.
+6. **bench-r3-hop:** D4's timing of both rewrites, as a pair of revision-3 bench images: `main`
+   with steps 1–2 (P3's rewrite as built), and the same with `OnsetDetector.cpp/.h` swapped for
+   P1's v2, whose bench image links with 2,376 bytes of ITCM spare (*measured*). Each also carries
+   the old `AnalyzeHop` as a `SuiteMicro` copy placed in ITCM (about 600 bytes), so each rewrite is
+   timed against the old form in its own image. The hop's object is byte-identical in the
+   revision-3 and wave-1 builds, so the timing carries over to wave 1.
 
 ### 8.2 Configurations
 
@@ -803,8 +878,9 @@ All images are ITCM builds of wave 1 plus the plan:
   - the worst birth (Hermite slot, mark path at r > 1, jitter, reverse, pan, a steal) at 0, 32 and
     64 voices;
   - one `RenderRun` call; heap push and pop; the governor's per-frame step;
-  - `AnalyzeHop`: the old form, P1's v2 and P3's as built (D4);
-  - each post stage alone, including a moving `TapGlide`, with the mix settled and moving;
+  - `AnalyzeHop`: the old form, P1's v2 and P3's as built (D4), in image 6's pair;
+  - each post stage alone, including a moving `TapGlide`, with the mix settled and moving, in
+    images 1 and 1b (step 2's A/B);
   - each event type: `SetParam`, `MacroMove` with 8 curved targets (about 538 cycles each,
     *estimated*, compiler §3.3), `SpilloverLoad` with FastCut and with Trails, `Trigger`;
   - a repeat pass boundary;
@@ -817,8 +893,9 @@ All images are ITCM builds of wave 1 plus the plan:
 
 ### 8.3 Pass criteria
 
-- **G1, determinism:** images 2 and 3 equal image 1 for every configuration, and image 4 equals the
-  host and qemu renders.
+- **G1, determinism:** image 1 equals the host and qemu renders (steps 1–2 on the device); images
+  1b, 2 and 3 equal image 1 for every configuration; image 4 equals the host and qemu renders; and
+  image 6's pair equals the revision-3 renders.
 - **G2, speed pack** (image 2):
   - hop spike (p90 − p50 on steady configurations) ≤ 60,000 cycles;
   - default worst block ≤ 30 %;
@@ -848,21 +925,21 @@ After the session:
 
 ## 9. Owner decisions
 
-The owner confirmed every answer below on 2026-10-09, as proposed and without amendment. Each
+The owner confirmed every answer below on 2026-10-08, as proposed and without amendment. Each
 stays reversible before the first public release; reversing one is an owner decision of its own
 and, where it changes the sound, a sound revision.
 
-| # | Decision | Answer (confirmed by the owner, 2026-10-09) | Consequence |
+| # | Decision | Answer (confirmed by the owner, 2026-10-08) | Consequence |
 |---|---|---|---|
 | D1 | Engine ceiling of 85 % (408,000 cycles per 48 frames) for any input | **Yes.** Session 2 confirms (G7) that the interrupt and USB fit in the remaining 15 %. | The governor's S + 48·R0 + Cmax is sized to 408,000 (§5.3) |
-| D2 | A deterministic cost governor as part of the sound, sound revision 8, after wave 1 | **Yes.** No bit-exact path bounds the legal corner: 105–115 % after steps 1–7, about 129 % with a trigger flood. | Step 11; the plugin plays the governed sound too |
+| D2 | A deterministic cost governor as part of the sound, sound revision 8, after wave 1 | **Yes.** No bit-exact path bounds the legal corner: 105–115 % after steps 1–7, about 129 % with a trigger flood. | Step 11; the plugin plays the governed sound too. The answer's figures assumed P1's v2 hop; with the rewrite built they are 108–115 % and about 131 % (§4.4). Revision 8, or 9 if CLOCK's tempo core lands first (§5.1) |
 | D3 | Order: FFT rewrite and post hygiene now; speed pack after wave 1 merges; governor last | **Yes.** Only steps 1–2 avoid conflicting with wave 1. | Steps 1–2 built at revision 3 (§4.1, §4.2) |
-| D4 | Which onset rewrite | **P1's v2 now** (−60k cycles per hop, *model*; +6.3 KB ITCM). Time both rewrites in session 2. Switch to P3's 1 KB rewrite if ITCM spare after wave 1, steps 4–5 and the governor falls below 8 KB. | Measured: P1's v2 adds 8,016 bytes and does not link on wave 1's tree, so **P3's rewrite is built** (§4.1); session 2 times both |
+| D4 | Which onset rewrite | **P1's v2 now** (−60k cycles per hop, *model*; +6.3 KB ITCM). Time both rewrites in session 2. Switch to P3's 1 KB rewrite if ITCM spare after wave 1, steps 4–5 and the governor falls below 8 KB. | Measured: P1's v2 adds 8,016 bytes and does not link on wave 1's tree, and D4's own tally with it is about 18.5 KB short of 8 KB, more than the code the audio path never reaches, so **P3's rewrite is built** (§4.1); session 2 times both, in revision-3 images where P1's v2 fits (§8.1, image 6) |
 | D5 | Birth-render fix: batched B or the lazy prefix flush | **B.** The per-birth cost is constant, so the governor can charge it; it costs 5.2 KB of DTCM. | Step 5 |
 | D6 | Governor semantics: (a) 128-frame fade-steal instead of the hard cut; (b) normalization follows V_eff; (c) pending cap of 8 per source, dropping the oldest and counting it, which amends "never drop" for floods; (d) one birth per frame across sources; (e) post-stage refund for births, with a static voice cap | **Yes to all five.** | §5.1, §6 |
 | D7 | Weights are measured worst-case upper bounds, not means | **Yes.** The guarantee rests on it. Density is recovered with PLD and Tier 2, not with optimistic weights. | §5.4 |
-| D8 | When to freeze the constants | **Once, after session 2, at revision 8.** Later speedups may raise them in a further revision before revision 1 is published. | §8 |
-| D9 | Output FIFO slack: +1 ms latency (2 → 3 blocks), no output change, about +24 % grain budget (*estimate*) | **Decide after session 2.** Take it if, with the final constants, the governor still caps density max at +12 st below about 56 voices, or caps any factory recipe inside its macro ranges. | Open until session 2 |
+| D8 | When to freeze the constants | **Once, after session 2, at revision 8.** Later speedups may raise them in a further revision before revision 1 is published. | §8; at revision 9 if CLOCK's tempo core takes 8 (§5.1) |
+| D9 | Output FIFO slack: +1 ms latency (2 → 3 blocks), no output change, about +24 % grain budget (*estimate*) | **Decide after session 2.** Take it if, with the final constants, the governor still caps density max at +12 st below about 56 voices, or caps any factory recipe inside its macro ranges. | Open until session 2; at today's constants column B gives 42.9 voices there and C 51.7 (§6) |
 | D10 | Sound-changing reserve levers: staged onset analysis, explicit FMA, Hermite demotion, coupling the voice cap to post stages | **Not now.** Explicit FMA gains little on the M7 and costs the x86 plugin (profile §7.3). The others stay in reserve. | §6 |
 | D11 | Factory gate | **Zero governor engagements at stored positions and S0–S10, with S11 corners reported.** Enforced by `bspc` L10 and the audition Load row. | §7.4 |
 | D12 | Firmware event contract: coalescing, at most 1 load per block, at most N events per block, a trigger rate cap | **Yes.** N is set from session 2's per-event costs, so that N × the worst event cost fits the reserve. | Step 8 |
@@ -880,8 +957,9 @@ and, where it changes the sound, a sound revision.
   by P2's sliding bank and load cap, with the hop as a static reserve.
 - "Land A and B before wave 1 grows" ignores that wave 1 already changed `Granular.cpp`.
   **Corrected:** only steps 1–2 land before the merge.
-- −60k cycles per hop is a model figure, calibrated by a factor fitted on latency-bound code.
-  **Shown as a range** (−49k to −60k); session 2 measures it.
+- −60k cycles per hop is a model figure, calibrated by a factor fitted on latency-bound code,
+  and its v2 is not the rewrite built. **The built rewrite's −49k is used** (§4.1, §5.3, §6);
+  session 2 times both (§8.1).
 - Its v2's ITCM cost is 8,016 bytes in the live image (measured, §4.1), not 6.3 KB.
 
 **P2 (deterministic governor)**
@@ -889,7 +967,8 @@ and, where it changes the sound, a sound revision.
 - "`pitch_reverse_spray` untouched in S2" is false: its S2 goldens differ from second 10. With the
   post refund it is untouched (F2r).
 - S2 assumes a hop of ≤ 25k cycles, which no bit-exact rewrite reaches. **Constants were
-  recomputed** for the bit-exact rewrites (R ≈ 3,860–4,220), and the governor was re-run (§6).
+  recomputed** for the rewrite built (R ≈ 3,864–3,989; 4,093–4,218 at P1's saving), and the
+  governor was re-run (§6).
 - Its musical summary leaves out `pess_births` falling from 35.2 to 17.5 voices. **Shown here.**
 - The pending cap it calls necessary is not in its prototype: `pendingManual_` is uncapped, and
   there are 278,866 slot deferrals in its trigger-flood run on the default preset. **Required in
@@ -946,4 +1025,8 @@ Not committed (scratch work of 2026-10-07, summarised where cited):
 - **P3:** the onset FFT rewrite (built as step 1), its ledger prototype and probes.
 - **The judges' re-check** of P3's rewrite.
 - **This document's probe:** P2's governor with the post-stage refund, its runs of the bench
-  configurations and the corpus under the F1, F1r, F2r and F5r constants, and its split checks.
+  configurations under the F1, F1r, F2r, F3r, F4r and F5r constants and of the corpus under F1, F1r,
+  F2r and F5r (GCC), its split checks, and (2026-10-08, MSVC, which reproduces those GCC runs bit
+  for bit) the F6r bench runs and the corpus under F3r, F4r and F6r.
+- **A review of steps 1–2:** the static call graph of the live image's ITCM (§4.1), the M7 issue
+  model of `AnalyzeHop` as built (§4.1), and the revision-3 bench image with P1's v2 (§8.1).

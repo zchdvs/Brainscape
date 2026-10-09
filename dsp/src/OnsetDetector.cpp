@@ -119,8 +119,10 @@ void OnsetDetector::SetSensitivity(float s01) noexcept {
 // The windowed last 512 samples through a radix-2 decimation-in-time FFT, then the whitened
 // positive flux. Bit for bit the textbook loop it replaced (a windowed copy, a bit-reversal
 // permutation, then nine stages of j-inner butterflies, which dsp/tests/test_onset.cpp keeps
-// as its reference and compares hop by hop): every value that reaches a magnitude is made by
-// the same IEEE operations on the same operands. What changed is where the work goes:
+// as its reference and compares hop by hop): every value that reaches a magnitude is the value
+// it made, up to the sign of a zero, which the square erases. The same IEEE operations run on
+// the same operands, except multiplies by 1, -0, 0 and -1, which are skipped. What changed is
+// where the work goes:
 //
 //   - The window, the permutation and stages 1-2 are one pass. Positions 4g..4g+3 take the
 //     windowed samples m, m+256, m+128 and m+384 with m = rev7(g) (rev9(4g+t) is
@@ -135,10 +137,14 @@ void OnsetDetector::SetSensitivity(float s01) noexcept {
 // A skipped multiply changes nothing but the sign of a zero. With W^0, br·1 - bi·(-0) is br
 // and br·(-0) + bi·1 is bi; with W^128, br·0 - bi·(-1) is bi and br·(-1) + bi·0 is -br; each
 // up to the sign of a zero result. A zero's sign changes no sum with a non-zero operand and no
-// product's magnitude, and re² + im² erases it. That holds for finite operands, which the
-// engine's ±2^16 clamp on the detector input guarantees (Engine.cpp, kDetectorBound: |X[k]|
-// stays below 2^25). The hop's whole cost lands in one block in every 256 samples; this form
-// is modelled at about half of it (docs/design/cpu-budget.md §4, step 1).
+// product's magnitude, and re² + im² erases it. That holds for finite operands and for NaN
+// (a NaN reaches every bin's magnitude in both forms). It does not hold for ±inf: the textbook
+// form's inf·0 makes a NaN where the skip keeps the inf. So this form is bit-exact only because
+// no infinity reaches it: the engine clamps the detector input to ±2^16 (Engine.cpp,
+// kDetectorBound), whose comparisons map ±inf to the bound, and under that bound |X[k]| stays
+// below 2^25, so nothing overflows. NaN passes the clamp's comparisons; the engine never sees
+// it (determinism profile §3.7). The hop's whole cost lands in one block in every 256 samples;
+// this form is modelled at about half of it (docs/design/cpu-budget.md §4, step 1).
 void OnsetDetector::AnalyzeHop() noexcept {
   float* __restrict re         = re_;
   float* __restrict im         = im_;

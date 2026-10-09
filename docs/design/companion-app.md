@@ -1349,7 +1349,9 @@ and visibility (§3.2); 10 iPlug2 and contract #7 (§1.1); 11 block-split fix sc
 > flush costs 0.9–1.8 %, and contraction off is inside every figure. Explicit FMA is a candidate
 > under profile §7.3's rule, to build and measure before adopting, and ITCM placement is
 > confirmed (silicon record §3.2–§3.5, §3.9). A fix for the budget is under design, with owner
-> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6).
+> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6). *(2026-10-08:
+> the fix is [cpu-budget.md](cpu-budget.md), owner-approved, with its decisions D1–D13; its steps
+> 1–2, bit-exact, are built, and its D10 defers explicit FMA.)*
 
 ### 10.2 Open questions
 

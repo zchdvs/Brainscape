@@ -191,10 +191,10 @@ constexpr float kInvScale = 1.0f / 32767.0f;
 
 constexpr float kMaxFinite = 0x1.fffffep127f;  // FLT_MAX
 
-// Bound on the onset detector's input. Its FFT and hop energy square the input, so a
-// finite sample past about 2e19 overflowed them and latched +inf into the whitening
-// memory, turning onset triggering off until Reset (review finding). 2^16 (+96 dBFS)
-// never touches real audio and keeps every square finite.
+// Bound on the onset detector's input. Its FFT and hop energy square the input, so a finite
+// sample past about 2e19 overflowed them and latched +inf into the whitening memory (onsets off
+// until Reset; review finding). 2^16 (+96 dBFS) never touches real audio, keeps every square
+// finite and maps ±inf to ±2^16, which the onset FFT's bit-exactness needs (AnalyzeHop).
 constexpr float kDetectorBound = 0x1p16f;
 
 // Init and PlanMemory accept these rates. Below ~40 Hz the ms-sized post buffers round

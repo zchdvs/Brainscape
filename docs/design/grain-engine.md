@@ -615,7 +615,11 @@ the trade is visible.
 > taming 68 (~200); a birth costs at most 6,203 cycles (the `ScheduleGrain` row: ~530
 > cycles/sample at 1 ms grains). "Even the pessimistic case stays inside budget", below, does not
 > hold. A fix is under design, with owner decisions pending. The figures and their sources are in
-> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3.
+> [reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §3. *(2026-10-08: the fix is
+> [cpu-budget.md](cpu-budget.md), owner-approved, with its decisions D1–D13. It replaces this
+> section's "even the pessimistic case stays inside budget" with an 85 % ceiling for any input,
+> enforced by a deterministic cost governor (its §5), and this table's derived costs with a
+> measured cost model (its §2–§3); its steps 1–2, bit-exact, are built.)*
 
 Worst case, 10,000 cycles/sample @ 48 kHz / 480 MHz. All figures derived, **not measured**;
 DWT counters gate every stage (§10). The v1 table's two systematic errors are fixed: the
@@ -983,7 +987,8 @@ do not vendor.
 > owner's Daisy Seed Rev7 ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md)).
 > The M7 cost: the worst case does not fit the budget (pessimistic worst block 135.5–168.5 %
 > with warm caches, against the 77–78 % estimated; §8's update has the figures), and a fix is
-> under design, with owner decisions pending (silicon record §3.2–§3.3). Subnormal timing: a
+> under design, with owner decisions pending (silicon record §3.2–§3.3; *2026-10-08: the fix is
+> [cpu-budget.md](cpu-budget.md), owner-approved*). Subnormal timing: a
 > subnormal costs the M7 nothing at FZ = 0 (silicon record §3.7). Emulation against silicon: the
 > chip rendered the golden corpus bit for bit at sound revisions 1 and 3 (silicon record §2).
 

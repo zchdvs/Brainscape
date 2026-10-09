@@ -297,9 +297,12 @@ engine's code in ITCM:
   the others peak at 41.4 % (`default`), 54.4 % (`tail_post_fb`), 84.6 %
   (`pitch_reverse_spray`) and 48.3 % (`max_delay_spray_rev_up24`). These are the engine's
   cycles alone, with interrupts off around each call. A fix is under design, with owner
-  decisions pending.
+  decisions pending. *(2026-10-08: the fix is
+  [cpu-budget.md](../docs/design/cpu-budget.md), owner-approved, with its decisions D1–D13; steps
+  1–2, bit-exact, are built.)*
 - **§7.3's rule:** contraction off threatens the budget, so explicit FMA is a candidate, to build
-  and measure before adopting.
+  and measure before adopting. *(2026-10-08: explicit FMA is deferred by cpu-budget.md's D10,
+  held in reserve with the other sound-changing levers.)*
 - **§4.2's rule:** a subnormal operand or result costs nothing at FZ = 0 (1.00× the normal
   latency), and both tails pass (silent-tail worst block FZ = 0 / FZ = 1 1.002 and 0.999, 0 of
   120,000 blocks flagged at FZ = 1, the renders equal): keep gradual underflow.
@@ -469,9 +472,11 @@ The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostCh
 and the shared tables `kParamTable`, `kLeafParams`, `kLeafOrdinal` and `kDefaultModeHash`,
 2.5 KiB, that the parity and bench images would otherwise take from a harness object in QSPI),
 libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetParam`,
-`ModeSwitches` and the rest of what the console reads) and has about 7.4 KiB left: a wave that grows the
-engine past that moves `Validate` (it runs once per load) out of ITCM next, or places the engine
-by function rather than by object.
+`ModeSwitches` and the rest of what the console reads) and has about 7.4 KiB left. A wave that
+grows the engine past that places the engine by function rather than by object, so the
+main-thread-only API leaves ITCM first; `Validate` (it runs inside `Process` at every Spillover
+load) moves out only after bench session 2 has measured that block
+([cpu-budget.md](../docs/design/cpu-budget.md) §7.3).
 
 ### Memory map
 
