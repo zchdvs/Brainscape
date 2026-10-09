@@ -176,8 +176,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
 
   auto pdLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
   if (pdLen < 2u) pdLen = 2u;
-  pdL_.Init(bulk, pdLen);
-  pdR_.Init(bulk + pdLen, pdLen);
+  pd_.Init(bulk, pdLen);  // 2 * pdLen floats: BulkFloats
 
   // Everything that depends only on the (lifetime-fixed) sample rate is computed
   // once here — the reverb prologue used to call expm1/lround every block
@@ -213,8 +212,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
 void PostChain::ClearBuffers() noexcept {
   modL_.Clear();
   modR_.Clear();
-  pdL_.Clear();
-  pdR_.Clear();
+  pd_.Clear();
   for (auto& a : rvAp_) a.Clear();
   for (auto& a : rvDap_) a.Clear();
   for (auto& d : rvDel_) d.Clear();
@@ -244,7 +242,7 @@ uint32_t PostChain::DelayTarget(float delayFrames) const noexcept {
   assert(delayFrames >= 0.f && delayFrames < 0x1p32f);
   auto back = static_cast<uint32_t>(delayFrames);
   if (back < 2u) back = 2u;
-  if (back > pdL_.len - 1u) back = pdL_.len - 1u;
+  if (back > pd_.len - 1u) back = pd_.len - 1u;
   return back;
 }
 
@@ -279,7 +277,13 @@ void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept
   svfWb_ = static_cast<float>(ws);
 }
 
-void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept {
+void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
+                        float* right) noexcept {
+  // The engine's wet buffers (Engine.cpp, the Hot arena) overlap neither each other nor any
+  // line or state of this chain, so a store through them need not reload the stages' state.
+  // __restrict changes which loads the compiler may keep, never an operation.
+  float* __restrict l = left;
+  float* __restrict r = right;
   modDepthSm_.target  = p.modDepth * 0.5f;  // wet capped at 0.5: dry always survives
   delayMixSm_.target  = p.delayMix;
   reverbMixSm_.target = p.reverbMix;
@@ -333,24 +337,33 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           pdTap_.Retarget(tap);
         }
         // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
-        assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pdL_.len));
+        assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pd_.len));
         const float dfb = p.delayFb;
+        // A settled mix (value == target) returns its target exactly on every frame, its step
+        // being a zero (Smoother::Next), so its gains hold for the whole block and are taken
+        // once; and its target is not 0 here (a settled 0 broke out above), so the per-sample
+        // gate stays open.
+        const bool settled = delayMixSm_.value == delayMixSm_.target;
+        float      gw      = settled ? detmath::SqrtF(delayMixSm_.target) : 0.f;
+        float      gd      = settled ? detmath::SqrtF(1.0f - delayMixSm_.target) : 0.f;
         for (uint32_t n = 0; n < numFrames; ++n) {
-          const float mix = delayMixSm_.Next();
-          if (mix == 0.0f && delayMixSm_.target == 0.0f) continue;  // per-sample gate
-          // Equal-power crossfade: delay wet is decorrelated from dry, and the
-          // linear law scooped the Space macro 5 dB mid-knob (review finding).
-          // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.
-          const float gw = detmath::SqrtF(mix);
-          const float gd = detmath::SqrtF(1.0f - mix);
-          float       tapL, tapR;
+          if (!settled) {
+            const float mix = delayMixSm_.Next();
+            if (mix == 0.0f && delayMixSm_.target == 0.0f) continue;  // per-sample gate
+            // Equal-power crossfade: delay wet is decorrelated from dry, and the
+            // linear law scooped the Space macro 5 dB mid-knob (review finding).
+            // sqrtf is IEEE-exact, so 0 and 1 stay exact endpoints.
+            gw = detmath::SqrtF(mix);
+            gd = detmath::SqrtF(1.0f - mix);
+          }
+          float tapL, tapR;
           if (pdTap_.moving) {
             pdTap_.Step(pdGlideCoef_, pdGlideKeep_);
-            tapL = pdTap_.Read(pdL_);
-            tapR = pdTap_.Read(pdR_);
+            pdTap_.Read(pd_, &tapL, &tapR);
           } else {
-            tapL = pdL_.ReadBack(pdTap_.base);
-            tapR = pdR_.ReadBack(pdTap_.base);
+            const float* f = pd_.Frame(pdTap_.base);
+            tapL           = f[0];
+            tapR           = f[1];
           }
           // Damped, DC-blocked regeneration (bare recirculation measured x9.9 DC
           // gain and full-bandwidth repeats forever; review finding).
@@ -362,8 +375,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
           pdLpR_ += pdLpCoef_ * ((tapR - pdDcR_) - pdLpR_);
           FlushTiny(pdLpL_);
           FlushTiny(pdLpR_);
-          pdL_.Write(l[n] + pdLpL_ * dfb);
-          pdR_.Write(r[n] + pdLpR_ * dfb);
+          pd_.Write(l[n] + pdLpL_ * dfb, r[n] + pdLpR_ * dfb);
           l[n] = l[n] * gd + tapL * gw;
           r[n] = r[n] * gd + tapR * gw;
         }
@@ -374,11 +386,17 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* l, float
         // Decay floor lowered: 0.35 put RT60 at 2.8 s with the knob at ZERO
         // (review finding); this maps ~0.6 s at 0 to ~10 s at 1.
         const float decay = 0.10f + 0.78f * p.reverbTime;
+        // As the delay's: a settled mix's gains are taken once, and its gate stays open.
+        const bool settled = reverbMixSm_.value == reverbMixSm_.target;
+        float      gw      = settled ? detmath::SqrtF(reverbMixSm_.target) : 0.f;
+        float      gd      = settled ? detmath::SqrtF(1.0f - reverbMixSm_.target) : 0.f;
         for (uint32_t n = 0; n < numFrames; ++n) {
-          const float mix = reverbMixSm_.Next();
-          if (mix == 0.0f && reverbMixSm_.target == 0.0f) continue;  // per-sample gate
-          const float gw  = detmath::SqrtF(mix);
-          const float gd  = detmath::SqrtF(1.0f - mix);
+          if (!settled) {
+            const float mix = reverbMixSm_.Next();
+            if (mix == 0.0f && reverbMixSm_.target == 0.0f) continue;  // per-sample gate
+            gw = detmath::SqrtF(mix);
+            gd = detmath::SqrtF(1.0f - mix);
+          }
           rvBandwidth_ += rvBw_ * (0.5f * (l[n] + r[n]) - rvBandwidth_);
           FlushTiny(rvBandwidth_);
           float x = rvBandwidth_;

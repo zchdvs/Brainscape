@@ -16,5 +16,6 @@
 | [companion-app.md](design/companion-app.md) | The JUCE plugin and companion app: product shape, build and licensing, plugin hosting, parameter layer, preset format, upload to the pedal, delivery plan |
 | [mode-compiler.md](design/mode-compiler.md) | Modes as data in practice: the preset schema, macro layer, permanent parameter IDs, compiled preset and `.bsp` package, engine runtime changes, the `bspc` compiler, and the step-4 factory-mode plan |
 | [clock.md](design/clock.md) | The CLOCK design pass, W2's tempo core: tap, MIDI clock and host tempo as stamped events, the integer tempo phasor, Subdiv and note divisions, tempo-synced delays, clock-quantised grain births, smoothing, the MIDI breadboard, and its owner decisions, every answer confirmed by the owner on 2026-10-08; its evidence and review dispositions are in [reviews/clock-record.md](design/reviews/clock-record.md) |
+| [cpu-budget.md](design/cpu-budget.md) | The Seed's worst-case CPU budget, owner-approved: why the engine §8 estimate missed, the measured cost model, a bit-exact speed pack (steps 1–2 built), a deterministic cost governor at 85 % for any input, the factory gate, and bench session 2 |
 
 Hardware documentation and build guides will land here as the project matures.

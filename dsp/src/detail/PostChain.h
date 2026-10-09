@@ -110,6 +110,36 @@ struct DelaySlice {
   }
 };
 
+// The post delay's stereo line over one caller-provided slice of 2 * len floats, the channels
+// interleaved (left at 2i, right at 2i + 1): a frame's two samples share a cache line and one
+// index computation, where the two DelaySlices it replaces were two streams 2 s apart in the
+// Bulk arena. It holds the values two DelaySlices in lockstep held, flushed the same way.
+struct StereoDelaySlice {
+  float*   buf = nullptr;
+  uint32_t len = 0, pos = 0;  // frames
+  void Init(float* b, uint32_t n) noexcept {
+    buf = b;
+    len = n;
+    pos = 0;
+  }
+  void Clear() noexcept {
+    for (uint32_t i = 0; i < 2u * len; ++i) buf[i] = 0.f;
+    pos = 0;
+  }
+  void Write(float l, float r) noexcept {
+    FlushTiny(l);
+    FlushTiny(r);
+    buf[2u * pos]      = l;
+    buf[2u * pos + 1u] = r;
+    if (++pos == len) pos = 0;
+  }
+  const float* Frame(uint32_t back) const noexcept {  // back in [1, len]: {left, right}
+    uint32_t i = pos + len - back;
+    if (i >= len) i -= len;
+    return buf + 2u * i;
+  }
+};
+
 // The post delay's read head (determinism profile §5.6, companion §4.11). A time change
 // glides the tap to its new integer target instead of splicing it, bending pitch like
 // tape: two one-poles in cascade, a critically damped pair, keep the read speed continuous
@@ -167,21 +197,32 @@ struct TapGlide {
   // Catmull-Rom (Granular's ReadHermite) toward the neighbour on frac's side; exactly the
   // integer tap at frac 0. A linear read low-passed the moving head by up to cos(pi f/fs),
   // -2 dB at 10 kHz, as a tremolo while frac cycles (review finding); this is -0.54 dB.
-  float Read(const DelaySlice& d) const noexcept {
+  // Both channels, each with the same arithmetic.
+  void Read(const StereoDelaySlice& d, float* l, float* r) const noexcept {
     // Targets are in [2, len - 1] and the head stays between them, so every tap is a frame
     // of the line.
     assert(base >= 2u && base <= d.len - 1u);
-    const float x0 = d.ReadBack(base);
-    if (frac == 0.0f) return x0;
+    const float* f0 = d.Frame(base);
+    if (frac == 0.0f) {
+      *l = f0[0];
+      *r = f0[1];
+      return;
+    }
     const bool     up  = frac > 0.0f;
     const uint32_t i1  = up ? base + 1u : base - 1u;
     const uint32_t im1 = up ? base - 1u : base + 1u;
     const uint32_t i2  = up ? base + 2u : base - 2u;
     assert(i2 >= 1u && i2 <= d.len);
-    const float xm1  = d.ReadBack(im1);
-    const float x1   = d.ReadBack(i1);
-    const float x2   = d.ReadBack(i2);
-    const float t    = detmath::Abs(frac);
+    const float* fm1 = d.Frame(im1);
+    const float* f1  = d.Frame(i1);
+    const float* f2  = d.Frame(i2);
+    const float  t   = detmath::Abs(frac);
+    *l               = CatmullRom(fm1[0], f0[0], f1[0], f2[0], t);
+    *r               = CatmullRom(fm1[1], f0[1], f1[1], f2[1], t);
+  }
+
+ private:
+  static float CatmullRom(float xm1, float x0, float x1, float x2, float t) noexcept {
     const float c    = (x1 - xm1) * 0.5f;
     const float v    = x0 - x1;
     const float w    = c + v;
@@ -267,7 +308,7 @@ class PostChain {
   Smoother   modDepthSm_{};
 
   // Post delay (stereo, Bulk) with damped, DC-blocked regeneration.
-  DelaySlice pdL_{}, pdR_{};
+  StereoDelaySlice pd_{};
   TapGlide   pdTap_{};
   float      pdGlideCoef_ = 1.f, pdGlideKeep_ = 0.f;  // fixed at Init
   float      pdLpL_ = 0.f, pdLpR_ = 0.f;  // loop damping LP state

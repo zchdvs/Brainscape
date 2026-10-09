@@ -172,14 +172,17 @@ Against the deadline (100 % of the block):
   `max_delay_spray_rev_up24` (48.3 %).
 
 These are the engine's cycles alone (§3.1); how much of each block the audio interrupt, USB and
-the control loop need is among the decisions pending (§5).
+the control loop need is among the decisions pending (§5). *(2026-10-08: settled by
+[cpu-budget.md](../cpu-budget.md)'s D1: the engine's ceiling is 85 %, and the interrupt, USB and
+the control loop keep 15 %, which its bench session 2 confirms.)*
 
 `dense_1ms` is a corpus preset and the live image's 1 ms glitch slot, and `nominal` is engine §8's
 nominal row, so the overrun is not confined to stress configurations. Silence does not help: the
 pessimistic configuration (feedback 0.95) costs a mean 475,902 cycles per block over its 120 s
 silent tail and peaks there at 14,251 cycles per sample, 142.5 % (14,269, 142.7 %, at FZ = 1;
 `bench-bench-ITCM-hooks.log:77-78`). A fix is under design, with owner decisions pending; none of
-it is in this tree.
+it is in this tree. *(2026-10-08: the fix is [cpu-budget.md](../cpu-budget.md), owner-approved
+with its decisions D1–D13; its steps 1–2, both bit-exact, are built.)*
 
 ### 3.4 Code placement: XIP against ITCM (profile §7.1)
 
@@ -351,8 +354,8 @@ after the first and after each later run (`session-2/parity-r3-run*.log:69`).
 | Profile §5.8, §8.2 risk 10, §8.3 Q9: `Restart` | *estimated* 45–160 ms | 47.2 ms, the clear at the core's floor (§3.6); the watermark and the default load mode stay open |
 | Profile §7.1: ITCM or XIP | requirement, unmeasured | ITCM confirmed: XIP multiplies the mean by 1.045–1.210 warm, 1.259–1.697 cold (§3.4) |
 | Profile §7.2, §8.2 risk 2; engine §8: the budget | *estimated* 32–41 % nominal, 77–78 % pessimistic | measured 77.7 % mean and 99.1–100.3 % worst nominal, 135.5–169.0 % worst pessimistic: **not met** (§3.2, §3.3) |
-| Profile §7.3 rule | deferred to DWT | contraction off threatens the budget: explicit FMA is a candidate, to build and measure before adopting (§3.9) |
-| Profile §8.3 Q2 | open | still open: no contraction-on or FMA build; births bounded at ≤ 6,203 cycles each, which does not decide kernels against tables (§3.5) |
+| Profile §7.3 rule | deferred to DWT | contraction off threatens the budget: explicit FMA is a candidate, to build and measure before adopting (§3.9); *2026-10-08: deferred by [cpu-budget.md](../cpu-budget.md)'s D10* |
+| Profile §8.3 Q2 | open | still open: no contraction-on or FMA build; births bounded at ≤ 6,203 cycles each, which does not decide kernels against tables (§3.5); *2026-10-08: explicit FMA deferred by cpu-budget.md's D10* |
 | Profile §6.6: render speed | *estimated* 1.3–3.1× | 2.66× (r1), 2.57× (r3) (§2) |
 | Firmware §6 checklist | open | `info`, `fp`, `audio`, archive, parity, bench and the long-render USB check done; the live items open |
 
@@ -361,11 +364,14 @@ after the first and after each later run (`session-2/parity-r3-run*.log:69`).
 - **The CPU budget.** Five configurations exceed the deadline in their worst block, and the
   nominal row comes within 1 % of it with warm caches (§3.3). A fix is under design, with owner
   decisions pending (among them how much of each block the interrupts, USB and the control loop
-  keep); none of it is in this tree, and it will need its own bench session.
+  keep); none of it is in this tree, and it will need its own bench session. *(2026-10-08: the
+  fix is [cpu-budget.md](../cpu-budget.md), owner-approved; the interrupts, USB and the control
+  loop keep 15 % of each block (its D1); steps 1–2, bit-exact, are built; its bench session 2 is
+  planned in its §8.)*
 - **The bench at revision 3.** Revisions 2 and 3 changed the engine (modes, the Mix law); the
   figures above are revision 1's.
 - **The live image** (firmware §6): pass-through, switches, structures, macros, the `stats`
   meter, clicks while typing.
-- **Profile §8.3 Q2** (explicit FMA, kernels or tables) and **Q9**'s watermark and default load
-  mode; the interrupt `FPDSCR` test (profile §6.5), the SDRAM march test and hot soak and the
-  HIL runner (profile §6.6).
+- **Profile §8.3 Q2** (explicit FMA, kernels or tables; *2026-10-08: explicit FMA deferred by
+  cpu-budget.md's D10*) and **Q9**'s watermark and default load mode; the interrupt `FPDSCR`
+  test (profile §6.5), the SDRAM march test and hot soak and the HIL runner (profile §6.6).

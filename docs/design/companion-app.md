@@ -1103,6 +1103,18 @@ hardware-in-the-loop CI runner.
   a 2 s PARITY on the stored slot (~1–2 s, *estimated*) and, on a pass, shows **Verified 1:1 on
   rN · firmware ‹hash›** (§7.6).
 
+> **Update (2026-10-08, Rev7 silicon record).** The cost is measured. On the owner's Daisy Seed
+> Rev7 the parity image rendered the whole golden corpus, each preset restarted by
+> `LoadPreset(Exact)`, at 2.57× realtime at sound revision 3 (709 s of audio in 276 s) and 2.66×
+> at revision 1 (639 s in 240 s), with the engine's code in ITCM and the renders in the main
+> loop ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §1.2, §1.3, §2). At
+> that rate a 10 s vector takes about 3.9 s and verified upload's 2 s about 0.8 s, each plus
+> `Restart`'s 47.2 ms (§4.9) (*derived*). The rate is the corpus's average; a vector's own time
+> follows its preset's load. The DWT pass measured the corpus preset `dense_1ms` at a mean of
+> 80.0 % of the budget at revision 1, about 8 s of engine time for a 10 s vector (*derived*),
+> and the densest bench configuration, `pess_births`, at 119.6 %, slower than realtime (silicon
+> record §3.2).
+
 **No scratch engine in v1:** PARITY reuses the live engine with the canonical 2²² ring, because
 the design plans SDRAM at 63.3 of 64 MiB once the looper exists (`grain-engine.md` §7) and a
 second engine also needs hot and warm arenas (profile §6.6). Smaller rings appear only in test
@@ -1377,7 +1389,9 @@ and visibility (§3.2); 10 iPlug2 and contract #7 (§1.1); 11 block-split fix sc
 > flush costs 0.9–1.8 %, and contraction off is inside every figure. Explicit FMA is a candidate
 > under profile §7.3's rule, to build and measure before adopting, and ITCM placement is
 > confirmed (silicon record §3.2–§3.5, §3.9). A fix for the budget is under design, with owner
-> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6).
+> decisions pending. Risk 11's mute is measured at 47.2 ms (silicon record §3.6). *(2026-10-08:
+> the fix is [cpu-budget.md](cpu-budget.md), owner-approved, with its decisions D1–D13; its steps
+> 1–2, bit-exact, are built, and its D10 defers explicit FMA.)*
 
 ### 10.2 Open questions
 
@@ -1414,6 +1428,21 @@ and visibility (§3.2); 10 iPlug2 and contract #7 (§1.1); 11 block-split fix sc
 10. Seed3 USB bring-up against §7.2's rules.
 11. Seed3 board detection takes the 24-bit, postgain-1 path (§4.8).
 12. STM32H750 errata (ST ES0392) for FP divide and square root (profile §6.6).
+
+> **Update (2026-10-08, Rev7 prototype).** The owner prototypes on a Daisy Seed Rev7 (STM32H750,
+> PCM3060 codec, micro-USB) while the Seed3 is out of stock, and keeps a custom STM32H750 core
+> board as a later option ([hardware-supply-2026-10.md](../research/hardware-supply-2026-10.md)),
+> so Q10 and Q11 are asked of the Rev7 first and again of whichever module ships. Q10: the
+> Rev7's onboard port is micro-USB on OTG_FS, as the Seed3's USB-C is, so §7.2's rules stand.
+> The bring-up images use libDaisy's CDC device (bench only, not distributable) with the OTG_FS
+> interrupts below the audio DMA, one of those rules, and the Rev7 has shown USB enumeration and
+> whole-corpus streams without a lost byte ([firmware/README.md](../../firmware/README.md) §9);
+> TinyUSB and §7.1's composite device are not built, so Q10 stays open. Q11: libDaisy detects
+> the Rev7 by its PD5 strap and configures its PCM3060 for 24 bits with `postgain` 1 (firmware
+> README §7), and every hello on the board reports that board and 24-bit audio
+> ([reviews/rev7-silicon-record.md](reviews/rev7-silicon-record.md) §1.1); samples through the
+> codec wait for the live image, and a Seed3 (TAC5242, PH6 strap) or a custom board needs the
+> check again.
 
 **Measurements:**
 

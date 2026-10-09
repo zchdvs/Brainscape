@@ -1247,7 +1247,10 @@ mode compiler, factory curation, the GUI.
 > 77–78 % estimated below; the corpus's `dense_1ms` peaks at 118.6 %. Of the costs this section
 > adds, the flush is 0.9–1.8 % (§4.3) and subnormals cost nothing extra (§4.2); contraction off is
 > inside every figure and not isolated. A fix is under design, with owner decisions pending
-> ([the silicon record](reviews/rev7-silicon-record.md) §3.2–§3.5).
+> ([the silicon record](reviews/rev7-silicon-record.md) §3.2–§3.5). *(2026-10-08: the fix is
+> [cpu-budget.md](cpu-budget.md), owner-approved, with its decisions D1–D13; it replaces the
+> estimate below with a cost model and an 85 % ceiling for any input, and its steps 1–2,
+> bit-exact, are built.)*
 
 The CPU budget of `grain-engine.md` §8 is derived and assumes contracted FMAs. With this profile
 (**estimated**): nominal 2,950–3,700 → about 3,200–4,050 cycles/sample (+≈100 contraction,
@@ -1264,7 +1267,10 @@ DWT gates every number.
 > contraction off only, inside every figure. On §7.2's estimate of about +430 cycles/sample for
 > contraction off at the pessimistic row, FMA alone cannot bring those blocks under the deadline;
 > it is weighed with the CPU budget's fix, which is under design
-> ([the silicon record](reviews/rev7-silicon-record.md) §3.9).
+> ([the silicon record](reviews/rev7-silicon-record.md) §3.9). *(2026-10-08: weighed and
+> deferred. [cpu-budget.md](cpu-budget.md)'s D10, owner-approved, keeps explicit FMA out for now:
+> it gains little on the M7 and costs the x86 plugin; it stays in reserve with the other
+> sound-changing levers.)*
 
 `detmath::Fma(a, b, c)` at chosen hot sites (`__builtin_fmaf`, `std::fma`), with contraction
 off elsewhere, is bit-exact everywhere because IEEE-754 defines fused multiply-add exactly:
@@ -1353,7 +1359,8 @@ Each risk is stated with its mitigation.
 > is no contraction-on or explicit-FMA build, and the births suite bounds a birth at 6,203 cycles
 > at most (48 voices at 1 ms grains, ring locality included), which does not decide kernels
 > against tables. In §8.2, risk 1 is retired, risk 10's mute is 47.2 ms, and risk 2 came true: the
-> measured cost exceeds the budget (§7.2).
+> measured cost exceeds the budget (§7.2). *(2026-10-08: Q2's explicit-FMA half is deferred by
+> [cpu-budget.md](cpu-budget.md)'s D10; kernels against tables stay open.)*
 
 | # | Question | Settled by |
 |---|---|---|
@@ -1380,7 +1387,8 @@ Each risk is stated with its mitigation.
 > underflow). Still open in step 13: render mode, the HIL runner, the engine SPSC queue, builds
 > with contraction on and with explicit FMA (§7.3), kernels against tables, the watermark and the
 > default load mode, and the CPU budget's fix, which is under design with owner decisions
-> pending.
+> pending. *(2026-10-08: the fix is [cpu-budget.md](cpu-budget.md), owner-approved; its steps 1–2,
+> bit-exact, are built, and its D10 defers explicit FMA.)*
 
 The merged milestone sequence is companion §8.1; the profile's steps fall into it as below.
 Every sound-changing change lands before revision 1 is **published** (§1.5).

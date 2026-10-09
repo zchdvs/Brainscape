@@ -61,7 +61,7 @@ factory set have not yet run on GitHub.
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 29 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started in code; designed and owner-approved ([clock.md](design/clock.md), draft v2, 2026-10-08, revised after three reviews, [record](design/reviews/clock-record.md); the owner confirmed the answers to its 23 decisions on 2026-10-08): tap, MIDI clock and host tempo as stamped events, an integer tempo phasor, Subdiv and note divisions, synced delays and clock-quantised births, in two sound revisions after the first set's knob ratings and an ITCM gate; the MIDI breadboard can start now |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending (*2026-10-08: [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`*). Not yet run on the board: the live image, the bench at revision 3, any image at revisions 4 to 7 |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); the fix is designed and owner-approved (2026-10-08, [cpu-budget.md](design/cpu-budget.md)), steps 1–2 built bit-exact. Not yet run on the board: the live image, the bench at revision 3, any image at revisions 4 to 7 |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -818,11 +818,14 @@ records live in [docs/design/reviews/](design/reviews/).
   64-voice row peaks at 99.1 % of the 480,000-cycle block (100.3 % cold), the pessimistic rows at
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
   `dense_1ms`, a live-image preset, at 118.6 %.
-  A fix is under design, with owner decisions pending; none of it is in this tree. *(2026-10-08:
-  the fix is [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`.)*
-  Still to run
-  on the board: the live image's checks, the bench at revision 3 and every image at revisions 4
-  to 7. The images use libDaisy's
+  The fix is designed and owner-approved (2026-10-08: [cpu-budget.md](design/cpu-budget.md), its
+  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor at sound
+  revision 8 (9 if CLOCK's tempo core lands first) that holds any 48 frames to 85 %. Of it, this
+  tree has steps 1–2, both bit-exact: the onset hop analysis restructured (P3's rewrite, chosen
+  under its D4 because P1's would not fit wave 1's ITCM) and post-chain hygiene; wave 1's ITCM
+  leaves too little room for steps 4, 5 and 11 until cold code moves out (cpu-budget.md §7.3).
+  Still to run on the board: the live image's checks, the bench at revision 3 and every image at
+  revisions 4 to 7. The images use libDaisy's
   ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
   golden corpus bit-identically on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
   `macos-14` and AppleClang 21 on `macos-latest`) and the Cortex-M7 under QEMU 10.2.3, whose
@@ -982,13 +985,16 @@ records live in [docs/design/reviews/](design/reviews/).
   fixtures load inexact (their 27 and 28 are unknown ids) and added `r2-onset-marks.bsp`, which
   must load exact on every later build; the fixtures' recipes now spell out each revision's
   leaves, so they keep rebuilding the committed bytes. **The
-  number code's committed hashes are provisional:** measured on x86-64 (MSVC 19.40, GCC 11.4,
-  Clang 14; the exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit
-  Cortex-M7 under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review), but the
-  design commits them only after one linux-arm64 and one macOS run (§10.2), which no host here
-  offered. Lane G's `bspc-roundtrip` legs run them on linux-arm64 and both macOS legs, and
-  their first GitHub run reproducing them is still the gate before the number code is relied
-  on; a leg that differs is a finding, not a reason to re-mint. The fuzzers' M7 run, the
+  number code's hashes** were measured on x86-64 (MSVC 19.40, GCC 11.4, Clang 14; the
+  exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit Cortex-M7
+  under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review); the design commits
+  them only after one linux-arm64 and one macOS run (§10.2), which no host here offered. Those
+  runs have happened on GitHub: `compiler_number_hashes` passed in lane G's `bspc-roundtrip`
+  legs on linux-arm64 and both macOS legs on pull requests #5, #6 and #7 (runs 37658865968,
+  37693138971, 37701943741), and the nightly exhaustive round trip reproduced its hashes on
+  linux-arm64 and linux-x64 GCC (run 37770014635, `main` at `1624f80`, 2026-10-08). Whether
+  that commits them under §10.2 is the owner's call, still pending; a leg that differs is a
+  finding, not a reason to re-mint. The fuzzers' M7 run, the
   libFuzzer leg and the number-check legs are CI jobs since lane G, and the plugin's typed-text
   parser now uses `Number` (lane A).
 - **Mode compiler lane A's open ends.** The compiler admits the default structure, the onset
@@ -1023,9 +1029,9 @@ records live in [docs/design/reviews/](design/reviews/).
   fortified buffer in the test's random generator (fixed in `7f20481`), and its second
   (37658865968) and those of #6 and #7 (37693138971, 37701943741) passed all eight jobs,
   `compiler_number_hashes` and `bspc roundtrip` on linux-arm64 and both macOS legs included.
-  Those runs were the gate for the number code's and the compiler's digests on arm64 and macOS
-  (above), and for `bspc`'s non-ASCII file names and the import check on macOS, which no host
-  here offered; the "provisional" and "x86-64 only" wording above predates them. Locally the new
+  Those runs reproduced the number code's and the compiler's digests on arm64 and macOS (whether
+  that commits them is pending the owner; lanes B and A, above) and passed `bspc`'s non-ASCII
+  file names and the import check on macOS, which no host here offered. Locally the new
   steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
@@ -1173,11 +1179,12 @@ records live in [docs/design/reviews/](design/reviews/).
   the pessimistic configuration (§8: ≈4,000 for the grain render), and a birth at most 6,203
   cycles (§8: ≈530 cycles/sample at 1 ms grains). Of the profile's costs, subnormal operations
   cost nothing extra and the flush 0.9–1.8 %; contraction off is inside every figure, not
-  isolated. A fix is under design, with owner decisions pending (*2026-10-08:
-  [cpu-budget.md](design/cpu-budget.md), owner-approved*). From the design, still: the
-  scheduler's 64-slot sweep wants a free bitmask; segment batching at extreme birth rates; the
-  detector's per-hop FFT is a single-sample cost spike (~2–2.4× the budgeted pessimistic row in
-  its worst block) that likely wants stage-splitting.
+  isolated. The fix is designed (2026-10-08, [cpu-budget.md](design/cpu-budget.md)); steps 1–2
+  are built, so the detector's hop costs about half (*model*). From the design, still: the
+  scheduler's 64-slot sweep wants a free bitmask (the fix's step 6); segment batching at extreme
+  birth rates; the detector's per-hop FFT is still a single-sample cost spike, about 49,500
+  cycles after step 1 (*model*): staged analysis is held in reserve (its D10), and the governor
+  reserves the hop statically (cpu-budget.md §5.2).
 - **Trigger layer**: no sidechain input; detector constants are calibrated for 44.1/48 kHz
   (the plugin design runs the engine at 48 kHz and resamples at other host rates; until that
   mode lands, the skeleton runs it at the host rate).
@@ -1215,8 +1222,9 @@ Steps 1–4 need no hardware.
    lint, derive), which compiles only the default structure until sound revision 2; and lane G,
    the CI: the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the
    decoder's fuzzers on every leg and the emulated M7, libFuzzer, nightly legs and the compiler
-   audit (on their first GitHub run, the arm64 and macOS legs must reproduce the number code's
-   and the compiler's committed hashes); and lane C, the engine runtime at sound revision 2
+   audit (the arm64 and macOS legs reproduced the number code's and the compiler's hashes on
+   pull requests #5–#7; whether that commits them is the owner's call); and lane C, the engine
+   runtime at sound revision 2
    (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
    trim, the effect volume and the wet kill, the corpus on compiled packages). The Mix law (Q13,
    the owner's provisional answer) is sound revision 3, with the first set's recipes re-measured
@@ -1236,11 +1244,11 @@ Steps 1–4 need no hardware.
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
-   Next, the CPU budget's fix (under design, owner decisions pending; *2026-10-08:
-   [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`*; the worst
-   case is not met) and the decisions the pass leaves (explicit FMA, which that fix's D10
-   defers, polynomial kernels or tables, the pedal's default load mode);
-   the live image's checks; the pedal side of the device link
+   Next, the CPU budget's fix (owner-approved 2026-10-08, [cpu-budget.md](design/cpu-budget.md);
+   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 8, or 9
+   after CLOCK's tempo core; the worst case is not met yet) and the decisions the pass leaves
+   (polynomial kernels or tables, the pedal's default load mode; explicit FMA is deferred by the
+   fix's D10); the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY
    check, the firmware update path, and the engine's SPSC event queue for the firmware's
    producers); and the app side
