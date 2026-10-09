@@ -1,6 +1,6 @@
 # Brainscape — Project Status
 
-> Snapshot as of **2026-10-07**.
+> Snapshot as of **2026-10-09**.
 > Brainscape is an open-source granular delay — a spiritual successor to the Hologram
 > Microcosm — targeting a Daisy Seed hardware pedal (prototyped on a Seed Rev7) **and** a JUCE desktop plugin and
 > companion app from one shared C++ DSP core. Licensed [GPLv3](../LICENSE).
@@ -29,8 +29,10 @@ with reproducible bounces and an offline audition render; it plays the default m
 packages is lane D's). The Daisy Seed Rev7 bring-up images (parity, bench, live) build at sound
 revision 3 and carry the corpus's packages. On the owner's Rev7 (2026-10-07) the parity image
 rendered the golden corpus bit for bit at sound revisions 1 and 3, and the DWT pass (revision 1)
-showed that **the worst-case CPU budget is not met**: a fix is under design, with owner decisions
-pending ([the silicon record](design/reviews/rev7-silicon-record.md)). The preset
+showed that **the worst-case CPU budget is not met** ([the silicon record](design/reviews/rev7-silicon-record.md)).
+The fix is designed (2026-10-09: [cpu-budget.md](design/cpu-budget.md), owner-approved, its
+decisions D1–D13 confirmed), and its first two steps, the onset FFT rewrite and post-chain
+hygiene, are built bit-exact at sound revision 3. The preset
 jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull requests #5
 (run 37658865968), #6 (run 37693138971) and #7 (run 37701943741).
 
@@ -48,7 +50,7 @@ jobs that mode-compiler lane G added to CI have run on GitHub and passed on pull
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 18 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
 | Tempo/clock trigger source | ⬜ Not started (`ProcessContext` fields reserved) |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 3 ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-3 corpus from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending. Not yet run on the board: the live image, the bench at revision 3 |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 3 ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-3 corpus from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); the fix is designed and owner-approved (2026-10-09, [cpu-budget.md](design/cpu-budget.md)), steps 1–2 built bit-exact. Not yet run on the board: the live image, the bench at revision 3 |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -593,7 +595,12 @@ records live in [docs/design/reviews/](design/reviews/).
   64-voice row peaks at 99.1 % of the 480,000-cycle block (100.3 % cold), the pessimistic rows at
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
   `dense_1ms`, a live-image preset, at 118.6 %.
-  A fix is under design, with owner decisions pending; none of it is in this tree. Still to run
+  The fix is designed and owner-approved (2026-10-09: [cpu-budget.md](design/cpu-budget.md), its
+  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor at sound
+  revision 8 that holds any 48 frames to 85 %. Of it, this tree has steps 1–2, both bit-exact: the
+  onset hop analysis restructured (P3's rewrite, chosen under its D4 because P1's would not fit
+  wave 1's ITCM) and post-chain hygiene; wave 1's ITCM leaves too little room for steps 4, 5 and 11
+  until cold code moves out (cpu-budget.md §7.3). Still to run
   on the board: the live image's checks and the bench at revision 3. The images use libDaisy's
   ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
   golden corpus bit-identically on every leg: Windows x64 (MSVC, MSVC AVX2), Linux x64 (GCC, Clang), Linux arm64 (GCC 13), macOS arm64 (AppleClang 15 on
@@ -839,7 +846,8 @@ records live in [docs/design/reviews/](design/reviews/).
   the pessimistic configuration (§8: ≈4,000 for the grain render), and a birth at most 6,203
   cycles (§8: ≈530 cycles/sample at 1 ms grains). Of the profile's costs, subnormal operations
   cost nothing extra and the flush 0.9–1.8 %; contraction off is inside every figure, not
-  isolated. A fix is under design, with owner decisions pending. From the design, still: the
+  isolated. The fix is designed (2026-10-09, [cpu-budget.md](design/cpu-budget.md)); steps 1–2
+  are built, so the detector's hop costs about half (*model*). From the design, still: the
   scheduler's 64-slot sweep wants a free bitmask; segment batching at extreme birth rates; the
   detector's per-hop FFT is a single-sample cost spike (~2–2.4× the budgeted pessimistic row in
   its worst block) that likely wants stage-splitting.
@@ -894,8 +902,9 @@ Steps 1–4 need no hardware.
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
-   Next, the CPU budget's fix (under design, owner decisions pending; the worst case is not
-   met) and the decisions the pass leaves (explicit FMA, polynomial kernels or tables, the
+   Next, the CPU budget's fix (owner-approved 2026-10-09, [cpu-budget.md](design/cpu-budget.md);
+   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 8; the worst
+   case is not met yet) and the decisions the pass leaves (explicit FMA, polynomial kernels or tables, the
    pedal's default load mode); the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY
    check, the firmware update path, and the engine's SPSC event queue for the firmware's

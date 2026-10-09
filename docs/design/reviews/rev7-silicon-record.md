@@ -179,7 +179,8 @@ nominal row, so the overrun is not confined to stress configurations. Silence do
 pessimistic configuration (feedback 0.95) costs a mean 475,902 cycles per block over its 120 s
 silent tail and peaks there at 14,251 cycles per sample, 142.5 % (14,269, 142.7 %, at FZ = 1;
 `bench-bench-ITCM-hooks.log:77-78`). A fix is under design, with owner decisions pending; none of
-it is in this tree.
+it is in this tree. *(2026-10-09: the fix is [cpu-budget.md](../cpu-budget.md), owner-approved
+with its decisions D1–D13; its steps 1–2, both bit-exact, are built.)*
 
 ### 3.4 Code placement: XIP against ITCM (profile §7.1)
 
@@ -361,7 +362,10 @@ after the first and after each later run (`session-2/parity-r3-run*.log:69`).
 - **The CPU budget.** Five configurations exceed the deadline in their worst block, and the
   nominal row comes within 1 % of it with warm caches (§3.3). A fix is under design, with owner
   decisions pending (among them how much of each block the interrupts, USB and the control loop
-  keep); none of it is in this tree, and it will need its own bench session.
+  keep); none of it is in this tree, and it will need its own bench session. *(2026-10-09: the
+  fix is [cpu-budget.md](../cpu-budget.md), owner-approved; the interrupts, USB and the control
+  loop keep 15 % of each block (its D1); steps 1–2, bit-exact, are built; its bench session 2 is
+  planned in its §8.)*
 - **The bench at revision 3.** Revisions 2 and 3 changed the engine (modes, the Mix law); the
   figures above are revision 1's.
 - **The live image** (firmware §6): pass-through, switches, structures, macros, the `stats`

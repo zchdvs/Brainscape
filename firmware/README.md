@@ -452,22 +452,24 @@ oracle build's byte for byte, and runs the static audits on the firmware build.
 
 At sound revision 3 (revision 1's in brackets). At revision 2 the images grew by the 18 embedded
 corpus packages (77,768 bytes), the package decoder, validator and encoder, the macro evaluator and
-the engine's mode runtime; revision 3's Mix law added 40–56 bytes to each.
+the engine's mode runtime; revision 3's Mix law added 40–56 bytes to each. The CPU plan's steps 1
+and 2 ([cpu-budget.md](../docs/design/cpu-budget.md) §4.1, §4.2; bit-exact, so still revision 3)
+added 480 bytes to each image and 488 bytes to each ITCM.
 
 | Image | Bytes | ITCM used (of 64 KiB) |
 | --- | --- | --- |
-| `brainscape_parity.bin` | 337,896 (223,312) | 54.0 KiB, 84.4 % (42.9 KiB) |
-| `brainscape_bench.bin` | 335,924 (220,692) | 53.9 KiB, 84.2 % (42.8 KiB) |
-| `brainscape_bench_xip.bin` | 335,744 (220,552) | 0 |
-| `brainscape_bench_hooks.bin` | 336,428 (221,068) | 54.3 KiB, 84.9 % (43.1 KiB) |
-| `brainscape_live.bin` | 376,392 (214,616) | 56.0 KiB, 87.5 % (38.9 KiB) |
+| `brainscape_parity.bin` | 338,376 (223,312) | 54.5 KiB, 85.1 % (42.9 KiB) |
+| `brainscape_bench.bin` | 336,404 (220,692) | 54.3 KiB, 84.9 % (42.8 KiB) |
+| `brainscape_bench_xip.bin` | 336,224 (220,552) | 0 |
+| `brainscape_bench_hooks.bin` | 336,908 (221,068) | 54.8 KiB, 85.6 % (43.1 KiB) |
+| `brainscape_live.bin` | 376,872 (214,616) | 56.5 KiB, 88.3 % (38.9 KiB) |
 
 The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostChain` 11.0,
 `Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`,
 and the shared tables `kParamTable`, `kLeafParams`, `kLeafOrdinal` and `kDefaultModeHash`,
 2.5 KiB, that the parity and bench images would otherwise take from a harness object in QSPI),
 libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetParam`,
-`ModeSwitches` and the rest of what the console reads) and has about 8 KiB left: a wave that grows the
+`ModeSwitches` and the rest of what the console reads) and has about 7.4 KiB left: a wave that grows the
 engine past that moves `Validate` (it runs once per load) out of ITCM next, or places the engine
 by function rather than by object.
 
@@ -476,7 +478,7 @@ by function rather than by object.
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
 | QSPI flash `0x90040000` | the image: vector table, code, constants (the 18 corpus packages among them, 76 KiB), initial data, ITCM's load image | 330 KiB |
-| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 54 KiB of 64 |
+| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 54.5 KiB of 64 |
 | DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (an 8 KiB slot; `sizeof(Engine)` is 7,168 bytes at sound revision 2, `kEngineImplBytes`), the main stack (32 KiB reserved at the top, linker-checked) | 34 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
@@ -554,9 +556,11 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
   `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (sound revision 3: `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
+  (sound revision 3 with the CPU plan's steps 1 and 2: `02b4960f03d26a18…`, hooks
+  `fd5bf8353e7df772…`; before them `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
   `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
-  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1, 2 and 3, to the M7 oracle
+  `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at revisions 1, 2 and 3 (before the CPU
+  plan's steps), to the M7 oracle
   built on Linux with the same pinned toolchain (in
   Docker, whose CMake 3.22 is too old for libDaisy's, so the images themselves build on Windows).
 - The packages the images carry are the committed ones: the table is generated from
