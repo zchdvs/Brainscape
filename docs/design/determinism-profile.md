@@ -371,6 +371,24 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
   subnormal inputs and parameters and requires finite output equal to the sanitized run, over
   several seeds: with one, the overflow above went unnoticed.
 
+> **Update (2026-10-09, the output limiter).** [output-limiter.md](output-limiter.md), a draft for
+> the owner's decisions and not built, adds a last step after the final mix's ±`FLT_MAX`
+> saturation: a peak limiter with a ceiling of exactly 1.0. Today the pedal's codec clamps every
+> over at ±0.999985 (§2.2) and the plugin passes it on, so the two differ above full scale. With
+> the limiter the engine's own output stops at 1.0, the same on every target.
+>
+> It works within this profile's rules:
+> - only +, −, ×, ÷, compares and bit operations, with no transcendental per sample;
+> - its release step is computed once at `Init` with `Exp2D`;
+> - its gain never decays toward 0, so §4.3 gains no site;
+> - per-sample state only;
+> - one-sided compares, so NaN still reaches the Debug assertion;
+> - each channel's ceiling is max(1, |dry term|), so this section's sanitized live dry still
+>   passes above 0 dBFS unclipped, and Mix 0 stays the input on hostile input.
+>
+> A prototype patched into revision 7 kept 37 of the 45 golden hashes, each identical under every
+> block pattern, delivery and the hostile environment. Its §5 gives the arithmetic.
+
 ### 3.8 Conforming builds and supported targets
 
 > **Update (2026-10-07, Rev7 silicon record).** The Cortex-M7 conforms on silicon too: on the
