@@ -16,8 +16,8 @@ stored as a patch against that tree rather than as a full copy; recreate them fr
 The production parity tooling grown from them lives elsewhere: the test-signal generator in
 `dsp/include/brainscape/TestSignal.h`, the golden-hash harness in `dsp/tests/golden/` with the
 golden file it checks (ctest `golden_check`; `brainscape_golden --help`), the CI legs in
-`.github/workflows/parity.yml` and `sound-rev.yml`, and the static audits, report comparison and
-sound-revision gate in `tools/ci/`. The contraction-on negative control builds through
+`.github/workflows/parity.yml`, `sound-rev.yml` and `sound-rev-render.yml`, and the static audits,
+report comparison, sound-revision gate and intermediate-revision render in `tools/ci/`. The contraction-on negative control builds through
 the test-only `-DBRAINSCAPE_FP_NEGATIVE_CONTROL=ON` (`cmake/BrainscapeFpProfile.cmake`), under which the
 harness only reports. The option is never cached, so it lasts one configure, and it refuses plugin and
 firmware builds: give it its own build directory. [`testsignal_ref.py`](testsignal_ref.py) here is

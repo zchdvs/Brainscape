@@ -279,9 +279,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"scheduler.sources", R"(["periodic", "footswitch"])", kModeFeatureSources, "W1"},
-      {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", kModeFeaturePitchSet, "W1"},
-      {"layers[0].pitch.select", R"("random")", kModeFeaturePitchSet, "W1"},
       {"scheduler.sources", R"(["periodic", "clock", "footswitch", "midi_note"])",
        kModeFeatureClock, "W2"},
       {"scheduler.subdiv", R"("2x")", kModeFeatureClock, "W2"},
@@ -341,6 +338,128 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
   Ok(With("layers[0].position.base_sync", Str("off")));
 }
 
+TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
+  using namespace brainscape;
+  // Source selection (sound revision 4, §7.5 R9): any subset of the sources this build plays,
+  // the empty set included (lint L5 says it never plays a grain, an error for --factory).
+  struct Case {
+    const char* json;
+    uint8_t     sources;
+    uint32_t    feature;
+  };
+  const Case cases[] = {
+      {R"(["onset"])", kSourceOnset, kModeFeatureOnset | kModeFeatureSources},
+      {R"(["periodic", "footswitch"])", kSourcePeriodic | kSourceFootswitch, kModeFeatureSources},
+      {R"(["midi_note", "periodic"])", kSourcePeriodic | kSourceMidiNote, kModeFeatureSources},
+      {R"([])", 0, kModeFeatureSources},
+  };
+  for (const Case& c : cases) {
+    INFO("scheduler.sources = " << c.json);
+    const std::string    text = With("scheduler.sources", Parse(c.json));
+    const CompileResult  r    = Ok(text);
+    const DecodedPackage p    = DecodePackage(r.package.data(), r.package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.schedule.sources == c.sources);
+    REQUIRE(p.state->mode.features == c.feature);
+    RoundTrip(text);
+  }
+  // The burst and intermittency leaves (57-59) take any value in range, and STAT holds them.
+  const std::string leaves =
+      With("scheduler.intermittency", Num("0.25"),
+           With("scheduler.burst.count", Num("6"), With("scheduler.burst.spacing_ms", Num("12.5"))));
+  const CompileResult  r = Ok(leaves);
+  const DecodedPackage p = DecodePackage(r.package.data(), r.package.size());
+  REQUIRE(p.ok);
+  auto leaf = [&](ParamId id) {
+    for (uint32_t i = 0; i < p.state->leafCount; ++i) {
+      if (p.state->leaves[i].id == static_cast<uint32_t>(id)) return p.state->leaves[i].value;
+    }
+    return -1.0f;
+  };
+  REQUIRE(leaf(ParamId::Intermittency) == 0.25f);
+  REQUIRE(leaf(ParamId::BurstCount) == 6.0f);
+  REQUIRE(leaf(ParamId::BurstSpacingMs) == 12.5f);
+  RoundTrip(leaves);
+  Refused(With("scheduler.burst.count", Num("17")), "E4", "/scheduler/burst/count");
+  Refused(With("scheduler.burst.spacing_ms", Num("501")), "E4", "/scheduler/burst/spacing_ms");
+
+  // Pitch sets (sound revision 5, §7.5 R10): 1-8 entries of st -24..24 and weight 1-16 (default
+  // 1), `cycle` or `random`, in the authored order; the default set alone compiles to no PSET.
+  struct SetCase {
+    const char* set;
+    const char* select;
+    uint8_t     count;
+    float       st[3];
+    uint16_t    weight[3];
+    uint32_t    feature;
+  };
+  const SetCase sets[] = {
+      {R"([{"st": 0}, {"st": 7, "weight": 3}])", "cycle", 2, {0.0f, 7.0f}, {1, 3},
+       kModeFeaturePitchSet},
+      {R"([{"st": 12, "weight": 2}, {"st": 0}, {"st": -12, "weight": 16}])", "random", 3,
+       {12.0f, 0.0f, -12.0f}, {2, 1, 16}, kModeFeaturePitchSet},
+      {R"([{"st": 0, "weight": 1}])", "random", 1, {0.0f}, {1}, kModeFeaturePitchSet},
+      {R"([{"st": -24}])", "cycle", 1, {-24.0f}, {1}, kModeFeaturePitchSet},
+      {R"([{"st": 0}])", "cycle", 1, {0.0f}, {1}, 0},
+  };
+  for (const SetCase& c : sets) {
+    INFO("layers[0].pitch.set = " << c.set << ", select " << c.select);
+    const std::string    text = With("layers[0].pitch.set", Parse(c.set),
+                                     With("layers[0].pitch.select", Str(c.select)));
+    const CompileResult  rs   = Ok(text);
+    const DecodedPackage ps   = DecodePackage(rs.package.data(), rs.package.size());
+    REQUIRE(ps.ok);
+    const PitchSet& set = ps.state->mode.pitch[0];
+    REQUIRE(set.count == c.count);
+    for (uint32_t i = 0; i < c.count; ++i) {
+      REQUIRE(set.entries[i].st == c.st[i]);
+      REQUIRE(set.entries[i].weight == c.weight[i]);
+    }
+    REQUIRE((ps.state->mode.layers[0].pitchSelect == PitchSelect::Random) ==
+            (std::string(c.select) == "random"));
+    REQUIRE(ps.state->mode.features == c.feature);
+    RoundTrip(text);
+  }
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 24.5}])")), "E4", "/layers/0/pitch/set/0/st");
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 0, "weight": 17}])")), "E4",
+          "/layers/0/pitch/set/0/weight");
+  Refused(With("layers[0].pitch.set", Parse(R"([{"st": 0, "weight": 1.5}])")), "E3",
+          "/layers/0/pitch/set/0/weight");
+  Refused(With("layers[0].pitch.set",
+               Parse(R"([{"st": 0}, {"st": 1}, {"st": 2}, {"st": 3}, {"st": 4}, {"st": 5},
+                        {"st": 6}, {"st": 7}, {"st": 8}])")),
+          "E7", "/layers/0/pitch/set");
+}
+
+TEST_CASE("compile: wave 1 is E6 on a build without it, naming W1", "[compile]") {
+  using namespace brainscape;
+  // Sound revision 3's features (onset and mark positioning): what a build that lacks wave 1
+  // says of its vocabulary, the source-selection and pitch-set messages. This build plays them.
+  CompileOptions r3;
+  r3.read.supportedFeatures = kModeFeatureOnset | kModeFeatureMarkPosition;
+  struct Case {
+    const char* path;
+    const char* json;
+    const char* message;
+  };
+  const Case cases[] = {
+      {"scheduler.sources", R"(["periodic", "footswitch"])",
+       "leaving out `midi_note` needs W1 (source selection)"},
+      {"scheduler.sources", R"(["onset"])", "needs W1 (source selection)"},
+      {"layers[0].pitch.set", R"([{"st": 0}, {"st": 7, "weight": 3}])", "needs W1 (pitch sets)"},
+      {"layers[0].pitch.select", R"("random")", "needs W1 (pitch sets)"},
+  };
+  for (const Case& c : cases) {
+    INFO(c.path << " = " << c.json);
+    const std::string          text  = With(c.path, Parse(c.json));
+    const std::vector<Finding> f     = Refused(text, "E6", nullptr, r3);
+    bool                       named = false;
+    for (const Finding& x : f) named = named || x.message.find(c.message) != std::string::npos;
+    REQUIRE(named);
+    Ok(text);
+  }
+}
+
 TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
   // E1: strict JSON.
   Refused("{\"schema_version\": 1, \"id\": \"a\", \"name\": \"A\",}", "E1", nullptr);
@@ -389,12 +508,13 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
       "/scheduler/sources");
   REQUIRE(clock[0].message ==
           "`clock` needs W2 (CLOCK); this build supports periodic, onset, footswitch, midi_note");
-  Refused(With("layers[0].voice_count", Num("8")), "E6", "/layers/0/voice_count");
+  // A later wave's leaf (wave 1's became Leaf rows as they landed, sound revisions 4-7).
+  Refused(With("layers[0].level_db", Num("-3")), "E6", "/layers/0/level_db");
   Refused(
       With(
           "macros",
           Parse(
-              R"([{"id": "aux1", "targets": [{"param": "layer0.decay_ms", "range": [0, 1000]}]}])")),
+              R"([{"id": "aux1", "targets": [{"param": "layer0.level_db", "range": [-6, 0]}]}])")),
       "E6", "/macros/0/targets/0/param");
   Refused(With("post.order", Parse(R"(["mod", "reverb", "delay", "filter"])")), "E6",
           "/post/order");
@@ -522,8 +642,8 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
     REQUIRE(t.macros[6].count == 0u);
     REQUIRE(r.doc.displayName[2] == "Contour");
   }
-  // E11: two layers share the slots and the voices (voice_count is W1's, so its default 64 per
-  // layer already sums past 64).
+  // E11: two layers share the slots and the voices (voice_count's default of 64 per layer
+  // already sums past 64).
   Refused(With("layers", Parse(R"([{"slot_share": 0.5}, {"slot_share": 0.5}])")), "E11", "/layers",
           AllFeatures());
   Refused(With("layers", Parse(R"([{"slot_share": 0.75}, {"slot_share": 0.5}])")), "E11", "/layers",
@@ -577,7 +697,7 @@ TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   REQUIRE(sched.Find("subdiv") == nullptr);  // the default structure is not written
   const json::Value& layer = v.Find("layers")->items[0];
   REQUIRE(layer.Find("slot_share") == nullptr);
-  REQUIRE(layer.Find("voice_count") == nullptr);  // a W1 leaf: not a Leaf row of this build
+  REQUIRE(layer.Find("voice_count")->text == "64");  // a Leaf row since sound revision 7
   REQUIRE(layer.Find("size_ms")->text == "100");
   REQUIRE(layer.Find("pitch")->Find("transpose_st")->text == "0");
   REQUIRE(layer.Find("pitch")->Find("select")->text == "cycle");  // core: the pitch set

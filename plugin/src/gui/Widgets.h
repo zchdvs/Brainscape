@@ -11,6 +11,13 @@
 
 namespace brainscape::plugin {
 
+// The frame every panel draws: the rounded panel, an accent dot and the title, and an optional
+// note at the right of the title row.
+void DrawPanel(juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title, juce::Colour accent,
+               float scale, const juce::String& note = {});
+// A caption label: centred, the given font and colour, transparent to the mouse.
+void StyleCaption(juce::Label& l, float height, juce::Colour colour, bool bold = false);
+
 // One parameter: caption, rotary knob, and the plain value in units. Double-click the
 // knob for the default, double-click the value to type one. A two-position parameter is
 // a switch instead: one segment per position, click to select.
@@ -27,13 +34,30 @@ class ParamKnob final : public juce::Component, public juce::SettableTooltipClie
   bool                       IsSwitch() const noexcept { return isSwitch_; }
   juce::TextButton&          Segment(int position) noexcept { return segments_[position != 0 ? 1 : 0]; }
   void                       resized() override;
+  void                       paintOverChildren(juce::Graphics&) override;
+  void                       mouseDown(const juce::MouseEvent&) override;
+
+  // The curation slice's marks (mode-compiler.md §9.1, §3.5): the accents of the macros that move
+  // this leaf, whether it is detached from them, and whether Save will derive it.
+  void SetMarks(const std::vector<juce::Colour>& macros, bool detached, bool pending, const juce::String& tip);
+  bool Pending() const noexcept { return pending_; }
+  // Right-click on the knob or its caption.
+  std::function<void()> onPopup;
 
  private:
   class KnobSlider final : public juce::Slider {
    public:
     std::function<void()> onDoubleClick;
+    std::function<void()> onPopup;
     void mouseDoubleClick(const juce::MouseEvent&) override {
       if (onDoubleClick) onDoubleClick();
+    }
+    void mouseDown(const juce::MouseEvent& e) override {
+      if (e.mods.isPopupMenu() && onPopup) {
+        onPopup();
+        return;
+      }
+      juce::Slider::mouseDown(e);
     }
   };
 
@@ -44,6 +68,10 @@ class ParamKnob final : public juce::Component, public juce::SettableTooltipClie
   std::unique_ptr<BrainscapePlainAttachment> attachment_;
   bool                                       isSwitch_ = false;
   float                                      scale_    = 1.f;
+  std::vector<juce::Colour>                  marks_;
+  bool                                       detached_ = false;
+  bool                                       pending_  = false;
+  juce::String                               baseTip_;
 };
 
 // A titled group of knobs (companion §2.5's raw-parameter view, one panel per group).

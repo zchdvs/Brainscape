@@ -5,10 +5,14 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
+#include "Curation.h"
+#include "FactoryModes.h"
 #include "PluginEditor.h"
 #include "brainscape/InputCondition.h"
+#include "brainscape/ModeEval.h"
 
 // The parity negative control builds the engine with floating-point contraction on
 // (cmake/BrainscapeFpProfile.cmake). Configure refuses it in plugin builds; this also
@@ -47,12 +51,25 @@ inline void RaisePeak(std::atomic<float>& meter, float p) noexcept {
   if (p > meter.load(std::memory_order_relaxed)) meter.store(p, std::memory_order_relaxed);
 }
 
-// A complete preset (companion §6.1): every leaf, as the wrapper holds it by ordinal.
-void ToPreset(const float* values, PresetState& out) noexcept {
+// No padding anywhere (Mode.h and PresetState.h lay their structs out with explicit pads), so
+// two copies of one mode compare equal byte for byte.
+static_assert(std::is_trivially_copyable<ModeState>::value &&
+                  sizeof(ModeState) == sizeof(ModeBlob) + sizeof(ControlState) + sizeof(PerformanceState) +
+                                           sizeof(uint32_t) &&
+                  sizeof(ModeState) % sizeof(uint32_t) == 0,
+              "state units carry the mode as words");
+
+// A complete preset (companion §6.1): every leaf, as the wrapper holds it by ordinal, and the
+// mode it plays (mode-compiler.md §9.2).
+void ToPreset(const float* values, const ModeState& mode, PresetState& out) noexcept {
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     out.leaves[i] = {static_cast<uint32_t>(LeafId(i)), values[i]};
   }
-  out.leafCount = static_cast<uint32_t>(kNumLeafParams);
+  out.leafCount   = static_cast<uint32_t>(kNumLeafParams);
+  out.soundRev    = mode.soundRev;
+  out.mode        = mode.mode;
+  out.control     = mode.control;
+  out.performance = mode.performance;
 }
 
 bool SameBits(const std::array<float, kNumLeafParams>& a,
@@ -60,17 +77,70 @@ bool SameBits(const std::array<float, kNumLeafParams>& a,
   return std::memcmp(a.data(), b.data(), sizeof(float) * kNumLeafParams) == 0;
 }
 
-uint64_t ValuesHash(const std::array<float, kNumLeafParams>& v) noexcept {  // FNV-1a, the bits
-  uint64_t h = 0xcbf29ce484222325ull;
-  for (const float x : v) {
-    uint32_t u = 0;
-    std::memcpy(&u, &x, sizeof u);
-    for (int i = 0; i < 4; ++i) {
-      h ^= (u >> (8 * i)) & 0xFFu;
-      h *= 0x100000001b3ull;
-    }
+bool SameMode(const ModeState& a, const ModeState& b) noexcept {
+  return std::memcmp(&a, &b, sizeof(ModeState)) == 0;
+}
+
+bool SameFloat(float a, float b) noexcept { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+uint64_t Fnv(uint64_t h, const void* bytes, size_t n) noexcept {  // FNV-1a over the bytes
+  const auto* p = static_cast<const unsigned char*>(bytes);
+  for (size_t i = 0; i < n; ++i) {
+    h ^= p[i];
+    h *= 0x100000001b3ull;
   }
   return h;
+}
+
+uint64_t ModeHash(const ModeState& m) noexcept { return Fnv(0xcbf29ce484222325ull, &m, sizeof m); }
+
+// What a restart starts from: the leaves' bits, the mode and the effect volume.
+uint64_t ValuesHash(const std::array<float, kNumLeafParams>& v, uint64_t modeHash, float volume) noexcept {
+  uint64_t h = Fnv(0xcbf29ce484222325ull, v.data(), sizeof(float) * kNumLeafParams);
+  h          = Fnv(h, &modeHash, sizeof modeHash);
+  return Fnv(h, &volume, sizeof volume);
+}
+
+constexpr auto kEffectVolume = static_cast<uint32_t>(ParamId::EffectVolumeDb);
+
+constexpr size_t kPackageHashAt = 96;  // the package header's package_hash (Preset.h)
+
+// The mode a session's FMOD block restores (StateCodec.h): this build's package of that id,
+// with the session's macro mirrors as its CTRL positions, over the session's leaves. False when
+// this build has no such package or the whole does not validate (ValidateMode's rules, the
+// leaves of absent elements included); *exact cleared when this build's package is not the one
+// the session played.
+bool RestoreFactoryMode(const WrapperState& state, const float* plain, ModeState* mode, PresetSource* source,
+                        bool* exact) {
+  const int index = FindFactory(state.factory.id);
+  if (index < 0) return false;
+  PackageInfo                        info;
+  const std::unique_ptr<PresetState> package = DecodeFactory(static_cast<size_t>(index), nullptr, &info);
+  if (package == nullptr) return false;
+  ModeState m;
+  m.mode        = package->mode;
+  m.control     = package->control;
+  m.performance = package->performance;
+  m.soundRev    = package->soundRev;
+  for (uint32_t k = 0; k < state.factory.macroCount && k < kMaxMacros; ++k) {
+    for (uint32_t j = 0; j < m.control.macroCount && j < kMaxMacros; ++j) {
+      if (m.control.positions[j].macroId == state.factory.macroIds[k]) {
+        m.control.positions[j].position = state.factory.positions[k];
+      }
+    }
+  }
+  auto check = std::make_unique<PresetState>();
+  ToPreset(plain, m, *check);
+  LoadReport report;
+  CheckPreset(*check, &report);
+  if (report.invalidMode) return false;
+  const FactoryPackage& f = Factory(static_cast<size_t>(index));
+  *mode                   = m;
+  *source                 = {index, juce::String::fromUTF8(f.name), f.family};
+  if (std::memcmp(info.packageHash.bytes, state.factory.packageHash, sizeof info.packageHash.bytes) != 0) {
+    *exact = false;  // this build's version of the mode, not the one the session played
+  }
+  return true;
 }
 
 }  // namespace
@@ -81,8 +151,9 @@ BrainscapeProcessor::BrainscapeProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       restore_(std::make_unique<PresetState>()),
       blockEvents_(kMaxBlockEvents) {
-  // One host parameter per Leaf row; Reserved and Retired rows are not registered, and the
-  // macro and performance rows join with the macro work (mode-compiler.md §9.2).
+  // One host parameter per Leaf row, then freeze, the macros, perf.expression and the effect
+  // volume (mode-compiler.md §9.2), automatable as host model (b) says (§3.6, Q12); Reserved
+  // and Retired rows are not registered. New rows go at the end, so a host's indices hold.
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     auto p     = std::make_unique<BrainscapeParam>(LeafId(i), sink_);
     params_[i] = p.get();
@@ -92,6 +163,21 @@ BrainscapeProcessor::BrainscapeProcessor()
   auto f  = std::make_unique<FreezeParam>(sink_);
   freeze_ = f.get();
   addParameter(f.release());
+  for (size_t k = 0; k < kMaxMacros; ++k) {
+    auto p     = std::make_unique<BrainscapeParam>(static_cast<ParamId>(static_cast<uint32_t>(ParamId::MacroActivity) + k), sink_);
+    macros_[k] = p.get();
+    addParameter(p.release());
+  }
+  SetMacroMirrors(mode_.control);
+  auto e      = std::make_unique<BrainscapeParam>(ParamId::PerfExpression, sink_);
+  expression_ = e.get();
+  addParameter(e.release());
+  auto v        = std::make_unique<BrainscapeParam>(ParamId::EffectVolumeDb, sink_);
+  effectVolume_ = v.get();
+  sentEffectVolume_ = v->Plain();
+  addParameter(v.release());
+  activeModeHash_ = ModeHash(activeMode_);
+  curation_       = std::make_unique<CurationSession>(*this);
   setLatencySamples(0);  // dry is never delayed (§4.5); the resampled mode will report its own
   // The Standalone expects a guitar on input 1 (§2.2); a plugin on a stereo track must pass
   // both channels, dry exact at Mix = 0 (§4.5). A saved session's mode wins over either.
@@ -179,12 +265,21 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
     loadPending_     = false;
     hostCount_ = uiCount_ = 0;
     for (size_t i = 0; i < kNumLeafParams; ++i) sent_[i] = params_[i]->Plain();
+    activeMode_       = mode_;
+    activeModeHash_   = ModeHash(activeMode_);
+    sentEffectVolume_ = effectVolume_->Plain();
+    resendVolume_     = false;
     // Init resets every parameter and clears freeze (Engine.cpp Init), so the wrapper's
     // preset goes back in with an Exact load (§4.1): the start state a render begins from.
-    ToPreset(sent_.data(), *restore_);
+    // The effect volume, a device setting the load keeps (mode-compiler.md §3.8), goes in
+    // first, so the load's restart snaps its smoother too.
+    live_->engine.SetParam(ParamId::EffectVolumeDb, sentEffectVolume_);
+    ToPreset(sent_.data(), activeMode_, *restore_);
     live_->engine.LoadPreset(*restore_, LoadMode::Exact);
-    live_->preset = sent_;
-    sentHash_.store(ValuesHash(sent_), std::memory_order_relaxed);
+    live_->preset       = sent_;
+    live_->mode         = activeMode_;
+    live_->effectVolume = sentEffectVolume_;
+    sentHash_.store(ValuesHash(sent_, activeModeHash_, sentEffectVolume_), std::memory_order_relaxed);
     LoadAfterRestart();
   }
   spareWake_.notify_all();
@@ -217,9 +312,13 @@ void BrainscapeProcessor::TriggerFromUi() noexcept {
 void BrainscapeProcessor::PostAt(uint64_t frame, WrapperEvent e) noexcept {
   // Events hold canonical values (profile §3.7), as every other producer's do: the value
   // sent to the engine becomes the parameter's mirror and the session state, so it must
-  // be the bits the engine keeps, not the caller's -0, NaN or out-of-range value.
-  if (e.type == WrapperEvent::Type::Param && IsLeaf(e.id)) {
+  // be the bits the engine keeps, not the caller's -0, NaN or out-of-range value. A macro's
+  // or the pedal's position is its row's value, canonicalized to [0, 1].
+  if ((e.type == WrapperEvent::Type::Param && (IsLeaf(e.id) || e.id == kEffectVolume)) ||
+      (e.type == WrapperEvent::Type::Macro && IsMacroRow(static_cast<ParamId>(e.id)))) {
     e.value = Canonicalize(static_cast<ParamId>(e.id), e.value);
+  } else if (e.type == WrapperEvent::Type::Expression) {
+    e.value = Canonicalize(ParamId::PerfExpression, e.value);
   }
   e.frame    = frame;
   e.scripted = true;
@@ -234,6 +333,10 @@ void BrainscapeProcessor::SetSettings(const WrapperSettings& s) noexcept {
   restartOnStart_.store(s.restartOnStart, std::memory_order_release);
   if (s.restartOnStart) EnsureSpareWorker();
   spareWake_.notify_all();  // the worker prepares or releases the spare
+}
+
+void BrainscapeProcessor::SetMonitorTrimDb(float db) noexcept {
+  monitorTrimDb_.store(CanonicalGainDb(db), std::memory_order_relaxed);
 }
 
 WrapperSettings BrainscapeProcessor::GetSettings() const noexcept {
@@ -263,9 +366,98 @@ BrainscapeProcessor::Status BrainscapeProcessor::GetStatus() const noexcept {
   return s;
 }
 
+BrainscapeParam* BrainscapeProcessor::FindHostParam(ParamId id) noexcept {
+  if (IsLeaf(id)) return params_[LeafIndex(id)];
+  if (IsMacroRow(id)) return macros_[MacroIndex(id)];
+  if (id == ParamId::PerfExpression) return expression_;
+  if (id == ParamId::EffectVolumeDb) return effectVolume_;
+  return nullptr;
+}
+
+ModeState BrainscapeProcessor::CurrentMode() const {
+  const std::lock_guard<std::mutex> lock(modeMutex_);
+  return mode_;
+}
+
+PresetSource BrainscapeProcessor::CurrentSource() const {
+  const std::lock_guard<std::mutex> lock(controlMutex_);
+  return source_;
+}
+
+std::unique_ptr<PresetState> BrainscapeProcessor::CurrentPreset() const {
+  auto  preset = std::make_unique<PresetState>();
+  float values[kNumLeafParams];
+  for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = params_[i]->Plain();
+  ToPreset(values, CurrentMode(), *preset);
+  ControlState& c = preset->control;
+  for (uint32_t k = 0; k < c.macroCount && k < kMaxMacros; ++k) {
+    const auto id = static_cast<ParamId>(c.positions[k].macroId);
+    if (IsMacroRow(id)) c.positions[k].position = macros_[MacroIndex(id)]->Plain();
+  }
+  return preset;
+}
+
+void BrainscapeProcessor::SetMacroMirrors(const ControlState& control) noexcept {
+  for (size_t k = 0; k < kMaxMacros; ++k) {
+    const auto id       = static_cast<ParamId>(static_cast<uint32_t>(ParamId::MacroActivity) + k);
+    float      position = FindParam(id)->def;
+    for (uint32_t j = 0; j < control.macroCount && j < kMaxMacros; ++j) {
+      if (control.positions[j].macroId == static_cast<uint32_t>(id)) position = control.positions[j].position;
+    }
+    macros_[k]->StoreMirror(Canonicalize(id, position));
+  }
+}
+
+// Outside every lock, since a host may call back in: each inner setValue sees its own
+// normalised view and returns at once (companion §5.3).
+void BrainscapeProcessor::NotifyHostOfMirrors() {
+  for (BrainscapeParam* p : params_) p->setValueNotifyingHost(p->getValue());
+  for (BrainscapeParam* p : macros_) p->setValueNotifyingHost(p->getValue());
+}
+
+bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* report,
+                                          const PresetSource& source) {
+  LoadReport r;
+  CheckPreset(state, &r);
+  if (report != nullptr) *report = r;
+  if (r.invalidMode) return false;
+  // Complete-state semantics, as LoadPreset applies them: a leaf the preset lacks loads its
+  // default, an id that is not a Leaf row is ignored, and of repeated ids the first counts.
+  float plain[kNumLeafParams];
+  bool  seen[kNumLeafParams] = {};
+  for (size_t i = 0; i < kNumLeafParams; ++i) plain[i] = Canonicalize(LeafId(i), FindParam(LeafId(i))->def);
+  for (uint32_t k = 0; k < state.leafCount && k < PresetState::kMaxLeaves; ++k) {
+    const size_t i = LeafIndex(state.leaves[k].id);
+    if (i == kNumLeafParams || seen[i]) continue;
+    plain[i] = Canonicalize(LeafId(i), state.leaves[k].value);
+    seen[i]  = true;
+  }
+  ModeState mode;
+  mode.mode        = state.mode;
+  mode.control     = state.control;
+  mode.performance = state.performance;
+  mode.soundRev    = state.soundRev;
+  {
+    const std::lock_guard<std::mutex> lock(controlMutex_);
+    {
+      const std::lock_guard<std::mutex> modeLock(modeMutex_);
+      mode_ = mode;
+    }
+    source_ = source;
+    PostStateUnit(plain, mode);
+    for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(plain[i]);
+    SetMacroMirrors(mode.control);
+    lastLoadInexact_.store(!r.exact, std::memory_order_relaxed);
+    loadSerial_.fetch_add(1u, std::memory_order_relaxed);
+  }
+  NotifyHostOfMirrors();
+  freeze_->setValueNotifyingHost(0.0f);  // the load turned it off
+  spareWake_.notify_all();
+  return true;
+}
+
 bool BrainscapeProcessor::StartAudition(const juce::File& wav, juce::String& error) {
-  float preset[kNumLeafParams];
-  for (size_t i = 0; i < kNumLeafParams; ++i) preset[i] = params_[i]->Plain();
+  const std::unique_ptr<PresetState> preset = CurrentPreset();
   double                          rate  = 0.0;
   const juce::AudioBuffer<float>* audio = testInput_.GetSource() == TestInput::Source::FileLoop
                                               ? testInput_.LoadedAudio(&rate)
@@ -273,7 +465,7 @@ bool BrainscapeProcessor::StartAudition(const juce::File& wav, juce::String& err
   AuditionInput input = audio != nullptr ? FileInput(*audio, rate, testInput_.LoadedName())
                                          : TestSignalInput();
   const auto mode = static_cast<InputMode>(inputMode_.load(std::memory_order_relaxed));
-  if (!audition_.Start(wav, preset, mode, std::move(input))) {
+  if (!audition_.Start(wav, *preset, mode, std::move(input))) {
     error = "An audition is already rendering";
     return false;
   }
@@ -287,7 +479,25 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
   {
     const std::lock_guard<std::mutex> lock(controlMutex_);
     for (size_t i = 0; i < kNumLeafParams; ++i) state.plain[i] = params_[i]->Plain();
-    state.settings = GetSettings();
+    state.settings          = GetSettings();
+    state.effectVolumeDb    = effectVolume_->Plain();
+    state.hasEffectVolume   = true;
+    // While a factory mode plays, the session names its package and keeps the macro mirrors at
+    // the positions its CTRL defines (StateCodec.h, FMOD).
+    if (source_.factory >= 0 && static_cast<size_t>(source_.factory) < FactoryCount()) {
+      const FactoryPackage& f = Factory(static_cast<size_t>(source_.factory));
+      state.hasFactory        = true;
+      state.factory.id        = f.id;
+      std::memcpy(state.factory.packageHash, f.bytes + kPackageHashAt, sizeof state.factory.packageHash);
+      const ControlState& c = mode_.control;
+      for (uint32_t k = 0; k < c.macroCount && k < kMaxMacros; ++k) {
+        const auto id = static_cast<ParamId>(c.positions[k].macroId);
+        if (!IsMacroRow(id)) continue;
+        state.factory.macroIds[state.factory.macroCount]  = static_cast<uint32_t>(id);
+        state.factory.positions[state.factory.macroCount] = macros_[MacroIndex(id)]->Plain();
+        ++state.factory.macroCount;
+      }
+    }
   }
   std::vector<uint8_t> bytes;
   EncodeState(state, bytes);
@@ -297,25 +507,47 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
 void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes) {
   WrapperState state{};
   if (sizeInBytes <= 0 || !DecodeState(data, static_cast<size_t>(sizeInBytes), state)) return;
+  // A v1 session holds leaves (StateCodec.h). One saved while a factory mode played names its
+  // package (FMOD): it plays this build's package of that id, over the session's leaves, with
+  // the session's macro mirrors as the CTRL positions. Any other plays the default mode, whose
+  // CTRL positions the macro mirrors take, until session v2 carries a package (mode-compiler.md
+  // §9.2); so does one whose factory mode this build lacks, inexact. The effect volume, a device
+  // setting, goes out after the unit's load (ApplyStateUnit), so its mirror is stored first.
+  ModeState    mode{};
+  PresetSource source;
+  bool         exact = state.unknownIds + state.missingIds == 0u && !state.unreadTail;
+  if (state.hasFactory && !RestoreFactoryMode(state, state.plain, &mode, &source, &exact)) exact = false;
   {
     const std::lock_guard<std::mutex> lock(controlMutex_);
-    PostStateUnit(state.plain);
+    {
+      const std::lock_guard<std::mutex> modeLock(modeMutex_);
+      mode_ = mode;
+    }
+    source_ = source;
+    if (state.hasEffectVolume) effectVolume_->StoreMirror(state.effectVolumeDb);
+    PostStateUnit(state.plain, mode);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(state.plain[i]);
+    SetMacroMirrors(mode.control);
     SetSettings(state.settings);
-    lastLoadInexact_.store(state.unknownIds + state.missingIds > 0u, std::memory_order_relaxed);
+    lastLoadInexact_.store(!exact, std::memory_order_relaxed);
+    loadSerial_.fetch_add(1u, std::memory_order_relaxed);
   }
   // Outside the lock, since a host may call back in. Each inner setValue sees its own
   // normalised view and returns at once (companion §5.3). Freeze never loads engaged.
-  for (BrainscapeParam* p : params_) p->setValueNotifyingHost(p->getValue());
+  NotifyHostOfMirrors();
+  effectVolume_->setValueNotifyingHost(effectVolume_->getValue());
   freeze_->setValueNotifyingHost(0.0f);
 }
 
-void BrainscapeProcessor::PostStateUnit(const float* plain) noexcept {
+void BrainscapeProcessor::PostStateUnit(const float* plain, const ModeState& mode) noexcept {
+  uint32_t words[kModeWords];
+  std::memcpy(words, &mode, sizeof mode);
   const uint32_t gen = NextGeneration();
   const uint32_t seq = stateSeq_.load(std::memory_order_relaxed);
   stateSeq_.store(seq + 1u, std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_release);
   for (size_t i = 0; i < kNumLeafParams; ++i) stateSlot_[i].store(plain[i], std::memory_order_relaxed);
+  for (size_t i = 0; i < kModeWords; ++i) modeSlot_[i].store(words[i], std::memory_order_relaxed);
   stateGen_.store(gen, std::memory_order_relaxed);
   stateSeq_.store(seq + 2u, std::memory_order_release);
   // Only once the slot is complete: whoever pops an event stamped with this generation
@@ -335,12 +567,22 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
   if (seq == seqApplied_ || (seq & 1u) != 0u) return;
   float plain[kNumLeafParams];
   for (size_t i = 0; i < kNumLeafParams; ++i) plain[i] = stateSlot_[i].load(std::memory_order_relaxed);
+  auto* unit = reinterpret_cast<unsigned char*>(&unitMode_);
+  for (size_t i = 0; i < kModeWords; ++i) {
+    const uint32_t w = modeSlot_[i].load(std::memory_order_relaxed);
+    std::memcpy(unit + i * sizeof w, &w, sizeof w);
+  }
   const uint32_t gen = stateGen_.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   if (stateSeq_.load(std::memory_order_relaxed) != seq) return;
   for (size_t i = 0; i < kNumLeafParams; ++i) sent_[i] = plain[i];
-  ToPreset(plain, *restore_);
+  // The mode changes with the load, at the block's first frame: this block's macro moves,
+  // all at or after it, fan out through the new one, as the engine's do.
+  activeMode_     = unitMode_;
+  activeModeHash_ = ModeHash(activeMode_);
+  ToPreset(plain, activeMode_, *restore_);
   touched_.set();
+  resendVolume_ = true;
   seqApplied_      = seq;
   generationFloor_ = gen;
   if (framePos_ != 0) {
@@ -349,6 +591,7 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
   }
   live_->engine.LoadPreset(*restore_, LoadMode::Exact);
   live_->preset = sent_;
+  live_->mode   = activeMode_;
 }
 
 // ── Restart on transport start (§4.9) ──────────────────────────────────────────────
@@ -374,34 +617,45 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
   // (§4.7). Sent after the load instead, they would glide the smoothers from whatever the
   // last playback left, and two bounces of one automated passage would differ. A stamp
   // made before the restart is void, so scripted events stay out.
-  Values start = sent_;
+  // A macro or expression move folds in as its fan-out through the active mode, which a
+  // restore this block has already replaced; the effect volume is a Global row (§3.8).
+  Values start       = sent_;
+  float  startVolume = resendVolume_ ? effectVolume_->Plain() : sentEffectVolume_;
   for (const auto& live : {std::make_pair(hostEvents_.data(), hostCount_),
                            std::make_pair(uiEvents_.data(), uiCount_)}) {
     for (size_t k = 0; k < live.second; ++k) {
       const WrapperEvent& e = live.first[k];
-      if (e.type != WrapperEvent::Type::Param || e.scripted || !Applies(e) || !IsLeaf(e.id)) {
-        continue;
+      if (e.scripted || !Applies(e)) continue;
+      if (e.type == WrapperEvent::Type::Param && e.id == kEffectVolume) {
+        startVolume = e.value;
+      } else {
+        Track(e, start, nullptr);
       }
-      start[LeafIndex(e.id)] = e.value;
     }
   }
   if (resync_) {  // the queue overflowed: the mirrors are the latest word
     for (size_t i = 0; i < kNumLeafParams; ++i) start[i] = params_[i]->Plain();
+    startVolume = effectVolume_->Plain();
   }
   bool restarted = false;
   // Offline, or with nothing played since the last Init or restart, restart in place (§4.9
   // a): about a millisecond offline, and on an engine that has rendered nothing the load
-  // clears nothing (Engine::Restart), so real time can take it too.
+  // clears nothing (Engine::Restart), so real time can take it too. The effect volume goes in
+  // first, so the restart snaps it.
   if (isNonRealtime() || framePos_ == 0) {
-    ToPreset(start.data(), *restore_);
+    live_->engine.SetParam(ParamId::EffectVolumeDb, startVolume);
+    ToPreset(start.data(), activeMode_, *restore_);
     live_->engine.LoadPreset(*restore_, LoadMode::Exact);
-    live_->preset = start;
-    restarted     = true;
+    live_->preset       = start;
+    live_->mode         = activeMode_;
+    live_->effectVolume = startVolume;
+    restarted           = true;
   } else {
     // Real time never blocks (§4.9 b): swap in the spare if it holds this preset.
     int ready = kSpareReady;
     if (spareState_.compare_exchange_strong(ready, kSpareSwapping, std::memory_order_acq_rel)) {
-      if (SameBits(spare_->preset, start)) {
+      if (SameBits(spare_->preset, start) && SameMode(spare_->mode, activeMode_) &&
+          SameFloat(spare_->effectVolume, startVolume)) {
         std::swap(live_, spare_);
         restarted = true;
       }
@@ -413,7 +667,9 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
   if (!restarted) return;
   // The block's live events still go out at its first frame: the parameter ones repeat
   // what the load holds, and freeze is a level, so it lands as it would have.
-  loadPending_ = false;  // the restore, if any, is part of the Exact load
+  loadPending_      = false;  // the restore, if any, is part of the Exact load
+  sentEffectVolume_ = startVolume;
+  resendVolume_     = false;
   LoadAfterRestart();
 }
 
@@ -451,9 +707,21 @@ void BrainscapeProcessor::PrepareSpare() {
   // plays at the transport start is never swapped in.
   Values snapshot;
   for (size_t i = 0; i < kNumLeafParams; ++i) snapshot[i] = params_[i]->Plain();
-  const bool settled = SameBits(snapshot, lastSnapshot_);
-  lastSnapshot_      = snapshot;
-  if (!settled || (state == kSpareReady && SameBits(snapshot, spareSnapshot_))) return;
+  ModeState mode;
+  {
+    const std::lock_guard<std::mutex> modeLock(modeMutex_);
+    mode = mode_;
+  }
+  const float volume  = effectVolume_->Plain();
+  const bool  settled = SameBits(snapshot, lastSnapshot_) && SameMode(mode, lastMode_) &&
+                       SameFloat(volume, lastVolume_);
+  lastSnapshot_ = snapshot;
+  lastMode_     = mode;
+  lastVolume_   = volume;
+  if (!settled || (state == kSpareReady && SameBits(snapshot, spareSnapshot_) &&
+                   SameMode(mode, spareMode_) && SameFloat(volume, spareVolume_))) {
+    return;
+  }
   if (state != kSpareEmpty && state != kSpareReady && state != kSpareRetired) return;
   if (!spareState_.compare_exchange_strong(state, kSparePreparing, std::memory_order_acq_rel)) return;
   if (spare_ == nullptr) {
@@ -473,11 +741,16 @@ void BrainscapeProcessor::PrepareSpare() {
     spare_->arenas = std::move(arenas);
   }
   auto preset = std::make_unique<PresetState>();
-  ToPreset(snapshot.data(), *preset);
+  ToPreset(snapshot.data(), mode, *preset);
+  spare_->engine.SetParam(ParamId::EffectVolumeDb, volume);  // snapped by the load's restart
   spare_->engine.LoadPreset(*preset, LoadMode::Exact);
-  spare_->preset = snapshot;
-  spareSnapshot_ = snapshot;
-  spareHash_.store(ValuesHash(snapshot), std::memory_order_relaxed);
+  spare_->preset       = snapshot;
+  spare_->mode         = mode;
+  spare_->effectVolume = volume;
+  spareSnapshot_       = snapshot;
+  spareMode_           = mode;
+  spareVolume_         = volume;
+  spareHash_.store(ValuesHash(snapshot, ModeHash(mode), volume), std::memory_order_relaxed);
   spareState_.store(kSpareReady, std::memory_order_release);
 }
 
@@ -537,11 +810,17 @@ void BrainscapeProcessor::Emit(const WrapperEvent& e, uint32_t offset) noexcept 
   switch (e.type) {
     case WrapperEvent::Type::Param: {
       const size_t leaf = LeafIndex(e.id);
-      if (leaf == kNumLeafParams) return;  // only Leaf rows are registered
-      b.type      = Engine::EventType::SetParam;
-      b.id        = e.id;
-      sent_[leaf] = e.value;
-      touched_.set(leaf);
+      if (leaf < kNumLeafParams) {
+        sent_[leaf] = e.value;
+        touched_.set(leaf);
+      } else if (e.id == kEffectVolume) {
+        sentEffectVolume_ = e.value;
+        effectTouched_    = true;
+      } else {
+        return;  // only Leaf rows and the effect volume take SetParam
+      }
+      b.type = Engine::EventType::SetParam;
+      b.id   = e.id;
       break;
     }
     case WrapperEvent::Type::Freeze: b.type = Engine::EventType::Freeze; break;
@@ -549,8 +828,52 @@ void BrainscapeProcessor::Emit(const WrapperEvent& e, uint32_t offset) noexcept 
       b.type = Engine::EventType::Trigger;
       b.id   = e.id;
       break;
+    case WrapperEvent::Type::Macro:
+      if (!IsMacroRow(static_cast<ParamId>(e.id))) return;
+      Track(e, sent_, &touched_);
+      b.type = Engine::EventType::MacroMove;
+      b.id   = e.id;
+      break;
+    case WrapperEvent::Type::Expression:
+      Track(e, sent_, &touched_);
+      b.type = Engine::EventType::Expression;
+      b.id   = 0;
+      break;
   }
   Emit(b);
+}
+
+// The engine applies a MacroMove's or an Expression's targets as SetParam events through the
+// same evaluator (ModeEval.h, detail/ModeEvalBody.h), so the leaves it writes here are the bits
+// the engine keeps: the mirrors follow the fan-out exactly. Rows that are not Leaf rows (a
+// target the engine would ignore) are skipped.
+void BrainscapeProcessor::Track(const WrapperEvent& e, Values& values,
+                                std::bitset<kNumLeafParams>* touched) const noexcept {
+  PresetLeaf out[kMaxTargets];
+  size_t     n = 0;
+  switch (e.type) {
+    case WrapperEvent::Type::Param: {
+      const size_t leaf = LeafIndex(e.id);
+      if (leaf == kNumLeafParams) return;
+      values[leaf] = e.value;
+      if (touched != nullptr) touched->set(leaf);
+      return;
+    }
+    case WrapperEvent::Type::Macro:
+      n = EvalMacro(activeMode_.mode, static_cast<ParamId>(e.id), e.value, out, kMaxTargets);
+      break;
+    case WrapperEvent::Type::Expression:
+      n = EvalExpression(activeMode_.mode, activeMode_.control, e.value, out, kMaxTargets);
+      break;
+    case WrapperEvent::Type::Freeze:
+    case WrapperEvent::Type::Trigger: return;
+  }
+  for (size_t k = 0; k < n; ++k) {
+    const size_t leaf = LeafIndex(out[k].id);
+    if (leaf == kNumLeafParams) continue;
+    values[leaf] = out[k].value;
+    if (touched != nullptr) touched->set(leaf);
+  }
 }
 
 void BrainscapeProcessor::EmitPending(size_t from, size_t to, WrapperEvent::Source rank,
@@ -593,6 +916,11 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
     Emit(load);
     loadPending_ = false;
   }
+  if (first && resendVolume_) {  // the device setting the restore kept (mode-compiler.md §3.8)
+    resendVolume_  = false;
+    const float v  = effectVolume_->Plain();
+    if (!SameFloat(v, sentEffectVolume_)) Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, kEffectVolume, v}, offset);
+  }
   EmitPending(*pending, runEnd, WrapperEvent::Source::Host, offset);
   if (first) EmitLive(hostEvents_.data(), hostCount_, offset);
   EmitPending(*pending, runEnd, WrapperEvent::Source::Midi, offset);
@@ -617,6 +945,7 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
               params_[i]->Plain()},
              offset);
       }
+      Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, kEffectVolume, effectVolume_->Plain()}, offset);
       Emit({WrapperEvent::Type::Freeze, WrapperEvent::Source::Ui, 0u, freeze_->get() ? 1.0f : 0.0f}, offset);
     }
     *frameZero = false;
@@ -631,6 +960,8 @@ void BrainscapeProcessor::WriteBackMirrors() noexcept {
     if (touched_.test(i)) params_[i]->StoreMirror(sent_[i]);
   }
   touched_.reset();
+  if (effectTouched_) effectVolume_->StoreMirror(sentEffectVolume_);
+  effectTouched_ = false;
 }
 
 // ── Audio ──────────────────────────────────────────────────────────────────────────
@@ -673,7 +1004,7 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     inGainDb_ = inDb;
     inGain_   = GainFromDb(inDb);
   }
-  const float outDb = outputGainDb_.load(std::memory_order_relaxed);
+  const float outDb = outputGainDb_.load(std::memory_order_relaxed) + monitorTrimDb_.load(std::memory_order_relaxed);
   if (outDb != outGainDb_) {
     outGainDb_ = outDb;
     outGain_   = GainFromDb(outDb);
@@ -721,7 +1052,7 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
   }
   hostCount_ = uiCount_ = 0;
   WriteBackMirrors();
-  sentHash_.store(ValuesHash(sent_), std::memory_order_relaxed);
+  sentHash_.store(ValuesHash(sent_, activeModeHash_, sentEffectVolume_), std::memory_order_relaxed);
 
   for (int c = 2; c < numOut; ++c) buffer.clear(c, 0, numSamples);
   onsets_.fetch_add(live_->engine.ConsumeOnsetCount(), std::memory_order_relaxed);

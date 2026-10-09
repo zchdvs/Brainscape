@@ -3,8 +3,8 @@
   "id": "corpus.switch_onset",
   "name": "Switch onset",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "c08510448dbb0d632f2b27355b5750144ea61f5ad31b1be8d53f0843c9962213",
+  "sound_rev": 7,
+  "sound_hash": "eafa352bd5a19cf140893cc74ec1c949ca5721316ab3bddf9f4250d4a1af3d6f",
   "meta": {
     "author": "",
     "description": "Golden corpus: mode switches, onsets on the live position.",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.8,
-    "jitter": 0.5
+    "jitter": 0.5,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 30
+        "spray_ms": 30,
+        "repeat": 1
       },
       "size_ms": 200,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

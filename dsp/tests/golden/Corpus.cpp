@@ -335,6 +335,169 @@ PresetCase LoneChanges() {
   return p;
 }
 
+// ── Sound revision 4: wave 1's trigger sources, bursts and intermittency (mode-compiler.md
+// §7.5 R9). Events off the 48-frame grid.
+using TS = Engine::TriggerSource;
+
+// Onsets alone (presets/sources_onset.json: sources ["onset"]): no free-running births, so every
+// grain is an onset's, and the footswitch and MIDI triggers the script sends are dropped.
+PresetCase OnsetOnly() {
+  PresetCase p = PackagePreset("onset_only", "sources_onset");
+  p.script.Trigger(S(3) + 333, TS::Footswitch);
+  p.script.Trigger(S(6) + 17, TS::MidiNote);
+  p.require = {{C::Onsets, 10}, {C::Births, 10, 30}, {C::Triggers, 2, 2}, {C::OffGridEvents, 2}};
+  p.ablate  = {Feature::Sources, Feature::OnsetTrigger};
+  return p;
+}
+
+// Phasing copies of the newest onset (presets/burst_marks.json, the Strum B sketch: onsets alone
+// on marks, a burst of 6 at spacing 0, so on consecutive frames, spray 4 ms).
+PresetCase OnsetBurst() {
+  PresetCase p = PackagePreset("onset_burst", "burst_marks");
+  p.require    = {{C::Onsets, 10}, {C::BurstBirths, 50}};
+  p.ablate     = {Feature::Burst, Feature::MarkPosition};
+  return p;
+}
+
+// Spaced bursts from onsets and the footswitch, with intermittency skipping whole triggers
+// (presets/burst_spaced.json: sources ["onset", "footswitch"], bursts of 4 every 120 ms,
+// intermittency 0.3). MIDI triggers are dropped; a load of another mode (sources_onset) late in
+// the render resets the bursts in progress.
+PresetCase BurstSpaced() {
+  PresetCase p = PackagePreset("burst_spaced", "burst_spaced");
+  Script&    s = p.script;
+  s.Trigger(S(1) + 77, TS::Footswitch);
+  s.Trigger(S(2) + 33, TS::MidiNote);
+  s.Trigger(S(3) + 501, TS::Footswitch);
+  s.Trigger(S(5) + 13, TS::Footswitch);
+  s.Trigger(S(6) + 47, TS::MidiNote);
+  s.Trigger(S(7) + 999, TS::Footswitch);
+  s.SpilloverPackage(S(9) + 123, "sources_onset");
+  p.require   = {{C::Onsets, 10},      {C::Triggers, 6, 6}, {C::BurstBirths, 20},
+                 {C::Skips, 3},        {C::Loads, 1, 1},    {C::ModeSwitches, 1, 1},
+                 {C::OffGridEvents, 7}};
+  p.ablate    = {Feature::Burst, Feature::Intermittency, Feature::Sources, Feature::Triggers};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Intermittency on the free-running scheduler (the default mode): about half the periodic births
+// skipped, each still consuming its interval.
+PresetCase IntermittentCloud() {
+  PresetCase p = Preset("intermittent_cloud",
+      {{P::Intermittency, 0.5f}, {P::Overlap, 0.75f}, {P::Jitter, 0.6f}, {P::SprayMs, 80.0f},
+       {P::GrainSizeMs, 70.0f}, {P::DelayMs, 220.0f}, {P::PanSpread, 0.8f}, {P::Feedback, 0.3f}});
+  p.require = {{C::Skips, 500}, {C::Births, 500}};
+  p.ablate  = {Feature::Intermittency};
+  return p;
+}
+
+// MIDI notes trigger, the footswitch does not (presets/sources_midi.json: sources ["periodic",
+// "midi_note"], one free-running voice, bursts of 3 every 40 ms); the burst count and spacing
+// change alone mid-render, and AmongEdits renders each change among edits of every other domain.
+PresetCase MidiGate() {
+  PresetCase p = PackagePreset("midi_gate", "sources_midi");
+  Script&    s = p.script;
+  s.Trigger(S(1) + 5, TS::MidiNote);
+  s.Trigger(S(2) + 77, TS::MidiNote);
+  s.Trigger(S(3) + 17, TS::Footswitch);
+  s.Trigger(S(4) + 301, TS::MidiNote);
+  s.Trigger(S(5) + 3, TS::Footswitch);
+  s.Param(S(5) + 1001, P::BurstCount, 5.0f);
+  s.Trigger(S(6) + 11, TS::MidiNote);
+  s.Param(S(6) + 333, P::BurstSpacingMs, 0.0f);
+  s.Trigger(S(7) + 444, TS::Footswitch);
+  s.Trigger(S(8) + 999, TS::MidiNote);
+  p.require   = {{C::Triggers, 8, 8}, {C::BurstBirths, 10}, {C::OffGridEvents, 10}};
+  p.ablate    = {Feature::Sources, Feature::Triggers, Feature::Burst};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// ── Sound revision 5: wave 1's pitch sets (mode-compiler.md §7.5 R10). ──────────────────────
+
+// A cycled set (presets/pitchset_cycle.json: {0 twice, +12, -12} by `cycle`, the free-running
+// scheduler at overlap 0.6) with the transpose leaf moved over it alone, and footswitch triggers
+// taking their turn in the cycle.
+PresetCase PitchCycle() {
+  PresetCase p = PackagePreset("pitch_cycle", "pitchset_cycle");
+  Script&    s = p.script;
+  s.Param(S(3) + 211, P::TransposeSt, -5.0f);
+  s.Trigger(S(5) + 7);
+  s.Trigger(S(5) + 7);
+  s.Param(S(7) + 97, P::TransposeSt, 7.0f);
+  s.Param(S(9) + 1, P::TransposeSt, 0.0f);
+  p.require   = {{C::Events, 5, 5}, {C::Triggers, 2, 2}, {C::OffGridEvents, 5}, {C::Births, 500}};
+  p.ablate    = {Feature::PitchSet, Feature::Pitch, Feature::Triggers};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A weighted random set (presets/pitchset_random.json: {0: 3, -12: 1, +7: 2} by `random`,
+// periodic and onsets, reverse 0.2) switched to the cycled mode and back, Trails then FastCut:
+// each switch resets the cycle, and the random draws restart with the load's epoch.
+PresetCase PitchRandom() {
+  PresetCase p = PackagePreset("pitch_random", "pitchset_random");
+  Script&    s = p.script;
+  s.SpilloverPackage(S(4) + 77, "pitchset_cycle");
+  s.SpilloverPackage(S(7) + 501, "pitchset_random", SwitchStyle::FastCut);
+  p.require = {{C::Loads, 2, 2}, {C::ModeSwitches, 2, 2}, {C::Onsets, 10}, {C::Births, 500}};
+  p.ablate  = {Feature::PitchSet, Feature::PitchSelect, Feature::ModeSwitch, Feature::Reverse};
+  return p;
+}
+
+// ── Sound revision 6: wave 1's repeat and decay (mode-compiler.md §7.5 R11). ────────────────
+
+// Micro-loops (presets/repeat_loops.json: 4 passes of 70 ms over the set {0, +12} by cycle,
+// decay 900 ms, periodic and onsets): the repeat and the decay moved alone, decay switched off,
+// then one pass.
+PresetCase RepeatLoops() {
+  PresetCase p = PackagePreset("repeat_loops", "repeat_loops");
+  Script&    s = p.script;
+  s.Param(S(3) + 333, P::Repeat, 8.0f);
+  s.Param(S(5) + 71, P::DecayMs, 0.0f);
+  s.Param(S(7) + 5, P::DecayMs, 250.0f);
+  s.Param(S(9) + 17, P::Repeat, 1.0f);
+  p.require   = {{C::Events, 4, 4}, {C::OffGridEvents, 4}, {C::RepeatPasses, 500}, {C::Onsets, 10}};
+  p.ablate    = {Feature::Repeat, Feature::Decay, Feature::PitchSet};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// The newest note, fading as it ages (presets/decay_marks.json: mark positioning, decay 700 ms,
+// the Strum A sketch): grains read the newest onset's mark, quieter the older it is.
+PresetCase DecayMarks() {
+  PresetCase p = PackagePreset("decay_marks", "decay_marks");
+  p.script.Trigger(S(10) + 777);  // two seconds after the last pluck: an old mark, faint
+  p.require = {{C::Onsets, 10}, {C::Triggers, 1, 1}, {C::OffGridEvents, 1}};
+  p.ablate  = {Feature::Decay, Feature::MarkPosition};
+  return p;
+}
+
+// ── Sound revision 7: wave 1's voice count (mode-compiler.md §7.5 R12). ──────────────────────
+
+// A dense cloud held to few voices (presets/voice_limit.json: overlap 0.9, voice_count 6, onset
+// bursts of 5 stealing the oldest), the count moved alone to 2 and back to 64.
+PresetCase VoiceLimit() {
+  PresetCase p = PackagePreset("voice_limit", "voice_limit");
+  Script&    s = p.script;
+  s.Param(S(4) + 129, P::VoiceCount, 2.0f);
+  s.Param(S(8) + 55, P::VoiceCount, 64.0f);
+  p.require   = {{C::Events, 2, 2}, {C::OffGridEvents, 2}, {C::Steals, 20}, {C::Onsets, 10}};
+  p.ablate    = {Feature::VoiceCount, Feature::Burst};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// One voice from onsets alone (presets/mono_stutter.json: bursts of 4 every 30 ms, voice_count
+// 1, the Blocks sketch): every grain cuts the one before it, so each onset stutters.
+PresetCase MonoStutter() {
+  PresetCase p = PackagePreset("mono_stutter", "mono_stutter");
+  p.require    = {{C::Onsets, 10}, {C::Steals, 40}, {C::BurstBirths, 40}};
+  p.ablate     = {Feature::VoiceCount, Feature::Burst};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -362,6 +525,11 @@ const char* CounterName(Counter c) noexcept {
     case C::ModeSwitches: return "modeSwitches";
     case C::KilledFrames: return "killedFrames";
     case C::MutedFrames: return "mutedFrames";
+    case C::Births: return "births";
+    case C::BurstBirths: return "burstBirths";
+    case C::Skips: return "skips";
+    case C::RepeatPasses: return "repeatPasses";
+    case C::Steals: return "steals";
     case C::kCount: break;
   }
   return "unknown";
@@ -389,6 +557,14 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::ModeSwitch: return "modeSwitch";
     case Feature::FastCut: return "fastCut";
     case Feature::WetKill: return "wetKill";
+    case Feature::Sources: return "sources";
+    case Feature::Burst: return "burst";
+    case Feature::Intermittency: return "intermittency";
+    case Feature::PitchSet: return "pitchSet";
+    case Feature::PitchSelect: return "pitchSelect";
+    case Feature::Repeat: return "repeat";
+    case Feature::Decay: return "decay";
+    case Feature::VoiceCount: return "voiceCount";
   }
   return "unknown";
 }
@@ -473,6 +649,14 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
         }
       }
       break;
+    case Feature::Sources: out.strip |= kStripSources; break;
+    case Feature::Burst: neutral(P::BurstCount, 1.0f); break;
+    case Feature::Intermittency: neutral(P::Intermittency, 0.0f); break;
+    case Feature::PitchSet: out.strip |= kStripPitchSet; break;
+    case Feature::PitchSelect: out.strip |= kStripPitchSelect; break;
+    case Feature::Repeat: neutral(P::Repeat, 1.0f); break;
+    case Feature::Decay: neutral(P::DecayMs, 0.0f); break;
+    case Feature::VoiceCount: neutral(P::VoiceCount, 64.0f); break;
   }
   return out;
 }
@@ -833,6 +1017,14 @@ std::vector<VectorCase> BuildCorpus() {
     age.require = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}};
     age.ablate  = {Feature::MarkPosition, Feature::RingLength};
     v.presets.push_back(age);
+    // presets/repeat_mark_aging.json (sound revision 6): the same, with 16 passes of 500 ms, so
+    // the far rail covers the whole life, 15 passes more: the aging mark reaches it about 79 s
+    // in, 8.5 s before the 2^22 ring's staleness guard drops the mark; the doubled ring never
+    // reaches it.
+    PresetCase loops = PackagePreset("repeat_mark_aging", "repeat_mark_aging");
+    loops.require    = {{C::Onsets, 1}, {C::TailActiveFrames, S(80)}, {C::RepeatPasses, 600}};
+    loops.ablate     = {Feature::Repeat, Feature::MarkPosition, Feature::RingLength};
+    v.presets.push_back(loops);
     corpus.push_back(std::move(v));
   }
 
@@ -877,6 +1069,22 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(ModeSwitchChain());
     v.presets.push_back(WetKillCase());
     v.presets.push_back(LoneChanges());
+    corpus.push_back(std::move(v));
+  }
+
+  {  // Wave 1 (sound revision 4 on): trigger sources, bursts, intermittency.
+    VectorCase v{"plucks_wave1_12s", Vector::Plucks, Frames(10), Frames(12), false, {}};
+    v.presets.push_back(OnsetOnly());
+    v.presets.push_back(OnsetBurst());
+    v.presets.push_back(BurstSpaced());
+    v.presets.push_back(IntermittentCloud());
+    v.presets.push_back(MidiGate());
+    v.presets.push_back(PitchCycle());   // sound revision 5 on: pitch sets
+    v.presets.push_back(PitchRandom());
+    v.presets.push_back(RepeatLoops());  // sound revision 6 on: repeat and decay
+    v.presets.push_back(DecayMarks());
+    v.presets.push_back(VoiceLimit());  // sound revision 7 on: voice count
+    v.presets.push_back(MonoStutter());
     corpus.push_back(std::move(v));
   }
 

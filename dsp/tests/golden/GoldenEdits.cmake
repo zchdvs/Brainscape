@@ -66,8 +66,9 @@ math(EXPR frames "${frames} + 1")
 string(JSON j SET "${golden}" ${P} counters frames ${frames})
 expect(counter 2 "${vector}/${preset}: counter frames = " "${j}")
 
-string(JSON j SET "${golden}" ${P} counters births 0)
-expect(extra_counter 2 "${vector}/${preset}: counter births is in golden but not counted" "${j}")
+# A counter name the harness never counts (births became a real counter at sound revision 4).
+string(JSON j SET "${golden}" ${P} counters notACounter 0)
+expect(extra_counter 2 "${vector}/${preset}: counter notACounter is in golden but not counted" "${j}")
 
 if(failed)
   message(FATAL_ERROR "check mode missed or misreported:${failed}")

@@ -3,8 +3,8 @@
   "id": "corpus.strum_marks",
   "name": "Strum marks",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "fa833f7c5099aeffe02953d95716dc4d5eb7e475532bd1166f06a06931fd2042",
+  "sound_rev": 7,
+  "sound_hash": "6ffd594c79da55990b2cccc58e20732cc274e6a155e926b8acfaabfc6ccc594b",
   "meta": {
     "author": "",
     "description": "Golden corpus: onset triggering on mark positions.",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.3,
-    "jitter": 0
+    "jitter": 0,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 250,
-        "spray_ms": 40
+        "spray_ms": 40,
+        "repeat": 1
       },
       "size_ms": 150,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

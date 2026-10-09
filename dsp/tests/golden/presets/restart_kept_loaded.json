@@ -3,8 +3,8 @@
   "id": "corpus.restart_kept_loaded",
   "name": "Restart kept loaded",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "b33c78c6e486c76cb7d3bf0bcf17113026b6aa904fde9b8501ab9e888ff84a7b",
+  "sound_rev": 7,
+  "sound_hash": "44bdb36473eee4a184f777978799f61b3cf0b2bcdc276538e92e58fb0ef137d5",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Restart preset’s Spillover load.",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.7,
-    "jitter": 0.6
+    "jitter": 0.6,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 180,
-        "spray_ms": 40
+        "spray_ms": 40,
+        "repeat": 1
       },
       "size_ms": 40,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

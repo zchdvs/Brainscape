@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "id": "factory.shards",
+  "name": "Shards",
+  "family": "misfire",
+  "sound_rev": 7,
+  "sound_hash": "0d4a3b60901644c84f81cd9df09e71bc602a02219c28bf7971c3f8e8d3c0ac2c",
+  "meta": {
+    "author": "Brainscape",
+    "description": "Each attack scatters a stream of octave-up shards of itself, half of them reversed.",
+    "tags": ["misfire", "first-set"]
+  },
+  "global": {
+    "mix": 0.38
+  },
+  "scheduler": {
+    "sources": ["onset"],
+    "overlap": 0.45,
+    "jitter": 1,
+    "intermittency": 0,
+    "burst": {
+      "count": 16,
+      "spacing_ms": 120
+    }
+  },
+  "layers": [
+    {
+      "voice_count": 2,
+      "position": {
+        "source": "mark",
+        "base_ms": 250,
+        "spray_ms": 400,
+        "repeat": 1
+      },
+      "size_ms": 150,
+      "decay_ms": 20000,
+      "window": {
+        "sustain": 0.36363634,
+        "skew": 0.53636366,
+        "smoothness": 0.2
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 12,
+        "spread_cents": 0,
+        "reverse_prob": 0.5
+      },
+      "pan_spread": 1
+    }
+  ],
+  "feedback": {
+    "amount": 0
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 250,
+      "fb": 0.5,
+      "mix": 0.45
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0.59999996
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 4.5,
+  "trigger": {
+    "sensitivity": 0.65
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [100, 1200],
+          "in_range": [0, 1],
+          "curve": 1.5
+        },
+        {
+          "param": "scheduler.burst.count",
+          "range": [4, 16],
+          "in_range": [0, 0.42],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "post.delay.fb",
+          "range": [0, 0.8],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.size_ms",
+          "range": [30, 250],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.1, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.8, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "scheduler.burst.spacing_ms",
+          "range": [20, 250],
+          "in_range": [0, 1],
+          "curve": 1.5
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.6],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 0.8],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.42055136,
+      "repeats": 0.625,
+      "shape": 0.54545456,
+      "time": 0.5739157,
+      "space": 0.74999994,
+      "filter": 1
+    }
+  }
+}

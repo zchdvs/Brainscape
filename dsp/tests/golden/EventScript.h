@@ -37,10 +37,13 @@ struct StagedLoad {
 
 // Structure an ablation switches off (Corpus.h), in every preset a render loads.
 enum Strip : uint8_t {
-  kStripOnset = 1u << 0,  // `onset` leaves scheduler.sources
-  kStripMark  = 1u << 1,  // layer 0 reads the live position, not marks
-  kStripMode  = 1u << 2,  // the default mode and CTRL (Mode.h, PresetState.h); leaves kept
-  kKeepMode   = 1u << 3,  // every load keeps the starting preset's mode and CTRL
+  kStripOnset   = 1u << 0,  // `onset` leaves scheduler.sources
+  kStripMark    = 1u << 1,  // layer 0 reads the live position, not marks
+  kStripMode    = 1u << 2,  // the default mode and CTRL (Mode.h, PresetState.h); leaves kept
+  kKeepMode     = 1u << 3,  // every load keeps the starting preset's mode and CTRL
+  kStripSources = 1u << 4,  // the default sources join scheduler.sources (sound revision 4)
+  kStripPitchSet    = 1u << 5,  // layer 0 plays the default set {0: 1} by `cycle` (revision 5)
+  kStripPitchSelect = 1u << 6,  // layer 0's `random` selection becomes `cycle` (revision 5)
 };
 
 // A restart at `frame`, before the events stamped there: Engine::Restart, which keeps the
@@ -58,8 +61,10 @@ class Script {
     Add(frame, EventType::SetParam, static_cast<uint32_t>(id), value);
   }
   void Freeze(int64_t frame, bool on) { Add(frame, EventType::Freeze, 0, on ? 1.f : 0.f); }
-  void Trigger(int64_t frame) {
-    Add(frame, EventType::Trigger, static_cast<uint32_t>(Engine::TriggerSource::Footswitch), 1.f);
+  // A trigger from `src`, which fires only if the playing mode lists its source (sound revision
+  // 4, mode-compiler.md §7.5).
+  void Trigger(int64_t frame, Engine::TriggerSource src = Engine::TriggerSource::Footswitch) {
+    Add(frame, EventType::Trigger, static_cast<uint32_t>(src), 1.f);
   }
   // A macro move or an expression-pedal move (mode-compiler.md §3.4, events 4 and 5).
   void Macro(int64_t frame, ParamId macro, float position) {

@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "brainscape/ParamDisplay.h"
+#include "brainscape/Preset.h"
 
 namespace brainscape::plugin {
 
@@ -23,6 +24,8 @@ inline const juce::Colour kIce{0xFF90CDF4};
 inline const juce::Colour kLed{0xFFF6E05E};
 
 juce::Colour GroupAccent(ParamGroup group);
+// A preset family's accent (the header's Modes menu); kTextFaint for none.
+juce::Colour FamilyAccent(PresetFamily family);
 }  // namespace palette
 
 // Fonts: Segoe UI on Windows, the system sans elsewhere.

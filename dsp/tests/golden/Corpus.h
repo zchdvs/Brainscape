@@ -34,13 +34,29 @@ namespace brainscape::golden {
 // on the output.
 // 8 (sound revision 3, the Mix law): subnormal_wet at Mix 0.75, where the law scales its dry
 // path by 0.5 as the linear crossfade did at 0.5; under the law Mix 0.5 plays the dry at unity.
-inline constexpr uint32_t kCorpusVersion = 8;
+// 9 (sound revision 4, wave 1's trigger sources, bursts and intermittency, mode-compiler.md
+// §7.5 R9): plucks_wave1_12s (onsets alone, footswitch and MIDI triggers gated by the mode's
+// sources, bursts at spacing 0 and 120 ms, intermittency on triggers and periodic births); the
+// births, burstBirths and skips counters; the sources, burst and intermittency ablations; MIDI
+// triggers in scripts.
+// 10 (sound revision 5, wave 1's pitch sets, R10): pitch_cycle (a cycled set under transpose
+// moves) and pitch_random (a weighted random set, mode switches to and from a cycled one) in
+// plucks_wave1_12s; the pitchSet and pitchSelect ablations.
+// 11 (sound revision 6, wave 1's repeat and decay, R11): repeat_loops (micro-loops of 4 passes
+// with decay over a cycled set, repeat and decay moved alone) and decay_marks (mark positioning
+// fading as its mark ages) in plucks_wave1_12s, and repeat_mark_aging in plucks_markage_92s (16
+// reverse passes of 500 ms on an aging mark, on the life's far rail from about 79 s); the
+// repeatPasses counter; the repeat and decay ablations.
+// 12 (sound revision 7, wave 1's voice count, R12): voice_limit (a cloud held to 6 voices, then
+// 2, then 64, onset bursts stealing) and mono_stutter (onsets alone, one voice, spaced bursts
+// cutting each other) in plucks_wave1_12s; the steals counter; the voiceCount ablation.
+inline constexpr uint32_t kCorpusVersion = 12;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
   Events,             // script events applied
   OffGridEvents,      // ... whose frame is not a multiple of 48 (the pedal's block grid)
-  Triggers,           // footswitch triggers
+  Triggers,           // trigger events, of any source (whether the mode lists it or not)
   Loads,              // Spillover loads
   Restarts,           // restarts mid-render (Restart or an Exact load)
   Onsets,             // ConsumeOnsetCount() total
@@ -67,6 +83,18 @@ enum class Counter : uint8_t {
   // below 1 the dry signal shows, so only mix 1 over a killed wet path (or a wet path not yet
   // sounding) gives one. Bits only, so no FP mode can change it.
   MutedFrames,
+  // The grain scheduler's counts over the render (Engine::Stats, from sound revision 4): grains
+  // born from every source, the second and later grains of bursts, and the periodic births and
+  // triggers intermittency skipped (mode-compiler.md §7.5).
+  Births,
+  BurstBirths,
+  Skips,
+  // Passes begun after a voice's first: repeat voices re-reading their region (Engine::Stats,
+  // from sound revision 6, mode-compiler.md §7.5 R11).
+  RepeatPasses,
+  // Triggered grains that took a sounding voice, the oldest, at voice_count or with all 64
+  // busy (Engine::Stats, from sound revision 7, mode-compiler.md §7.5 R12).
+  Steals,
   kCount
 };
 const char* CounterName(Counter) noexcept;
@@ -82,11 +110,17 @@ const char* CounterName(Counter) noexcept;
 // loads (Strip, EventScript.h); Mode loads the default mode and CTRL instead of each preset's;
 // Macro drops the macro and expression moves; ModeSwitch makes every load keep the starting
 // preset's mode; FastCut makes every FastCut load Trails; WetKill moves every cutoff at 40 Hz,
-// the kill, to 41 Hz.
+// the kill, to 41 Hz. Wave 1 (sound revision 4): Sources gives every loaded mode the default
+// sources back (periodic, footswitch and midi_note, beside its own), Burst sets
+// scheduler.burst.count to 1 and Intermittency scheduler.intermittency to 0. Sound revision 5:
+// PitchSet gives every loaded mode the default set {0: 1} by `cycle`, PitchSelect makes its
+// `random` selection `cycle`. Sound revision 6: Repeat sets layer0.position.repeat to 1 and
+// Decay layer0.decay_ms to 0. Sound revision 7: VoiceCount sets layer0.voice_count to 64.
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
+  Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay, VoiceCount,
 };
 const char* FeatureName(Feature) noexcept;
 

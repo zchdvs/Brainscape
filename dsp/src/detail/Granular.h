@@ -22,25 +22,37 @@ inline constexpr uint32_t kBlockWriteAheadFrames = 512;
 // A FastCut load's fade, in frames (Engine.cpp checks it equals kFastCutFrames), and a grain's
 // fadeStart while it is not fading.
 inline constexpr uint32_t kGranularFastCutFrames = 128;
+inline constexpr uint32_t kGranularMaxPitch      = 8;  // a pitch set's entries (Mode.h's cap)
 inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
-// schedule-time; grains never re-read a global parameter).
+// schedule-time; grains never re-read a global parameter). A voice with repeat N (mode-compiler.md
+// §7.5, R11) reads one ring region N times, each pass windowed: its life is N passes of passLen
+// frames, and each pass restarts at startFrame with the envelope and its own decay gain.
 struct Grain {
   uint64_t pos;        // absolute ring position, 32.32 fixed point (frame << 32 | frac)
-  int64_t  inc;        // signed 32.32 increment — pitch AND direction
-  int64_t  endAbs;     // absolute engine sample where the grain finishes
-  uint32_t rendered;   // output frames rendered so far
-  uint32_t total;      // output frames in the grain; a FastCut shortens it to its fade's end
-  uint32_t fadeStart;  // the output frame at which a FastCut load began fading the grain
+  int64_t  inc;        // signed 32.32 increment — pitch AND direction; +1.0 exactly
+                       // (kUnityInc) takes the bit-exact integer read path (Tu)
+  int64_t  endAbs;     // absolute engine sample where the grain's life finishes
+  uint32_t rendered;   // output frames rendered so far, over the whole life
+  uint32_t total;      // output frames in the life, passes * passLen; a FastCut shortens it to
+                       // its fade's end
+  uint32_t fadeStart;  // the life frame at which a FastCut load began fading the grain
                        // (mode-compiler.md §7.3), or kNoFade
-  grainmath::EnvSpec env;
+  uint32_t passLen;    // L: output frames of one pass (the grain length)
+  uint32_t startFrame; // ring frame every pass starts reading at
+  uint32_t age0;       // frames the position reference had aged at birth: a mark's age, 0 live
+  float    decayRate;  // log2(1000) / decay_ms in frames, captured at birth; 0 = no decay
+  float    decayGain;  // the current pass's decay gain (grainmath::DecayGain)
+  grainmath::EnvSpec env;  // one pass's envelope
   float    smoothness;  // piecewise->LUT window morph
   float    gainL, gainR;
   uint8_t  tier;       // resolved at birth: 0 = cubic Hermite, 1 = linear
+  uint8_t  pass;       // the current pass, 0 to passes - 1
+  uint8_t  passes;     // N: layer0.position.repeat at birth, 1-16
   bool     active;
-  bool     unity;      // inc == +1.0 exactly: bit-exact integer read path (Tu)
 };
+inline constexpr int64_t kUnityInc = int64_t{1} << 32;
 static_assert(sizeof(Grain) <= 128, "grain pool must stay inside the DTCM budget (design §3)");
 
 // Block-rate parameters, resolved from the drained plain values once per block.
@@ -53,8 +65,15 @@ struct GranularParams {
   float    targetVoices;     // effective target: min(kMaxGrains*overlap^3, totalFrames),
                              // since the 1-frame interval floor caps sustainable voices
   float    jitter;           // 0 = periodic, 1 = Poisson inter-arrival
-  float    ratioBase;        // the pitch set's entry plus layer0.pitch.transpose_st
-                             // (semitones; the set is {0} until W1)
+  // Layer 0's pitch set (mode-compiler.md §7.5, R10; sound revision 5): each entry's
+  // semitones plus layer0.pitch.transpose_st, before detune and the ±24 st clamp; the weights
+  // and their sum; the selection. The default set {0: 1} gives 0 + transpose, which is the
+  // transpose bit for bit (sound revision 1's pitch).
+  float    pitchSt[kGranularMaxPitch];
+  uint16_t pitchWeight[kGranularMaxPitch];  // 1-16
+  uint32_t pitchCount;                      // 1-8
+  uint32_t pitchWeightSum;
+  bool     pitchRandom;                     // `random` selection, else `cycle`
   float    spreadCents;
   float    reverseProb;
   float    sustain, skew, smoothness;
@@ -62,12 +81,44 @@ struct GranularParams {
   // From the active mode's structure (mode-compiler.md §7.3), not from leaves since sound
   // revision 2 retired rows 27 and 28 into it:
   bool     onsetTrigger;     // `onset` in scheduler.sources, OR'd with the free-running
-                             // scheduler: each detected onset fires a grain (oldest-steal —
+                             // scheduler: each detected onset fires a burst (oldest-steal —
                              // explicit triggers never drop, design §4)
   bool     posFromMark;      // layer 0's position.source is `mark`: grains read from the most
                              // recent onset mark (the Strum family's mechanism) instead of
                              // the live position
+  // Trigger sources and the scheduler's modifiers (mode-compiler.md §7.5, R9; sound revision 4):
+  bool     periodic;         // `periodic` in scheduler.sources: the free-running scheduler runs,
+                             // with its one-voice floor; without it only triggers give births
+  float    intermittency;    // scheduler.intermittency: a draw below it skips a periodic birth
+                             // (which still consumes its interval) or a whole trigger
+  uint32_t burstCount;       // scheduler.burst.count, read as an integer (1-16): grains a
+                             // trigger births
+  uint32_t burstSpacing;     // frames between a burst's grains: max(1, round(spacing_ms * 48))
+  // Repeat and decay (mode-compiler.md §7.5, R11; sound revision 6):
+  uint32_t repeat;           // layer0.position.repeat, read as an integer (1-16): passes a voice
+                             // reads its region; the scheduler spaces births by the whole life
+  float    decayRate;        // log2(1000) / layer0.decay_ms in frames, 0 when decay is off
+  // Voice count (mode-compiler.md §7.5, R12; sound revision 7):
+  uint32_t voiceCount;       // layer0.voice_count, read as an integer (1-64): voices that sound
+                             // at once; targetVoices is at most it, and a trigger beyond it
+                             // steals the oldest
 };
+
+// What the scheduler has done (Engine::Stats): counts since Init, kept by Reset and Restart.
+struct GranularStats {
+  uint64_t births      = 0;  // grains born, from every source
+  uint64_t burstBirths = 0;  // ... of them a burst's second and later grains
+  uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
+  uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, sound revision 6)
+  uint64_t steals       = 0;  // triggered grains that took a sounding voice (sound revision 7)
+};
+
+// The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
+// extension): a periodic birth, an onset and a manual trigger can each be decided at one frame,
+// and their draws must not be one draw.
+inline constexpr uint32_t kOrdinalPeriodic = 0;
+inline constexpr uint32_t kOrdinalOnset    = 1;
+inline constexpr uint32_t kOrdinalManual   = 2;
 
 // External trigger events for one block, collected by the Engine (onset detector,
 // manual/MIDI triggers). Offsets are block-relative sample indices, ascending.
@@ -99,7 +150,21 @@ class GranularCore {
     // initial 0 leaves a -1 residual in the phasor and every subsequent birth
     // lands one sample early — which breaks exact grain abutment.
     intervalRemaining_ = 1.0f;
+    ResetSequencing();
   }
+
+  // The sequencing state a load of a different mode resets and a load of the same mode keeps
+  // (mode-compiler.md §7.3): the bursts in progress (sound revision 4) and the pitch cycle's
+  // position (5).
+  void ResetSequencing() noexcept {
+    burstCount_ = 0;
+    burstDue_   = kNoBurstDue;
+    pitchCycle_ = grainmath::PitchCycle{};
+  }
+
+  // Counts since Init (Engine::Stats); Reset and Restart keep them.
+  const GranularStats& Stats() const noexcept { return stats_; }
+  void                 ClearStats() noexcept { stats_ = GranularStats{}; }
 
   // A FastCut load at absolute frame `abs` (mode-compiler.md §7.3): every grain still sounding
   // there that is not already fading starts a linear fade to zero over kFastCutFrames from
@@ -128,15 +193,42 @@ class GranularCore {
   };
   static constexpr uint32_t kMaxMarks = 16;
 
+  // A trigger's burst in progress (mode-compiler.md §7.5): its second and later grains.
+  struct Burst {
+    int64_t  next;       // absolute frame its next grain is due
+    uint32_t spacing;    // frames between its grains
+    uint32_t remaining;  // grains still to fire
+  };
+  // Bursts kept at once; a trigger past them drops the oldest. They overlap only when triggers
+  // come faster than a burst lasts, (count - 1) * spacing frames (7.5 s at most).
+  static constexpr uint32_t kMaxBursts  = 8;
+  static constexpr int64_t  kNoBurstDue = INT64_MAX;
+
   // anchorFrame: the position reference (the pin while frozen).
   // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
                      uint32_t anchorFrame, uint32_t liveFrame) noexcept;
-  // Fire an explicit trigger: free slot if available, else steal the OLDEST voice
-  // (design §4 allocation policy — explicit triggers never drop a hit).
+  // Fire an explicit trigger: free slot if available and fewer than voice_count voices sound,
+  // else steal the OLDEST voice (design §4 allocation policy — explicit triggers never drop a
+  // hit; mode-compiler.md §7.5 R12).
   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
                     uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
                     int64_t absSample, float* wetL, float* wetR) noexcept;
+  // A trigger (an onset or a manual trigger, `ordinal` saying which) at birthAbs: skipped by
+  // intermittency, or its burst's first grain now and the rest queued. True when it fired.
+  bool FireTrigger(const GranularParams& p, uint32_t ordinal, int64_t birthAbs,
+                   uint32_t anchorFrame, uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
+                   int64_t absSample, float* wetL, float* wetR) noexcept;
+  // The oldest due burst's next grain: at most one a frame, and none at a frame a trigger
+  // already fired at, so no two of the frame's births share the frame's draws.
+  void FireBurst(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
+                 uint32_t liveFrame, uint32_t* renderedTo, uint32_t n, int64_t absSample,
+                 float* wetL, float* wetR) noexcept;
+  void AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept;
+  // The pitch-set entry a birth plays (mode-compiler.md §7.5, R10): the next of the cycle, or a
+  // weighted draw at the birth's key.
+  uint32_t PickPitch(const GranularParams& p, int64_t drawKey) noexcept;
+  void UpdateBurstDue() noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
@@ -145,6 +237,8 @@ class GranularCore {
   // kFade multiplies its envelope by a FastCut's linear fade (only frames past fadeStart).
   template <bool kFade>
   void RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept;
+  // A repeat voice's next pass: back to its start frame, with the decay gain of its age then.
+  void NextPass(Grain& g) noexcept;
 
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;
@@ -159,6 +253,11 @@ class GranularCore {
   Mark           marks_[kMaxMarks]{};  // recent onset marks (ring of kMaxMarks)
   uint32_t       markHead_  = 0;
   uint32_t       markCount_ = 0;
+  Burst          bursts_[kMaxBursts]{};   // in progress, oldest first
+  uint32_t       burstCount_ = 0;
+  int64_t        burstDue_   = kNoBurstDue;  // the earliest `next` among them
+  grainmath::PitchCycle pitchCycle_;  // `cycle` selection's position, over every birth
+  GranularStats  stats_;
 };
 
 }  // namespace brainscape::detail

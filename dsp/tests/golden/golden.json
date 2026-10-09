@@ -1,8 +1,8 @@
 {
   "format": "brainscape-golden/1",
-  "soundRevision": 3,
+  "soundRevision": 7,
   "generatorVersion": 1,
-  "corpusVersion": 8,
+  "corpusVersion": 12,
   "sampleRate": 48000,
   "stereoInput": true,
   "ditherRingWrite": true,
@@ -56,7 +56,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 1394,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -99,13 +104,18 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 120,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "strum_marks",
           "package": "strum_marks",
-          "soundHash": "fa833f7c5099aeffe02953d95716dc4d5eb7e475532bd1166f06a06931fd2042",
+          "soundHash": "6ffd594c79da55990b2cccc58e20732cc274e6a155e926b8acfaabfc6ccc594b",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "b3a3275638887986661ceb193e2c09283e8c438b33f949d937df9c47bf57d227",
           "secondHashes": [
@@ -145,7 +155,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 147,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -188,7 +203,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 7226,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -231,7 +251,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 252,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -274,7 +299,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 252,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -317,7 +347,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 252,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -333,7 +368,7 @@
         {
           "name": "freeze_marks",
           "package": "freeze_marks",
-          "soundHash": "9547a1303d9a6bac30d6a7a2a856ff5e47cc3a323f1d367611fdcaf3db4654eb",
+          "soundHash": "47be2716610977912ed5212b315e057166d6ece0e51fa8bff5dc422464b1f096",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "36ca09e8bf28d351f8ebd135b9f0e913c5f959c9daa2d82efb24df609abd767a",
           "secondHashes": [
@@ -377,7 +412,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 2223
+            "mutedFrames": 2223,
+            "births": 2458,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -424,7 +464,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 2053,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -471,7 +516,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 6337
+            "mutedFrames": 6337,
+            "births": 17117,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -487,7 +537,7 @@
         {
           "name": "dense_1ms",
           "package": "dense_1ms",
-          "soundHash": "86436eed9433714115f81fd6f9480a1705b93298052de47423b2ff2befeb70e3",
+          "soundHash": "7daa6446a7c675b6bca67764bd4359a2dd2515b9f80857dda77bb2413aba01c7",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "3c8910efb39df100418ec714568184619ed6702a6e596e8fee726f30aeefd072",
           "secondHashes": [
@@ -521,7 +571,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 211020,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -572,7 +627,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 1160,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -613,7 +673,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 1160,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -654,7 +719,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 200,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -701,7 +771,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 11046
+            "mutedFrames": 11046,
+            "births": 700,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -762,7 +837,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 200,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -813,7 +893,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 2316,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -977,7 +1062,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 14257,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -993,7 +1083,7 @@
         {
           "name": "freeze_long",
           "package": "freeze_long",
-          "soundHash": "938a384150f2a3049b9797ee3cf02d910d44f24b55cea2ca2b2079d93c09ed31",
+          "soundHash": "e4305e8347b58637396b53fe795c3c6b057ce821d5e88c5ba3e7520f22acefca",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "a3050925be736df86386e42775573575d8e7ed4ead33be99126b4ad55aeebc5f",
           "secondHashes": [
@@ -1091,13 +1181,18 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 7906,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "freeze_live_long",
           "package": "freeze_live_long",
-          "soundHash": "b95d2c36426f73186ebfecab942e9b6e845dd5915e49110680aa0d9ba0d2e3b6",
+          "soundHash": "765c23bc0e7d16ee539ed8822ae00af467cbf29f773064706f82fb5d39b166a0",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "06bf72658522201646fa225c349112ccda9c7893f1b3ee5dfdf17e653094e7fa",
           "secondHashes": [
@@ -1195,7 +1290,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 7876,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -1211,7 +1311,7 @@
         {
           "name": "reverse_mark_aging",
           "package": "reverse_mark_aging",
-          "soundHash": "c8ad0560c4558220273bd68b18236132437193855d81f1525e06ef7a3d7461a5",
+          "soundHash": "e01c923936a2c2cad7d88c2f384ac29778b4b930b2227a4d15913ca3cd007901",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "45af699169291a6560a6cbc465d10964e23a55b6ca9b8a597df251a77b926a02",
           "secondHashes": [
@@ -1331,7 +1431,143 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 22919
+            "mutedFrames": 22919,
+            "births": 3738,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "repeat_mark_aging",
+          "package": "repeat_mark_aging",
+          "soundHash": "fc3ec471549797ec5065091f386b2ee3a6294a63529b36ef2a7a0db8ae2929d0",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "b549e561e802eedfc5fe887f34cd34e42b6a364fa2c754efbbce3a38473b734b",
+          "secondHashes": [
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "3083dcabb8b0bc66905bd412f771f73d9ce72bc48428c94ccbf2c753fee38030",
+            "64bec2db1fb151eb3c7af770e1b9ccd510558bd95c66c25e182ef91b874880b1",
+            "bcef444118515f2694a8757e9e302e360422099e9c35351b6963996db658fdfe",
+            "cb43ccd8aa0b2f5e6502fefc044297a4f1415d54c94825afbd558c049f4391c9",
+            "082b9f4c91246bcb0bcd380080391a5601adc4f6cb93dbd9dfac154dca82537f",
+            "ac5c62f369756e87c4efe82b55316cb56ba15bf170d6c3d3cf6232b900019cf0",
+            "b9bdb8d59ebdb3c72abf83fe4091a127c84962732f57994fcd5d5b6d7259ec81",
+            "0028b994f367f2b584282d2a8d1ac8e87c67ab76af3bd2e9c15a1c770118a604",
+            "677c39dc7eaa682c157e7c0cb907b62ed82e94232ab170042facff1adb336084",
+            "ce9ced259b1c7c2c790389ebe129f90e6ec6091f9bedaf7cde17b7af3fe8bbc0",
+            "d2e35c175ddbe2f428708a39e6d985adbeb91a2f528ae057a332e3ea4865ec53",
+            "30f776ab6cfd5833ba235cb1090ef520b56227ac543af4a0e1c3a9f991d8c068",
+            "2b0a0777acb136b3fec44f367f17388289cd4fb661671dd03998432c60e16c8b",
+            "76368a1b68bd42d429f1523984e505b0f43dd2f40f4ca11fca2a599b43dc69c0",
+            "d4f82eee4dfd98eb52e7406118857100e66877a00ac7bd6ab9a9a7f3d6829395",
+            "56f0eaad49931c25c238fc33a095662bfd77cc4b4033f93e49d6dcb86b9a0f20",
+            "9fb62487087ef812bcb5b0c51e1772cc556319edb76ac127526091a3d82c0218",
+            "31de32d220d322c5f3197f5f28e72ca41769ac1d386b441af45e7d28637ad81f",
+            "ed361a1aa261a95ae1009e76784f8ce9ea29cee95f588ce2e2d032ff0f8baf72",
+            "c192c220ed537ca433de90c37b3ee6d52ce2335f860e5c1491aae207335eef0e",
+            "dc89550e947855b53d9c8346e5e254584f6d5cb4d12f2ad917491ebae984b813",
+            "79b5b03995bf915ecd2ef26945993344d4a79a08d0d463db249786bf3c2526bc",
+            "2413748acd9ae2e6b75ca7363dc077aec56a97246f18e10a22fa6f728af32887",
+            "a868da8fc4dc631a86cc68c51d5a16dccfb4e8870e10ca8d7f80c216bfba370c",
+            "78c53f4588bb6327cc2f34e7ab44e0557fee87324a281370e0f85fe85ed526bb",
+            "0b380e48734596c62144d2acff9264e711a9f523d6dded1f05a07a2c9c520cb5",
+            "56c0fb4153d4de8f148f83f89e5632c2c5814c6485cb610264df78618c2668f5",
+            "2f88791a29cdf0ad3332f1277f525c23e72e55ac706fc58837fba63a86491ef6",
+            "9d6af47bcabd25a6ef13b8c5cb124b918117d05566b3ca6fa1332dca1871f098",
+            "62bb5a2d6081230a948a27979a2a37d9224895badf38b2399ca71e56da944b11",
+            "cbfb85dd5c7d77dd8ed6814b55418761ef427987e9bd882ca9e054c1326253b5",
+            "985615620fee3db1da715b172131f9a8c35854d527550960034decaa95aa2104",
+            "b98b208a2da59efbb9e8fc8a5e4cd104742163c2e1bd9e0157102971b9fe5ef8",
+            "95570844cf30aa3c76d42d729215315f328250426999f90b5bbdbf5d6c1e8d65",
+            "cbc6de4f3d40a81bf34cc47a8e5d11013c55cdc8e4af5ee420b4a115541602aa",
+            "9bd83a5b1467185475a7c74e609dc9569b785fec9620341d460af15a2b31bf24",
+            "ae67734177a5a42e24621025c746708bdbee8fc7c29f51564176edb1d13a1a74",
+            "f4489fedaf345bb341e8602596c03da322a49aada074f354352f6203843cf340",
+            "5f18d06ac798b1ccadee8e498851f886f25de29849467b2ccb99c93f2cb40c71",
+            "192d2e41e909006ca7c8711b5b30db6349aead2ecd358a7c8fa55e541fb7e023",
+            "6e78187b87351174ae8382586d3efa67f72c9dcca9a37be49aa9e5c2e5710624",
+            "d58bb77d614aa0f3b35389063c3d9ff07bc95958cac79030acb906349d2280e7",
+            "3a7c104fcc2a28d67a918f4f430e7abb61a49835cad7d8fd3d6f26df8ef7f654",
+            "88f75b3d5ce0be4234b41fad3d3ad77b1b8ff13b5dc3abacbea2841826c27b83",
+            "2de978ee68e7bf4689dc12c0473bed02806667e8d71469ae2f23d8060b55cbe0",
+            "19a53f2fbfce629e408f693385222b6253738868bfe8d1568a5d3b84bb883b9c",
+            "fa2227a3297152ced103670c39888ed2ca0acd567228c2eb3a9124c3cfda9459",
+            "1a0a5bc80511b7f831f1550899112c07e5cd16003e4ace5440fbc1b7e3a0b786",
+            "7d56c36c163feacd6c29b612fb2b2833115088454c0dcee38cd6c7347e5433c4",
+            "71d496cecf35004ed659b4d997ac1372b97c8155a43f12139c2622f272339962",
+            "14b9c19697f54f9c832cd8cc8550fcb5a7650edc587c7cc8c64fe723c324d74b",
+            "40bd864b2c8666a8b1d407393a8b03e3b86d4a1e1876ac5cc020c3a0a7687e02",
+            "516334d51fc9024ce96db07f0e962c89b85235d66f24a88ce945dd14c61fa57d",
+            "fa80fdf337204bb92ef918e7bf683db5d5b5049e91c1297258202b06e62b8457",
+            "02c9d02828c7bf730504c2e8f2c24af151fea725ff61a90cbadc51d0dcfd6524",
+            "40f039a1de02ad722097d268e77f75724da781c2b4264fcb9dae7cb3ec5d031b",
+            "f038751ad6322748ac3a62b758748a7e9ec06317152159ceb2c79650d080f8f9",
+            "9402657fa2d22fc5679c6f74e4191968c25176c0ee7d1e18f5e411e78def8199",
+            "309e0898ef23a5da3282750fe39497e73b2dfca21e62bec21dc66941ccbffa69",
+            "e400949199abb19c64782b2cedd91f23c844dfd82284716d7e3262f8c8429092",
+            "9fd7d65d66aa659528d044711da4de6d5f4826a9d0599ae82a5ca3194675b32c",
+            "9176067c804629a38d96ebc3d34a9059e9dad765250c8052836e7ff5c33500c8",
+            "24872a12498508ed4f9054063b56a156ef57656bab98c1478baf8dd2b2111fc5",
+            "b7ef3f9c46544b05045cec8e256dfab142b4e74c178f5f896129743a3ad1d293",
+            "e3a20fac1d9eb63fdbb514463aa0fadd35c108d5bc71c5a45f1f5791cfef8fcd",
+            "a33319e90a6915abdb5162ecec95a749ff93d6f7f21e3f38a5532f45afa987a4",
+            "e131d408bd90249889ac9228ca3f2bfca4bcabfdb1e6fadbcf3e5f90a203cbce",
+            "12fb5dfe45deebf72ae591f717931f77c2aba8f7d558b6c8abb52a3336a33cb1",
+            "8e1c06d58a7c11477c3cab33b3c797bb55c9df6e0e4da8e1828e6afe9fc8854d",
+            "aaf3b76d03d5f60cca5b31fcb9867a608a9449bad5be7bc9c7139f4c525272bf",
+            "69f3c97249b4fc141598c37a5687b3afbc370157b28be27c2bea705e89d753a7",
+            "1e24361c22a198e4b3d5ab726df23dc95d35c2c16140380f641d3b56d05b0651",
+            "921c54ee4ae2d0c58448ca1888ca206bf8cc139044880639920bf7a8ba39533b",
+            "1796c13bfa0fb98b84d1acffe062ba5d0cff3c30aac067b6da80debfdb29dc58",
+            "2567d58c95fa4fdf4806d42b44cf2a7760dc9558412ab6c2c6072e9d22183976",
+            "a306dbe947fed2fc6b3cd37ef191199b9a013f4a43e74f2f015915028d642bd1",
+            "9d66c3b5a1b9cde43dd6abe0df5d9a962f4750d661b1895d1a2a6e1cbd6a52e1",
+            "0e3f0b38774602fdf6dc779f16ad777fd2afa0811f4e8862d4d5df758f68ac23",
+            "38e0b966f545c37cd0efb0ac8343e21fa9b26c8ab0a6061ba359d35b6ed3c72a",
+            "70e8661365cad2d7fdffa84cc46e27dceaa4f83fd5d64d43a606bc8413b2d2a7",
+            "bb728b469d74f22f76f869aa34e2878629546e6bca5eb2b4bf463a634861e18c",
+            "7c0dcc5ed41dc5905b7f1f95aefc6e7bda8a9c235fb821790daeafba71a4a0eb",
+            "52465975fc50318c7a641da514813db5a2679084d51fd02476c6a87fa93ad6ec",
+            "4e1ff5712f66ae1763b52e6c594f64b82db56e74bc9a5173d198d8e60545acfa",
+            "c64010e43d50e594cc236d24de083041e88f7149705305266fa7294810836ac2",
+            "2e62ba293f9902ba0f8699b69c40beefddd1cd7a766cb09c9548a5a16bbfda27",
+            "de7d8a25f246974226fd28859be42edf1801d9d7def90d86a44255a48274189b",
+            "86078e11846a664d14afd02f0a63552033baeacd052bcf08e8cd1553d5ad026d",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 4416000,
+            "events": 0,
+            "offGridEvents": 0,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 4,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 4329600,
+            "outActiveFrames": 4112669,
+            "tailActiveFrames": 4111662,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 4228071,
+            "lastNonzeroFrame": 4228084,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 85351,
+            "births": 48,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 684,
+            "steals": 0
           }
         }
       ]
@@ -1384,7 +1620,12 @@
             "expressionEvents": 0,
             "modeSwitches": 17,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 3449,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -1400,7 +1641,7 @@
         {
           "name": "spillover_chain",
           "package": "strum_chain",
-          "soundHash": "cbc6ccc4f24f6b3deb3944bb657560a9375827297a7d35f0a335df9e36c29e7a",
+          "soundHash": "86817de7e1ce635dbdb662e17ba6c8ab0c8cd5b11cc4241edb43b3d8490b92cd",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "9ea1b82ea4cb151f7f0b13fee02773c12dd3e618e55de829637ece19a78b9436",
           "secondHashes": [
@@ -1442,13 +1683,18 @@
             "expressionEvents": 0,
             "modeSwitches": 2,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 36222,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "restart_kept_params",
           "package": "restart_kept",
-          "soundHash": "f4ebf3d676b0870abc81d148f42a028141f8c5984005a149bda1d2cd062e07c6",
+          "soundHash": "261f5a844c0849d6b87ede9861ba38a867a290e021faf5feec70910ff4c2bd3c",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "894cd87fe4df61f2510cece8729caa10c112a85d8a492412d905a1f1c8ee87ed",
           "secondHashes": [
@@ -1490,7 +1736,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 6406,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -1535,7 +1786,12 @@
             "expressionEvents": 0,
             "modeSwitches": 1,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 9670,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -1582,7 +1838,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 700,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -1619,7 +1880,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 700,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]
@@ -1635,7 +1901,7 @@
         {
           "name": "macro_sweep",
           "package": "macro_sweep",
-          "soundHash": "e1cff8be897fc4ca9a4781241d81c2fac90d51dc3f15b5ae012c4decfddf06d4",
+          "soundHash": "585787e48c8bcb4cce604fff728676994436717698384482aeb51a29d28f3b0f",
           "controlHash": "6b24eac57e000ac2f6e72ea0bfb1d53b8c4a0b9d7840327f62cba8c23b874371",
           "hash": "0c631daa0979b5353f998e6fc8d40d850be0d6c14732456faab5c45c17d7fa82",
           "secondHashes": [
@@ -1677,13 +1943,18 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 39933,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 2082,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "expression",
           "package": "expression",
-          "soundHash": "4b0545a6b86aa63c87ff5445db8059cfd66e9eb9d160086e4a8fa1a17919bde9",
+          "soundHash": "9afb4dc912ec41e99d13fa4711eb72e0772a41700f9ec562f559cf85f1cfc91e",
           "controlHash": "4ea6b076ed6996eab5ca874155e28818ef3143c518057bfa6470f5d1b2fb09f5",
           "hash": "5a0c92d410fc4442053d4a246f9bde514d2c5125d983758fba2f8abe4dadcaaa",
           "secondHashes": [
@@ -1725,13 +1996,18 @@
             "expressionEvents": 300,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 1431,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "mode_switch",
           "package": "switch_marks",
-          "soundHash": "fb40d0b39ece8d9511c227931537be44cb118b6dd9a9d47104e39ee65e6050c1",
+          "soundHash": "e5d12743c238d6a7920e1061c1fe2386494d4dd5ef621c289d965dff500e9c1b",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "8d0fb295d67ce8c5701a6b8f7054da6e6435205fddf016f4ebd03ef04a5f8e63",
           "secondHashes": [
@@ -1773,7 +2049,12 @@
             "expressionEvents": 5,
             "modeSwitches": 5,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 2190,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
@@ -1818,13 +2099,18 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 287976,
-            "mutedFrames": 131781
+            "mutedFrames": 131781,
+            "births": 1595,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         },
         {
           "name": "lone_changes",
           "package": "lone_busy",
-          "soundHash": "b22991277d733aff2f969876ec28c209cd01c04d0fc2037a1dc181c60a680409",
+          "soundHash": "b38087fce16b40d4fbbc7f35c38b3e5c19d3590cc322b385674656690cc707b9",
           "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
           "hash": "727e38afd2ab8f89f3ca1c4db262a2206d2290d07f6b201d50f97f99c918b3fb",
           "secondHashes": [
@@ -1866,7 +2152,580 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 13956,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "plucks_wave1_12s",
+      "source": "plucks",
+      "generatorVersion": 1,
+      "frames": 576000,
+      "inputHash": "187e2d4e52cdbde3e58d4613e29b7d2198fe73367d42252f6ad774365a4f4100",
+      "ringSizes": [4194304],
+      "presets": [
+        {
+          "name": "onset_only",
+          "package": "sources_onset",
+          "soundHash": "342fa1662bee163185540ba6df204075a690bbb9d54edab771c4c552628a4712",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "764155f7a636b3b7fdf5303a2ce913581a13cd014a7af42507e768c063ed3e5a",
+          "secondHashes": [
+            "79425624ddd78369637f2d4fe2a51540fbe7e548e9f55092f6931b8ae9054474",
+            "b423df8556369b0c8b7646ab19addd62963fb234e8e106eeea666fd240fc7ce4",
+            "69fa3ead101fc1be12e6d6ff695c51176267af2eb926fe2c67c15760ee7ca8c8",
+            "4ee1ce1a2cdc5b9a20d1442db05d42e5cb1a929d6c3a490ece1931a87a22b3a9",
+            "6c4a69d94d2e4892d439963e48f313685625cc2cb8c88ae8e5352fba9aeffc87",
+            "26354be896a51e3e594c1c74bb21ce4276e937af0083822a3cd8fd35c60509b2",
+            "95f1ad5d2289e46a84d0d84c521f91f3323510fa9d0e7dc37cfe8d880368b859",
+            "f2d0d0fbeb2d7449d9c7cb276bb3732e6c5e3977efd601376820073508c32c98",
+            "e00c454a6d0343d2a1b530487c63bf0e954dc7535ed3717ae5d3548f74253616",
+            "7656e48711dec53fe13bb670acd946c12327f4c989f9f9b8e98b3516fd449e62",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 2,
+            "offGridEvents": 2,
+            "triggers": 2,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 431839,
+            "tailActiveFrames": 1,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 478799,
+            "lastNonzeroFrame": 478799,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 20,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "onset_burst",
+          "package": "burst_marks",
+          "soundHash": "86c25cff9b3974401a3c64faadd5a589294b111a6505160efba2e13ae46ab1bb",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "ed825f7cceaf924540dd9a8dbe578f67b62edaed12c227f7512a4f0a00d31db2",
+          "secondHashes": [
+            "c76f82f309d9673d316fe30350004dc94c88fe4a02e798c099ab85efed47bd05",
+            "56d9b79f83d2d049518e369049b9ce16c9d5a364be8e1f7de781606526df0b9d",
+            "18a7133221b28a0d5907204a5e21d5210ef851beb6b9cec454319ae9ae428ac4",
+            "f73d5b77492254665a3209f792d491f41a7037d36218760af5ec013ddeff0d03",
+            "0a9d0e03114aff02d09cb1bc3961a1a219856522ad029fa97d15353053a87dab",
+            "cf9098485c8ccd032042a713449a1c4cfd34a04b5ced973d479e5cb85c95136c",
+            "5cd2561d959991d8f1f970fc30d9dd074c90d22ff5d83eb0edf17bcaaf5bcd0a",
+            "cdf686d98b16fbe7a8130122596d8c1e1a50a50c91e8f835db514dd67648165e",
+            "522f639943c731c4ba7aa29c1a61d089f4ae82287e0b74ed90c4ed0c05db73e7",
+            "ecf87e489d631cee53bd062574bacd7e0a521f4c7c6c3855b5ec520696385914",
+            "9085b54974168acc9b413a6f3f57cc79586c05a7fc9b654d156c042830cb8e12",
+            "5ef3fe17904b9bb551b82b7d634506e8d51024356e5a3b33c67aa54ee3585297"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 0,
+            "offGridEvents": 0,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 574535,
+            "tailActiveFrames": 142536,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 575999,
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 120,
+            "burstBirths": 100,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "burst_spaced",
+          "package": "burst_spaced",
+          "soundHash": "50f153337195a75af8a8be8125beadc5455c82296e211f347cd835792559afc2",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "fb3cb732ffff2e428996fdb9b4cc9e127cbcf83b32988866b4ffa23208e8bde2",
+          "secondHashes": [
+            "587efa55789d95bfda39df675e0ef4874e1b4f3035f5c97105d7fb40f5390ccb",
+            "6b6d0569c61e396bafc97d03fabb80a4118c8af7cbb9fe2436e96fd9927547b5",
+            "ff332bc724d2160b9b662f660f00fd8a7464f4d16bc1b9e62f16ac26650d2803",
+            "30127ab6707f5a130c0306e13025168f8cf0fa2384ebcebf52d6076f3ba26baa",
+            "b4a818083c23f586ef0d36cc327971bd94871dbf741258e45ea6dce517c64010",
+            "024faa87a4ecca6d3198a06a37c979d2f7db55733296390393dce8f54faf6bee",
+            "8fe45771407bb845c6fe808af6cc4600bd5d997f4a56c12fbb305e369f8352df",
+            "94da35c3a1ffe5646a9ea16f5c378538627fd2e46d23c8d1763f4bb771aa544d",
+            "fdf18a524eefa439346fbbf689977f15a5656711428657165db6f377345cc8ad",
+            "ad226986ee492a5e246fa97a8be874076d011c8e41f56dc707acf24760498532",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 7,
+            "offGridEvents": 7,
+            "triggers": 6,
+            "loads": 1,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 434383,
+            "tailActiveFrames": 2502,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 478799,
+            "lastNonzeroFrame": 478799,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 1,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 66,
+            "burstBirths": 48,
+            "skips": 6,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "intermittent_cloud",
+          "hash": "db31d0e2b8eebe556f5b94b7152a6e88adafa4cbb3a5825a2e84fffd5aa3da3d",
+          "secondHashes": [
+            "2aecdccd58f9e9842a3ed48895fc346253d5629f7a5376600bfa9a101dfad788",
+            "4ab6a135232ae9940f5f26062df624507a331c9b46bc3150dafa1d032e437340",
+            "3a32829b22331b83d2e5eff776f339474bb29814451a0d237b18c81c7a816dc5",
+            "2ada4069525454a1a0ac42da9b1e7d8ee66f3fca392614c380ca7f267e9ef6f9",
+            "5cb8a907f7c0214cbe5a35d2dfa767a13d04a9ac297687dfa4ffc52d4e3c447d",
+            "5f10725253aa35f9b90314dd4f1d20ac42235ebf763b364a8783f4baf4561841",
+            "ff7c56be37c4ae743f70285501ae44643846a768bebe7b0c7230a64f676d3939",
+            "6a5add91debd7d12e10625bf79788216cec957ab8d8906ed8ab2b4414e82b7a8",
+            "d83edb68bd95e8c4354faa6aa5e7e48d4410bae96f85c65a25a34a9cc78420c8",
+            "e157855a40ed7ba8e944a61243f089277fbd428147503ab8bf10b7b1c7352ac1",
+            "5bbccd6ed0d83ca6a6b6738e387de232209894bfc557e1352671a6e6910a4ddb",
+            "e185ab16880e11d6c6b7fff98b8bdfb48f1cd704b94d744499a8ba3bb63932cb"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 0,
+            "offGridEvents": 0,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 533353,
+            "tailActiveFrames": 101354,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 549400,
+            "lastNonzeroFrame": 555970,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 2401,
+            "burstBirths": 0,
+            "skips": 2299,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "midi_gate",
+          "package": "sources_midi",
+          "soundHash": "bd6d4e95817672800f1df6be0483e8ad6391d86bb777bbdcca76f0de125095c9",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "fbd646744e7bb16e2aa83c7cd940901d472412078823f91fa48c115b2e34f852",
+          "secondHashes": [
+            "556651e19abc439d721540963fd423f7f74d1dceb019ad252dd7b47c27c007fc",
+            "7d1c3a2223842ec29228a6057e9f26bc0f70e8e1c6a05eecdf1abfffe156bcf7",
+            "e574ef9f2c161315c35e00f13272218d6ff21b16bcead801f00a8564a8c4322d",
+            "58d2f562284622631b5836f12a5faa06054b1288662f4c4f37f15737bd798fdc",
+            "08d54dbdce90c2193ab6d89c5024961e0e9a7c4e5333609ef14f78d4cb848420",
+            "5a43e45dc181b8977e01c8c543a33263ce81f569878d5181ad0ccfbb74879b0f",
+            "ed33abfac78eb678d0fe31cc8d10c1f8fa631edc84556f0a47895638f2a73ddb",
+            "85d315b5f7b7a9488928af11758c7de99594f8aac2a093ff50d2360ff188c38e",
+            "8235530d0542d63469ca510b9c0ec8d2781e361d4c64881bed4c6c9b5c4a294d",
+            "6a558b9013098a4d6e76de6f1b7269420a533d5c1b6df42b4d5a93188848e4f9",
+            "170918851c1154ff9f25c0ae3d18900e2953ecd1576bbca114503334b67f3e92",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 10,
+            "offGridEvents": 10,
+            "triggers": 8,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 486257,
+            "tailActiveFrames": 54279,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 514540,
+            "lastNonzeroFrame": 517813,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 191,
+            "burstBirths": 14,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "pitch_cycle",
+          "package": "pitchset_cycle",
+          "soundHash": "8a3700f17de4ee1fcd9298990faab45db12911368ba4205eb3e0270832d13776",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "cdc42a2405382300e7b5a7ed942e2b7f929fa57ccf108b9493f280cda5146a36",
+          "secondHashes": [
+            "324db34d2c14af8e9ef4457a608914f20baa233c50eff964d4e681061f867619",
+            "2e24d639e452f66b0d6bf41398855103522d2144bcbf6d69be694c089895bc0d",
+            "c927203c92080e02b03f49c2a6ac1709ab80d10da0dfd5564785144c486ccda2",
+            "97e7b633bb2d48f1b125a40edc0bf9214ead3dcc443a41d28531c522dce0aec5",
+            "598939eb97221815e8e6accd391bff4c8914158194427c7d5cfa82d768cf1c72",
+            "252d3223ebadafc007b83a3e3daf6f7899ea0dbf5cf5806b1f703177a7b8d8a8",
+            "44f116b3b8f89168509085e35ced2c74158d29bb1209cd205b22ee174a917188",
+            "86666933d89e309d204f64e63d5e34967136cf5eb6319272deef12299de92eaa",
+            "437c7811bc02ad5089dde3ecb754ec6184414a5baba2a3f64735e21cd69351a7",
+            "b0f1098ac080619629c967194048bdfe59603afac112f44f76d042f5825119f3",
+            "086c32850b472a63df3b430a2c9b1d946f10aded3f2703dd8e54a1f023c7c66d",
+            "bba1a76442bb6236d2a800413fb5ed5d27deda4b3a21c40c2a47534eafd8d49b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 5,
+            "offGridEvents": 5,
+            "triggers": 2,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 537761,
+            "tailActiveFrames": 105762,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 549912,
+            "lastNonzeroFrame": 559188,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 1121,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "pitch_random",
+          "package": "pitchset_random",
+          "soundHash": "ed3aecf1d41606623d1dbc3ebdeb5eeb530ccf0d929d805e3d1a0cc3659a338b",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "1b1ccd7bf56150e7e087692455e174acb73454bfb22708e4c6a427630d615008",
+          "secondHashes": [
+            "cf84c5416dcbdf4e6b2e9cc207e1f43fa3f1fe7782848cdf4027485f509eb279",
+            "3a4b6e02c863e4183460aebea6c3dcdeaddab9ac2bbe5eea98fd4c6d1c2e5869",
+            "245fb051d8e855dad54772618e869d116001be6dec4da6d7bebfd02ae1912b9d",
+            "6fe653b613fb2700162d75f37124f9eb84b31bc623ef9abd90c032cb9d84d3c9",
+            "763e18b7c9cbff5a3ffb5571dd99450442673f7e3636b17959dab18d62a61756",
+            "e35a99e72a7c8dff53a27784375be056d7675804286b46c2dbb76fb8e5f2a011",
+            "d0dffb3e88b95bce42bd16783331cb30b8c91ce8f3ad83c6425945e750aa9513",
+            "df904a9a04058561db693c95ae0966e9b5495ef1bd97dcdfc7a6d88470026c36",
+            "20c0ba7cdc3f74f8ecbf18e3b1105524b006107f01ed552c2454472541a9ae0b",
+            "bfa59d54cee79e5c8b26b808f16f411bfe28e7d903122b82db9e9c8c04efd119",
+            "2229f1f6b5afe83a0cecc91a0a8ce33e53026d692e4ffec1864987ea1050f6bb",
+            "8e9a8e356fb7c6a99070e3c849c1546b17b000b1f5dd13e2d5f92577c019d38c"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 2,
+            "offGridEvents": 2,
+            "triggers": 0,
+            "loads": 2,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 553722,
+            "tailActiveFrames": 121724,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 574754,
+            "lastNonzeroFrame": 575975,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 2,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 874,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "repeat_loops",
+          "package": "repeat_loops",
+          "soundHash": "748f050727146ffba4e6d84357bfffa485541ba0fb459a1a1ef7e24613d9fe30",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "b406e7d84d3ef886cd9271327349c962566b08dc793b877faffb0cdecf59e52d",
+          "secondHashes": [
+            "65dc9ecad2f44ef3dc4db884fc3bb16055cab0d3c703a6575d8c9678ae61ee45",
+            "836f2239cbcccdbadea41cb13386176f88b414efd36f389a51c29047ad54e75f",
+            "bf4cf43ff863343677d5c1528e4673ed1883f4991b8e1675d83efc63058e2958",
+            "0d60278bad6ea3afdbdb88ab9f7d8c4b19230a48aa5759ea9f192ffc57259d19",
+            "de19d6b3a28951d4abbb84ebfce86c175ef330931a129ec75c2cf15fe22153e6",
+            "0c2cb7a1ad7872ac7f4b5d2950b0b505b9440a6ca09ff0135565bc5171ccbfeb",
+            "f7e7c9a81d3478405d995c6770090e4c5874fee4241ab98bf8d51822dccb7708",
+            "2cd388f08cc498d216adbc7f647361bc95789e9bb797969b0fb92b4e88758a99",
+            "775752f3527fb6e321372dc41cc44bbb4dfa69aacbdd1fc3c230d3708932fd62",
+            "2a191db7a107476ce729ad3931b112fe906df704ce80003116063a95bd4f3e82",
+            "c6744dc69ca25042032e3672587906d92f2f8b60fe704a6f675921c8ad766c3d",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 4,
+            "offGridEvents": 4,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 503116,
+            "tailActiveFrames": 71118,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 510438,
+            "lastNonzeroFrame": 512683,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 350,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 637,
+            "steals": 0
+          }
+        },
+        {
+          "name": "decay_marks",
+          "package": "decay_marks",
+          "soundHash": "a754613a0c3819c50db8f5cd316242f7efdf88a14bcf1d550cce37e3d577eec9",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "d40a8f82ae24645d0c4aff020b3317ce21d836bb02dbe787848860c46e191951",
+          "secondHashes": [
+            "d52a40ba114ff9144abf347e8ea924b5159889ee9f6da9e9f49f3ac5ca4c451a",
+            "091f8208751caf979de96001c96a6b64fb60acaf6258554f69e903f2154c4641",
+            "c6a6900d317ad9f43d74e3503086c051d4366e3e2eb38ecb1fef05e3ddffebae",
+            "1eedc3fe2e9038e9bf7a0bd8ff2d409800814579034a2b06962cb0eba02bdbb1",
+            "a6c934f781a0b18ff8c2263524289a834258123a8aa1b131a2da31382fda63c0",
+            "ad5fede1ef6d31a909c66a1314c4f37e087ae76c4bae3a824958f8846d322453",
+            "330bc85eca11bd4ef84ee1c859fce61c073b60e3228210fe2e8d7f3d32078684",
+            "18674447088ed2fab0a7941840718342a6ed532fcb125864520700a932a7f15c",
+            "32c6ade541538774e340b12f25a65334b9a2854a7fcf60418f69edc1627d0089",
+            "ee64892d57e6adedd58438447213816609672f6551057a65cc56ef5b693e77ce",
+            "57104fee806f56ff96d968955e0773da835b8b454454b0187264c4c4b46902c1",
+            "57ef8c055d4c95e4fa1e16d812f5950b7c4976a27e3221ec54b915366ca462b4"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 1,
+            "offGridEvents": 1,
+            "triggers": 1,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 498842,
+            "tailActiveFrames": 66846,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 507750,
+            "lastNonzeroFrame": 575999,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 730,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
+          }
+        },
+        {
+          "name": "voice_limit",
+          "package": "voice_limit",
+          "soundHash": "624072f47399330d0850910b6813457387daf6162c85d31ffd56bcfefab52df2",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "41d9d5246a5782b90ad773c6aef88bafc52e3658a6af3b0838770ad03b4ef793",
+          "secondHashes": [
+            "546766d67fc149e4873eb7f7e739ee22827f1bedc7f5fd0d548f9eeb3603ef71",
+            "9ed9db3af702f11a68cc52604c41acc105a52a4f3e4c82876a54d3fbbc54cf37",
+            "1fbd1bbd911cbea8ef287203084feebda1c132863ad7e94f12af139ea79e5a38",
+            "dce8625afd3ce199857c2eac2681dc0cdb02af320e977eeab5f46241acdeb144",
+            "92378035e4554854b8f177780dd10d448cafa2bce39813901c5594888a4dd497",
+            "fcf4aea193a24cd9b12cfa431762132521ccac1fbab3b2330d09fca4331c5e7e",
+            "c071dd6d70224351a87dae2d1bf7479925aff3721a1ee25128fe65015f08a03d",
+            "269ce42beee1f11bf58ae7b88ec2d15bfce5e6b17441f05501b5470d2483569a",
+            "d1d3b0c3a25066e33d0ff88135c13fb1decbccdfbd2a73eb7009b97c1030fe23",
+            "8ce08f95da1c57abd14112269e877e55a509356e98434d9e4cb188e15ec2e29a",
+            "7b542b10d196a14406c8c754085fd6ef135590ae7652fdfeae5b1f4275257e5b",
+            "04c025a21ba88e0542f84fb7efec04a3ab35960147549fde3f6c686536ba4ae0"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 2,
+            "offGridEvents": 2,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 517227,
+            "tailActiveFrames": 85229,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 528103,
+            "lastNonzeroFrame": 531051,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 1070,
+            "burstBirths": 80,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 65
+          }
+        },
+        {
+          "name": "mono_stutter",
+          "package": "mono_stutter",
+          "soundHash": "068b7b06f0542582820ad3f6e210946e7fb8ecfb2b0ffe3059fae3ec22d0ede6",
+          "controlHash": "180627410b4f4cb8708cca886c9fdbf7a96f737ee14dc7d02e13732acf5aa4b3",
+          "hash": "eb239d739d62eb3e4e8107deca7145c3d05caea75ca1ff88acc6725ca6a91947",
+          "secondHashes": [
+            "0fa138152382e176deeec40a7c7a7cc36bdb9d9c4a72eb4fa95ad2c41b63668a",
+            "4d6c877ea56de5a746a2398fc4094ac86ab29fd38b2ae96f3eb78e1d120c3220",
+            "4f7b85b5bf9a521d4146a995019933f8e6896fd38a5595fc918fff26ed07406d",
+            "031b445c31be137a5532c5b4cf349d1c1b39f12324b956342965cd60d7ad0742",
+            "6c8961d1c21ac8a301159939ce98afd794733212555bb72d5ef1f4f0eecb1776",
+            "7caf617a1566fc2b13c321a4cb4e2d767735540938ce15c3e23934e2f3e7195c",
+            "f12270ffdb74c66d025332cba2e0b2bb22f0777ea146c96af5ba07a8cc4a29b5",
+            "49c61c704be7fb67515d1dd481f395dca5976bd935f39de52caef752a7a421b7",
+            "b5723279941fd336dd7e738c343489b04319e29238c76823ea16daa050673d32",
+            "b6727886f47b1c442390d2e771961474dbbb5c336e91c62d0356d5327a244ecc",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+            "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b"
+          ],
+          "counters": {
+            "frames": 576000,
+            "events": 0,
+            "offGridEvents": 0,
+            "triggers": 0,
+            "loads": 0,
+            "restarts": 0,
+            "onsets": 20,
+            "frozenOnsets": 0,
+            "frozenFrames": 0,
+            "freezeEngages": 0,
+            "fbAbove1Frames": 0,
+            "inClipFrames": 0,
+            "silentInFrames": 144001,
+            "outActiveFrames": 431806,
+            "tailActiveFrames": 0,
+            "subnormalOutFrames": 0,
+            "lastActiveFrame": 478799,
+            "lastNonzeroFrame": 478799,
+            "macroMoves": 0,
+            "expressionEvents": 0,
+            "modeSwitches": 0,
+            "killedFrames": 0,
+            "mutedFrames": 0,
+            "births": 80,
+            "burstBirths": 60,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 60
           }
         }
       ]
@@ -1911,7 +2770,12 @@
             "expressionEvents": 0,
             "modeSwitches": 0,
             "killedFrames": 0,
-            "mutedFrames": 0
+            "mutedFrames": 0,
+            "births": 466,
+            "burstBirths": 0,
+            "skips": 0,
+            "repeatPasses": 0,
+            "steals": 0
           }
         }
       ]

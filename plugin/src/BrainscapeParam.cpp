@@ -235,10 +235,17 @@ juce::String FormatPlainText(ParamId id, float plain) {
   return juce::String(buf);
 }
 
+WrapperEvent::Type BrainscapeParam::EventTypeFor(ParamId id) noexcept {
+  if (FindParam(id) != nullptr && FindParam(id)->kind == ParamKind::Macro) return WrapperEvent::Type::Macro;
+  if (id == ParamId::PerfExpression) return WrapperEvent::Type::Expression;
+  return WrapperEvent::Type::Param;
+}
+
 BrainscapeParam::BrainscapeParam(ParamId id, EventSink& sink)
     : juce::RangedAudioParameter(juce::ParameterID{Descriptor(id).name, 1},
                                  FindParamDisplay(id)->title, Attributes(*FindParamDisplay(id))),
       id_(id),
+      eventType_(EventTypeFor(id)),
       display_(*FindParamDisplay(id)),
       defaultPlain_(Canonicalize(id, Descriptor(id).def)),
       sink_(sink),
@@ -258,8 +265,7 @@ void BrainscapeParam::SetPlainInGesture(float plain) {
   const float canonical = Canonicalize(id_, plain);
   if (canonical == Plain()) return;
   plain_.store(canonical, std::memory_order_relaxed);
-  sink_.Post({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, static_cast<uint32_t>(id_),
-              canonical});
+  sink_.Post({eventType_, WrapperEvent::Source::Ui, EventId(), canonical});
   tlsOwnNotify = true;
   setValueNotifyingHost(getValue());
   tlsOwnNotify = false;
@@ -273,8 +279,7 @@ void BrainscapeParam::setValue(float newValue) {
   if (tlsOwnNotify || newValue == getValue()) return;
   const float plain = PlainFromNormalized(id_, newValue);
   plain_.store(plain, std::memory_order_relaxed);
-  sink_.Post({WrapperEvent::Type::Param, WrapperEvent::Source::Host, static_cast<uint32_t>(id_),
-              plain});
+  sink_.Post({eventType_, WrapperEvent::Source::Host, EventId(), plain});
 }
 
 float BrainscapeParam::getDefaultValue() const { return NormalizedFromPlain(id_, defaultPlain_); }

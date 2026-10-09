@@ -271,7 +271,8 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
     out->soundHash   = Sha256::ToHex(info.soundHash.bytes, sizeof info.soundHash.bytes);
     out->controlHash = Sha256::ToHex(info.controlHash.bytes, sizeof info.controlHash.bytes);
   }
-  const uint32_t switchesBefore = engine.ModeSwitches();
+  const uint32_t           switchesBefore = engine.ModeSwitches();
+  const Engine::GrainStats statsBefore    = engine.Stats();  // counts since Init
   queue_->Clear();  // the load restarted the engine: a new timeline
   StagedPresets staged;
   for (const StagedLoad& s : p.script.Staged()) {
@@ -503,6 +504,13 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
 
   At(out, Counter::Frames)       = frames;
   At(out, Counter::ModeSwitches) = static_cast<int64_t>(engine.ModeSwitches() - switchesBefore);
+  const Engine::GrainStats stats = engine.Stats();
+  At(out, Counter::Births)      = static_cast<int64_t>(stats.births - statsBefore.births);
+  At(out, Counter::BurstBirths) = static_cast<int64_t>(stats.burstBirths - statsBefore.burstBirths);
+  At(out, Counter::Skips)       = static_cast<int64_t>(stats.skips - statsBefore.skips);
+  At(out, Counter::RepeatPasses) =
+      static_cast<int64_t>(stats.repeatPasses - statsBefore.repeatPasses);
+  At(out, Counter::Steals) = static_cast<int64_t>(stats.steals - statsBefore.steals);
   out->ringReachFrame            = reach;
   hasher.Finish(out);
   return true;

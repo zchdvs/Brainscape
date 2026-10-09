@@ -3,8 +3,8 @@
   "id": "example.leaves",
   "name": "Every leaf",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "fe3aa432ac054259d2781d4f6bee08f8f1d039937e6320027a750b2f3f6f77b2",
+  "sound_rev": 7,
+  "sound_hash": "37a9826bd794d3794714d882830461f0ab7f1ceb744c30be7d31030539f3c4c6",
   "meta": {
     "author": "",
     "description": "",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.999,
-    "jitter": 1
+    "jitter": 1,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 5000,
-        "spray_ms": 7.0385307e-26
+        "spray_ms": 7.0385307e-26,
+        "repeat": 1
       },
       "size_ms": 1,
+      "decay_ms": 0,
       "window": {
         "sustain": 0,
         "skew": 1,
