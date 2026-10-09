@@ -295,6 +295,14 @@ mode files; it bounds the staging ring, the guard clamps, and the worst-case cac
 
 ## 4. Scheduler
 
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) designs the `CLOCK` source
+> (its §6.3): an integer phasor in 24-ppqn ticks, quantised to the effective Subdiv, fed by tap,
+> MIDI clock and host tempo as stamped events. One sentence below changes: a CLOCK grid hit is
+> trigger-class, stealing the oldest voice at `voice_count`, and `overlap` no longer caps it (the
+> "don't-fire ceiling" under a `CLOCK` source is withdrawn; clock.md D13, confirmed by the owner
+> on 2026-10-08), because a refused hit is a missing beat. `jitter` delays a hit by up to half a
+> grid period without accumulating; the grid itself never moves with births.
+
 **Trigger vocabulary** — OR'd, Clouds' triple-trigger extended (grain-delay-theory.md §3.2;
 onset doc rec #8):
 
@@ -524,6 +532,17 @@ filter concurrency vs. tier capacity); `d_min_fb` when feedback > 0; grain-lengt
 > `layer0.pitch.transpose_st`, an offset over the pitch set. That design amends this section
 > when it is accepted (its §12.5).
 
+> **Update (2026-10-08, CLOCK design pass).** The Time knob's dual mode below is specified in
+> [clock.md](clock.md) §5.1 and §6.4. The Microcosm's manual settles what the Subdiv steps mean:
+> its 1/4, 1/2, TAP, 2×, 4× and 8× are **rate multipliers of the tapped quarter note**, so its
+> "1/4" is a whole-note grid and "forced to quarters" means TAP; the stored code 0 is TAP, the
+> default. Brainscape writes them as rates (×1/4, ×1/2, TAP, ×2, ×4, ×8; `x1/4` … `x8` in JSON)
+> so they never read as the note values of synced fields. A mode's separate `subdiv` field is
+> withdrawn: the preset's performance state holds the one stored subdivision, which the live
+> control overrides. The stage gesture toggles Subdiv and Tempo, as the Microcosm's does; a third
+> time mode, Free, authored in the preset, keeps the Time knob on `macro.time` for modes that are
+> not tempo-driven. All confirmed by the owner on 2026-10-08 (clock.md §11.5, D7, D14 and D18).
+
 Two tiers over **one** parameter system (microcosm.md §13.1; preset doc recs #6–#7).
 
 **The leaf/structure split** (review finding — a `constexpr` table cannot enumerate leaves of
@@ -654,6 +673,17 @@ estimated ([determinism-profile.md](determinism-profile.md), "Effect on the grai
 budget").
 
 ## 9. `dsp/` core API
+
+> **Update (2026-10-08, CLOCK design pass).** The listing's transport and performance calls
+> `SetTempo(double bpm)`, `Tap()`, `SetSubdiv(Subdiv)` and `SetExternalClock(bool)`, and the
+> threading table's row for them, are superseded by stamped events, as
+> [mode-compiler.md](mode-compiler.md) §7.4 decided (its record §3, item 14) and
+> [clock.md](clock.md) §2.6 and §4.1 specify: Tap (6), Tempo (7, ns per quarter), ClockTick (8),
+> Transport (9, with a position in 24-ppqn ticks) and Subdivision (10), with no unstamped
+> counterparts; the engine estimates tap and clock tempo itself in integer arithmetic, so an
+> external clock is not a switch but a state the events drive. `ProcessContext`'s `tempoBpm`,
+> `timelinePos` and `transportPlaying` are never read and go with the tempo core.
+> `SetGlobalReverse` becomes event 11 with the rest of W2.
 
 > **Update (2026-10-07, mode-compiler lane C, sound revision 2).** The API as built is
 > [mode-compiler.md](mode-compiler.md) §7.4's: `LoadPreset(state, Exact or Spillover, report,

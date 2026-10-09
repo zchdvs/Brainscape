@@ -526,6 +526,21 @@ keeps the ring, so it neither silences old audio nor makes bounces reproducible.
 
 ### 4.10 Events are applied at exact frames
 
+> **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §4 adds the tempo events
+> (Tap, Tempo, ClockTick, Transport, Subdivision) and amends two bullets below for the pedal.
+> Every pedal producer stamps an event a fixed number of blocks after the block in which it was
+> captured: two for MIDI bytes (captured in the UART's DMA callback), the console and the knobs,
+> five for the tap switch, which the audio callback samples and debounces by state. The control
+> loop, the queue's single producer, pushes stamps that never fall and at most two clock ticks per
+> block; the UART hands its bytes to the loop through a ring whose entries carry a timeline epoch,
+> so bytes captured before an Exact load's reset are parsed but never stamped into the new
+> timeline. A session log records the frame where each event **applied**, not its stamp, since a
+> late event applies at the next block's start. After an Exact load the producer re-asserts the
+> running tempo, and under a running MIDI clock the master's position, as logged events at
+> frame 0 (clock.md §2.5). The plugin turns the host's tempo and transport into those events
+> itself (clock.md §4.4), and its Standalone feeds device MIDI clock through the same translator
+> the pedal uses (§4.3 there).
+
 `SetParam` ignores its sample offset and applies at the next `Process` (`Engine.h:90-96`), which
 made 48- and 512-frame renders differ; splitting at the event's frame made them identical
 (*measured* [preset], [challenge]). So every event the app generates (scripted UI edits, MIDI,
@@ -773,6 +788,18 @@ and the UI says so. A new leaf must default to a value that leaves existing pres
 bit-identical, so it can land as "sound-neutral" (§6.5); otherwise it bumps the revision.
 
 ### 6.2 What a preset captures, and what it deliberately excludes
+
+> **Update (2026-10-08, CLOCK design pass).** The table's "tempo source" and the exclusions'
+> "clock source" contradicted each other. [clock.md](clock.md) §2.4 and §3.6 resolve it as the
+> exclusions say, the Microcosm's way (its D3): the tempo source is a device setting ("receive
+> MIDI clock" on the pedal, the Tempo source in the plugin), and STAT's `tempo_source` byte is
+> reserved and must be 0, so presets that sound the same keep one `sound_hash`. A preset stores
+> its time mode, subdivision and tempo as an integer µs per quarter, which saving a preset
+> captures from the live performance (clock.md §10.3); whether a load recalls that tempo is the
+> device setting `global.tempo_recall`. Under Keep, the default, the running tempo carries
+> across every load: the engine's Exact load plays the stored tempo, and the producer re-asserts
+> the running one as a logged event at frame 0 (clock.md §2.5, its D4 and D17). The owner
+> confirmed these answers, with the rest of clock.md §11.5, on 2026-10-08.
 
 | Captured | Section |
 |---|---|
