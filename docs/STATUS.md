@@ -977,13 +977,16 @@ records live in [docs/design/reviews/](design/reviews/).
   fixtures load inexact (their 27 and 28 are unknown ids) and added `r2-onset-marks.bsp`, which
   must load exact on every later build; the fixtures' recipes now spell out each revision's
   leaves, so they keep rebuilding the committed bytes. **The
-  number code's committed hashes are provisional:** measured on x86-64 (MSVC 19.40, GCC 11.4,
-  Clang 14; the exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit
-  Cortex-M7 under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review), but the
-  design commits them only after one linux-arm64 and one macOS run (§10.2), which no host here
-  offered. Lane G's `bspc-roundtrip` legs run them on linux-arm64 and both macOS legs, and
-  their first GitHub run reproducing them is still the gate before the number code is relied
-  on; a leg that differs is a finding, not a reason to re-mint. The fuzzers' M7 run, the
+  number code's hashes** were measured on x86-64 (MSVC 19.40, GCC 11.4, Clang 14; the
+  exhaustive one with MSVC and GCC) and, the per-pull-request sets, on the 32-bit Cortex-M7
+  under qemu (arm-none-eabi GCC 10.3, run serially by the lane B review); the design commits
+  them only after one linux-arm64 and one macOS run (§10.2), which no host here offered. Those
+  runs have happened on GitHub: `compiler_number_hashes` passed in lane G's `bspc-roundtrip`
+  legs on linux-arm64 and both macOS legs on pull requests #5, #6 and #7 (runs 37658865968,
+  37693138971, 37701943741), and the nightly exhaustive round trip reproduced its hashes on
+  linux-arm64 and linux-x64 GCC (run 37770014635, `main` at `1624f80`, 2026-10-08). Whether
+  that commits them under §10.2 is the owner's call, still pending; a leg that differs is a
+  finding, not a reason to re-mint. The fuzzers' M7 run, the
   libFuzzer leg and the number-check legs are CI jobs since lane G, and the plugin's typed-text
   parser now uses `Number` (lane A).
 - **Mode compiler lane A's open ends.** The compiler admits the default structure, the onset
@@ -1018,9 +1021,9 @@ records live in [docs/design/reviews/](design/reviews/).
   fortified buffer in the test's random generator (fixed in `7f20481`), and its second
   (37658865968) and those of #6 and #7 (37693138971, 37701943741) passed all eight jobs,
   `compiler_number_hashes` and `bspc roundtrip` on linux-arm64 and both macOS legs included.
-  Those runs were the gate for the number code's and the compiler's digests on arm64 and macOS
-  (above), and for `bspc`'s non-ASCII file names and the import check on macOS, which no host
-  here offered; the "provisional" and "x86-64 only" wording above predates them. Locally the new
+  Those runs reproduced the number code's and the compiler's digests on arm64 and macOS (whether
+  that commits them is pending the owner; lanes B and A, above) and passed `bspc`'s non-ASCII
+  file names and the import check on macOS, which no host here offered. Locally the new
   steps passed with MSVC 19.40, GCC 11.4, Clang 14 (libFuzzer included, where
   CI's runner has Clang 18) and the emulated M7, and actionlint (with shellcheck) passes. For
   the owner: create the "package-change" label and require the eight new checks (above). What
@@ -1209,8 +1212,9 @@ Steps 1–4 need no hardware.
    lint, derive), which compiles only the default structure until sound revision 2; and lane G,
    the CI: the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the
    decoder's fuzzers on every leg and the emulated M7, libFuzzer, nightly legs and the compiler
-   audit (on their first GitHub run, the arm64 and macOS legs must reproduce the number code's
-   and the compiler's committed hashes); and lane C, the engine runtime at sound revision 2
+   audit (the arm64 and macOS legs reproduced the number code's and the compiler's hashes on
+   pull requests #5–#7; whether that commits them is the owner's call); and lane C, the engine
+   runtime at sound revision 2
    (modes loaded and validated, macro and expression moves, Trails and FastCut, the wet-only
    trim, the effect volume and the wet kill, the corpus on compiled packages). The Mix law (Q13,
    the owner's provisional answer) is sound revision 3, with the first set's recipes re-measured
