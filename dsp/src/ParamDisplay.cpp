@@ -22,9 +22,9 @@ namespace {
 
 // Host model (b) (ParamDisplay.h, mode-compiler.md §3.6, Q12): only macros, Mix, the effect
 // volume and the performance rows are automatable; Reserved rows carry the flags their
-// final kind will have. Sound revision 1's leaves keep kAuto until lane D registers the
-// macro parameters that take their automation over (§12.4), and then take kLeaf. Retired
-// rows (27 and 28 since sound revision 2) keep a display row but are never registered.
+// final kind will have. Every other leaf is kLeaf: registered, but not automatable, since lane
+// D's curation slice registered the macro parameters that took their automation over (§12.4).
+// Retired rows (27 and 28 since sound revision 2) keep a display row but are never registered.
 constexpr uint16_t kLeaf     = 0;
 constexpr uint16_t kLeafStep = kParamDiscrete;
 constexpr uint16_t kAuto     = kParamAutomatable;
@@ -35,32 +35,32 @@ using K = DisplayKind;
 using T = Taper;
 
 constexpr ParamDisplay kDisplayTable[] = {
-    {ParamId::DelayMs,             G::GrainDelay,  "Delay time",                   "Time",     T::Quartic, K::Milliseconds, 0,  kAuto},
+    {ParamId::DelayMs,             G::GrainDelay,  "Delay time",                   "Time",     T::Quartic, K::Milliseconds, 0,  kLeaf},
     {ParamId::Mix,                 G::GrainDelay,  "Mix",                          "Mix",      T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::Feedback,            G::GrainDelay,  "Feedback",                     "Feedback", T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::WetTrimDb,           G::GrainDelay,  "Wet trim",                     "Trim",     T::Linear,  K::Decibels,     0,  kAuto},
-    {ParamId::GrainSizeMs,         G::Grains,      "Grain size",                   "Size",     T::Quartic, K::Milliseconds, 0,  kAuto},
-    {ParamId::Overlap,             G::Grains,      "Grain overlap",                "Overlap",  T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::SprayMs,             G::Grains,      "Grain spray",                  "Spray",    T::Quartic, K::Milliseconds, 0,  kAuto},
-    {ParamId::TransposeSt,         G::Pitch,       "Transpose",                    "Pitch",    T::Linear,  K::Semitones,    0,  kAuto},
-    {ParamId::SpreadCents,         G::Pitch,       "Pitch spread",                 "Spread",   T::Linear,  K::Cents,        0,  kAuto},
-    {ParamId::ReverseProb,         G::Pitch,       "Reverse probability",          "Reverse",  T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::Jitter,              G::Grains,      "Scheduler jitter",             "Jitter",   T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::WindowSustain,       G::Window,      "Window sustain",               "Sustain",  T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::WindowSkew,          G::Window,      "Window skew",                  "Skew",     T::Linear,  K::Balance,      0,  kAuto},
-    {ParamId::WindowSmooth,        G::Window,      "Window smoothness",            "Smooth",   T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::PanSpread,           G::Grains,      "Pan spread",                   "Pan",      T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::ModRateHz,           G::Mod,         "Mod rate",                     "Rate",     T::Quartic, K::Hertz,        0,  kAuto},
-    {ParamId::ModDepth,            G::Mod,         "Mod depth",                    "Depth",    T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::DelayTimeMs,         G::PostDelay,   "Post delay time",              "Time",     T::Square,  K::Milliseconds, 0,  kAuto},
-    {ParamId::DelayFb,             G::PostDelay,   "Post delay feedback",          "Repeats",  T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::DelayMix,            G::PostDelay,   "Post delay mix",               "Mix",      T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::ReverbTime,          G::Reverb,      "Reverb time",                  "Time",     T::Linear,  K::Amount,       0,  kAuto},
-    {ParamId::ReverbMix,           G::Reverb,      "Reverb mix",                   "Mix",      T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::FilterCutoffHz,      G::Filter,      "Filter cutoff",                "Cutoff",   T::Quartic, K::FilterCutoff, 0,  kAuto},
-    {ParamId::FilterRes,           G::Filter,      "Filter resonance",             "Reso",     T::Linear,  K::Percent,      0,  kAuto},
-    {ParamId::FilterMorph,         G::Filter,      "Filter morph",                 "Morph",    T::Linear,  K::FilterMorph,  0,  kAuto},
-    {ParamId::TriggerSens,         G::Triggers,    "Trigger sensitivity",          "Sense",    T::Linear,  K::Percent,      0,  kAuto},
+    {ParamId::Feedback,            G::GrainDelay,  "Feedback",                     "Feedback", T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::WetTrimDb,           G::GrainDelay,  "Wet trim",                     "Trim",     T::Linear,  K::Decibels,     0,  kLeaf},
+    {ParamId::GrainSizeMs,         G::Grains,      "Grain size",                   "Size",     T::Quartic, K::Milliseconds, 0,  kLeaf},
+    {ParamId::Overlap,             G::Grains,      "Grain overlap",                "Overlap",  T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::SprayMs,             G::Grains,      "Grain spray",                  "Spray",    T::Quartic, K::Milliseconds, 0,  kLeaf},
+    {ParamId::TransposeSt,         G::Pitch,       "Transpose",                    "Pitch",    T::Linear,  K::Semitones,    0,  kLeaf},
+    {ParamId::SpreadCents,         G::Pitch,       "Pitch spread",                 "Spread",   T::Linear,  K::Cents,        0,  kLeaf},
+    {ParamId::ReverseProb,         G::Pitch,       "Reverse probability",          "Reverse",  T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::Jitter,              G::Grains,      "Scheduler jitter",             "Jitter",   T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::WindowSustain,       G::Window,      "Window sustain",               "Sustain",  T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::WindowSkew,          G::Window,      "Window skew",                  "Skew",     T::Linear,  K::Balance,      0,  kLeaf},
+    {ParamId::WindowSmooth,        G::Window,      "Window smoothness",            "Smooth",   T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::PanSpread,           G::Grains,      "Pan spread",                   "Pan",      T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::ModRateHz,           G::Mod,         "Mod rate",                     "Rate",     T::Quartic, K::Hertz,        0,  kLeaf},
+    {ParamId::ModDepth,            G::Mod,         "Mod depth",                    "Depth",    T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::DelayTimeMs,         G::PostDelay,   "Post delay time",              "Time",     T::Square,  K::Milliseconds, 0,  kLeaf},
+    {ParamId::DelayFb,             G::PostDelay,   "Post delay feedback",          "Repeats",  T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::DelayMix,            G::PostDelay,   "Post delay mix",               "Mix",      T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::ReverbTime,          G::Reverb,      "Reverb time",                  "Time",     T::Linear,  K::Amount,       0,  kLeaf},
+    {ParamId::ReverbMix,           G::Reverb,      "Reverb mix",                   "Mix",      T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::FilterCutoffHz,      G::Filter,      "Filter cutoff",                "Cutoff",   T::Quartic, K::FilterCutoff, 0,  kLeaf},
+    {ParamId::FilterRes,           G::Filter,      "Filter resonance",             "Reso",     T::Linear,  K::Percent,      0,  kLeaf},
+    {ParamId::FilterMorph,         G::Filter,      "Filter morph",                 "Morph",    T::Linear,  K::FilterMorph,  0,  kLeaf},
+    {ParamId::TriggerSens,         G::Triggers,    "Trigger sensitivity",          "Sense",    T::Linear,  K::Percent,      0,  kLeaf},
     {ParamId::OnsetTrigger,        G::Triggers,    "Onset trigger (retired)",      "Onset",    T::Linear,  K::OffOn,        2,  kLeafStep},
     {ParamId::PositionSource,      G::Triggers,    "Position source (retired)",    "Position", T::Linear,  K::LiveMark,     2,  kLeafStep},
     {ParamId::Repeat,              G::Grains,      "Repeat passes",                "Repeat",   T::Linear,  K::Count,        16, kLeafStep},
@@ -122,13 +122,11 @@ static_assert(sizeof(kDisplayTable) / sizeof(kDisplayTable[0]) == kNumParams,
               "every descriptor needs a display row");
 
 // The rows a host may automate under model (b): macros, performance controls (perf.reverse
-// and perf.loop_level are Reserved until W2 and the looper), Mix and the effect volume. Until
-// lane D switches the plugin to model (b), sound revision 1's leaves stay automatable too.
+// and perf.loop_level are Reserved until W2 and the looper), Mix and the effect volume.
 constexpr bool HostAutomatable(const ParamDescriptor& d) {
-  const bool keptUntilLaneD = d.kind == ParamKind::Leaf && d.sinceRev == 1u;
   return d.kind == ParamKind::Macro || d.kind == ParamKind::Performance ||
          d.id == ParamId::PerfReverse || d.id == ParamId::PerfLoopLevel || d.id == ParamId::Mix ||
-         d.id == ParamId::EffectVolumeDb || keptUntilLaneD;
+         d.id == ParamId::EffectVolumeDb;
 }
 
 constexpr bool DisplayTableMatchesDescriptors() {

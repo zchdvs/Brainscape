@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "id": "factory.murmuration",
+  "name": "Murmuration",
+  "family": "reverie",
+  "sound_rev": 7,
+  "sound_hash": "1417835778fe02f9c504ff78fcf3548e74aa34caacb0269e5202f7760ef37d1f",
+  "meta": {
+    "author": "Brainscape",
+    "description": "A dense, randomized grain cloud that flocks around the playing.",
+    "tags": ["reverie", "first-set"]
+  },
+  "global": {
+    "mix": 0.3
+  },
+  "scheduler": {
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.8,
+    "jitter": 1,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
+  },
+  "layers": [
+    {
+      "voice_count": 64,
+      "position": {
+        "source": "live",
+        "base_ms": 300,
+        "spray_ms": 646.875,
+        "repeat": 1
+      },
+      "size_ms": 140,
+      "decay_ms": 0,
+      "window": {
+        "sustain": 0.16363637,
+        "skew": 0.4909091,
+        "smoothness": 1
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 0,
+        "spread_cents": 25,
+        "reverse_prob": 0.35
+      },
+      "pan_spread": 1
+    }
+  ],
+  "feedback": {
+    "amount": 0.4
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0.15
+    },
+    "delay": {
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
+    },
+    "reverb": {
+      "time": 0.7,
+      "mix": 0.5
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 2,
+  "trigger": {
+    "sensitivity": 0.5
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.55, 0.95],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [100, 1500],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "feedback.amount",
+          "range": [0.1, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.size_ms",
+          "range": [60, 500],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.4, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.2, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [50, 2000],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.625,
+      "repeats": 0.375,
+      "shape": 0.18181817,
+      "time": 0.35805744,
+      "space": 0.5,
+      "filter": 1
+    }
+  }
+}

@@ -93,8 +93,9 @@ int main(int argc, char* argv[]) {
       haveDelay |= p->getName(64) == "Delay time";
       haveFreeze |= p->getName(64) == "Freeze";
     }
-    // The Leaf rows, freeze, and the bypass JUCE's VST3 wrapper adds.
-    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 2 && haveDelay && haveFreeze,
+    // The Leaf rows, freeze, the eight macros, the expression pedal, the effect volume
+    // (mode-compiler.md §9.2), and the bypass JUCE's VST3 wrapper adds.
+    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 12 && haveDelay && haveFreeze,
           juce::String(host->getParameters().size()) + " host parameters, engine and freeze present");
 
     // A session state with exact values: the record's two awkward ones (companion-app

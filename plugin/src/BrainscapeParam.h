@@ -8,13 +8,20 @@
 
 namespace brainscape::plugin {
 
-// One host parameter per Leaf row (companion §5.3, mode-compiler.md §4.1). The exact
-// binary32 plain value is the source of truth; the normalised value JUCE and the host see
-// is only a view computed by dsp/'s taper. The atomic is a mirror for host and GUI: the
-// engine receives values only as events through the wrapper queue (companion §4.7).
+// One host parameter per Leaf row (companion §5.3, mode-compiler.md §4.1), and per Macro row,
+// for perf.expression and for the effect volume (§9.2). The exact binary32 plain value is the
+// source of truth; the normalised value JUCE and the host see is only a view computed by
+// dsp/'s taper. The atomic is a mirror for host and GUI: the engine receives values only as
+// events through the wrapper queue (companion §4.7). A Leaf or Global row's change is a
+// SetParam; a Macro row's a MacroMove of its position, and perf.expression's an Expression
+// event, whose fan-out the wrapper mirrors on the leaves it moves (§3.4). Automatable as the
+// shared display flags say: host model (b) (§3.6, Q12).
 class BrainscapeParam final : public juce::RangedAudioParameter {
  public:
   BrainscapeParam(ParamId id, EventSink& sink);
+
+  // The event a change of `id`'s row posts.
+  static WrapperEvent::Type EventTypeFor(ParamId id) noexcept;
 
   ParamId Id() const noexcept { return id_; }
   float   Plain() const noexcept { return plain_.load(std::memory_order_relaxed); }
@@ -41,7 +48,12 @@ class BrainscapeParam final : public juce::RangedAudioParameter {
   const juce::NormalisableRange<float>& getNormalisableRange() const override { return range_; }
 
  private:
+  uint32_t EventId() const noexcept {
+    return eventType_ == WrapperEvent::Type::Expression ? 0u : static_cast<uint32_t>(id_);
+  }
+
   const ParamId                  id_;
+  const WrapperEvent::Type       eventType_;
   const ParamDisplay&            display_;
   const float                    defaultPlain_;
   EventSink&                     sink_;

@@ -180,6 +180,7 @@ static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
+static_assert(kMaxPitchEntries == detail::kGranularMaxPitch, "a pitch set's cap differs");
 static_assert(kFastCutFrames == detail::kGranularFastCutFrames, "public and core fades differ");
 
 // Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
@@ -421,7 +422,11 @@ struct Engine::Impl {
   Smoother     mix_, wetGain_, feedback_, norm_;
   int64_t      sampleCounter_ = 0;
   int64_t      epochStart_    = 0;  // random draws are keyed on sampleCounter_ - epochStart_
-  uint32_t     pendingTriggers_ = 0;  // due triggers, fired one per frame (audio thread)
+  // Due triggers by source, fired one per frame, footswitch first (audio thread). The mode's
+  // sources gate them when they are due (RenderFrames, design §7.5): footswitch counts every
+  // source but MidiNote.
+  uint32_t     pendingFootswitch_ = 0;
+  uint32_t     pendingMidi_       = 0;
   uint32_t     modeSwitches_  = 0;  // loads whose mode differed by content (ModeSwitches)
   bool         ready_         = false;
   uint8_t      dirty_         = kAllParamDomains;  // ParamDomain bits to rebuild
@@ -443,7 +448,8 @@ struct Engine::Impl {
   std::atomic<float>    pending_[kNumStored]{};
   std::atomic<bool>     freezePending_{false};
   std::atomic<uint32_t> onsetCount_{0};
-  std::atomic<uint32_t> manualTriggers_{0};
+  std::atomic<uint32_t> manualFootswitch_{0};  // Trigger() calls, by source
+  std::atomic<uint32_t> manualMidi_{0};
   float                 active_[kNumStored]{};
 };
 
@@ -501,9 +507,22 @@ bool Engine::GetFreeze() const noexcept {
   return impl().freezePending_.load(std::memory_order_relaxed);
 }
 
-void Engine::Trigger(TriggerSource /*src*/, float /*velocity*/,
-                     uint32_t /*sampleOffset*/) noexcept {
-  impl().manualTriggers_.fetch_add(1u, std::memory_order_relaxed);
+void Engine::Trigger(TriggerSource src, float /*velocity*/, uint32_t /*sampleOffset*/) noexcept {
+  // Gated by the mode's sources only when due (RenderFrames), so a load between this call and
+  // the trigger's frame decides it as a Trigger event at that frame would be decided.
+  (src == TriggerSource::MidiNote ? impl().manualMidi_ : impl().manualFootswitch_)
+      .fetch_add(1u, std::memory_order_relaxed);
+}
+
+Engine::GrainStats Engine::Stats() const noexcept {
+  const detail::GranularStats& s = impl().granular_.Stats();
+  GrainStats out;
+  out.births      = s.births;
+  out.burstBirths = s.burstBirths;
+  out.skips       = s.skips;
+  out.repeatPasses = s.repeatPasses;
+  out.steals       = s.steals;
+  return out;
 }
 
 uint32_t Engine::ConsumeOnsetCount() noexcept {
@@ -595,7 +614,8 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   writeFrame_    = 0;
   sampleCounter_ = 0;
   epochStart_    = 0;
-  pendingTriggers_ = 0;
+  pendingFootswitch_ = 0;
+  pendingMidi_       = 0;
   frozen_        = false;
   frozenAnchor_  = 0;
   freezePending_.store(false, std::memory_order_relaxed);
@@ -617,6 +637,7 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   }
 
   granular_.Init(ring_, mask_, windowLut_);
+  granular_.ClearStats();  // counts since Init (Engine::Stats)
 
   mix_.SetTau(10.0f, cfg.sampleRate);
   wetGain_.SetTau(10.0f, cfg.sampleRate);
@@ -649,8 +670,10 @@ void Engine::Impl::Reset() noexcept {
   tamer_.Reset();
   detector_.Reset();
   onsetCount_.store(0u, std::memory_order_relaxed);
-  manualTriggers_.store(0u, std::memory_order_relaxed);
-  pendingTriggers_ = 0;
+  manualFootswitch_.store(0u, std::memory_order_relaxed);
+  manualMidi_.store(0u, std::memory_order_relaxed);
+  pendingFootswitch_ = 0;
+  pendingMidi_       = 0;
   std::memset(fbFifo_, 0, static_cast<size_t>(kFeedbackDelayFrames) * 2u * sizeof(float));
   for (size_t i = 0; i < kNumStored; ++i) {
     active_[i] = pending_[i].load(std::memory_order_relaxed);
@@ -718,8 +741,10 @@ void Engine::Impl::InstallMode(const PresetState& preset) noexcept {
     ++modeSwitches_;
     // A different mode resets the sequencing state a load of the same mode keeps (design
     // §7.3): the pitch-cycle index, bursts, the step position and modulator phases, which the
-    // waves that build them reset here. Sound revision 2 has none; scheduler phase, marks and
-    // grains always carry over.
+    // waves that build them reset here (the bursts in progress since sound revision 4, the
+    // pitch cycle's position since 5).
+    // Scheduler phase, marks, grains and due triggers always carry over.
+    granular_.ResetSequencing();
   }
   std::memcpy(&mode_->mode, &preset.mode, sizeof(ModeBlob));
   std::memcpy(&mode_->control, &preset.control, sizeof(ControlState));
@@ -806,21 +831,56 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   if (total < 1u) total = 1u;
   gp_.totalFrames = total;
 
+  // Repeat (design §7.5, R11; sound revision 6): a voice reads its region `repeat` times, so it
+  // lives repeat * total frames. Counting leaves are read as RoundHalfAwayI32 of the canonical
+  // value, in range because canonicalization clamped it (§3.7).
+  const int32_t repeat = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::Repeat)));
+  assert(repeat >= 1 && repeat <= 16);
+  gp_.repeat         = static_cast<uint32_t>(repeat);
+  const uint32_t life = total * gp_.repeat;  // <= 16 * 24,000 frames
+
+  // Voice count (design §7.5, R12; sound revision 7): at most voice_count voices sound. The
+  // free-running target is min(64 * overlap^3, voice_count, a voice's life); 64 is revision 6's.
+  const int32_t voices = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::VoiceCount)));
+  assert(voices >= 1 && voices <= static_cast<int32_t>(kMaxGrains));
+  gp_.voiceCount = static_cast<uint32_t>(voices);
+
   const float overlap = get(ParamId::Overlap);
   float target        = static_cast<float>(kMaxGrains) * overlap * overlap * overlap;
   if (target < 1.0f) target = 1.0f;
   if (target > static_cast<float>(kMaxGrains)) target = static_cast<float>(kMaxGrains);
-  // The 1-frame inter-arrival floor caps sustainable voices at the grain length:
-  // normalizing to an unreachable target read up to -12.9 dB low (review finding).
-  if (target > static_cast<float>(total)) target = static_cast<float>(total);
+  if (target > static_cast<float>(gp_.voiceCount)) target = static_cast<float>(gp_.voiceCount);
+  // The 1-frame inter-arrival floor caps sustainable voices at a voice's life, the grain
+  // length times the repeat: normalizing to an unreachable target read up to -12.9 dB low
+  // (review finding).
+  if (target > static_cast<float>(life)) target = static_cast<float>(life);
   gp_.targetVoices = target;
+  // Decay (design §7.5, R11): 60 dB over decay_ms as the position reference ages, the rate
+  // log2(1000) / decay_ms in frames; 0 is off, so no gain changes.
+  const float decayMs = get(ParamId::DecayMs);
+  gp_.decayRate =
+      decayMs > 0.0f
+          ? static_cast<float>(grainmath::kLog2Of1000 / (static_cast<double>(decayMs) * (sr / 1000.0)))
+          : 0.0f;
 
   gp_.jitter      = get(ParamId::Jitter);
-  // The pitch (design §7.5): the pitch set's entry, then the transpose leaf (ID 8) as an offset
-  // over it; detune is added at birth. Sound revision 2 plays only the default set {0: 1} (sets
-  // are W1's, R10), whose entry 0 + t is t exactly for every canonical t, as revision 1 read it.
-  const ModeBlob& mode = mode_->mode;
-  gp_.ratioBase   = mode.pitch[0].entries[0].st + get(ParamId::TransposeSt);
+  // The pitch (design §7.5, R10; sound revision 5): layer 0's pitch set, each entry plus the
+  // transpose leaf (ID 8) as an offset over it, picked at birth by `cycle` or `random`; detune
+  // and the ±24 st clamp follow at birth. The validated mode's set has 1-8 entries of weight
+  // 1-16. The default set {0: 1}'s 0 + t is t exactly for every canonical t, so it plays sound
+  // revision 1's pitch.
+  const ModeBlob& mode      = mode_->mode;
+  const PitchSet& set       = mode.pitch[0];
+  const float     transpose = get(ParamId::TransposeSt);
+  assert(set.count >= 1u && set.count <= detail::kGranularMaxPitch);
+  gp_.pitchCount     = set.count;
+  gp_.pitchWeightSum = 0;
+  for (uint32_t i = 0; i < set.count; ++i) {
+    gp_.pitchSt[i]     = set.entries[i].st + transpose;
+    gp_.pitchWeight[i] = set.entries[i].weight;
+    gp_.pitchWeightSum += set.entries[i].weight;
+  }
+  gp_.pitchRandom = mode.layers[0].pitchSelect == PitchSelect::Random;
   gp_.spreadCents = get(ParamId::SpreadCents);
   gp_.reverseProb = get(ParamId::ReverseProb);
   gp_.sustain      = get(ParamId::WindowSustain);
@@ -831,6 +891,20 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // validated mode's sources and position are this build's: onset on or off, live or mark.
   gp_.onsetTrigger = (mode.schedule.sources & kSourceOnset) != 0u;
   gp_.posFromMark  = mode.layers[0].source == PositionSource::Mark;
+  // Trigger sources, bursts and intermittency (design §7.5, R9; sound revision 4). The free-
+  // running scheduler runs only with `periodic`; footswitch and MIDI triggers are gated where
+  // they fall due (RenderFrames). Counting leaves are read as RoundHalfAwayI32 of the canonical
+  // value, in range because canonicalization clamped it (§3.7).
+  gp_.periodic      = (mode.schedule.sources & kSourcePeriodic) != 0u;
+  gp_.intermittency = get(ParamId::Intermittency);
+  const int32_t burst = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::BurstCount)));
+  assert(burst >= 1 && burst <= 16);
+  gp_.burstCount = static_cast<uint32_t>(burst);
+  // max(1, round(spacing_ms * 48)) at 48 kHz: sr / 1000 is exact there, so the product is.
+  const double spacingFrames = static_cast<double>(get(ParamId::BurstSpacingMs)) * (sr / 1000.0);
+  assert(spacingFrames >= 0.0 && spacingFrames <= 0.5 * sr + 1.0);  // profile §3.10: 0-500 ms
+  const int32_t spacing = detmath::RoundHalfAwayI32(spacingFrames);
+  gp_.burstSpacing      = spacing >= 1 ? static_cast<uint32_t>(spacing) : 1u;
 
   // Coherence-aware normalization exponent (design §3): unity-rate, zero-spray
   // grains all read the SAME source sample and sum coherently (1/N); anything
@@ -841,11 +915,20 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // and its jitter term had the wrong sign: at unity rate a grain's output is
   // independent of its birth time, so timing jitter decorrelates nothing
   // (review findings, all measured).
-  const float ratio        = grainmath::SemitonesToRatio(gp_.ratioBase);
+  // The pitch term takes the set's largest |ratio - 1| (design §7.5), each entry clamped as a
+  // grain clamps it; for the one-entry default set that is revision 1's term.
+  float pitchSpan = 0.f;
+  for (uint32_t i = 0; i < gp_.pitchCount; ++i) {
+    float st = gp_.pitchSt[i];
+    if (st > 24.f) st = 24.f;
+    if (st < -24.f) st = -24.f;
+    const float d = detmath::Abs(grainmath::SemitonesToRatio(st) - 1.0f);
+    if (d > pitchSpan) pitchSpan = d;
+  }
   const float kDecorrFrames = static_cast<float>(0.003 * sr);  // ~3 ms of divergence = full
   auto clamp01 = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
   float decorr = 0.f;
-  decorr += clamp01(detmath::Abs(ratio - 1.0f) * static_cast<float>(total) / kDecorrFrames);
+  decorr += clamp01(pitchSpan * static_cast<float>(total) / kDecorrFrames);
   decorr += clamp01(get(ParamId::SprayMs) * (1.0f / 30.0f));  // ms-based: rate-independent
   decorr += clamp01(detmath::Abs(grainmath::SemitonesToRatio(gp_.spreadCents * 0.01f) - 1.0f) *
                     static_cast<float>(total) / kDecorrFrames);
@@ -856,10 +939,18 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   // POS_MARK is the same geometry (all grains anchored to one ring frame, born
   // at different times) — without its term the Strum family read up to 18 dB
   // quiet across the overlap knob (review finding).
-  if (frozen_ || gp_.posFromMark) decorr = 1.0f;
+  // A repeat voice re-reads its region pass after pass, time-shifted copies again (design
+  // §7.5), so repeat > 1 counts as decorrelated too.
+  if (frozen_ || gp_.posFromMark || gp_.repeat > 1u) decorr = 1.0f;
   decorr        = clamp01(decorr);
   const float p = 1.0f - 0.5f * decorr;
-  norm_.target  = detmath::PowF(gp_.targetVoices, -p);
+  // N, the voices normalized for (design §7.5): the free-running target, or without a free-
+  // running source the grains one trigger births that can sound at once, min(voice_count,
+  // burst.count).
+  const uint32_t burstVoices =
+      gp_.burstCount < gp_.voiceCount ? gp_.burstCount : gp_.voiceCount;
+  const float normVoices = gp_.periodic ? gp_.targetVoices : static_cast<float>(burstVoices);
+  norm_.target           = detmath::PowF(normVoices, -p);
 }
 
 // Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro
@@ -952,7 +1043,8 @@ void Engine::Impl::DrainPending() noexcept {
       MarkDirty(i);
     }
   }
-  pendingTriggers_ += manualTriggers_.exchange(0u, std::memory_order_relaxed);
+  pendingFootswitch_ += manualFootswitch_.exchange(0u, std::memory_order_relaxed);
+  pendingMidi_ += manualMidi_.exchange(0u, std::memory_order_relaxed);
 }
 
 void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
@@ -966,8 +1058,12 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       *freeze = e.value != 0.0f;
       freezePending_.store(*freeze, std::memory_order_relaxed);
       break;
-    case EventType::Trigger:
-      ++pendingTriggers_;
+    case EventType::Trigger:  // id: its source, gated when due (RenderFrames)
+      if (e.id == static_cast<uint32_t>(Engine::TriggerSource::MidiNote)) {
+        ++pendingMidi_;
+      } else {
+        ++pendingFootswitch_;
+      }
       break;
     case EventType::SpilloverLoad:
       // The producer learns whether the preset is exact from CheckPreset, when it stages
@@ -1050,9 +1146,19 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
   // Deliver at most `count` due triggers and CARRY the surplus — draining the
   // counter dropped every trigger past numFrames, silently breaking the "explicit
   // triggers never drop" contract on small blocks (review finding).
+  // The mode's trigger sources (design §7.5, R9): a due trigger whose source the playing mode
+  // leaves out is dropped here, at the first frame it is due. A render span starts at every
+  // event's frame, so a load decides the triggers due from its frame on, by any delivery.
+  const uint8_t sources = mode_->mode.schedule.sources;
+  if ((sources & kSourceFootswitch) == 0u) pendingFootswitch_ = 0;
+  if ((sources & kSourceMidiNote) == 0u) pendingMidi_ = 0;
+  const uint32_t pending = pendingFootswitch_ + pendingMidi_;
   detail::TriggerEvents ev;
-  ev.manualCount = pendingTriggers_ < count ? pendingTriggers_ : count;
-  pendingTriggers_ -= ev.manualCount;
+  ev.manualCount = pending < count ? pending : count;
+  const uint32_t fromFootswitch =
+      ev.manualCount < pendingFootswitch_ ? ev.manualCount : pendingFootswitch_;
+  pendingFootswitch_ -= fromFootswitch;
+  pendingMidi_ -= ev.manualCount - fromFootswitch;
   for (uint32_t n = 0; n < count; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);

@@ -3,8 +3,8 @@
   "id": "factory.engram",
   "name": "Engram",
   "family": "echoic",
-  "sound_rev": 3,
-  "sound_hash": "a0971b44ac215e448d032d864bc9a9ddae68daa7fa8ab64f9d9ae3abac88d087",
+  "sound_rev": 7,
+  "sound_hash": "c4ccd1232a0dbb129ac54d6d5cef53329efcd860eb0b4ffd4cd27ef10037656e",
   "meta": {
     "author": "",
     "description": "",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0,
-    "jitter": 0
+    "jitter": 0,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 1,
-        "spray_ms": 0
+        "spray_ms": 0,
+        "repeat": 1
       },
       "size_ms": 100,
+      "decay_ms": 0,
       "window": {
         "sustain": 1,
         "skew": 0.5,

@@ -70,6 +70,26 @@ TEST_CASE("lint: L1 subnormals, L3 empty macros, L5 silence", "[lint]") {
   REQUIRE(Count(Lint(d), "L5") == 1u);
   d = Read(With("scheduler.sources", Parse(R"(["onset"])"), base), AllFeatures().read);
   REQUIRE(Count(Lint(d), "L5") == 0u);
+  // Triggered sources alone are a warning, also for --factory; no source at all never plays a
+  // grain, which --factory makes an error.
+  LintOptions factory;
+  factory.factory = true;
+  const auto l5 = [](const std::vector<Finding>& f) {
+    const auto it =
+        std::find_if(f.begin(), f.end(), [](const Finding& x) { return x.code == "L5"; });
+    REQUIRE(it != f.end());
+    return *it;
+  };
+  d = Read(With("scheduler.sources", Parse(R"(["footswitch"])"), base));
+  REQUIRE(Count(Lint(d), "L5") == 1u);
+  REQUIRE(Count(Lint(d, factory), "L5", true) == 0u);
+  REQUIRE(l5(Lint(d)).message.find("silent until triggered") != std::string::npos);
+  d = Read(With("scheduler.sources", Parse("[]"), base));
+  REQUIRE(Count(Lint(d), "L5") == 1u);
+  REQUIRE(Count(Lint(d), "L5", true) == 0u);
+  REQUIRE(l5(Lint(d)).message.find("never plays a grain") != std::string::npos);
+  REQUIRE(l5(Lint(d)).at.pointer == "/scheduler/sources");
+  REQUIRE(Count(Lint(d, factory), "L5", true) == 1u);
 }
 
 TEST_CASE("lint: L2 the near guard for pitched grains", "[lint]") {

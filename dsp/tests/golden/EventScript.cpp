@@ -126,6 +126,14 @@ std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint8_t 
   if ((strip & kStripMark) != 0 && preset->mode.layers[0].source == PositionSource::Mark) {
     preset->mode.layers[0].source = PositionSource::Live;
   }
+  if ((strip & kStripSources) != 0) {
+    preset->mode.schedule.sources = static_cast<uint8_t>(preset->mode.schedule.sources | kDefaultSources);
+  }
+  if ((strip & kStripPitchSet) != 0) {
+    preset->mode.pitch[0]              = kDefaultPitchSet;
+    preset->mode.layers[0].pitchSelect = PitchSelect::Cycle;
+  }
+  if ((strip & kStripPitchSelect) != 0) preset->mode.layers[0].pitchSelect = PitchSelect::Cycle;
   preset->mode.features = RequiredModeFeatures(preset->mode);
   return preset;
 }

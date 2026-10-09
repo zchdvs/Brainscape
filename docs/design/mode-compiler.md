@@ -12,7 +12,8 @@
 > [reviews/mode-compiler-record.md](reviews/mode-compiler-record.md) ("record §N").
 > Numbers are *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
 > `main` `42773a2`. Status: **draft v2**, revised after review (record §6); lanes 0, B, A, G
-> and C (sound revision 2) and the Mix law (sound revision 3) are built (docs/STATUS.md), and
+> and C (sound revision 2), the Mix law (sound revision 3) and wave 1 (lane F, sound revisions
+> 4–7) are built (docs/STATUS.md), and
 > notes marked "as built" record what an implementing lane decided where this document left a
 > choice.
 
@@ -278,12 +279,13 @@ Findings carry a JSON pointer, line and column. **Errors** stop compilation:
 | E12 | MODE ≤ 4 KiB, package ≤ 16 KiB. |
 
 **Lint** (`bspc lint`, §8.2) never stops compilation; `--factory`, which CI runs over
-`firmware/factory/`, makes L4 and L7–L9 errors. L1 a subnormal leaf was written (it compiles
+`firmware/factory/`, makes L4, L7–L9 and L5's empty source set errors. L1 a subnormal leaf was written (it compiles
 to +0); L2 the smallest `base_ms` its leaf and macros reach is below `size_ms`·(r − 1) for a
 pitch entry, so the guard moves those grains back (engine §3); L3 `activity`, `repeats` or
 `time` has no targets; L4 a targeted leaf is further than its display resolution from its
 macro's value at the stored position, or a position is omitted (§3.5); L5 no free-running
-source and no onset (silent until triggered); L6 `mark` positioning with `decay_ms` 0 holds
+source and no onset (silent until triggered), or no source at all (the mode never plays a
+grain); L6 `mark` positioning with `decay_ms` 0 holds
 the last note (record §2.2); L7 a macro targets a Shift-secondary leaf (§3.1); L8 an
 overridden Filter or Space macro breaks the universal endpoints (§3.1); L9 a product string
 (`name`, `display_name`, META, tags) matches the denylist of other makers' marks (§11.2).
@@ -864,6 +866,13 @@ less 8 elsewhere), to 6,600 of the raised 7,168 (`kEngineImplBytes`; x86-64: by 
 to 6,752 of 7,424). W1 and W3 budget from these. The active mode and its CTRL, 1,616 bytes
 rounded to 16, end the Warm arena. No DTCM map audit exists yet to check the raise against.
 
+As built (lane F, wave 1, *measured* on the M7 / x86-64): `Engine::Impl` 6,808 / 6,960 bytes at
+revision 4 (the bursts, triggers by source, the stats), 6,872 / 7,024 at 5 (the pitch set and
+its cycle), 7,928 / 8,080 at 6 (`Grain` from 80 to 96 bytes for repeat and decay) and 7,944 /
+8,096 at 7; `kEngineImplBytes` rose at 6 from 7,168 / 7,424 to 8,192 / 8,448, and the firmware's
+DTCM engine slot from 8 to 9 KiB, the host parity stream placing the x86-64 engine in it too.
+Wave 1 added 1,344 bytes on the M7, inside the 1.3–1.5 KiB estimate. The live image's ITCM reached 94.4%.
+
 ### 7.2 Parameter domains: the routing fix
 
 `Engine::Impl::ApplyParam` rebuilds granular parameters only for IDs below 16
@@ -1035,6 +1044,40 @@ over the set; `repeat` > 1 counts as decorrelated, like marks (`Engine.cpp:659-6
 a free-running source *N* = `min(voice_count, burst.count)`; layers normalize separately.
 Each feature runs contract #3's level test over its cases.
 
+As built (lane F, sound revisions 4–7, one feature and one revision each; *measured* where
+stated):
+
+- **R9, revision 4.** The sources gate a footswitch or MIDI-note trigger at the frame it falls
+  due, the frame's events applied first, so a load at that frame decides it and a trigger due
+  under a mode without its source is dropped; Sidechain and unknown trigger ids count as the
+  footswitch. A burst's later grains fire at most one a frame and none at a frame a trigger fired
+  at, a deferred grain keeping the spacing from where it fired; 8 bursts fly at once, the oldest
+  dropped past them; the spacing in frames is `RoundHalfAwayI32(spacing_ms · 48)`, at least 1, and
+  counting leaves are read as `RoundHalfAwayI32` of their canonical value. The intermittency draw
+  is purpose 9 with an ordinal per kind (periodic 0, onset 1, manual 2), and it skips a trigger's
+  whole burst. Without `periodic` the scheduler's phase holds until a mode with it loads.
+- **R10, revision 5.** `cycle` advances on every birth, from any source; `random` takes the top 24
+  bits of the birth's purpose-8 draw, so births at one frame share it as they share every draw.
+  The engine keeps each entry plus the transpose per rebuild and clamps at birth, as the design
+  says; the normalization's pitch term clamps each entry the same way. The cycle's position is
+  the first sequencing state with bursts (a load of another mode and `Restart` reset both).
+- **R11, revision 6.** Each pass restarts at the birth's start frame with the envelope's index
+  and its decay gain; the far rail is the design's formulas, the near rail the first pass's. A
+  live position's age is the pass's start since birth; a mark's is the mark's age, so a mark mode
+  keeps fading while frozen; the "pin age" is `POS_PIN`'s, W3's, so freeze does not age a live
+  position. Below 2^-126 the gain is 0, never subnormal, and it scales the pan gains once per run,
+  so without decay every product is revision 5's. The scheduler spaces births by the life,
+  repeat × L, and caps its target at it, so `overlap` keeps meaning voices sounding at once. A
+  FastCut's fade may run into the next pass. `Grain` grew from 80 to 96 bytes (pass length,
+  start frame, pass and passes, the mark's age, the decay rate and gain; `unity` became a
+  comparison).
+- **R12, revision 7.** A trigger, burst grain or onset steals the oldest voice when voice_count
+  voices sound, which at 64 is revision 6's allocation exactly; periodic births are refused past
+  the target, min(64·overlap³, voice_count, the life).
+- `Engine::Stats()` counts births, burst births, skips, repeat passes and steals since `Init`
+  (new API, for the tests and §11.3's metrics). Each revision's defaults keep the previous
+  revision's bits: every earlier golden preset reproduced at each of the four re-mints.
+
 ### 7.6 The sound-revision plan
 
 Profile §5.12 governs: any change that *can* alter output bumps `kSoundRevision` by one and
@@ -1092,6 +1135,26 @@ subnormal dry path it exists for. The corpus's packages and the compiler's examp
 compiler's random-document and reader-fuzz digests and the package fuzzer's verdict digest were
 re-minted for the stamp alone: built with `kSoundRevision` 2, the same tree gives revision 2's
 three digests.
+
+As built (item 6, wave 1, sound revisions 4–7, 2026-10-07): four bumps, R9 to R12, each its own
+commit and `--mode mint`. At each, every earlier preset reproduced its hashes and counters bit
+for bit (33, 38, 40 and 43 of them) and the new presets were added (§10.3). Revisions 4, 6 and
+7 add leaves (57–59, 29–30, 31), which the compiler writes into every document at their
+defaults, so every corpus package's `sound_hash` changed with no render moving: the pull
+request that carries each of them needs the package rule's label, with one `Package-change:`
+line per revision (§8.3); revision 5 adds none and only re-stamped them. The frozen fixtures
+changed verdict as §10.3 planned: `future-pitch-set.bsp` decodes at 5,
+`w1-leaf-macro-target.bsp` and `w1-leaf-expression.bsp` at 6. The compiler's two digests and the
+package fuzzer's were re-minted at each revision. Lane F's review restored the coverage those
+verdicts gave: three fixtures hold their roles for later waves (`w3-leaf-macro-target.bsp` and
+`w3-leaf-expression.bsp`, `UnsupportedTarget` on `layer0.level_db`, ID 32, from `ValidateMode` and
+`DecodePreset`; `w2-step-table.bsp`, `UnsupportedFeature` for step tables), the package fuzzer's
+Reserved target moved from row 30 to row 32, so `DecodePreset` reaches all 51 of its codes again,
+and a compiler test checks the E6 messages a build without wave 1 gives. `DecayGain` takes a
+32-bit age, since a 64-bit integer's conversion to `float` is a libgcc soft-float call on the M7
+that the arm symbol audit rejects (the age stays below 2^27); no output changed. L5 tells a mode
+with no source at all, which never plays a grain and is an error for `--factory`, from one that
+waits for its triggers.
 
 ## 8. The compiler library and `bspc`
 
@@ -1237,6 +1300,38 @@ optional M7 leg is not built.
 - **Audition**: a package, an input and an event script (§11.3); the render moves to
   `tools/audition/` and takes a `PresetState` instead of 28 floats (`plugin/src/Audition.h:45`).
 
+As built (lane D's curation slice, `plugin/src/Curation.*`, `plugin/src/gui/CurationViews.*`):
+the processor owns a curation session, so a document outlives the editor. It opens a document
+or a package (its JSON section, or the document rebuilt) and plays it as a state restore does
+(Spillover with Trails while audio runs, Exact before). The working document is the stored one
+with what plays now: the leaf mirrors, the macro mirrors as positions, and `editor.detached`.
+Save derives every targeted leaf that is not detached, compiles, writes the stamped canonical
+JSON (and the package when one sits beside it or the document came from one) and Spillover-loads
+what it wrote; it does not watch the file on disk. Before saving, the session compiles and lints
+what Save would write as the knobs come to rest, factory rules for a `factory.` id, and lists
+the leaves derive will change, and says when Save would rewrite a document that is otherwise
+unedited (a pending derive, a stale stamp). "Solve position" runs for all macros, for one, or
+from a chosen leaf's target. Save writes the document and its package as a pair or not at all.
+A/B switches between
+the stored package (A) and the remembered working state (B) with Trails; level matching renders
+both offline on the class input's test-signal vector, measures K-weighted loudness and trims the
+louder on a monitor-only output trim, outside every preset and render. One click renders the
+document as Save would write it through `tools/audition`'s S0 or S0–S11 with the pre-screen;
+closing the plugin, or opening or closing a document, stops it within a block.
+The editor's Pedal view holds the eight knobs with pickup (a knob waits after a load until the
+hand reaches the stored position; a caught knob follows the host) and Shift; the Leaves view is
+the raw-parameter view, each targeted leaf marked with its macros, its right-click menu detaching
+or solving. The capture-endpoint button and the rating form wait (the ratings log is
+`tools/audition/ratings.py`'s), as does the input class from the log's declarations.
+The header's Modes menu (`plugin/src/gui/ModeMenu.*`) holds the factory set, embedded at build
+time from `firmware/factory/MANIFEST` and the committed packages (`plugin/EmbedFactory.cmake`,
+`plugin/src/FactoryModes.*`; the build fails when a package's header does not carry MANIFEST's
+hashes, the tests when its bytes do not): the set by family, the reserves in a submenu.
+Choosing a mode opens its package in the session as opening the `.bsp` does (the same bytes,
+document and load); a built-in document saves only as a copy. While the open document has
+unsaved edits, the menu and Open ask before replacing it. It stands in for the Factory bank
+until the library exists.
+
 ### 9.2 Load modes, parameters and session state
 
 - **Loads**: Spillover with Trails while audio runs, Exact when nothing has played since the
@@ -1248,6 +1343,16 @@ optional M7 leg is not built.
   the host model says (§3.6); a host move of a macro parameter becomes a `MacroMove`.
   `Reserved` rows and rows retired before release are not registered.
 - **Device settings** (§3.8) live in the wrapper's settings and are written into every recipe.
+  As built (the curation slice): the effect volume is a host parameter (automatable, a SetParam
+  on its Global row), restored before the start state's Exact load at Init, re-sent after a
+  restore, and saved in `BSWS` v1 as setting key 5; the macros (a host move is a `MacroMove`)
+  and `perf.expression` are registered too, the leaves under host model (b), and the leaf mirrors
+  follow a move's fan-out through `EvalMacro`/`EvalExpression`, though hosts are not told of it
+  yet. Session v2 is still to build: a v1 session holds leaves and plays the default mode,
+  unless a factory mode played when it was saved: then an `FMOD` block after the settings
+  (which earlier v1 readers never read) names the package by id and package hash with the
+  macro positions, and a recall plays the build's package of that id with the session's leaves
+  and positions, inexact when the build's package differs.
 - **Session state** (`BSWS` v2): a wrapper header, the current `.bsp` and the wrapper settings
   (companion §6.9). A host set that is not an exact echo rewrites STAT, patches the JSON and
   recomputes `sound_hash` before saving; v1 states are migrated (§4.4).
@@ -1354,6 +1459,21 @@ no mode while a freeze is held. Mutants that keep the old macro table or CTRL ov
 load, install CTRL only on a switch, drop the kill, or misplace the Hermite or linear fade by one
 frame each fail the check.
 
+Corpus versions 9–12 (wave 1, revisions 4–7) add twelve presets, eleven of them in
+`plucks_wave1_12s`: `onset_only`, `onset_burst`, `burst_spaced`, `intermittent_cloud` and
+`midi_gate` (onsets alone, bursts on consecutive and spaced frames, intermittency on triggers and
+periodic births, MIDI triggers, a mode switch resetting bursts); `pitch_cycle` and
+`pitch_random` (both selections, transpose moves over a set, switches between the two modes);
+`repeat_loops` and `decay_marks` (passes, decay on live positions and on marks); `voice_limit`
+and `mono_stutter` (counts moved alone, steals, one voice); and in `plucks_markage_92s`,
+`repeat_mark_aging`, 16 reverse passes of 500 ms on an aging mark, whose ring ablation first
+differs at second 82, when the life's far rail binds. Eleven of them start from packages
+(`presets/*.json`, 11 new documents); scripts carry the trigger's source. New counters
+`births`, `burstBirths`, `skips`, `repeatPasses` and `steals` (`Engine::Stats`), and ablations
+`sources` (the default sources join each mode's), `burst`, `intermittency`, `pitchSet` (the set
+{0}), `pitchSelect` (`random` made `cycle`), `repeat`, `decay` and `voiceCount`, each changing
+its presets' output.
+
 ### 10.4 Engine and plugin tests
 
 - **Per-kind rules**: STAT containing IDs 27, 31, 69 or 81 loads inexact and changes no
@@ -1382,6 +1502,21 @@ another CTRL installs it; and that macro, expression and load events, `CheckPres
 every exception unmasked), as `test_mode_eval.cpp` does for `EvalExpression`. The compiler's
 migrate test covers rows 27 and 28 at the 0.5 threshold's edges and at non-finite values, and the
 plugin parses `Kill`, the cutoff minimum's display text.
+
+As built (lane F): `dsp/tests/test_wave1.cpp` holds wave 1's cases, 29 over the four features,
+each with block-split invariance (contract #1) at five block patterns and a level case (contract
+#3): sources gating stamped and unstamped triggers and a load at a due trigger's frame; burst
+timing, rounding and same-frame bursts; intermittency on whole triggers and on periodic births
+that keep their schedule; the cycle's order, weights and modulo reduction and the random pick
+exact at its boundaries over all 2^24 draws; one-entry and equal-entry sets playing the
+transpose bit for bit; a load of another mode restarting the cycle and bursts, of the same mode
+keeping them, an Exact load (`Restart`) dropping them; a voice's passes repeating its first bit for bit, decay
+by the pass's or the mark's age to the gain's formula, one live pass never decaying (bit for
+bit), the far rail met on a small ring when the arithmetic says (a ring twice as long renders
+the same bits before and other bits after); the target's three-way minimum and steals at the
+count. The reset of sequencing state on a load of another mode, a hook at sound revision 2, is
+now tested on the state itself (the cycle's position, the bursts in flight). The plugin's session
+test reads the leaf table instead of IDs 1–26.
 
 ## 11. Step 4: the first factory modes
 
@@ -1492,6 +1627,37 @@ corpus. Echoic modes' Time ratings stay provisional until W2. Static recipes can
 to tune character, but no rating counts before macros exist, because the knobs are the
 product (engine §1).
 
+As built (step 4's first set, 2026-10-07, sound revision 7): the 14 modes of §11.1 and four
+reserves are in `firmware/factory/` and pass every pre-screen check; `AUDITION.md` records each
+iteration's reason (`ratings.py note`). Three readings changed the recipes. Shape had to move
+the class render measurably, which window-only Shapes did not once the dry plays at unity, so
+most modes take Shape towards fewer, longer, swelled grains, with skew below 1 (a grain ending
+at full level is a step). S11 at the corners and at the other modes' positions found one
+coherent voice with Repeats at its maximum over full scale, so the Repeats maxima, voice floors,
+trims and stored Mix were set against it. The tap modes (Engram, Callback, Pinhole) read through
+Hann grains a quarter-grain apart instead of one rectangular grain, so their Activity and Time no
+longer splice.
+
+As built, after review (2026-10-07) and the owner's answers (2026-10-08): the cloud modes, Lull
+and Runaway are pad class and the rest attack class. A first pass made the clouds and Lull attack
+class on the reading that Level and Peak could not both pass on SoftNotes; that was wrong
+(SoftNotes peaks 2.7 dB under Plucks, and Level is measured at Mix 1, so a lower stored Mix lowers
+the Peak alone) and hid 7 stored renders clipping on SoftNotes; the stored Mix now holds them
+under −1 dBFS, and the owner, who listened at those values, finds the pad modes' level (Mix 0.3 to
+0.35) about right. The review read three checks more strictly than the table, and the owner kept
+two: Response (Activity) from the engine's births per second at Activity 0, 0.25, 0.5, 0.75 and
+1, monotonic and changed by a quarter (`Engine::Stats()`; the echoic modes add voices or overlap
+with Activity); and a Repeats knob's tail, S7's at 1 against at 0, reported for listening under
+1.5 times (Updraft's octave climb leaves the band, so its tail cannot grow much). The third, Peak
+at the stored positions on Plucks, Strums and SoftNotes for every mode, the owner found too
+strict: Peak is judged on the class inputs, as the table says, and the other inputs' stored peaks
+are reported (Peak (other)), never failed; at the stored Mix they all sit under −1 dBFS anyway.
+Sweeps and S11 are judged on the class input as above, so an attack mode at an extreme corner can
+still pass full scale on a sustained chord (up to +2.5 dBFS on SoftNotes): the owner wants an
+output safety limiter, a sound revision of its own, not yet built. All 14 modes are "keep",
+pending the owner's knob ratings in the curation slice. `firmware/factory/AUDITION.md` records
+each change, its numbers and the owner's answers.
+
 ### 11.4 What waits
 
 | Microcosm family | Waits for |
@@ -1581,7 +1747,7 @@ touches.
 | **C** runtime | R1, R2b, R3, R5–R7; R3b after approval; corpus conversion, frozen fixtures, wet-kill cases; r2 | `dsp/include/brainscape/{Params,Engine,PresetState,SoundRevision}.h`, `dsp/src/{Engine,Granular}.cpp`, `dsp/src/detail/Granular.h`, `dsp/tests/`, `dsp/tests/golden/` | after B; merges after A and G's rule | 7–10 |
 | **E** audition | first, the JUCE-free render out of `plugin/src/Audition.*`; scripts S0–S11, metrics, carry-forward; factory documents, `MANIFEST`, `AUDITION.md` | `tools/audition/`, `plugin/src/Audition.*` (extraction), `firmware/factory/` | after 0; scripts after C | 4–7 plus curation |
 | **D** app | curation slice first (§9.1); then parameters by kind and host model, `PresetState` plumbing, session v2, views | `plugin/` (rebased onto 0 and E's extraction) | slice after A and C; rest after B | slice 6–9; rest 12–25; GUI unsized |
-| **F** wave 1 | R9–R12, a pull request and bump each | `Granular.*`, `GrainMath.h`, `Engine.cpp`, `Params.h`, `ParamDisplay.cpp`, the compiler's support table, `DecodePreset`'s feature set, `dsp/tests/golden/`, `firmware/factory/` | after C | 8–14 |
+| **F** wave 1 | R9–R12, a pull request and bump each (as built: a commit and bump each, one pull request for all four, which profile §5.12's per-commit gate allows) | `Granular.*`, `GrainMath.h`, `Engine.cpp`, `Params.h`, `ParamDisplay.cpp`, the compiler's support table, `DecodePreset`'s feature set, `dsp/tests/golden/`, `firmware/factory/` | after C | 8–14 |
 
 Pull requests in order: lane 0; B; A; G's package rule; C (r2); the Mix law (r3, if
 approved); then F's features one by one while D and E continue, F serializing with A, B and E

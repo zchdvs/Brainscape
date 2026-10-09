@@ -3,8 +3,8 @@
   "id": "corpus.restart_kept",
   "name": "Restart kept",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "f4ebf3d676b0870abc81d148f42a028141f8c5984005a149bda1d2cd062e07c6",
+  "sound_rev": 7,
+  "sound_hash": "261f5a844c0849d6b87ede9861ba38a867a290e021faf5feec70910ff4c2bd3c",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Restart preset.",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "onset", "footswitch", "midi_note"],
     "overlap": 0.7,
-    "jitter": 0.6
+    "jitter": 0.6,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "mark",
         "base_ms": 180,
-        "spray_ms": 40
+        "spray_ms": 40,
+        "repeat": 1
       },
       "size_ms": 70,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

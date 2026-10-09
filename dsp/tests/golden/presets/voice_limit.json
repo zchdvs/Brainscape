@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "id": "corpus.voice_limit",
+  "name": "Voice limit",
+  "family": "none",
+  "sound_rev": 7,
+  "sound_hash": "624072f47399330d0850910b6813457387daf6162c85d31ffd56bcfefab52df2",
+  "meta": {
+    "author": "",
+    "description": "Golden corpus: a dense cloud held to six voices, onset bursts of five stealing the oldest (sound revision 7).",
+    "tags": []
+  },
+  "global": {
+    "mix": 0.7
+  },
+  "scheduler": {
+    "sources": ["periodic", "onset", "footswitch", "midi_note"],
+    "overlap": 0.9,
+    "jitter": 0.5,
+    "intermittency": 0,
+    "burst": {
+      "count": 5,
+      "spacing_ms": 0
+    }
+  },
+  "layers": [
+    {
+      "voice_count": 6,
+      "position": {
+        "source": "live",
+        "base_ms": 160,
+        "spray_ms": 40,
+        "repeat": 1
+      },
+      "size_ms": 200,
+      "decay_ms": 0,
+      "window": {
+        "sustain": 0.3,
+        "skew": 0.4,
+        "smoothness": 0.7
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 0,
+        "spread_cents": 0,
+        "reverse_prob": 0
+      },
+      "pan_spread": 0.7
+    }
+  ],
+  "feedback": {
+    "amount": 0.2
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 0,
+  "trigger": {
+    "sensitivity": 0.6
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.25, 0.85],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [0, 200],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "feedback.amount",
+          "range": [0, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.9, 0.1],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.3, 0.7],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [20, 2000],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.delay.mix",
+          "range": [0, 0.5],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.5,
+      "repeats": 0.5,
+      "shape": 0.5,
+      "time": 0.5,
+      "space": 0.5,
+      "filter": 0.5
+    }
+  }
+}

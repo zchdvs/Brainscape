@@ -3,8 +3,8 @@
   "id": "example.default",
   "name": "Default",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "3ab1aa253a0c3d4442d2c89273b5eccedec0c5d14c23acc44287bdb265dcc2a0",
+  "sound_rev": 7,
+  "sound_hash": "3d8bf7893f8a70698dd1827b7c53595ae5fad3c856378d02c5e6534cc2e98ee1",
   "meta": {
     "author": "",
     "description": "",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.55,
-    "jitter": 0.2
+    "jitter": 0.2,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

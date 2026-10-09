@@ -29,8 +29,9 @@ enum class ParamId : uint32_t {
   Overlap        = 6,   // scheduler.overlap — target voices = kMaxGrains * overlap^3
   SprayMs        = 7,   // layer0.position.spray_ms
   TransposeSt    = 8,   // layer0.pitch.transpose_st (was layer0.pitch.st; ±24 st = the
-                        // design's r_max = 4 ratio ceiling): from W1 an offset over the pitch
-                        // set, which with the default set {0} is today's pitch bit for bit
+                        // design's r_max = 4 ratio ceiling): since sound revision 5 an offset
+                        // over the pitch set, which with the default set {0} is revision 1's
+                        // pitch bit for bit
   SpreadCents    = 9,   // layer0.pitch.spread_cents
   ReverseProb    = 10,  // layer0.pitch.reverse_prob
   Jitter         = 11,  // scheduler.jitter — synchronous <-> asynchronous morph
@@ -58,9 +59,11 @@ enum class ParamId : uint32_t {
   OnsetTrigger   = 27,  // was scheduler.onset_trigger
   PositionSource = 28,  // was layer0.position.source
   // ── Layer 0 (W1: 29-31; W3: 32-37) ───────────────────────────────────────────────
+  // Leaves since sound revision 6 (mode-compiler.md §7.5, R11): 29 and 30.
   Repeat          = 29,  // layer0.position.repeat: passes over one region, integer
   DecayMs         = 30,  // layer0.decay_ms: 60 dB fall as the position ages, 0 = off
-  VoiceCount      = 31,  // layer0.voice_count: voices this layer may sound, integer
+  VoiceCount      = 31,  // layer0.voice_count: voices this layer may sound, integer (a Leaf
+                         // row since sound revision 7, R12)
   LevelDb         = 32,  // layer0.level_db
   GlideCurve      = 33,  // layer0.pitch.glide.curve
   SvfCutoffHz     = 34,  // layer0.svf.cutoff_hz: the per-grain filter modifier
@@ -88,9 +91,10 @@ enum class ParamId : uint32_t {
   L1CrushBits       = 55,  // layer1.crush.bits
   L1CrushDownsample = 56,  // layer1.crush.downsample
   // ── Scheduler, layers, dry duck, post (W1: 57-59; W2: 60, 63; W3: 61, 62, 64) ───────
+  // Leaves since sound revision 4 (mode-compiler.md §7.5, R9): 57-59.
   Intermittency  = 57,  // scheduler.intermittency: probability a birth or trigger is skipped
   BurstCount     = 58,  // scheduler.burst.count: grains per trigger, integer
-  BurstSpacingMs = 59,  // scheduler.burst.spacing_ms
+  BurstSpacingMs = 59,  // scheduler.burst.spacing_ms: between a burst's grains (0: a frame)
   StepCount      = 60,  // scheduler.steps.count, integer
   LayerMix       = 61,  // layer_mix
   DryDuckDepth   = 62,  // dry_duck.depth
@@ -207,9 +211,9 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::TriggerSens,        "trigger.sensitivity",          0.0f,    1.0f,     0.5f,     "",   ParamKind::Leaf,        kDomainDetector,               1},
     {ParamId::OnsetTrigger,       nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
     {ParamId::PositionSource,     nullptr,                        0.0f,    1.0f,     0.0f,     "",   ParamKind::Retired,     kDomainNone,                   0},
-    {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
+    {ParamId::Repeat,             "layer0.position.repeat",       1.0f,    16.0f,    1.0f,     "",   ParamKind::Leaf,        kDomainGranular,               6},
+    {ParamId::DecayMs,            "layer0.decay_ms",              0.0f,    20000.0f, 0.0f,     "ms", ParamKind::Leaf,        kDomainGranular,               6},
+    {ParamId::VoiceCount,         "layer0.voice_count",           1.0f,    64.0f,    64.0f,    "",   ParamKind::Leaf,        kDomainGranular,               7},
     {ParamId::LevelDb,            "layer0.level_db",              -24.0f,  6.0f,     0.0f,     "dB", ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::GlideCurve,         "layer0.pitch.glide.curve",     -1.0f,   1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::SvfCutoffHz,        "layer0.svf.cutoff_hz",         20.0f,   20000.0f, 20000.0f, "Hz", ParamKind::Reserved,    kDomainGranular,               0},
@@ -235,9 +239,9 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::L1SvfRes,           "layer1.svf.res",               0.0f,    1.0f,     0.1f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::L1CrushBits,        "layer1.crush.bits",            1.0f,    16.0f,    16.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::L1CrushDownsample,  "layer1.crush.downsample",      1.0f,    32.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::Intermittency,      "scheduler.intermittency",      0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::BurstCount,         "scheduler.burst.count",        1.0f,    16.0f,    1.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
-    {ParamId::BurstSpacingMs,     "scheduler.burst.spacing_ms",   0.0f,    500.0f,   0.0f,     "ms", ParamKind::Reserved,    kDomainGranular,               0},
+    {ParamId::Intermittency,      "scheduler.intermittency",      0.0f,    1.0f,     0.0f,     "",   ParamKind::Leaf,        kDomainGranular,               4},
+    {ParamId::BurstCount,         "scheduler.burst.count",        1.0f,    16.0f,    1.0f,     "",   ParamKind::Leaf,        kDomainGranular,               4},
+    {ParamId::BurstSpacingMs,     "scheduler.burst.spacing_ms",   0.0f,    500.0f,   0.0f,     "ms", ParamKind::Leaf,        kDomainGranular,               4},
     {ParamId::StepCount,          "scheduler.steps.count",        1.0f,    16.0f,    16.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::LayerMix,           "layer_mix",                    0.0f,    1.0f,     0.5f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::DryDuckDepth,       "dry_duck.depth",               0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainMix,                    0},
