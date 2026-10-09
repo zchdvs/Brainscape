@@ -8,6 +8,7 @@
 #include "PluginProcessor.h"
 #include "gui/BrainscapeLookAndFeel.h"
 #include "gui/CurationViews.h"
+#include "gui/ModeMenu.h"
 #include "gui/Widgets.h"
 
 namespace brainscape::plugin {
@@ -17,7 +18,8 @@ namespace brainscape::plugin {
 //            commands (open, save, solve, A/B, render) and the compiler's findings;
 //   Leaves : every engine leaf as a knob, grouped as in companion §2.5's raw-parameter view (the
 //            design's Advanced tab), marked with the macros that move it.
-// Around both: freeze, trigger, the onset LED, levels, the test input panel and the status line.
+// Around both: the header's Modes menu (the factory set built in, and the mode that plays),
+// freeze, trigger, the onset LED, levels, the test input panel and the status line.
 class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::Timer {
  public:
   static constexpr int kDefaultWidth  = 1180;
@@ -44,6 +46,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
 
   const std::vector<ParamKnob*>& Knobs() const noexcept { return knobs_; }
   MacroPanel&                    Macros() noexcept { return macros_; }
+  ModeMenu&                      Modes() noexcept { return modes_; }
   DocumentPanel&                 DocumentView() noexcept { return document_; }
   FindingsPanel&                 Findings() noexcept { return findings_; }
 
@@ -61,6 +64,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
 
   juce::TextButton pedalTab_{"PEDAL"}, leavesTab_{"LEAVES"};
   juce::Label      tabNote_;
+  ModeMenu         modes_;
   MacroPanel       macros_;
   DocumentPanel    document_;
   FindingsPanel    findings_;
@@ -74,6 +78,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
 
   View                 view_ = View::Pedal;
   juce::Rectangle<int> header_;
+  bool                 wordmarkText_ = true;  // room for the wordmark's text beside the Modes menu
   float                scale_ = 1.f;
   juce::TooltipWindow  tooltips_{this, 700};
 

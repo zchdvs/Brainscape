@@ -1,8 +1,10 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
+#include "brainscape/Mode.h"
 #include "brainscape/Params.h"
 
 namespace brainscape::plugin {
@@ -30,6 +32,25 @@ inline constexpr float kWrapperGainRangeDb = 24.f;
 // row of this build (a Macro, Performance, Global, Reserved or Retired row, or one it lacks)
 // is unknown. BSWS v2, a .bsp plus wrapper settings, replaces this layout and migrates v1
 // sessions to preset documents (mode-compiler.md §4.4, §9.2).
+//
+// Blocks may follow the settings, {u32 tag, u32 length, payload, zero padding to 4}; a reader
+// skips a tag it does not know, and readers written before blocks existed stop after the
+// settings, so every v1 reader takes a session with blocks. One block so far:
+//   "FMOD"  the factory mode the session played (FactoryModes.h, the editor's Modes menu):
+//           u32 idLength (1-48), the document id's bytes, zero padding to 4; u8[32] its
+//           package_hash; u32 m (<= 8), m x {u32 macro id, u32 position bits}, the macro mirrors
+//           (CTRL's positions, pickup references, mode-compiler.md §3.5).
+// Bytes after the settings that do not read as whole blocks are ignored, and said so
+// (unreadTail), as readers before blocks ignored them; an FMOD block that does not read is
+// ignored the same way. A session without one plays the default mode, as every v1 session did.
+struct WrapperFactoryMode {
+  std::string id;                          // "factory.lull"
+  uint8_t     packageHash[32] = {};        // the package the session played
+  uint32_t    macroCount      = 0;
+  uint32_t    macroIds[kMaxMacros]  = {};  // Macro rows (69-76); the reader drops other ids
+  float       positions[kMaxMacros] = {};  // canonicalized when written and read
+};
+
 struct WrapperState {
   float           plain[kNumLeafParams];
   WrapperSettings settings;
@@ -39,6 +60,9 @@ struct WrapperState {
   bool            hasEffectVolume = false;
   uint32_t        unknownIds = 0;  // ids in the blob this build lacks (ignored)
   uint32_t        missingIds = 0;  // ids this build has that the blob lacks (defaults)
+  bool               hasFactory = false;  // an FMOD block was read (written when set)
+  WrapperFactoryMode factory;
+  bool               unreadTail = false;  // bytes after the settings were ignored (decoding)
 };
 
 inline constexpr uint32_t kStateFormatVersion = 1;

@@ -100,6 +100,16 @@ The build never copies plugins into system folders.
 
 The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tuned and rated.
 
+0. **The Modes menu** (the header, beside the wordmark) holds the factory set, built into the
+   plugin from `firmware/factory/` (every package `MANIFEST` lists, byte for byte): the set by
+   family (echoic, reverie, recall, misfire), **Reserves** in a submenu, and **Open a document or
+   package...**. Choosing a mode plays it exactly as opening its `.bsp` does (step 1): a
+   Spillover load with Trails while audio runs, Exact before anything has played, the knobs
+   waiting for pickup, and its document open below. The header names what plays and its
+   family. A factory mode has no file: **Save** is **Save as...**, which writes a copy (that copy
+   is then what plays and saves), and **Revert** re-opens the built-in package. While the open
+   document has unsaved edits, choosing a mode (even the one playing) or a file to open asks
+   first: **Discard** drops the edits and opens it, **Cancel** keeps them and what plays.
 1. **Open...** (Ctrl+O) a schema-1 preset document (`.json`) or a package (`.bsp`). It compiles
    through the compiler library and plays at once: a Spillover load with Trails while audio
    runs, Exact before anything has played. A document that does not read or compile is refused
@@ -139,8 +149,13 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
    and the status line's tooltip holds the pre-screen summary. `bspc render` makes the same bits.
    Opening another document, closing it or closing the plugin stops a render at its next block.
 
-The document stays open while the editor is closed. A DAW's session (BSWS v1) holds leaves
-only, so recalling one closes the document and plays the default mode.
+The document stays open while the editor is closed. A DAW's session (BSWS v1) holds the leaves
+and, while a factory mode plays, that mode by its id and package hash with the macro positions
+(the `FMOD` block, `src/StateCodec.h`): recalling it plays the build's package of that id with
+the session's leaves and positions (the status line says **Last state load was inexact** when
+the build's package is not the one saved), and the views open its document again. Any other
+session plays the default mode, as do sessions read by builds before the block, and recalling
+one closes the document.
 
 ## Load the VST3
 
@@ -215,12 +230,22 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   saved as a pair or not at all, level matching, the one-click render, a render stopped by
   closing the plugin or opening another document), the knobs' names from the open document,
   the pedal knob's pickup, and the test-signal audition's hash against `bspc render`'s S0.
+  The factory set: every embedded package against `MANIFEST` (byte for byte the committed
+  `.bsp`, its hashes computed and decoded, META's id, name and family, validation), the Modes
+  menu's structure, its question before it drops unsaved edits (nothing loads until Discard),
+  every mode loaded through the menu against its `.bsp` opened from a file on
+  a playing processor (the same output bit for bit, a Spillover load with Trails, the same
+  mirrors and document), Save as and Revert of a built-in mode, and sessions with the `FMOD`
+  block (an Exact restore saved back byte for byte, a recall over an open document, readers
+  without the block, unknown and truncated blocks, a mode the build lacks or packages
+  differently).
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
   `build/plugin/plugin/screenshots/`: both views with no document and with a scratch copy of
   `compiler/tests/data/engram.json` open (a knob waiting for pickup, a hand-edited leaf, Shift, A
   playing, a finished render) at the default, minimum, large and 2× sizes, a 44.1 kHz frozen
-  frame with Restart on play on, and the Standalone's editor after an audition render, which it
-  also writes there.
+  frame with Restart on play on, a factory mode and a reserve chosen from the Modes menu (with
+  the menu itself drawn as the look and feel draws it, `editor-modes-menu.png`), and the
+  Standalone's editor after an audition render, which it also writes there.
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
   in-place audio in odd host blocks equals the engine reference, and that an offline export
@@ -252,9 +277,10 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   automatable, every other leaf is registered but not. A macro's fan-out updates the leaves the
   editor shows, but hosts are not told of it yet.
 - **Session state is a provisional binary v1** (exact plain values plus the input mode, levels,
-  the restart option and the effect volume): it holds no package, so a session plays the default
-  mode. The preset library and the device link are not built, and the Leaves view's audition
-  renders no event script (the Pedal view's **Render** runs the scripts).
+  the restart option and the effect volume, and a factory mode by reference): it holds no
+  package, so a session saved with a document file (a copy of a factory mode included) plays the
+  default mode. The preset library and the device link are not built, and the Leaves view's
+  audition renders no event script (the Pedal view's **Render** runs the scripts).
 - **Not yet built from §4:** the wrapper-owned bypass with crossfade (JUCE's default bypass
   stops the engine, so trails do not continue), the resampled 48 kHz mode, MIDI CC mapping, LV2
   and CLAP.

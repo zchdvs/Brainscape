@@ -27,10 +27,26 @@ juce_add_plugin(Brainscape
   HARDENED_RUNTIME_OPTIONS      com.apple.security.device.audio-input
 )
 
+# The factory set (firmware/factory: MANIFEST, the documents and their packages, the reserves
+# included), embedded at build time so the editor's Modes menu plays every mode without its file
+# (src/FactoryModes.h). The table follows the committed files; the build fails when a package's
+# header does not carry MANIFEST's hashes (EmbedFactory.cmake), the tests when its bytes do not.
+set(_bs_factory ${PROJECT_SOURCE_DIR}/firmware/factory)
+set(_bs_factory_table ${CMAKE_CURRENT_BINARY_DIR}/FactoryPackages.cpp)
+file(GLOB _bs_factory_files CONFIGURE_DEPENDS
+  ${_bs_factory}/*.json ${_bs_factory}/*.bsp ${_bs_factory}/reserve/*.json ${_bs_factory}/reserve/*.bsp)
+add_custom_command(OUTPUT ${_bs_factory_table}
+  COMMAND ${CMAKE_COMMAND} -DFACTORY=${_bs_factory} -DOUT=${_bs_factory_table}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFactory.cmake
+  DEPENDS ${_bs_factory}/MANIFEST ${_bs_factory_files} ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFactory.cmake
+  COMMENT "Embedding the factory set's packages (firmware/factory/MANIFEST)"
+  VERBATIM)
+
 set(BRAINSCAPE_PLUGIN_SOURCES
   src/Audition.cpp
   src/BrainscapeParam.cpp
   src/Curation.cpp
+  src/FactoryModes.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
   src/PluginProcessor.cpp
@@ -39,7 +55,9 @@ set(BRAINSCAPE_PLUGIN_SOURCES
   src/TestInput.cpp
   src/gui/BrainscapeLookAndFeel.cpp
   src/gui/CurationViews.cpp
+  src/gui/ModeMenu.cpp
   src/gui/Widgets.cpp
+  ${_bs_factory_table}
 )
 target_sources(Brainscape PRIVATE ${BRAINSCAPE_PLUGIN_SOURCES})
 target_include_directories(Brainscape PRIVATE src)
@@ -98,7 +116,8 @@ if(BRAINSCAPE_BUILD_TESTS)
   target_link_libraries(brainscape_plugin_tests PRIVATE Brainscape brainscape_compiler)
   target_compile_definitions(brainscape_plugin_tests PRIVATE
     BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data"
-    BRAINSCAPE_GOLDEN_PRESETS="${PROJECT_SOURCE_DIR}/dsp/tests/golden/presets")
+    BRAINSCAPE_GOLDEN_PRESETS="${PROJECT_SOURCE_DIR}/dsp/tests/golden/presets"
+    BRAINSCAPE_FACTORY_DIR="${_bs_factory}")
   target_include_directories(brainscape_plugin_tests PRIVATE
     src
     ${PROJECT_SOURCE_DIR}/dsp/tests  # golden/Sha256.h: an independent check of audition hashes

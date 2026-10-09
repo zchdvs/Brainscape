@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "Compile.h"  // brainscape_compiler
+#include "FactoryModes.h"
 #include "Lint.h"
 #include "PluginProcessor.h"
 #include "Text.h"
@@ -33,15 +34,9 @@ ParamId MacroId(size_t k) { return static_cast<ParamId>(static_cast<uint32_t>(Pa
 
 bool IsFactory(const bsc::Document& d) { return d.id.rfind("factory.", 0) == 0; }
 
-const char* FamilyName(PresetFamily f) {
-  switch (f) {
-    case PresetFamily::Recall: return "recall";
-    case PresetFamily::Reverie: return "reverie";
-    case PresetFamily::Misfire: return "misfire";
-    case PresetFamily::Echoic: return "echoic";
-    case PresetFamily::None: break;
-  }
-  return "none";
+// A factory package's .bsp path within firmware/factory/ ("lull.bsp", "reserve/runaway.bsp").
+juce::String FactoryBsp(size_t index) {
+  return juce::String(Factory(index).path).upToLastOccurrenceOf(".json", false, false) + ".bsp";
 }
 
 bool ReadBytes(const juce::File& file, std::vector<uint8_t>* out, juce::String* error) {
@@ -205,29 +200,65 @@ bool CurationSession::Open(const juce::File& file, juce::String* error) {
     refusedFile_ = file.getFileName();
     return false;
   }
-  if (file.hasFileExtension("bsp")) {
-    const bsc::DecompileResult d = bsc::Decompile(bytes.data(), bytes.size());
-    if (!d.ok) {
-      refused_     = ErrorsFirst(d.findings);
-      refusedFile_ = file.getFileName();
-      err          = file.getFileName() + ": not a package this build reads (" + FirstError(d.findings) + ")";
-      return false;
-    }
-    return LoadText(d.json, file, true, &bytes, &err);
-  }
-  return LoadText(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), file, false, nullptr,
+  if (file.hasFileExtension("bsp")) return OpenPackage(std::move(bytes), {file, -1}, &err);
+  return LoadText(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {file, -1}, false, nullptr,
                   &err);
+}
+
+bool CurationSession::OpenFactory(size_t index, juce::String* error) {
+  juce::String  local;
+  juce::String& err = error != nullptr ? *error : local;
+  if (index >= FactoryCount()) {
+    err = "no factory mode " + juce::String(static_cast<int>(index));
+    return false;
+  }
+  const FactoryPackage& f = Factory(index);
+  return OpenPackage(std::vector<uint8_t>(f.bytes, f.bytes + f.size), {juce::File(), static_cast<int>(index)}, &err);
+}
+
+bool CurationSession::OpenPackage(std::vector<uint8_t> bytes, const Origin& origin, juce::String* error) {
+  const bsc::DecompileResult d = bsc::Decompile(bytes.data(), bytes.size());
+  if (!d.ok) {
+    refused_     = ErrorsFirst(d.findings);
+    refusedFile_ = Label(origin);
+    *error       = Label(origin) + ": not a package this build reads (" + FirstError(d.findings) + ")";
+    return false;
+  }
+  return LoadText(d.json, origin, true, &bytes, error);
 }
 
 bool CurationSession::Revert(juce::String* error) {
   if (!open_) return false;
+  if (factory_ >= 0) return OpenFactory(static_cast<size_t>(factory_), error);
   return Open(source_, error);
 }
 
+juce::String CurationSession::Label(const Origin& origin) const {
+  return origin.factory >= 0 ? "factory/" + FactoryBsp(static_cast<size_t>(origin.factory))
+                             : origin.file.getFileName();
+}
+
+juce::String CurationSession::SourceLabel() const {
+  if (!open_) return {};
+  if (factory_ >= 0) return "firmware/factory/" + FactoryBsp(static_cast<size_t>(factory_)) + " (built in)";
+  return jsonFile_.getFileName();
+}
+
+PresetSource CurationSession::Source() const {
+  if (!open_) return {};
+  return {factory_, juce::String::fromUTF8(stored_->name.c_str()), stored_->family};
+}
+
 void CurationSession::Close() {
+  CloseDocument();
+  adoptSerial_ = processor_.LoadSerial();  // closed by hand: not reopened for what plays now
+}
+
+void CurationSession::CloseDocument() {
   StopWorkers("the document closed");
   if (side_ == Side::Stored) SetSide(Side::Working);
-  open_ = false;
+  open_    = false;
+  factory_ = -1;
   stored_.reset();
   working_.reset();
   storedState_.reset();
@@ -247,21 +278,22 @@ void CurationSession::ResetMatch() {
   ++matchGen_;
 }
 
-bool CurationSession::LoadText(const std::string& text, const juce::File& source, bool fromPackage,
-                               const std::vector<uint8_t>* package, juce::String* error) {
-  auto                      doc = std::make_unique<bsc::Document>();
+bool CurationSession::LoadText(const std::string& text, const Origin& origin, bool fromPackage,
+                               const std::vector<uint8_t>* package, juce::String* error, bool play) {
+  const juce::String        label = Label(origin);
+  auto                      doc   = std::make_unique<bsc::Document>();
   std::vector<bsc::Finding> found;
   if (!bsc::ReadDocumentText(text, {}, doc.get(), &found)) {
     refused_     = ErrorsFirst(found);
-    refusedFile_ = source.getFileName();
-    *error       = source.getFileName() + " does not read: " + FirstError(found);
+    refusedFile_ = label;
+    *error       = label + " does not read: " + FirstError(found);
     return false;
   }
   const bsc::CompileResult r = bsc::CompileDocument(*doc);
   if (!r.ok) {
     refused_     = ErrorsFirst(r.findings);
-    refusedFile_ = source.getFileName();
-    *error       = source.getFileName() + " does not compile: " + FirstError(r.findings);
+    refusedFile_ = label;
+    *error       = label + " does not compile: " + FirstError(r.findings);
     return false;
   }
   // What plays: the package's own bytes when it came from one (what the pedal plays), else the
@@ -270,27 +302,39 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
   bsc::DecodedPackage         p     = bsc::DecodePackage(bytes.data(), bytes.size());
   if (!p.ok) {
     refused_.clear();
-    refusedFile_ = source.getFileName();
-    *error       = source.getFileName() + ": " + juce::String(bsc::DescribeDiagnostic(p.diagnostic));
+    refusedFile_ = label;
+    *error       = label + ": " + juce::String(bsc::DescribeDiagnostic(p.diagnostic));
     return false;
   }
   LoadReport report;
-  if (!processor_.LoadPresetState(*p.state, &report)) {
-    refused_.clear();
-    refusedFile_ = source.getFileName();
-    *error       = source.getFileName() + ": its mode does not validate";
-    return false;
+  report.exact = true;
+  if (play) {
+    if (!processor_.LoadPresetState(*p.state, &report,
+                                    {origin.factory, juce::String::fromUTF8(doc->name.c_str()), doc->family})) {
+      refused_.clear();
+      refusedFile_ = label;
+      *error       = label + ": its mode does not validate";
+      return false;
+    }
+  } else {
+    const ModeState now = processor_.CurrentMode();
+    if (std::memcmp(&now.mode, &p.state->mode, sizeof(ModeBlob)) != 0) {
+      *error = label + ": the plugin plays another mode";
+      return false;
+    }
   }
   StopWorkers("another document opened");  // a render of the document this one replaces
   refused_.clear();
   refusedFile_.clear();
   open_          = true;
-  source_        = source;
-  jsonFile_      = source.withFileExtension(".json");
+  factory_       = origin.factory;
+  source_        = origin.file;
+  jsonFile_      = origin.factory >= 0 ? juce::File() : origin.file.withFileExtension(".json");
   writesPackage_ = fromPackage || jsonFile_.withFileExtension(".bsp").existsAsFile();
   // What Save would write for the document unedited and derived is the stamped canonical text
-  // (r.json, when nothing is pending): the file is that, or Save changes it.
-  if (fromPackage) {
+  // (r.json, when nothing is pending): the file is that, or Save changes it. A factory
+  // package's is its JSON section.
+  if (fromPackage && origin.factory < 0) {
     juce::MemoryBlock beside;
     canonical_ = jsonFile_.existsAsFile() && jsonFile_.loadFileAsData(beside) && beside.getSize() == r.json.size() &&
                  std::memcmp(beside.getData(), r.json.data(), r.json.size()) == 0;
@@ -307,8 +351,9 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
   seenBits_.clear();
   ResetMatch();
   matchStale_ = matchLevel_;
-  message_    = "Opened " + source.getFileName() +
-             (report.exact ? juce::String() : juce::String(": the load is not exact (leaves this build lacks)"));
+  message_    = play ? "Opened " + label +
+                        (report.exact ? juce::String() : juce::String(": the load is not exact (leaves this build lacks)"))
+                     : juce::String::fromUTF8(stored_->name.c_str()) + " (" + label + ") plays: a session restored it";
   Refresh();
   Relint();
   ApplyMonitorTrim();
@@ -316,6 +361,22 @@ bool CurationSession::LoadText(const std::string& text, const juce::File& source
 }
 
 // ── The working document ─────────────────────────────────────────────────────────────────
+
+// A factory mode the processor plays with no document open: a session restored it (FMOD,
+// StateCodec.h). Its document opens as the stored version without a load, once per load; the
+// working version is what plays.
+bool CurationSession::AdoptPlaying() {
+  const uint32_t serial = processor_.LoadSerial();
+  if (serial == adoptSerial_) return false;
+  adoptSerial_                = serial;
+  const PresetSource source   = processor_.CurrentSource();
+  if (source.factory < 0 || static_cast<size_t>(source.factory) >= FactoryCount()) return false;
+  const FactoryPackage&      f = Factory(static_cast<size_t>(source.factory));
+  const std::vector<uint8_t> bytes(f.bytes, f.bytes + f.size);
+  const bsc::DecompileResult d = bsc::Decompile(bytes.data(), bytes.size());
+  juce::String               error;
+  return d.ok && LoadText(d.json, {juce::File(), source.factory}, true, &bytes, &error, false);
+}
 
 bool CurationSession::Refresh() {
   bool changed = false;
@@ -340,14 +401,15 @@ bool CurationSession::Refresh() {
       changed = true;
     }
   }
-  if (!open_) return changed;
+  if (!open_) return AdoptPlaying() || changed;
   if (side_ == Side::Working) {
     // A host that recalled a session (or anything else that loaded another mode) replaced the
-    // document: it no longer plays.
+    // document: it no longer plays. A factory mode the recall played opens in its place.
     const ModeState now = processor_.CurrentMode();
     if (std::memcmp(&now.mode, &storedState_->mode, sizeof(ModeBlob)) != 0) {
-      Close();
+      CloseDocument();
       message_ = "The document closed: the plugin now plays another preset (a session recall?)";
+      AdoptPlaying();
       return true;
     }
     const auto            preset = processor_.CurrentPreset();
@@ -569,6 +631,11 @@ std::vector<std::string> CurationSession::SolvePositions(ParamId macro, ParamId 
 
 CurationSession::SaveResult CurationSession::Save() {
   if (!open_) return {};
+  if (factory_ >= 0) {  // built in: nothing on disk to write back to
+    SaveResult result;
+    result.message = message_ = "A factory mode is built in: Save as... writes a copy, which then plays";
+    return result;
+  }
   return WriteTo(jsonFile_, writesPackage_);
 }
 
@@ -612,7 +679,8 @@ CurationSession::SaveResult CurationSession::WriteTo(const juce::File& json, boo
     result.message = message_ = "Saved, but the written document does not read back: " + FirstError(found);
     return result;
   }
-  processor_.LoadPresetState(*p.state);
+  processor_.LoadPresetState(*p.state, nullptr, {-1, juce::String::fromUTF8(stored->name.c_str()), stored->family});
+  factory_       = -1;  // a copy of a factory mode is a document file from now on
   source_        = json;
   jsonFile_      = json;
   writesPackage_ = withPackage;
@@ -642,12 +710,12 @@ bool CurationSession::SetSide(Side side) {
   if (side == Side::Stored) {
     Refresh();
     workingSnapshot_ = processor_.CurrentPreset();
-    if (!processor_.LoadPresetState(*storedState_)) {
+    if (!processor_.LoadPresetState(*storedState_, nullptr, Source())) {
       workingSnapshot_.reset();
       return false;
     }
   } else {
-    if (workingSnapshot_ == nullptr || !processor_.LoadPresetState(*workingSnapshot_)) return false;
+    if (workingSnapshot_ == nullptr || !processor_.LoadPresetState(*workingSnapshot_, nullptr, Source())) return false;
     workingSnapshot_.reset();
     seenBits_.clear();
   }
@@ -776,7 +844,8 @@ bool CurationSession::StartRender(const RenderRequest& request, juce::String* er
   preset->identity.id          = d->id;
   preset->identity.name        = d->name;
   preset->identity.family      = FamilyName(d->family);
-  preset->identity.source      = jsonFile_.getFullPathName().replaceCharacter('\\', '/').toStdString();
+  preset->identity.source      = factory_ >= 0 ? "firmware/factory/" + std::string(Factory(static_cast<size_t>(factory_)).path)
+                                               : jsonFile_.getFullPathName().replaceCharacter('\\', '/').toStdString();
   preset->identity.soundRev    = p.info.soundRev;
   preset->identity.soundHash   = bsc::Hex(r.soundHash.bytes, 32);
   preset->identity.controlHash = bsc::Hex(r.controlHash.bytes, 32);

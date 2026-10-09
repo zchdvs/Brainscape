@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "../FactoryModes.h"
 #include "BrainscapeLookAndFeel.h"
 #include "Widgets.h"
 #include "brainscape/ParamDisplay.h"
@@ -430,6 +431,21 @@ void MacroPanel::resized() {
 
 // ── DocumentPanel ────────────────────────────────────────────────────────────────────────
 
+juce::ScopedMessageBox AskDiscard(const CurationSession& session, const juce::String& replacement,
+                                  juce::Component* parent, std::function<void()> discard) {
+  const juce::String name =
+      session.HasDocument() ? juce::String::fromUTF8(session.Stored().name.c_str()) : juce::String("The document");
+  const juce::String keep = session.FactoryIndex() >= 0 ? "Save as... keeps them in a copy." : "Save keeps them.";
+  const auto options = juce::MessageBoxOptions::makeOptionsOkCancel(
+      juce::MessageBoxIconType::WarningIcon, "Discard unsaved edits to " + name + "?",
+      name + " has unsaved edits (knob positions, leaves, detached leaves). Opening " + replacement +
+          " drops them. " + keep,
+      "Discard", "Cancel", parent);
+  return juce::AlertWindow::showScopedAsync(options, [then = std::move(discard)](int result) {
+    if (result != 0 && then) then();  // 1: Discard, 0: Cancel or closed
+  });
+}
+
 void DocumentPanel::StyleToggle(juce::TextButton& b, juce::Colour on) {
   b.setClickingTogglesState(false);
   b.setColour(juce::TextButton::buttonOnColourId, on);
@@ -530,25 +546,41 @@ void DocumentPanel::Note(const juce::String& text, juce::Colour colour) {
 }
 
 void DocumentPanel::ChooseOpen() {
-  const juce::File start = session_.HasDocument()
+  const juce::File start = session_.HasDocument() && session_.FactoryIndex() < 0
                                ? session_.SourceFile().getParentDirectory()
                                : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
   chooser_ = std::make_unique<juce::FileChooser>("Open a preset document or package", start, "*.json;*.bsp");
   chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                         [safe = juce::Component::SafePointer<DocumentPanel>(this)](const juce::FileChooser& fc) {
                           if (safe == nullptr || fc.getResult() == juce::File()) return;
-                          juce::String error;
-                          if (safe->session_.Open(fc.getResult(), &error)) {
-                            safe->Note(safe->session_.LastMessage(), palette::kText);
-                          } else {
-                            safe->Note(error, palette::kBad);
-                          }
-                          safe->Refresh();
+                          safe->OpenChosen(fc.getResult());
                         });
+}
+
+void DocumentPanel::OpenChosen(const juce::File& file) {
+  std::function<void()> openFile = [safe = juce::Component::SafePointer<DocumentPanel>(this), file] {
+    if (safe == nullptr) return;
+    juce::String error;
+    if (safe->session_.Open(file, &error)) {
+      safe->Note(safe->session_.LastMessage(), palette::kText);
+    } else {
+      safe->Note(error, palette::kBad);
+    }
+    safe->Refresh();
+  };
+  if (session_.HasDocument() && session_.Dirty()) {
+    askBox_ = AskDiscard(session_, file.getFileName(), this, std::move(openFile));
+  } else {
+    openFile();
+  }
 }
 
 void DocumentPanel::Save() {
   if (!session_.HasDocument()) return;
+  if (session_.FactoryIndex() >= 0) {  // built in: a copy, wherever the user puts it
+    ChooseSaveAs();
+    return;
+  }
   const auto r = session_.Save();
   Note(r.message, !r.written ? palette::kBad : r.compiled ? palette::kGood : palette::kWarn);
   Refresh();
@@ -556,8 +588,14 @@ void DocumentPanel::Save() {
 
 void DocumentPanel::ChooseSaveAs() {
   if (!session_.HasDocument()) return;
-  chooser_ = std::make_unique<juce::FileChooser>("Save the working version as a preset document",
-                                                 session_.DocumentFile(), "*.json");
+  // A factory mode's copy starts in Documents, under its file name ("lull.json").
+  const int        factory = session_.FactoryIndex();
+  const juce::File start =
+      factory < 0 ? session_.DocumentFile()
+                  : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                        .getChildFile(juce::File::createLegalFileName(
+                            juce::String(Factory(static_cast<size_t>(factory)).path).fromLastOccurrenceOf("/", false, false)));
+  chooser_ = std::make_unique<juce::FileChooser>("Save the working version as a preset document", start, "*.json");
   chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
                             juce::FileBrowserComponent::warnAboutOverwriting,
                         [safe = juce::Component::SafePointer<DocumentPanel>(this)](const juce::FileChooser& fc) {
@@ -586,21 +624,32 @@ void DocumentPanel::StartRender() {
 }
 
 void DocumentPanel::Refresh() {
-  const bool open = session_.HasDocument();
-  const bool a    = open && session_.GetSide() == CurationSession::Side::Stored;
+  const bool open    = session_.HasDocument();
+  const bool a       = open && session_.GetSide() == CurationSession::Side::Stored;
+  const bool factory = open && session_.FactoryIndex() >= 0;
   if (open) {
     const bsc::Document& d = session_.Stored();
     name_.setText(juce::String::fromUTF8(d.name.c_str()) + "   " + juce::String::fromUTF8(d.id.c_str()),
                   juce::dontSendNotification);
-    file_.setText(session_.DocumentFile().getFileName() +
-                      (session_.WritesPackage() ? " + " + session_.PackageFile().getFileName() : juce::String()) +
-                      "   " + kDot + "   " + session_.DocumentFile().getParentDirectory().getFullPathName(),
-                  juce::dontSendNotification);
+    if (factory) {
+      file_.setText(session_.SourceLabel() + "   " + kDot + "   the factory set: Save as... writes a copy",
+                    juce::dontSendNotification);
+    } else {
+      file_.setText(session_.DocumentFile().getFileName() +
+                        (session_.WritesPackage() ? " + " + session_.PackageFile().getFileName() : juce::String()) +
+                        "   " + kDot + "   " + session_.DocumentFile().getParentDirectory().getFullPathName(),
+                    juce::dontSendNotification);
+    }
     juce::String state;
     juce::Colour colour = palette::kTextDim;
     if (a) {
       state  = "A: playing the stored version " + kDot + " B waits";
       colour = palette::kWarn;
+    } else if (factory) {
+      // Nothing to save back to: edits go to a copy (Save as).
+      state  = session_.Dirty() ? juce::String("Edited: Save as... keeps the edits in a copy")
+                                : juce::String("As built in");
+      colour = session_.Dirty() ? palette::kWarn : palette::kTextDim;
     } else if (session_.SaveChangesFile()) {
       // Unsaved edits, or a document on disk that Save would still rewrite: a targeted leaf off
       // its macro's value (derive), or a stale stamp.
@@ -621,14 +670,14 @@ void DocumentPanel::Refresh() {
     state_.setColour(juce::Label::textColourId, colour);
   } else {
     name_.setText("No document", juce::dontSendNotification);
-    file_.setText("Open a preset document (.json) or package (.bsp) to curate it; the knobs play the default mode "
-                  "until then.",
+    file_.setText("Pick a mode from the Modes menu, or open a document (.json) or package (.bsp), to curate it.",
                   juce::dontSendNotification);
     state_.setText({}, juce::dontSendNotification);
   }
   for (auto* b : {&save_, &saveAs_, &revert_, &a_, &b_, &match_, &renderButton_, &all_, &attack_, &pad_}) {
     b->setEnabled(open);
   }
+  save_.setEnabled(open && !factory);  // built in: Save as
   solve_.setEnabled(open && !a);
   a_.setToggleState(a, juce::dontSendNotification);
   b_.setToggleState(open && !a, juce::dontSendNotification);
