@@ -1,6 +1,6 @@
 # CLOCK design pass — evidence record
 
-> The evidence behind [clock.md](../clock.md) (draft v2, owner-approved on 2026-10-09): the
+> The evidence behind [clock.md](../clock.md) (draft v2, owner-approved on 2026-10-08): the
 > inputs, what each investigation found and where, the probes the revision ran, where the
 > sources disagreed and how the design resolves it, the alternatives it rejected, and how the
 > three reviews of draft v1 were disposed of (§6). The design document is normative; this
@@ -257,15 +257,21 @@ Standalone's block stamping.
 ### 2.9 ITCM and CPU (design §9.6)
 
 **ITCM** (*measured*, the `modes-impl` live image's map): `.itcm_text` is 61,840 of 65,536 bytes
-(94.4 %), 3,696 spare. By object: `Engine.cpp` 15,246, `Granular.cpp` 11,404, `PostChain.cpp`
+(94.4 %), 3,632 spare, since it starts 64 bytes into the region (this record first gave 3,696, the
+region less `.itcm_text`). By object: `Engine.cpp` 15,246, `Granular.cpp` 11,404, `PostChain.cpp`
 11,244, `Validate.cpp` 8,612, `DetMath.cpp` 5,496, `OnsetDetector.cpp` 1,792, `Mode.cpp` 1,468,
 `ModeEval.cpp` 1,292, `EventQueue.cpp` 452, `mem*` 1,728 and the shared tables 2,536. Only
 `Decode`, `Encode`, `Sha256` and `TestSignal` are kept out (`firmware/CMakeLists.txt:198`).
 `ValidateStructure` runs inside `ApplyEvent` on every Spillover load (`dsp/src/Engine.cpp:315`,
-`:1068-1079`). The CPU proposal (scratch `cpu/cpu-budget-proposal.md`) adds 6.3 KB or 1 KB (its
-FFT rewrite), 3.75 KB (its step 4) and about 2.3 KB (the governor), and requires 8 KB spare (its
-G6). So with `Validate` out the remainder is −0.35 or +4.95 KiB before the tempo core
-(C12), −1.35 to −1.95 or +3.35 to +3.95 KiB after it (*calculated*, review [H]).
+`:1068-1079`). The CPU proposal (scratch `cpu/cpu-budget-proposal.md`, adopted as
+[cpu-budget.md](../cpu-budget.md)) adds 6.3 KB or 1 KB (its FFT rewrite), 3.75 KB (its step 4)
+and about 2.3 KB (the governor), and requires 8 KB spare (its G6). So with `Validate` out the
+remainder is −0.35 or +4.95 KiB before the tempo core (C12), −1.35 to −1.95 or +3.35 to +3.95
+KiB after it (*calculated*, review [H]). *(2026-10-08, measured in the CPU plan's builds,
+cpu-budget.md §4.1: P1's FFT rewrite costs 8,016 bytes and does not link on wave 1's tree, so its
+D4 put P3's in, 560 bytes; wave 1 with the plan's steps 1–2 leaves 3,208 bytes; with `Validate`
+out the remainder is about +5.6 KiB before step 5 and the tempo core and +4.0 to +4.6 KiB after
+it, still under the gate, and no smaller FFT is left to swap in.)*
 
 **CPU** (`rev7-silicon-record.md` §3.2–§3.6, *measured* on the Rev7 at revision 1): the default
 preset's warm mean 1,902 cycles per sample; XIP against ITCM 1.076× warm and 1.697× cold for it,
@@ -275,10 +281,11 @@ the post delay 319 cycles per sample; a dirty `Restart` 47.2 ms, of which the 16
 44.97 ms. Review [H]'s cold-fetch estimate for a tick, 3–10k cycles for 1–2 KiB at 100–200
 cycles per 32-byte line, is scaled from these and stays *estimated* until T1's bench.
 
-**The governor** (CPU proposal): trigger births that fail admission stay pending while the
-oldest voices take FastCut's 128-frame fade; scheduler births need no trigger pending; beyond 8
-pending per source the oldest is dropped; P(f) charges each post stage a constant K_s; the
-constants freeze once, at its revision 8 (its D8); its event reserve is a 24k-cycle placeholder.
+**The governor** (CPU proposal; cpu-budget.md §5): trigger births that fail admission stay
+pending while the oldest voices take FastCut's 128-frame fade; scheduler births need no trigger
+pending; beyond 8 pending per source the oldest is dropped; P(f) charges each post stage a
+constant K_s; the constants freeze once, at its revision 8 (its D8); its event reserve is a
+24k-cycle placeholder.
 
 ## 3. Where the sources disagreed, and how the design resolves it
 
@@ -359,7 +366,7 @@ constants freeze once, at its revision 8 (its D8); its event reserve is a 24k-cy
 Written 2026-10-08 from the survey and the three investigations of record §1, on branch
 `claude/clock-design` from `claude/mode-compiler-impl` at `343f33c`, as draft v1 (commit
 `ca09f3a`), and revised the same day into draft v2 after the three reviews (§6). The design's
-owner decisions (design §11.5) carried provisional answers until 2026-10-09, when the owner
+owner decisions (design §11.5) carried provisional answers until 2026-10-08, when the owner
 confirmed every one as proposed and the design became owner-approved; its open questions (§11.8)
 are settled at T0b or by listening.
 

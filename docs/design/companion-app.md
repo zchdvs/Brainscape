@@ -799,7 +799,7 @@ bit-identical, so it can land as "sound-neutral" (§6.5); otherwise it bumps the
 > device setting `global.tempo_recall`. Under Keep, the default, the running tempo carries
 > across every load: the engine's Exact load plays the stored tempo, and the producer re-asserts
 > the running one as a logged event at frame 0 (clock.md §2.5, its D4 and D17). The owner
-> confirmed these answers, with the rest of clock.md §11.5, on 2026-10-09.
+> confirmed these answers, with the rest of clock.md §11.5, on 2026-10-08.
 
 | Captured | Section |
 |---|---|

@@ -1,6 +1,6 @@
 # Brainscape — Project Status
 
-> Snapshot as of **2026-10-07**.
+> Snapshot as of **2026-10-08**.
 > Brainscape is an open-source granular delay — a spiritual successor to the Hologram
 > Microcosm — targeting a Daisy Seed hardware pedal (prototyped on a Seed Rev7) **and** a JUCE desktop plugin and
 > companion app from one shared C++ DSP core. Licensed [GPLv3](../LICENSE).
@@ -35,7 +35,9 @@ Seed Rev7 bring-up images (parity, bench, live) build at sound revision 7 and ca
 packages. On the owner's Rev7 (2026-10-07) the parity image rendered the golden corpus bit for bit
 at sound revisions 1 and 3, and the DWT pass (revision 1) showed that **the worst-case CPU budget
 is not met**: a fix is under design, with owner decisions pending
-([the silicon record](design/reviews/rev7-silicon-record.md)); revisions 4 to 7 have not run on
+([the silicon record](design/reviews/rev7-silicon-record.md); *2026-10-08: the fix is
+[cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1` with its steps 1–2*);
+revisions 4 to 7 have not run on
 the board. **Step 4's first factory set is authored and pre-screened** (see
 [Step 4: the first factory set](#step-4-the-first-factory-set)): 14 modes and 4 reserves in
 `firmware/factory/`, every one passing the objective pre-screen at revision 7; the owner has
@@ -56,9 +58,9 @@ factory set have not yet run on GitHub.
 | Companion app + plugin (JUCE: VST3, AU, standalone) | 🚧 Skeleton built ([plugin/README.md](../plugin/README.md); design in [companion-app.md](design/companion-app.md)): wrapper on stamped events and `LoadPreset`, plain-value parameters under host model (b) with the macro, expression and effect-volume parameters, Restart on transport start, offline audition; lane D's curation slice (mode-compiler.md §9.1): a preset document or package opened, played with its mode, edited with the pedal's eight knobs (pickup, Shift) and the raw leaves, saved as canonical JSON through the compiler (derive, solve position, the compiler's errors and lint), A/B against the stored version with level matching, and a one-click render through `tools/audition`; no library, session v2 or device link yet |
 | Mode system (JSON → compiled mode, desktop-only compiler) | 🚧 Designed ([mode-compiler.md](design/mode-compiler.md), draft v2); lanes 0, B, A, G and C are built: the permanent parameter-ID table with the macro IDs, the decoded preset (`ModeBlob`, CTRL, performance state) with its decoder, validator and encoder, the compiler with `bspc` (schema 1, canonical JSON, lint, derive), their CI (the sound-revision gate's package rule, `bspc-roundtrip` on seven host legs, the decoder's fuzzers on every leg and the emulated M7, the compiler audit, nightly legs), and the engine runtime at sound revision 2 (modes loaded and validated, the onset source and mark positioning as structure, macro and expression moves, Trails and FastCut mode switches, the wet-only trim, the effect volume and the cutoff's wet kill), the Mix law at sound revision 3 (dry at unity to the knob's middle, wet at unity from it), with the first factory set's recipes re-measured under it, and wave 1 at sound revisions 4–7 (lane F: trigger sources, bursts, intermittency, pitch sets, micro-loop repeat and decay, voice count); lane E's audition tooling ([tools/audition](../tools/audition/README.md): the offline render the app and `bspc render` share, the scripts S0–S11, the objective pre-screen, the ratings log with its carry-forward by render hash and the authoring history); and lane D's curation slice in the app (above). Step 4's first factory set ([firmware/factory](../firmware/factory/README.md): 14 modes in all four families and 4 reserves, every one passing the pre-screen at revision 7) is heard: the owner keeps all 14 (2026-10-08), the knob ratings pending. Next: those ratings, then W2's CLOCK |
 | Preset package + upload to the pedal | 🚧 The `.bsp` format is built in `dsp/src/blob/` (decode, validate, encode, SHA-256; no floating-point instruction on the M7) with frozen fixtures and fuzzers, and `bspc` compiles documents to packages byte-identically on MSVC, GCC and Clang; the golden corpus commits 29 packages, which the harness decodes on every leg, the M7 included; upload needs hardware |
-| Tempo/clock trigger source | ⬜ Not started in code; designed and owner-approved ([clock.md](design/clock.md), draft v2, 2026-10-08, revised after three reviews, [record](design/reviews/clock-record.md); the owner confirmed the answers to its 23 decisions on 2026-10-09): tap, MIDI clock and host tempo as stamped events, an integer tempo phasor, Subdiv and note divisions, synced delays and clock-quantised births, in two sound revisions after the first set's knob ratings and an ITCM gate; the MIDI breadboard can start now |
+| Tempo/clock trigger source | ⬜ Not started in code; designed and owner-approved ([clock.md](design/clock.md), draft v2, 2026-10-08, revised after three reviews, [record](design/reviews/clock-record.md); the owner confirmed the answers to its 23 decisions on 2026-10-08): tap, MIDI clock and host tempo as stamped events, an integer tempo phasor, Subdiv and note divisions, synced delays and clock-quantised births, in two sound revisions after the first set's knob ratings and an ITCM gate; the MIDI breadboard can start now |
 | Looper subsystem | ⬜ Not started (memory/CPU envelope budgeted in the design) |
-| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending. Not yet run on the board: the live image, the bench at revision 3, any image at revisions 4 to 7 |
+| Firmware bring-up (Daisy Seed Rev7 prototype; custom H750 board later) | 🚧 Bring-up images built at sound revision 7 and verified off-hardware at revisions 2 to 7 (the parity stream's code under emulation, in the image's placement) ([firmware/README.md](../firmware/README.md)): silicon parity check (the revision-7 corpus, version 12, from its packages, compiled into the image), DWT measurement pass (contraction-off costs, the §4.2 silent-tail rule, the §7.3 budget rule; it cannot compare explicit FMA or kernels against tables), live audio with mode switches, macros and the expression pedal, on pinned libDaisy v9.0.0; faults are recorded and reported after a reset. **On the owner's Rev7, 2026-10-07** ([record](design/reviews/rev7-silicon-record.md), captures in [`firmware/records/`](../firmware/records/rev7-2026-10-07/README.md)): parity passed at revision 1 (28 presets) and revision 3 (33 presets, 18 packages), each at `maxBlockSize` 512 and 48 and from a hostile caller; the DWT pass (revision 1) keeps gradual underflow and ITCM placement, measures the flush at 0.9–1.8 % and an Exact load at 47.2 ms, and finds **the worst-case CPU budget not met**: the nominal row peaks at 99.1 % (100.3 % cold), the pessimistic rows at 135.5–168.5 % (136.2–169.0 % cold), the corpus's `dense_1ms` at 118.6 % (119.7 % cold); a fix is under design, owner decisions pending (*2026-10-08: [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`*). Not yet run on the board: the live image, the bench at revision 3, any image at revisions 4 to 7 |
 | Hardware (schematic/PCB) | ⬜ Not started (reference design chosen in research) |
 
 **The one-engine bet is validated in code.** The design's central claim — that the
@@ -181,7 +183,7 @@ Minted 2026-10-07 by mode-compiler lane F ([mode-compiler.md](design/mode-compil
 §7.6 item 6), one revision and one commit per feature, each re-minting
 [`golden.json`](../dsp/tests/golden/golden.json) with `--mode mint`. Internal, like revisions 1–3,
 and they keep all their gates. The owner's provisional Q2 put wave 1 before CLOCK; the owner
-confirmed that order on 2026-10-09 with CLOCK's D1 ([clock.md](design/clock.md) §11.5).
+confirmed that order on 2026-10-08 with CLOCK's D1 ([clock.md](design/clock.md) §11.5).
 
 **What changed in the engine.**
 
@@ -814,7 +816,9 @@ records live in [docs/design/reviews/](design/reviews/).
   64-voice row peaks at 99.1 % of the 480,000-cycle block (100.3 % cold), the pessimistic rows at
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
   `dense_1ms`, a live-image preset, at 118.6 %.
-  A fix is under design, with owner decisions pending; none of it is in this tree. Still to run
+  A fix is under design, with owner decisions pending; none of it is in this tree. *(2026-10-08:
+  the fix is [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`.)*
+  Still to run
   on the board: the live image's checks, the bench at revision 3 and every image at revisions 4
   to 7. The images use libDaisy's
   ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
@@ -1162,7 +1166,8 @@ records live in [docs/design/reviews/](design/reviews/).
   the pessimistic configuration (§8: ≈4,000 for the grain render), and a birth at most 6,203
   cycles (§8: ≈530 cycles/sample at 1 ms grains). Of the profile's costs, subnormal operations
   cost nothing extra and the flush 0.9–1.8 %; contraction off is inside every figure, not
-  isolated. A fix is under design, with owner decisions pending. From the design, still: the
+  isolated. A fix is under design, with owner decisions pending (*2026-10-08:
+  [cpu-budget.md](design/cpu-budget.md), owner-approved*). From the design, still: the
   scheduler's 64-slot sweep wants a free bitmask; segment batching at extreme birth rates; the
   detector's per-hop FFT is a single-sample cost spike (~2–2.4× the budgeted pessimistic row in
   its worst block) that likely wants stage-splitting.
@@ -1224,9 +1229,11 @@ Steps 1–4 need no hardware.
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
-   Next, the CPU budget's fix (under design, owner decisions pending; the worst case is not
-   met) and the decisions the pass leaves (explicit FMA, polynomial kernels or tables, the
-   pedal's default load mode); the live image's checks; the pedal side of the device link
+   Next, the CPU budget's fix (under design, owner decisions pending; *2026-10-08:
+   [cpu-budget.md](design/cpu-budget.md), owner-approved, on `claude/cpu-speed-1`*; the worst
+   case is not met) and the decisions the pass leaves (explicit FMA, which that fix's D10
+   defers, polynomial kernels or tables, the pedal's default load mode);
+   the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY
    check, the firmware update path, and the engine's SPSC event queue for the firmware's
    producers); and the app side

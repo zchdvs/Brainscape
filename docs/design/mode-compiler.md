@@ -59,13 +59,13 @@ defects, mark-positioned modes holding their note forever and onset-only modes b
 impossible (record §2.2). CLOCK, the largest feature, gets its own design pass. The owner
 may reorder (Q2).
 
-> **Update (2026-10-08, CLOCK design pass).** The pass is [clock.md](clock.md), draft v1. It
-> splits W2: its tempo core (tap, MIDI clock, host tempo and transport as events 6–10, the stored
-> performance state, CLOCK grain births and tempo-synced times, as two sound revisions) lands
-> before step tables, mark index and walk, global reverse and trigger velocity. Its owner
-> decisions carried provisional answers (its §11.5) until 2026-10-09, when the owner confirmed
-> all 23 (D1–D23) as proposed: clock.md (draft v2, revised after its reviews on 2026-10-08) is
-> now the owner-approved design.
+> **Update (2026-10-08, CLOCK design pass).** The pass is [clock.md](clock.md), draft v1, revised
+> to v2. It splits W2: its tempo core (tap, MIDI clock, host tempo and transport as events 6–10,
+> the stored performance state, CLOCK grain births and tempo-synced times, as two sound
+> revisions) lands before step tables, mark index and walk, global reverse and trigger velocity.
+> Its owner decisions carried provisional answers (its §11.5) until the owner confirmed all 23
+> (D1–D23) as proposed, later the same day: clock.md (draft v2, revised after its reviews) is now
+> the owner-approved design.
 
 ### 1.3 Terms
 
@@ -269,7 +269,7 @@ floating point out of the compiler. Freeze is never stored. Until W2, other valu
 
 > **Update (2026-10-08, CLOCK design pass).** [clock.md](clock.md) §2.4, §5.1 and §11.1 amend
 > this section and §2.3's `scheduler.subdiv` row (its D3, D7 and D14, confirmed by the owner on
-> 2026-10-09). The six subdivisions are rate multipliers of the tapped quarter (the Microcosm's
+> 2026-10-08). The six subdivisions are rate multipliers of the tapped quarter (the Microcosm's
 > "1/4" is a whole-note grid), written `tap, x1/4, x1/2, x2, x4, x8` so no label reads as a note
 > value, and re-coded so code 0 is `tap`, the default: §2.3's "default `1/4`" becomes `tap`, the
 > printed labels are E5, and no package changes, every stored byte being 0. `scheduler.subdiv`
@@ -1730,7 +1730,7 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
 2. **(owner)** W1 before CLOCK (recommended) or CLOCK first, as companion §8.1 has it (§1.2).
    Provisionally answered for W1 first (STATUS.md, sound revisions 4–7, 2026-10-07), as built.
    [clock.md](clock.md) §11.5 D1 (2026-10-08) keeps W2 after the first set's knob ratings and
-   starts its tempo core first; the owner confirmed D1 on 2026-10-09, which settles Q2 for W1
+   starts its tempo core first; the owner confirmed D1 the same day, which settles Q2 for W1
    first.
 3. **(owner)** Clear the factory, family and knob display names (§11.2).
 4. **(owner)** `wet_trim_db` wet only with the cutoff wet kill and Shift+Mix as a separate
@@ -1739,8 +1739,8 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
    setting only, as companion §6.2 implies.
 6. **(owner)** Reserve `perf.loop_level` now (recommended) or with the looper (companion Q29).
 7. In Tempo mode, does the Time knob still reach `macro.time`? Decided in the CLOCK pull request.
-   Answered by [clock.md](clock.md) §6.4 (its D5, 2026-10-08, confirmed by the owner on
-   2026-10-09): no; in Subdiv and Tempo time modes the knob sends Subdivision or Tempo events,
+   Answered by [clock.md](clock.md) §6.4 (its D5, 2026-10-08, confirmed by the owner the same
+   day): no; in Subdiv and Tempo time modes the knob sends Subdivision or Tempo events,
    and `macro.time` stays reachable by expression, MIDI and hosts in every mode; in the third
    time mode, Free, the knob is `macro.time` as today.
 8. **(owner)** After a load: pickup (recommended, engine §6) or "knobs follow" (§3.5).
@@ -1750,7 +1750,7 @@ Record §3 keeps the 29 disagreements behind these, and record §6 the review fi
     listening pass decides.
 11. Tempo-exact grain feedback (W2): compensate the 10.67 ms FIFO in the base delay, or route
     rhythmic repeats through the post delay, as Engram does? Answered by [clock.md](clock.md)
-    §6.2 (its D6, 2026-10-08, confirmed by the owner on 2026-10-09): through the post delay;
+    §6.2 (its D6, 2026-10-08, confirmed by the owner on 2026-10-08): through the post delay;
     `base_sync` places the first grain tap exactly, grain feedback keeps its one-FIFO pass, and
     lint L12 says so.
 12. **(owner)** The host model (§3.6): (b) only macros, Mix, effect volume and performance

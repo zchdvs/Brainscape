@@ -15,9 +15,9 @@
 > *measured*, *calculated* or *estimated*. Code is cited as `path:line` at
 > `claude/mode-compiler-impl` `343f33c` (sound revision 7); "LD" is the pinned libDaisy v9.0.0
 > and "JUCE" the plugin build's fetched 9.0 tree. Status: **owner-approved design**
-> (2026-10-09): draft v2 (2026-10-08), revised after three reviews of draft v1 (determinism and
+> (2026-10-08): draft v2, revised the same day after three reviews of draft v1 (determinism and
 > parity, the musician and the product, the firmware and hardware), with the answers to the 23
-> decisions of §11.5, which the owner confirmed as proposed on 2026-10-09;
+> decisions of §11.5, which the owner confirmed as proposed;
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
 > finding's disposition. Nothing is built.
 
@@ -62,7 +62,7 @@ designs, precisely enough to build and test:
 | Time signatures and bars | Not designed; grids align to position 0 of the transport in 24-ppqn ticks, so every grid up to a whole note is bar-aligned in 4/4 only |
 | Which panel gesture toggles the time mode, the LEDs | The control-surface design; §6.4 says what the gesture does |
 | The pedal's MIDI CC map | The firmware's MIDI design (compiler §1.2, deferred); §6.5 recommends the Microcosm's CCs |
-| The CPU budget's fix (the cost governor) | The CPU proposal, its decisions confirmed by the owner on 2026-10-09; §9.6 says how CLOCK births enter it |
+| The CPU budget's fix (the cost governor) | [cpu-budget.md](cpu-budget.md) (the CPU proposal as adopted, on `claude/cpu-speed-1` until it merges), its decisions D1–D13 confirmed by the owner on 2026-10-08 and its D4 applied (P3's FFT rewrite is built); §9.6 says how CLOCK births enter it |
 
 ### 1.3 Terms
 
@@ -877,7 +877,7 @@ Pass 1 writes a whole block before grains render, and blocks reach 512 frames
 | A variable-length feedback path | exact | rejected for the tempo core: sound-changing on every feedback preset, with a cost not yet estimated |
 | **Rhythmic repeats on the post delay** (Engram's way) | exact taps, measured | **chosen**: `base_sync` places the first grain tap exactly on the division; grain feedback keeps its one-FIFO pass, the smear and lateness echoic modes already have; tempo-exact repeats use `post.delay.sync` with `post.delay.fb` |
 
-Lint **L12** (after the CPU proposal's L10 and L11) notes a layer with `base_sync` whose
+Lint **L12** (after cpu-budget.md's L10 and L11, its §7.4) notes a layer with `base_sync` whose
 `feedback.amount` is above 0 at the stored position or any macro corner: "grain-feedback repeats
 fall 10.67 ms later per pass than the grid; tempo-exact repeats belong on the post delay". A
 warning, never an error.
@@ -928,7 +928,7 @@ BPM and grids of 3, 24 and 96 ticks, and at constant tempo every hit lands on �
   CLOCK source … `overlap` then acts as a don't-fire ceiling" is withdrawn: a refused grid hit is
   a missing beat, and the rhythmic families the source exists for (engine §5's Seq, Arp, Pattern,
   Warp, Mosaic) are hits;
-- **under the cost governor** (CPU proposal, its own sound revision), a hit that fails admission
+- **under the cost governor** (cpu-budget.md §5, its own sound revision), a hit that fails admission
   waits as triggers do, blocking scheduler births while it waits, but **at most
   `kClockLateFrames` = 48 frames** past its (jittered) frame: a hit not admitted by then is
   dropped (`clockDropped`), where other triggers wait for up to eight pending. Deferred hits are
@@ -960,7 +960,7 @@ the step index is ⌊position / G⌋ modulo the step count, so patterns align to
 | Subdiv | a Subdivision event (field 0) when its zone changes, with hysteresis at zone edges | the knob's | expression, MIDI CC, hosts |
 | Tempo | Tempo events, exponential from 20 BPM (fully counter-clockwise) to 300 BPM: ns = round(3·10⁹ · 2^(−m·log₂15)) through DetMath's `Exp2D`, exported as `TempoNsFromKnob(m)` | forced to TAP | expression, MIDI CC, hosts |
 
-**Q7 (answered here, D5, which the owner confirmed on 2026-10-09):** in Subdiv and Tempo modes
+**Q7 (answered here, D5, which the owner confirmed on 2026-10-08):** in Subdiv and Tempo modes
 the Time knob never reaches `macro.time`; expression, MIDI and hosts still do, in every mode
 (compiler §3.1's lean).
 
@@ -1118,8 +1118,8 @@ of the fold count, or sync switching on or off.
 **Cost:** one more Catmull-Rom read per sample during a fade, about 60–80 cycles (*estimated* from
 the post delay's 319 cycles per sample with one head, `rev7-silicon-record.md` §3.5), 3–4k cycles
 per 48-frame block, 0.6–0.8 % of the budget, for 21 ms per jump. The cost governor charges the
-delay stage a constant measured with one head (CPU proposal, P(f) = Σ K_s), so T2 measures the
-stage with a fade in progress, both heads moving in stereo, and raises its constant in the same
+delay stage a constant measured with one head (cpu-budget.md §5.1, P(f) = Σ K_s), so T2 measures
+the stage with a fade in progress, both heads moving in stereo, and raises its constant in the same
 revision (§9.6).
 
 ### 7.4 The artefact budget
@@ -1411,22 +1411,27 @@ hand its tapped tempo on; draft v1 deferred both without listing the gap (record
 
 ### 9.6 Placement and CPU
 
-**ITCM.** The live image at revision 7 uses 61,840 of 65,536 bytes of ITCM, leaving 3,696
-(*measured* from the `modes-impl` build's `brainscape_live.size.txt` and map;
-`firmware/README.md:476-491` gives about 3.6 KiB). Objects are placed whole: `Engine.cpp` 15,246
-bytes, `Granular.cpp` 11,404, `PostChain.cpp` 11,244, `Validate.cpp` 8,612, `DetMath.cpp` 5,496;
-only `Decode`, `Encode`, `Sha256` and `TestSignal` stay out (`firmware/CMakeLists.txt:198`). The
-CPU plan adds 7–12 KB and asks for 8 KB spare (its G6), and moving `Validate` out frees 8.4 KiB,
-so by draft v1's own figures (code finding C12) the remainder before the tempo core is −0.35 or
-+4.95 KiB: below that gate either way, and a link failure with the CPU plan's preferred FFT
-rewrite once the tempo core's 1.0–1.6 KiB is added. Draft v1's "adds next to no ITCM" is
-withdrawn (record §6, H3). So:
+**ITCM.** The live image at revision 7 has 61,840 bytes of `.itcm_text`, which starts 64 bytes
+into the 65,536-byte region, leaving 3,632 (*measured* from the `modes-impl` build's
+`brainscape_live.size.txt` and map; `firmware/README.md:476-491` gives about 3.6 KiB). Objects are
+placed whole: `Engine.cpp` 15,246 bytes, `Granular.cpp` 11,404, `PostChain.cpp` 11,244,
+`Validate.cpp` 8,612, `DetMath.cpp` 5,496; only `Decode`, `Encode`, `Sha256` and `TestSignal`
+stay out (`firmware/CMakeLists.txt:198`). The CPU plan's steps 1–2, built bit-exact, take 424
+bytes more: 3,208 spare (*measured*, cpu-budget.md §4.1). Its D4 is applied: P1's FFT rewrite
+costs 8,016 bytes, not 6.3 KB, and does not link on wave 1's tree even before any tempo-core code,
+so P3's rewrite (560 bytes) is the one built, and no smaller FFT is left to swap in. The plan
+still adds step 4 (3,752 bytes) and the governor (about 2.3 KB), and step 5 an amount not yet
+measured, and asks for 8 KB spare (its G6). With `Validate` moved out, the remainder is 3,208 −
+3,752 − 2,300 + 8,612 ≈ +5.6 KiB before step 5 and the tempo core, and about +4.0 to +4.6 KiB
+after the tempo core's 1.0–1.6 KiB (*calculated*): below that gate. Draft v1's figures (code
+finding C12) gave −0.35 or +4.95 KiB, and its "adds next to no ITCM" is withdrawn (record §6,
+H3). So:
 
 - **An entry gate for T1 and T2** (D1): today's use, minus what moves out, plus the CPU plan's
-  additions, plus the tempo core's, leaves at least 8 KiB, tallied from the merged tree's map
-  with the CPU plan's FFT choice, which the owner settled on 2026-10-09 (its D4: P1's 6.3 KB
-  rewrite now, P3's 1 KB one if the spare after wave 1, the plan's steps 4–5 and the governor
-  falls below 8 KB).
+  additions, plus the tempo core's, leaves at least 8 KiB, tallied from the merged tree's map.
+  The CPU plan's FFT choice, which the gate waited on, is settled and applied: the owner's D4
+  (2026-10-08) takes P3's rewrite when the spare after wave 1, the plan's steps 4–5 and the
+  governor falls below 8 KB, which it does, so P3's is built (cpu-budget.md §4.1).
 - **Cold code moves out, not only `Validate`.** `Engine.cpp`'s main-thread-only API (`Init`, the
   Exact-load and `Restart` clears, `GetParam`, `ModeSwitches`, the accessors the console reads)
   goes to a translation unit kept out of ITCM, or the engine is placed by function with a
@@ -1456,7 +1461,8 @@ pessimistic rows at 135.5–168.5 % (`rev7-silicon-record.md` §3.3). The tempo 
 | A crossfade | 3–4k cycles per block for 21 ms (§7.3) | per jump |
 
 Block-grid stamps split no pedal block (§4.5); a sub-block stamp would cost about 5–6k cycles at
-64 voices (CPU proposal). **The cost governor** (CPU proposal, sound revision 8 there):
+64 voices (cpu-budget.md §3: a `RenderRun` call per voice, 75–100 cycles). **The cost governor**
+(cpu-budget.md §5, sound revision 8 there, or 9 if the tempo core lands first, §11.3):
 
 - CLOCK hits are trigger-class, placed in its source order as manual/MIDI, onset, **clock**,
   burst, scheduler (D13); a deferred hit takes the draws of the frame it is born at, as the
@@ -1600,8 +1606,8 @@ Profile §5.12: each step that can change output is one commit raising `kSoundRe
 | `MidiClockParser` (with the master's position), host-conversion functions, `UsesTempo`, the effective-value display | none | producer code in `dsp/`: the "sound-neutral" label | — |
 | Firmware (stamps, epoch, UART restarts, the sampled tap, thru and clock out), plugin (re-asserts, the persisted tempo, saving the performance), audition, compiler-only changes | none | outside the trigger paths | — |
 
-N is the next revision when the tempo core lands: 8 if it precedes the CPU proposal's governor,
-which that proposal numbers 8, else 9. CLOCK's 48-frame lateness cap (§6.3) belongs to whichever
+N is the next revision when the tempo core lands: 8 if it precedes cpu-budget.md's governor,
+which that design numbers 8, else 9. CLOCK's 48-frame lateness cap (§6.3) belongs to whichever
 of the two lands second. Each revision re-mints `golden.json`, and every earlier preset must
 reproduce its hashes and counters, as at every wave-1 revision.
 
@@ -1619,28 +1625,30 @@ reproduce its hashes and counters, as at every wave-1 revision.
 | **T5** audition | S12, the beat-lock metric, the Lock row; re-rate the echoic modes' Time; Engram and Callback given a synced post delay by listening (§6.6) | `tools/audition/`, `firmware/factory/` | after T2 | 3–5 plus listening |
 | **T6** bench | DWT at revision N + 1 on the Rev7, with the CPU fix: hits with bursts, bunched ticks, the crossfade | `firmware/` | after T2, with the governor | 1–2 |
 
-**Order:** T0b now; the ITCM gate passed (§9.6), the CPU plan's FFT choice being settled
-(2026-10-09); the first set's knob ratings (`docs/STATUS.md:57`); T1, then T2, each one
-revision, with T3 and T4 alongside; T4b; T5; T6; then the rest of W2 (steps, mark walk, global
-reverse, velocity) and step 4's rhythmic second set (compiler §11.4). **Total** about 30–48
-engineer-days beyond this design (*estimated*). Draft v1's 22–38 left out the ITCM work, the
-producers' re-asserts, the epoch and UART recovery, MIDI out and the reviews' added tests; the
-survey's 25–45 included the design and golden coverage as separate lines, folded here into T1
-and T2.
+**Order:** T0b now; the ITCM gate passed (§9.6), the CPU plan's FFT choice being settled and
+applied (2026-10-08: P3's rewrite, cpu-budget.md §4.1); the first set's knob ratings
+(`docs/STATUS.md:57`); T1, then T2, each one revision, with T3 and T4 alongside; T4b; T5; T6;
+then the rest of W2 (steps, mark walk, global reverse, velocity) and step 4's rhythmic second set
+(compiler §11.4). **Total** about 30–48 engineer-days beyond this design (*estimated*). Draft
+v1's 22–38 left out the ITCM work, the producers' re-asserts, the epoch and UART recovery, MIDI
+out and the reviews' added tests; the survey's 25–45 included the design and golden coverage as
+separate lines, folded here into T1 and T2.
 
 ### 11.5 Owner decisions
 
-The owner confirmed every answer below on 2026-10-09, as proposed and without amendment, so none
-is provisional any more. Each was first adopted provisionally (2026-10-08) so the design was
-complete; as with every owner answer in this design, each stays reversible before the first
-public release, and reversing one is an owner decision of its own and, where it changes the
-sound, a sound revision. The CPU proposal's decisions were confirmed the same day, its D4
-settling the FFT choice that D1's gate is tallied with (§9.6). D1–D11 are the status survey's
-eleven, with its recommendations amended where the evidence of §12 or the reviews required (D2,
-D4, D7, D8, D9, D10, D11); D12–D20 are draft v1's, several amended by the reviews (D13, D15, D16,
-D17, D18, D20); D21–D23 are new in draft v2.
+The owner confirmed every answer below on 2026-10-08, as proposed and without amendment, so none
+is provisional any more. Each was first adopted provisionally, earlier the same day, so the
+design was complete; as with every owner answer in this design, each stays reversible before the
+first public release, and reversing one is an owner decision of its own and, where it changes
+the sound, a sound revision. The CPU proposal's decisions were confirmed at the same time
+([cpu-budget.md](cpu-budget.md) §9), its D4 settling the FFT choice that D1's gate is tallied
+with; D4 has since been applied: P1's rewrite does not fit wave 1's ITCM, so P3's is built
+(cpu-budget.md §4.1; §9.6). D1–D11 are the status survey's eleven, with its recommendations
+amended where the evidence of §12 or the reviews required (D2, D4, D7, D8, D9, D10, D11); D12–D20
+are draft v1's, several amended by the reviews (D13, D15, D16, D17, D18, D20); D21–D23 are new in
+draft v2.
 
-| # | Decision | Answer (confirmed by the owner, 2026-10-09) | Consequence | § |
+| # | Decision | Answer (confirmed by the owner, 2026-10-08) | Consequence | § |
 |---|---|---|---|---|
 | D1 | Order | Keep W2 after the first set's knob ratings; start the breadboard (T0b) now; land the tempo core before steps, mark walk, global reverse and velocity; enter T1 and T2 only through the ITCM gate (8 KiB spare after the CPU plan) | Nothing here changes the sound before the ratings and the CPU plan's FFT choice; T0b's data arrives before the thresholds freeze | 11.4, 9.6 |
 | D2 | Sources and priority | The Microcosm's: Start and Continue switch to external clock at the next tick and set the position; Stop reverts to internal keeping tempo and phase, and cancels an armed Start; tap and the Tempo knob are ignored under a running master. Added: clock without transport is followed after 24 ticks while the master is not stopped; a second without a tick reverts to internal and clears the window in any source; a loss mid-song resumes ClockRunning after 24 ticks; host tempo is the wrapper's, which drops taps while following it | A clock box that never sends Start still locks; a cable knock costs a beat or two of free-running, not the rest of the set; tap is unavailable while a master runs | 3 |
@@ -1691,8 +1699,9 @@ D17, D18, D20); D21–D23 are new in draft v2.
    with the 48-frame cap (§6.3, §9.6); the producer's tick cap; T1's cold-cache bench; compiler
    lints on hit rate × burst.
 2. **ITCM.** The gate may fail even with `Validate` out. Mitigation: the cold API out of ITCM or
-   placement by function (§9.6), in T1's estimate; if it still fails, the CPU plan's 1 KB FFT
-   rewrite instead of its 6.3 KB one.
+   placement by function (§9.6), in T1's estimate. That is the only lever: the CPU plan already
+   built its smaller FFT rewrite (cpu-budget.md §4.1). Placed by function, about 16 KB of the live
+   image's ITCM is never reached from the audio callback (*estimated*, cpu-budget.md §4.1).
 3. **Computer clocks.** Real DAW jitter may exceed the E-RM case. Mitigation: T0b's recordings
    replayed in the corpus; the thresholds of §3.3 and §7.1 are constants to tune before the first
    public revision.
@@ -1735,12 +1744,16 @@ Keep across loads through re-asserts; saving captures the performance); **mode-c
 re-coded default, the rate labels), §7.4 (the payloads), §12.3 (Q2 recorded as provisionally
 answered, Q7 and Q11 answered here); **determinism-profile.md** §5.11 (tempo events, the gap rule
 and the pedal's stamps); **docs/README.md** and **docs/STATUS.md** (this document). Draft v2
-revised the notes of draft v1's commit where its rules changed. On 2026-10-09 the owner's
+revised the notes of draft v1's commit where its rules changed. On 2026-10-08 the owner's
 confirmation of §11.5 was recorded, dated, in the notes that called its answers provisional
 (grain-engine.md §4 and §6, companion-app.md §6.2, mode-compiler.md §1.2, §2.6 and §12.3, whose
 Q2 the confirmed D1 settles), in determinism-profile.md §5.11, in docs/README.md and
-docs/STATUS.md, and in the record. The implementing pull requests amend the code comments that
-cite the old meanings (`Mode.h:86-97`, `PresetState.h:42-56`, `Engine.h:206-210`).
+docs/STATUS.md, and in the record. The same day, once the CPU plan's steps 1–2 were built, §1.2,
+§9.6, §11.3–§11.5, §11.7's risk 2, C12 and record §2.9 were brought up to its D4 as applied
+(P3's FFT rewrite) and to the measured ITCM (3,632 bytes spare, counting the 64-byte offset,
+and 3,208 with steps 1–2), and the CPU proposal's citations now point at cpu-budget.md. The
+implementing pull requests amend the code comments that cite the old meanings (`Mode.h:86-97`,
+`PresetState.h:42-56`, `Engine.h:206-210`).
 
 ## 12. Evidence
 
@@ -1815,7 +1828,10 @@ survey, are C1–C12, and C13–C18 come from checking the reviews:
 - **C12.** The live image has 3.6 KiB of ITCM left (`firmware/README.md:482-491`); the CPU
   proposal adds an FFT rewrite (6.3 KB, or 1 KB), its step 4 (3.75 KB) and the governor (about
   2.3 KB) and asks for 8 KB spare, so even with `Validate` (8.4 KiB) moved out the remainder is
-  −0.35 or +4.95 KiB.
+  −0.35 or +4.95 KiB. *(2026-10-08, measured in the CPU plan's builds, cpu-budget.md §4.1: the
+  live image has 3,632 bytes spare, `.itcm_text` starting 64 bytes into the region; P1's rewrite
+  costs 8,016 bytes and does not link on wave 1's tree; P3's, built, costs 560, leaving 3,208;
+  with `Validate` out the remainder is about +5.6 KiB before step 5 and the tempo core.)*
 - **C13.** On the pedal an Exact load mutes, and a muted callback returns before `g_blocks`
   advances; the load then clears the queue and zeroes `g_frame`, `g_blocks` and `g_seq`
   (`firmware/live/main.cpp:94-98`, `:110`, `:390-403`), and `Clear()` resets the queue's order
