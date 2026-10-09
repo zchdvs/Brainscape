@@ -33,6 +33,10 @@ _autosave-*
 fp-info-cache
 *.lck
 
+# Audition renders written inside the factory directory by mistake (firmware/factory/README.md
+# writes them to build/): never committed, and bspc_roundtrip.py skips the directory
+firmware/factory/renders/
+
 # Parity probes: engine copies recreated from patches, and battery inputs
 tools/parity/**/dsp_*/
 tools/parity/**/bin/

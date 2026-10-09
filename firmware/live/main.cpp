@@ -217,6 +217,12 @@ constexpr Settable kSettable[] = {
     {ParamId::FilterRes, "FilterRes"},
     {ParamId::FilterMorph, "FilterMorph"},
     {ParamId::TriggerSens, "TriggerSens"},
+    {ParamId::Repeat, "Repeat"},
+    {ParamId::DecayMs, "DecayMs"},
+    {ParamId::VoiceCount, "VoiceCount"},
+    {ParamId::Intermittency, "Intermittency"},
+    {ParamId::BurstCount, "BurstCount"},
+    {ParamId::BurstSpacingMs, "BurstSpacingMs"},
     {ParamId::EffectVolumeDb, "EffectVolumeDb"},
 };
 constexpr size_t kNumSettable = sizeof kSettable / sizeof kSettable[0];
@@ -255,7 +261,11 @@ constexpr Alias kAliases[] = {
     {"delaymix", ParamId::DelayMix},      {"reverbtime", ParamId::ReverbTime},
     {"reverbmix", ParamId::ReverbMix},    {"cutoff", ParamId::FilterCutoffHz},
     {"res", ParamId::FilterRes},          {"morph", ParamId::FilterMorph},
-    {"sens", ParamId::TriggerSens},       {"volume", ParamId::EffectVolumeDb},
+    {"sens", ParamId::TriggerSens},       {"repeat", ParamId::Repeat},
+    {"decay", ParamId::DecayMs},          {"voices", ParamId::VoiceCount},
+    {"skip", ParamId::Intermittency},
+    {"burst", ParamId::BurstCount},       {"spacing", ParamId::BurstSpacingMs},
+    {"volume", ParamId::EffectVolumeDb},
 };
 
 const Settable* FindByName(const std::string& name) {

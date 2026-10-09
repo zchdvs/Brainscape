@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "id": "factory.refrain",
+  "name": "Refrain",
+  "family": "recall",
+  "sound_rev": 7,
+  "sound_hash": "c8af188b50ac3262098dc9bb5ce6c6ff74a709defcf831354e0c1098c68ea8db",
+  "meta": {
+    "author": "Brainscape",
+    "description": "Free-running loops at pitch and an octave up; Activity sets how many play.",
+    "tags": ["recall", "first-set"]
+  },
+  "global": {
+    "mix": 0.35
+  },
+  "scheduler": {
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.5,
+    "jitter": 0.2,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
+  },
+  "layers": [
+    {
+      "voice_count": 4,
+      "position": {
+        "source": "live",
+        "base_ms": 420,
+        "spray_ms": 20,
+        "repeat": 4
+      },
+      "size_ms": 120,
+      "decay_ms": 0,
+      "window": {
+        "sustain": 0.5,
+        "skew": 0.5,
+        "smoothness": 0.8
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          },
+          {
+            "st": 12,
+            "weight": 1
+          }
+        ],
+        "select": "cycle",
+        "transpose_st": 0,
+        "spread_cents": 0,
+        "reverse_prob": 0
+      },
+      "pan_spread": 0.7
+    }
+  ],
+  "feedback": {
+    "amount": 0
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 350,
+      "fb": 0.3,
+      "mix": 0
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0.25
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 2,
+  "trigger": {
+    "sensitivity": 0.5
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "layer0.voice_count",
+          "range": [2, 8],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "layer0.position.repeat",
+          "range": [2, 8],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.5, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.skew",
+          "range": [0.5, 0.9],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.size_ms",
+          "range": [60, 400],
+          "in_range": [0, 1],
+          "curve": 1.5
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.3333333,
+      "repeats": 0.3333333,
+      "shape": 0,
+      "time": 0.31461653,
+      "space": 0.25,
+      "filter": 1
+    }
+  }
+}

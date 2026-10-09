@@ -370,9 +370,15 @@ std::vector<Finding> Lint(const Document& d, const LintOptions& options) {
         std::string("the position of ") + MacroName(macroId) + " is omitted (compiled as 0.5)");
   }
 
-  // L5: something starts grains without a trigger.
+  // L5: something starts grains without a trigger. With no source at all nothing ever does
+  // (the engine drops a footswitch or MIDI trigger whose source the mode does not list), so that
+  // case is an error for --factory.
   const uint8_t sources = m.schedule.sources;
-  if ((sources & (kSourcePeriodic | kSourceClock | kSourceOnset)) == 0u) {
+  if (sources == 0u) {
+    add("L5", true, At(d, "sources", "/scheduler/sources"),
+        "no source at all: this mode never plays a grain (it lists no periodic, clock, onset, "
+        "footswitch or midi_note source)");
+  } else if ((sources & (kSourcePeriodic | kSourceClock | kSourceOnset)) == 0u) {
     add("L5", false, At(d, "sources", "/scheduler/sources"),
         "no free-running source (periodic, clock) and no onset: silent until triggered");
   }

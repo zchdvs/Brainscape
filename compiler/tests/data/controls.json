@@ -3,8 +3,8 @@
   "id": "example.controls",
   "name": "Controls",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "9f581401e8d1da917301824f59804ee374344c1a4e860dc06f82ae0985a593f1",
+  "sound_rev": 7,
+  "sound_hash": "1f9b8508583dee411b524cc9dae207846846fd353feb06b74c73d5e844f349f7",
   "meta": {
     "author": "",
     "description": "",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.55,
-    "jitter": 0.2
+    "jitter": 0.2,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

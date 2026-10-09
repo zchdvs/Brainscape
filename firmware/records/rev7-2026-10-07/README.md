@@ -30,7 +30,7 @@ An earlier run of `brainscape_bench_xip` was interrupted; its partial log is not
 
 Re-check them with the tools and golden file of the commit that built the images: this tree's
 `parity_check.py` refuses the revision-1 stream format (`/2`), and its `golden.json` is revision
-3's, against which the bench's golden-tail renders cannot match. Once:
+7's, against which the bench's golden-tail renders cannot match. Once:
 
 ```text
 git worktree add --detach ../brainscape-a91aa8 a91aa8ad64c7
@@ -63,18 +63,25 @@ tree), engine archive `1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae
 | `parity-r3-run-pedal.log` | Parity, `run pedal`: `maxBlockSize` 48 | `brainscape_parity` |
 | `parity-r3-run-hostile.log` | Parity, `run hostile` | `brainscape_parity` |
 
-This tree's tools check them as they are (nothing in `tools/hil/` or `dsp/tests/golden/` has
-changed since `4090270`); from the repository's root:
+Re-check them, as for session 1, with the tools and golden file of the commit that built the
+image: this tree's `golden.json` is revision 7's, against which revision 3's renders cannot
+match. Once:
 
 ```text
-python tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run.log --run "run" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
-python tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run-pedal.log --run "run pedal" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
-python tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run-hostile.log --run "run hostile" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
+git worktree add --detach ../brainscape-409027 4090270
+```
+
+then, from this repository's root (the script reads the golden file and `MANIFEST` beside
+itself, so these are `4090270`'s):
+
+```text
+python ../brainscape-409027/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run.log --run "run" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
+python ../brainscape-409027/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run-pedal.log --run "run pedal" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
+python ../brainscape-409027/tools/hil/parity_check.py --log firmware/records/rev7-2026-10-07/session-2/parity-r3-run-hostile.log --run "run hostile" --expect-archive 1d6fe1dc41f02fd965783d70d8bfb63bd28a363b59d6915f54e60b4ae7401ced
 ```
 
 Each ends `VERDICT: PASS - 33 preset(s) match golden.json bit for bit, 18 package(s) match
-MANIFEST (sound revision 3, whole corpus)`, exit 0. A later sound revision re-mints
-`golden.json`; check these then from a worktree at `4090270`, as for session 1.
+MANIFEST (sound revision 3, whole corpus)`, exit 0.
 
 These images link libDaisy's USB code (ST's SLA0044): the captures are data, but the images
 that produced them must not be distributed (firmware/README.md §10).

@@ -136,15 +136,14 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
 }
 
 // Host model (b), provisionally (mode-compiler.md §3.6, Q12): macros, Mix, the effect volume
-// and the performance rows are automatable; the other leaves are registered but not. Lane D
-// applies it in the plugin with the macro parameters (§12.4); until then sound revision 1's
-// leaves, IDs 1-26 (27 and 28 retired at r2), stay automatable.
+// and the performance rows are automatable; the other leaves are registered but not. The plugin
+// applies it since lane D's curation slice registered the macro parameters (§12.4).
 TEST_CASE("host automation follows the host model") {
   for (const ParamDescriptor& d : kParamTable) {
     INFO((d.name != nullptr ? d.name : "(retired)"));
     const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
     const auto raw         = static_cast<uint32_t>(d.id);
-    const bool want        = raw <= 26u || (raw >= 69u && raw <= 80u) ||
+    const bool want        = d.id == ParamId::Mix || (raw >= 69u && raw <= 80u) ||
                       d.id == ParamId::EffectVolumeDb;
     CHECK(automatable == want);
   }

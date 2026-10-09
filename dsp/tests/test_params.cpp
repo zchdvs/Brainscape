@@ -171,13 +171,17 @@ TEST_CASE("the ID table runs 1-82 with the design's kinds for this build") {
     REQUIRE(static_cast<uint32_t>(d->id) == id);
     INFO("id " << id << " " << (d->name != nullptr ? d->name : "(retired)"));
     ParamKind want = ParamKind::Reserved;  // 29-68, 79 (W2), 80 (looper), 81 (phase D)
-    if (id <= 26) want = ParamKind::Leaf;
+    uint32_t  since = 0;                   // the revision that made a Leaf row one
+    if (id <= 26) want = ParamKind::Leaf, since = 1;
     if (id == 27 || id == 28) want = ParamKind::Retired;  // into structure at r2 (§7.6 item 4)
+    if (id >= 57 && id <= 59) want = ParamKind::Leaf, since = 4;  // W1's R9 (§7.5)
+    if (id == 29 || id == 30) want = ParamKind::Leaf, since = 6;  // W1's R11
+    if (id == 31) want = ParamKind::Leaf, since = 7;              // W1's R12
     if (id >= 69 && id <= 76) want = ParamKind::Macro;
     if (id == 77 || id == 78) want = ParamKind::Performance;
     if (id == 82) want = ParamKind::Global;
     CHECK(d->kind == want);
-    CHECK(d->sinceRev == (want == ParamKind::Leaf ? 1u : 0u));
+    CHECK(d->sinceRev == since);
   }
   CHECK(FindParam(static_cast<ParamId>(0)) == nullptr);
   CHECK(FindParam(static_cast<ParamId>(83)) == nullptr);
@@ -273,7 +277,9 @@ TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
 }
 
 TEST_CASE("the Leaf rows are the presets' leaves, in ascending id order") {
-  REQUIRE(kNumLeafParams == 26u);  // sound revision 1's rows but the retired 27 and 28
+  // Sound revision 1's rows but the retired 27 and 28, and wave 1's leaves as they land: 57-59
+  // (sound revision 4), 29 and 30 (6), 31 (7).
+  REQUIRE(kNumLeafParams == 32u);
   uint32_t prev = 0;
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const auto id = static_cast<uint32_t>(LeafId(i));
@@ -354,10 +360,11 @@ TEST_CASE("a preset naming a row that is not a Leaf loads inexact and changes no
   Engine& e = rig.engine;
   e.SetParam(ParamId::EffectVolumeDb, -6.0f);
   const PresetState base = Complete({{ParamId::DelayMs, 300.0f}});
-  // IDs 27 and 28 are Retired, 31 and 81 Reserved, 69 a Macro, 77 Performance, 82 Global: none
-  // is stored in a preset (§10.4).
+  // IDs 27 and 28 are Retired, 32 and 81 Reserved, 69 a Macro, 77 Performance, 82 Global: none
+  // is stored in a preset (§10.4; the design's 31 became a Leaf row at sound revision 7, so a W3
+  // row stands in for it).
   PresetState p = base;
-  for (const uint32_t id : {27u, 28u, 31u, 69u, 77u, 81u, 82u}) p.leaves[p.leafCount++] = {id, 1.0f};
+  for (const uint32_t id : {27u, 28u, 32u, 69u, 77u, 81u, 82u}) p.leaves[p.leafCount++] = {id, 1.0f};
   std::sort(p.leaves, p.leaves + p.leafCount,
             [](const PresetLeaf& a, const PresetLeaf& b) { return a.id < b.id; });
   for (const LoadMode mode : {LoadMode::Exact, LoadMode::Spillover}) {
@@ -370,7 +377,7 @@ TEST_CASE("a preset naming a row that is not a Leaf loads inexact and changes no
     CHECK(report.changedValues == 0u);
     CHECK(e.GetParam(ParamId::DelayMs) == 300.0f);
     CHECK(e.GetParam(ParamId::EffectVolumeDb) == -6.0f);  // the stored 1.0 is ignored
-    CHECK(e.GetParam(ParamId::VoiceCount) == 0.0f);
+    CHECK(e.GetParam(ParamId::LevelDb) == 0.0f);
   }
   LoadReport checked;
   CHECK_FALSE(CheckPreset(p, &checked));
@@ -416,8 +423,8 @@ TEST_CASE("Global rows survive every load and Restart; Init resets them") {
 namespace {
 
 // A busy start state in which a change to any Leaf row is audible within the render: every
-// post stage engaged, onsets triggering grains (the mode's onset source) among about eight
-// periodic voices.
+// post stage engaged, onsets triggering bursts of two grains (the mode's onset source) among
+// about eight periodic voices, each reading its region twice (so the decay is heard).
 const Params kBusy = {
     {ParamId::DelayMs, 120.0f},     {ParamId::Mix, 0.9f},          {ParamId::Feedback, 0.4f},
     {ParamId::GrainSizeMs, 60.0f},  {ParamId::Overlap, 0.5f},      {ParamId::SprayMs, 10.0f},
@@ -425,7 +432,8 @@ const Params kBusy = {
     {ParamId::Jitter, 0.3f},        {ParamId::ModRateHz, 1.3f},    {ParamId::ModDepth, 0.3f},
     {ParamId::DelayTimeMs, 90.0f},  {ParamId::DelayFb, 0.4f},      {ParamId::DelayMix, 0.3f},
     {ParamId::ReverbTime, 0.6f},    {ParamId::ReverbMix, 0.3f},    {ParamId::FilterCutoffHz, 3000.0f},
-    {ParamId::FilterRes, 0.3f},     {ParamId::FilterMorph, 0.5f},  {ParamId::TriggerSens, 0.6f}};
+    {ParamId::FilterRes, 0.3f},     {ParamId::FilterMorph, 0.5f},  {ParamId::TriggerSens, 0.6f},
+    {ParamId::BurstCount, 2.0f},    {ParamId::Repeat, 2.0f}};
 
 // `preset` with the onset source on, and with mark positioning when `mark` (unit tests set the
 // structure directly; the golden corpus takes it only from compiled packages, §10.3).
@@ -448,7 +456,9 @@ const std::map<ParamId, float> kChangeTo = {
     {ParamId::ModRateHz, 7.0f},       {ParamId::ModDepth, 1.0f},      {ParamId::DelayTimeMs, 400.0f},
     {ParamId::DelayFb, 0.9f},         {ParamId::DelayMix, 1.0f},      {ParamId::ReverbTime, 1.0f},
     {ParamId::ReverbMix, 1.0f},       {ParamId::FilterCutoffHz, 400.0f}, {ParamId::FilterRes, 1.0f},
-    {ParamId::FilterMorph, 2.0f},     {ParamId::TriggerSens, 1.0f},   {ParamId::EffectVolumeDb, -9.0f}};
+    {ParamId::FilterMorph, 2.0f},     {ParamId::TriggerSens, 1.0f},   {ParamId::EffectVolumeDb, -9.0f},
+    {ParamId::Intermittency, 0.5f},   {ParamId::BurstCount, 5.0f},    {ParamId::BurstSpacingMs, 40.0f},
+    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f},     {ParamId::VoiceCount, 2.0f}};
 
 constexpr int64_t kChangeFrame = 2401;  // off the 48-frame grid, before the second pluck
 

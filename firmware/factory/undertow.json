@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "id": "factory.undertow",
+  "name": "Undertow",
+  "family": "reverie",
+  "sound_rev": 7,
+  "sound_hash": "b93e5bef880493381f4d26f8945dc267d4d70bf02ee4b5d1138b39bab0cca35d",
+  "meta": {
+    "author": "Brainscape",
+    "description": "A grain cloud with an octave below pulling under it.",
+    "tags": ["reverie", "first-set"]
+  },
+  "global": {
+    "mix": 0.3
+  },
+  "scheduler": {
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.55,
+    "jitter": 0.5,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
+  },
+  "layers": [
+    {
+      "voice_count": 64,
+      "position": {
+        "source": "live",
+        "base_ms": 120,
+        "spray_ms": 71.42856,
+        "repeat": 1
+      },
+      "size_ms": 220,
+      "decay_ms": 0,
+      "window": {
+        "sustain": 0.3,
+        "skew": 0.5,
+        "smoothness": 1
+      },
+      "pitch": {
+        "set": [
+          {
+            "st": 0,
+            "weight": 1
+          },
+          {
+            "st": -12,
+            "weight": 1
+          }
+        ],
+        "select": "random",
+        "transpose_st": 0,
+        "spread_cents": 6,
+        "reverse_prob": 0
+      },
+      "pan_spread": 0.7
+    }
+  ],
+  "feedback": {
+    "amount": 0.3
+  },
+  "post": {
+    "mod": {
+      "rate_hz": 0.4,
+      "depth": 0
+    },
+    "delay": {
+      "time_ms": 420,
+      "fb": 0.35,
+      "mix": 0.35
+    },
+    "reverb": {
+      "time": 0.5,
+      "mix": 0.3
+    },
+    "filter": {
+      "cutoff_hz": 20000,
+      "res": 0.1,
+      "morph": 0
+    }
+  },
+  "wet_trim_db": 2,
+  "trigger": {
+    "sensitivity": 0.5
+  },
+  "macros": [
+    {
+      "id": "activity",
+      "targets": [
+        {
+          "param": "scheduler.overlap",
+          "range": [0.4, 0.75],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.position.spray_ms",
+          "range": [20, 300],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "repeats",
+      "targets": [
+        {
+          "param": "post.delay.fb",
+          "range": [0.15, 0.75],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "targets": [
+        {
+          "param": "layer0.size_ms",
+          "range": [100, 400],
+          "in_range": [0, 1],
+          "curve": 1
+        },
+        {
+          "param": "layer0.window.sustain",
+          "range": [0.5, 0],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "time",
+      "targets": [
+        {
+          "param": "layer0.position.base_ms",
+          "range": [20, 1200],
+          "in_range": [0, 1],
+          "curve": 2
+        }
+      ]
+    },
+    {
+      "id": "space",
+      "targets": [
+        {
+          "param": "post.reverb.mix",
+          "range": [0, 1],
+          "in_range": [0, 1],
+          "curve": 1
+        }
+      ]
+    },
+    {
+      "id": "filter",
+      "targets": [
+        {
+          "param": "post.filter.cutoff_hz",
+          "range": [40, 20000],
+          "in_range": [0, 1],
+          "curve": 4
+        }
+      ]
+    }
+  ],
+  "controls": {
+    "macro_positions": {
+      "activity": 0.42857137,
+      "repeats": 0.3333333,
+      "shape": 0.39999998,
+      "time": 0.29111126,
+      "space": 0.3,
+      "filter": 1
+    }
+  }
+}

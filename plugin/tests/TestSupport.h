@@ -174,12 +174,31 @@ inline RefEvent RefLoad(int64_t frame, const PresetState* preset) {
   return e;
 }
 
-// The engine alone, from Init and LoadPreset(preset, Exact), in 48-frame blocks with the
-// events handed to Process at their offsets. `beforeBlock` runs before each block with its
-// first frame. Empty on failure.
-inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rate = 48000.0,
-                              const std::vector<RefEvent>& events = {},
-                              const std::function<void(Engine&, int)>& beforeBlock = {}) {
+// A MacroMove or an Expression event (mode-compiler.md §3.4).
+inline RefEvent RefMacro(int64_t frame, ParamId macro, float position) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = Engine::EventType::MacroMove;
+  e.id    = static_cast<uint32_t>(macro);
+  e.value = position;
+  return e;
+}
+inline RefEvent RefExpression(int64_t frame, float position) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = Engine::EventType::Expression;
+  e.value = position;
+  return e;
+}
+
+// The engine alone, from Init and LoadPreset(state, Exact), in 48-frame blocks with the events
+// handed to Process at their offsets. `beforeBlock` runs before each block with its first
+// frame. A device setting's value (the effect volume) goes in before the load, whose restart
+// snaps it, as the wrapper's Init does. Empty on failure.
+inline Stereo RenderStateReference(const PresetState& state, const Stereo& in, double rate = 48000.0,
+                                   const std::vector<RefEvent>& events = {},
+                                   const std::function<void(Engine&, int)>& beforeBlock = {},
+                                   float effectVolumeDb = 0.f) {
   EngineConfig cfg;
   cfg.sampleRate    = rate;
   cfg.maxBlockSize  = 512;
@@ -187,7 +206,8 @@ inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rat
   host::HeapArenas arenas(PlanMemory(cfg));
   auto             engine = std::make_unique<Engine>();
   if (!arenas.ok() || !engine->Init(cfg, arenas.get())) return {};
-  engine->LoadPreset(*CompleteState(preset), LoadMode::Exact);
+  if (effectVolumeDb != 0.f) engine->SetParam(ParamId::EffectVolumeDb, effectVolumeDb);
+  engine->LoadPreset(state, LoadMode::Exact);
 
   const int frames = static_cast<int>(in.l.size());
   Stereo    out;
@@ -221,6 +241,13 @@ inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rat
     pos = end;
   }
   return out;
+}
+
+// The same from a leaf-only preset: the default mode.
+inline Stereo RenderReference(const Preset& preset, const Stereo& in, double rate = 48000.0,
+                              const std::vector<RefEvent>& events = {},
+                              const std::function<void(Engine&, int)>& beforeBlock = {}) {
+  return RenderStateReference(*CompleteState(preset), in, rate, events, beforeBlock);
 }
 
 }  // namespace brainscape::testing

@@ -3,8 +3,8 @@
   "id": "corpus.switch_live",
   "name": "Switch live",
   "family": "none",
-  "sound_rev": 3,
-  "sound_hash": "41616be2fd560a3b68977401a8b32e36bfa42f0f4e4a68bd072fbb169b756103",
+  "sound_rev": 7,
+  "sound_hash": "d427c16f7317160ee4af649030329e9f483fe14537a9b2c9df512900a1cc2649",
   "meta": {
     "author": "",
     "description": "Golden corpus: mode switches, the default structure.",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.8,
-    "jitter": 0.5
+    "jitter": 0.5,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 30
+        "spray_ms": 30,
+        "repeat": 1
       },
       "size_ms": 200,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,

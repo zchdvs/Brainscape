@@ -15,8 +15,10 @@ and every leg writes the same sorted manifest of package hashes.
       checked on every leg, so a missing rule fails on Linux too. `bspc roundtrip` checks each
       document: it compiles (to its committed .bsp when there is one), passes fmt --check with
       a current stamp, decompiles to itself, rebuilds without its JSON section, and its JSON
-      section recompiles to the same bytes. Writes the sets' manifests, each path prefixed
-      with its set, sorted by path, to --out.
+      section recompiles to the same bytes. The factory set must also pass `bspc lint
+      --factory` (mode-compiler.md §2.7: L4, L7-L9 and L5's empty source set are errors for
+      factory presets). Writes the sets' manifests, each path prefixed with its set, sorted by
+      path, to --out.
 
   bspc_roundtrip.py compare --legs A,B,... [--summary FILE] DIR
       parity-summary's check: the manifests under DIR (bspc-manifest-<leg>.txt) of every
@@ -34,7 +36,9 @@ Document sets:
   dsp/tests/golden/presets   the golden corpus's package presets (§10.3): each .json beside
                              its .bsp, and MANIFEST; frozen/ is exempt (never rebuilt or
                              re-stamped)
-  firmware/factory           the factory presets: each .json beside its .bsp, and MANIFEST
+  firmware/factory           the factory presets: each .json beside its .bsp, and MANIFEST;
+                             linted with `bspc lint --factory`; renders/ is skipped (audition
+                             renders written there by mistake; .gitignore keeps them out)
 """
 import argparse
 import os
@@ -43,11 +47,11 @@ import subprocess
 import sys
 import tempfile
 
-# (directory, commits packages, excluded subdirectories)
+# (directory, commits packages, excluded subdirectories, factory lint)
 SETS = [
-    ("compiler/tests/data", False, ()),
-    ("dsp/tests/golden/presets", True, ("frozen",)),
-    ("firmware/factory", True, ()),
+    ("compiler/tests/data", False, (), False),
+    ("dsp/tests/golden/presets", True, ("frozen",), False),
+    ("firmware/factory", True, ("renders",), True),
 ]
 MANIFEST = "MANIFEST"
 HASHES = 195  # three 64-digit hashes and their spaces, then the path
@@ -101,7 +105,7 @@ def check(bspc, top=".", say=print):
     """Every document set under top. bspc is the command, a list; say prints progress.
     Returns (manifest lines, error messages, sets bspc ran over)."""
     lines, errors, ran = [], [], 0
-    for root, packaged, excluded in SETS:
+    for root, packaged, excluded, factory in SETS:
         where = os.path.join(top, root)
         if not os.path.isdir(where):
             say(f"{root}: absent, skipped")
@@ -141,6 +145,12 @@ def check(bspc, top=".", say=print):
                 with open(got, encoding="utf-8", newline="") as fh:
                     for line in fh.read().splitlines():
                         lines.append(line[:HASHES] + root + "/" + line[HASHES:])
+        if factory:
+            say(f"{root}: bspc lint --factory over {len(jsons)} document(s)", flush=True)
+            rc = subprocess.run(bspc + ["lint", "--factory", "--"] + jsons, cwd=where).returncode
+            if rc != 0:
+                errors.append(f"{root}: bspc lint --factory exit {rc} (a factory preset's lint error: "
+                              f"L4, L7-L9 or an empty source set)")
     return lines, errors, ran
 
 
@@ -163,6 +173,8 @@ def run(bspc, out):
 # self-test: a stand-in for bspc that writes an empty manifest and fails on "fail.json".
 STUB_BSPC = """import sys
 a = sys.argv[1:]
+if a[0] == "lint":
+    sys.exit(1 if "lintfail.json" in a else 0)
 open(a[a.index("--write-manifest") + 1], "w").close()
 sys.exit(1 if "fail.json" in a else 0)
 """
@@ -184,7 +196,11 @@ SELF_TEST_CASES = [
     ("a document without its package", {F + "b.json": "{}\n"}, "no committed package beside it"),
     ("a package without its document", {F + "b.bsp": "BSP\0"}, "a committed package without its document"),
     ("a MANIFEST without documents", {F + "a.json": None, F + "a.bsp": None}, "but no documents"),
+    ("audition renders left in the factory directory are skipped",
+     {F + "renders/factory.a/S0.engaged.plucks.json": "{}\n"}, None),
     ("bspc fails", {F + "fail.json": "{}\n", F + "fail.bsp": "BSP\0"}, "bspc roundtrip exit 1"),
+    ("a factory document fails the factory lint",
+     {F + "lintfail.json": "{}\n", F + "lintfail.bsp": "BSP\0"}, "bspc lint --factory exit 1"),
 ]
 
 
@@ -192,7 +208,7 @@ def self_test():
     failures = total = 0
     # The repository's own .gitattributes: every set's documents, MANIFEST and packages.
     paths = []
-    for root, packaged, _ in SETS:
+    for root, packaged, _, _ in SETS:
         paths += [f"{root}/x.json", f"{root}/sub/x.json", f"{root}/{MANIFEST}"]
         paths += [f"{root}/x.bsp", f"{root}/sub/x.bsp"] if packaged else []
     problems = attribute_problems(".", paths)

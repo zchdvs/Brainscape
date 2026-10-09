@@ -3,8 +3,8 @@
   "id": "example.macros",
   "name": "Every macro",
   "family": "reverie",
-  "sound_rev": 3,
-  "sound_hash": "c7488c33ead588d95f42a5ad88da9d992230311b1d7298e13c25287593a970a8",
+  "sound_rev": 7,
+  "sound_hash": "9df44453568362a1dabc469408dda65c0b531b43b01dc9061bc2f9240307c3ec",
   "meta": {
     "author": "",
     "description": "",
@@ -16,16 +16,24 @@
   "scheduler": {
     "sources": ["periodic", "footswitch", "midi_note"],
     "overlap": 0.55,
-    "jitter": 0.2
+    "jitter": 0.2,
+    "intermittency": 0,
+    "burst": {
+      "count": 1,
+      "spacing_ms": 0
+    }
   },
   "layers": [
     {
+      "voice_count": 64,
       "position": {
         "source": "live",
         "base_ms": 250,
-        "spray_ms": 20
+        "spray_ms": 20,
+        "repeat": 1
       },
       "size_ms": 90,
+      "decay_ms": 0,
       "window": {
         "sustain": 0.3,
         "skew": 0.5,
