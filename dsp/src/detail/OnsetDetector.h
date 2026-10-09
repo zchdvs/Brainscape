@@ -9,6 +9,8 @@
 // is a small in-tree radix-2 (not CMSIS/libm) so firmware and plugin compute
 // bit-identical spectra; swapping the M7 build to arm_rfft_fast_f32 is a
 // measured-budget decision that would also need the contract-#7 determinism note.
+// AnalyzeHop's FFT is restructured for speed and bit-identical to the textbook form,
+// which dsp/tests/test_onset.cpp keeps and compares it with (OnsetDetector.cpp).
 //
 // The decision layer is Dixon's peak-picker (moving-mean baseline + margin +
 // causal rising condition — the research says the moving mean "does most of the
@@ -51,6 +53,8 @@ class OnsetDetector {
   bool ProcessSample(float x, int64_t abs) noexcept;
 
  private:
+  friend struct OnsetDetectorProbe;  // dsp/tests/test_onset.cpp reads the hop state
+
   void AnalyzeHop() noexcept;  // fills flux_ from the last 512 samples
 
   float* hann_    = nullptr;  // [512]

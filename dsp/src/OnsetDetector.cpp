@@ -8,6 +8,30 @@
 
 namespace brainscape::detail {
 
+namespace {
+
+// AnalyzeHop's first pass is specialised to the 512-point transform: its 128 groups of four
+// are addressed by a 7-bit bit reversal.
+static_assert(kOnsetFftSize == 512u && kOnsetBins == 257u, "AnalyzeHop is a 512-point FFT");
+
+struct Rev7Table {
+  uint8_t v[128];
+};
+
+constexpr Rev7Table MakeRev7() noexcept {
+  Rev7Table t{};
+  for (uint32_t g = 0; g < 128u; ++g) {
+    uint32_t r = 0;
+    for (uint32_t b = 0; b < 7u; ++b) r |= ((g >> b) & 1u) << (6u - b);
+    t.v[g] = static_cast<uint8_t>(r);
+  }
+  return t;
+}
+
+constexpr Rev7Table kRev7 = MakeRev7();
+
+}  // namespace
+
 void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
   float* p = warm;
   hann_    = p;
@@ -54,6 +78,10 @@ void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
     twCos_[k] = static_cast<float>(c);
     twSin_[k] = static_cast<float>(-s);
   }
+  // AnalyzeHop skips the multiplies by W^0 = (1, -0) and W^128 = (0, -1); DetMath is exact
+  // at quarter turns (dsp/tests/test_detmath.cpp), so these are those values exactly.
+  assert(twCos_[0] == 1.0f && twSin_[0] == 0.0f && twCos_[kOnsetFftSize / 4u] == 0.0f &&
+         twSin_[kOnsetFftSize / 4u] == -1.0f);
   Reset();
 }
 
@@ -88,45 +116,129 @@ void OnsetDetector::SetSensitivity(float s01) noexcept {
   delta_ = 0.01f + (1.0f - s01) * 0.13f;
 }
 
+// The windowed last 512 samples through a radix-2 decimation-in-time FFT, then the whitened
+// positive flux. Bit for bit the textbook loop it replaced (a windowed copy, a bit-reversal
+// permutation, then nine stages of j-inner butterflies, which dsp/tests/test_onset.cpp keeps
+// as its reference and compares hop by hop): every value that reaches a magnitude is the value
+// it made, up to the sign of a zero, which the square erases. The same IEEE operations run on
+// the same operands, except multiplies by 1, -0, 0 and -1, which are skipped. What changed is
+// where the work goes:
+//
+//   - The window, the permutation and stages 1-2 are one pass. Positions 4g..4g+3 take the
+//     windowed samples m, m+256, m+128 and m+384 with m = rev7(g) (rev9(4g+t) is
+//     rev2(t)·128 + rev7(g)); the input is real and those stages' twiddles are W^0 = (1, -0)
+//     and W^128 = (0, -1), so their butterflies are sums and differences.
+//   - In stages 3-8 the W^0 and W^128 butterflies skip their multiplies, and the others run
+//     with the twiddle hoisted out of the group loop. Butterflies of one stage touch disjoint
+//     pairs, so their order is free.
+//   - Stage 9 computes only bins 1-256, the ones the flux reads, each straight into its
+//     magnitude.
+//
+// A skipped multiply changes nothing but the sign of a zero. With W^0, br·1 - bi·(-0) is br
+// and br·(-0) + bi·1 is bi; with W^128, br·0 - bi·(-1) is bi and br·(-1) + bi·0 is -br; each
+// up to the sign of a zero result. A zero's sign changes no sum with a non-zero operand and no
+// product's magnitude, and re² + im² erases it. That holds for finite operands and for NaN
+// (a NaN reaches every bin's magnitude in both forms). It does not hold for ±inf: the textbook
+// form's inf·0 makes a NaN where the skip keeps the inf. So this form is bit-exact only because
+// no infinity reaches it: the engine clamps the detector input to ±2^16 (Engine.cpp,
+// kDetectorBound), whose comparisons map ±inf to the bound, and under that bound |X[k]| stays
+// below 2^25, so nothing overflows. NaN passes the clamp's comparisons; the engine never sees
+// it (determinism profile §3.7). The hop's whole cost lands in one block in every 256 samples;
+// this form is modelled at about half of it (docs/design/cpu-budget.md §4, step 1).
 void OnsetDetector::AnalyzeHop() noexcept {
-  // Windowed copy of the last 512 samples (anaPos_ points one past the newest).
-  for (uint32_t i = 0; i < kOnsetFftSize; ++i) {
-    const uint32_t src = (anaPos_ + i) & (kOnsetFftSize - 1u);
-    re_[i]             = ana_[src] * hann_[i];
-    im_[i]             = 0.f;
+  float* __restrict re         = re_;
+  float* __restrict im         = im_;
+  const float* __restrict ana  = ana_;
+  const float* __restrict hann = hann_;
+  const float* __restrict twc  = twCos_;
+  const float* __restrict tws  = twSin_;
+  const uint32_t a0            = anaPos_;  // one past the newest sample: the oldest
+
+  // Window, bit reversal and stages 1-2.
+  for (uint32_t g = 0; g < 128u; ++g) {
+    const uint32_t m   = kRev7.v[g];
+    const float    v0  = ana[(a0 + m) & 511u] * hann[m];
+    const float    v1  = ana[(a0 + m + 256u) & 511u] * hann[m + 256u];
+    const float    v2  = ana[(a0 + m + 128u) & 511u] * hann[m + 128u];
+    const float    v3  = ana[(a0 + m + 384u) & 511u] * hann[m + 384u];
+    const float    s01 = v0 + v1, d01 = v0 - v1;
+    const float    s23 = v2 + v3, d23 = v2 - v3;
+    float* __restrict r = re + 4u * g;
+    float* __restrict i = im + 4u * g;
+    r[0] = s01 + s23;
+    i[0] = 0.f;
+    r[1] = d01;
+    i[1] = -d23;
+    r[2] = s01 - s23;
+    i[2] = 0.f;
+    r[3] = d01;
+    i[3] = d23;
   }
 
-  // In-place iterative radix-2 FFT (decimation in time), bit-reversed input.
-  for (uint32_t i = 1, j = 0; i < kOnsetFftSize; ++i) {
-    uint32_t bit = kOnsetFftSize >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) {
-      const float tr = re_[i];
-      re_[i]         = re_[j];
-      re_[j]         = tr;
-      const float ti = im_[i];
-      im_[i]         = im_[j];
-      im_[j]         = ti;
-    }
-  }
-  for (uint32_t len = 2; len <= kOnsetFftSize; len <<= 1) {
+  // Stages 3-8.
+  for (uint32_t len = 8; len <= 256u; len <<= 1) {
     const uint32_t half = len >> 1;
-    const uint32_t step = kOnsetFftSize / len;
-    for (uint32_t i = 0; i < kOnsetFftSize; i += len) {
-      for (uint32_t j = 0; j < half; ++j) {
-        const float wr = twCos_[j * step];
-        const float wi = twSin_[j * step];
-        const uint32_t a = i + j, b = i + j + half;
-        const float xr = re_[b] * wr - im_[b] * wi;
-        const float xi = re_[b] * wi + im_[b] * wr;
-        re_[b] = re_[a] - xr;
-        im_[b] = im_[a] - xi;
-        re_[a] += xr;
-        im_[a] += xi;
+    const uint32_t step = 512u / len;
+    const uint32_t q    = half >> 1;  // j = q is W^128 = (0, -1)
+    for (uint32_t i = 0; i < 512u; i += len) {  // j = 0: W^0 = (1, -0)
+      const uint32_t a = i, b = i + half;
+      const float br = re[b], bi = im[b], ar = re[a], ai = im[a];
+      re[b] = ar - br;
+      im[b] = ai - bi;
+      re[a] = ar + br;
+      im[a] = ai + bi;
+    }
+    for (uint32_t i = 0; i < 512u; i += len) {  // j = q
+      const uint32_t a = i + q, b = a + half;
+      const float br = re[b], bi = im[b], ar = re[a], ai = im[a];
+      re[b] = ar - bi;
+      im[b] = ai + br;
+      re[a] = ar + bi;
+      im[a] = ai - br;
+    }
+    for (uint32_t j = 1; j < half; ++j) {
+      if (j == q) continue;
+      const float wr = twc[j * step];
+      const float wi = tws[j * step];
+      for (uint32_t i = 0; i < 512u; i += len) {
+        const uint32_t a = i + j, b = a + half;
+        const float br = re[b], bi = im[b];
+        const float xr = br * wr - bi * wi;
+        const float xi = br * wi + bi * wr;
+        const float ar = re[a], ai = im[a];
+        re[b] = ar - xr;
+        im[b] = ai - xi;
+        re[a] = ar + xr;
+        im[a] = ai + xi;
       }
     }
   }
+
+  // Stage 9 for bins 1-256 only, each into its magnitude (stashed in re, scratch after the
+  // FFT). Bin 256 is the j = 0 butterfly's difference; bins 1-255 its sums.
+  float frameMax = 1e-6f;
+  const float r256 = re[0] - re[256];
+  const float i256 = im[0] - im[256];
+  const float m256 = detmath::SqrtF(r256 * r256 + i256 * i256);
+  for (uint32_t j = 1; j < 256u; ++j) {
+    const float br = re[j + 256u], bi = im[j + 256u];
+    float       r, i;
+    if (j == 128u) {  // W^128 = (0, -1)
+      r = re[j] + bi;
+      i = im[j] - br;
+    } else {
+      const float wr = twc[j], wi = tws[j];
+      const float xr = br * wr - bi * wi;
+      const float xi = br * wi + bi * wr;
+      r = re[j] + xr;
+      i = im[j] + xi;
+    }
+    const float mag = detmath::SqrtF(r * r + i * i);
+    re[j]           = mag;
+    if (mag > frameMax) frameMax = mag;
+  }
+  re[256] = m256;
+  if (m256 > frameMax) frameMax = m256;
 
   // Whitened positive spectral flux (Stowell & Plumbley adaptive whitening:
   // each bin normalized by its own decaying peak memory — this is what makes one
@@ -138,27 +250,25 @@ void OnsetDetector::AnalyzeHop() noexcept {
   // flutter free-ran the detector at every sensitivity (review finding, 242
   // fires/10 s on a held sine). Relative to the frame max, not absolute, so
   // level independence is preserved.
-  float frameMax = 1e-6f;
+  float* __restrict peakMem = peakMem_;
+  float* __restrict prevW   = prevW_;
+  float* __restrict prevAvg = prevAvg_;
+  const float decay         = whitenDecay_;
+  const float floorVal      = frameMax * 0.01f;
+  float       flux          = 0.f;
   for (uint32_t k = 1; k < kOnsetBins; ++k) {
-    const float mag = detmath::SqrtF(re_[k] * re_[k] + im_[k] * im_[k]);
-    re_[k]          = mag;  // stash magnitudes (re_ is scratch after the FFT)
-    if (mag > frameMax) frameMax = mag;
-  }
-  const float floorVal = frameMax * 0.01f;
-  float       flux     = 0.f;
-  for (uint32_t k = 1; k < kOnsetBins; ++k) {
-    const float mag = re_[k];
-    float pm        = peakMem_[k] * whitenDecay_;
+    const float mag = re[k];
+    float pm        = peakMem[k] * decay;
     if (mag > pm) pm = mag;
     if (pm < floorVal) pm = floorVal;
-    peakMem_[k]     = pm;
+    peakMem[k]      = pm;
     const float w   = mag / pm;
     // 2-hop averaging on top mops up residual hop-to-hop alternation.
-    const float avg = 0.5f * (w + prevW_[k]);
-    const float d   = avg - prevAvg_[k];
+    const float avg = 0.5f * (w + prevW[k]);
+    const float d   = avg - prevAvg[k];
     if (d > 0.f) flux += d;
-    prevW_[k]   = w;
-    prevAvg_[k] = avg;
+    prevW[k]   = w;
+    prevAvg[k] = avg;
   }
   flux_ = flux * (1.0f / static_cast<float>(kOnsetBins - 1));
 }

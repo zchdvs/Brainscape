@@ -315,9 +315,12 @@ engine's code in ITCM:
   the others peak at 41.4 % (`default`), 54.4 % (`tail_post_fb`), 84.6 %
   (`pitch_reverse_spray`) and 48.3 % (`max_delay_spray_rev_up24`). These are the engine's
   cycles alone, with interrupts off around each call. A fix is under design, with owner
-  decisions pending.
+  decisions pending. *(2026-10-08: the fix is
+  [cpu-budget.md](../docs/design/cpu-budget.md), owner-approved, with its decisions D1–D13; steps
+  1–2, bit-exact, are built.)*
 - **§7.3's rule:** contraction off threatens the budget, so explicit FMA is a candidate, to build
-  and measure before adopting.
+  and measure before adopting. *(2026-10-08: explicit FMA is deferred by cpu-budget.md's D10,
+  held in reserve with the other sound-changing levers.)*
 - **§4.2's rule:** a subnormal operand or result costs nothing at FZ = 0 (1.00× the normal
   latency), and both tails pass (silent-tail worst block FZ = 0 / FZ = 1 1.002 and 0.999, 0 of
   120,000 blocks flagged at FZ = 1, the renders equal): keep gradual underflow.
@@ -471,31 +474,35 @@ oracle build's byte for byte, and runs the static audits on the firmware build.
 At sound revision 7 (revision 3's in brackets). At revision 2 the images grew by the 18 embedded
 corpus packages (77,768 bytes), the package decoder, validator and encoder, the macro evaluator and
 the engine's mode runtime; revision 3's Mix law added 40–56 bytes to each; wave 1 (revisions 4–7)
-added 11 packages and the engine's wave-1 code, about 4.4 KiB of it in ITCM.
+added 11 packages and the engine's wave-1 code, about 4.4 KiB of it in ITCM. The CPU plan's steps 1
+and 2 ([cpu-budget.md](../docs/design/cpu-budget.md) §4.1, §4.2; bit-exact, so no revision of their
+own) added 416–432 bytes to each image and 424–432 bytes to each ITCM.
 
 | Image | Bytes | ITCM used (of 64 KiB) |
 | --- | --- | --- |
-| `brainscape_parity.bin` | 399,600 (337,896) | 58.4 KiB, 91.2 % (54.0 KiB) |
-| `brainscape_bench.bin` | 397,284 (335,924) | 58.2 KiB, 91.0 % (53.9 KiB) |
-| `brainscape_bench_xip.bin` | 397,112 (335,744) | 0 |
-| `brainscape_bench_hooks.bin` | 397,772 (336,428) | 58.7 KiB, 91.7 % (54.3 KiB) |
-| `brainscape_live.bin` | 438,208 (376,392) | 60.4 KiB, 94.4 % (56.0 KiB) |
+| `brainscape_parity.bin` | 400,016 (337,896) | 58.8 KiB, 91.8 % (54.0 KiB) |
+| `brainscape_bench.bin` | 397,700 (335,924) | 58.6 KiB, 91.6 % (53.9 KiB) |
+| `brainscape_bench_xip.bin` | 397,528 (335,744) | 0 |
+| `brainscape_bench_hooks.bin` | 398,204 (336,428) | 59.1 KiB, 92.3 % (54.3 KiB) |
+| `brainscape_live.bin` | 438,624 (376,392) | 60.8 KiB, 95.0 % (56.0 KiB) |
 
 The ITCM holds the engine's code and constants (`Engine` 9.6–13.4 KiB, `PostChain` 11.0,
 `Validate` 8.4, `Granular` 8.2, `DetMath` 5.4, `OnsetDetector`, `Mode`, `ModeEval`, `EventQueue`,
 and the shared tables `kParamTable`, `kLeafParams`, `kLeafOrdinal` and `kDefaultModeHash`,
 2.5 KiB, that the parity and bench images would otherwise take from a harness object in QSPI),
 libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetParam`,
-`ModeSwitches` and the rest of what the console reads) and has about 3.6 KiB left at revision 7
-(8 KiB at revision 3): the next wave that grows the engine moves `Validate` (it runs once per
-load) out of ITCM, or places the engine by function rather than by object.
+`ModeSwitches` and the rest of what the console reads) and has about 3.1 KiB left at revision 7
+with the CPU plan's steps 1–2 (7.4 KiB at revision 3). A wave that grows the engine past that
+places the engine by function rather than by object, so the main-thread-only API leaves ITCM
+first; `Validate` (it runs inside `Process` at every Spillover load) moves out only after bench
+session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3).
 
 ### Memory map
 
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
-| QSPI flash `0x90040000` | the image: vector table, code, constants (the 29 corpus packages among them, 128 KiB), initial data, ITCM's load image | 390 KiB |
-| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 58 KiB of 64 |
+| QSPI flash `0x90040000` | the image: vector table, code, constants (the 29 corpus packages among them, 128 KiB), initial data, ITCM's load image | 391 KiB |
+| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 58.8 KiB of 64 |
 | DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (a 9 KiB slot since sound revision 6; `sizeof(Engine)` is `kEngineImplBytes`, 7,168 bytes at sound revision 2 and 8,192 since 6, when wave 1's repeat voices grew the grain pool), the main stack (32 KiB reserved at the top, linker-checked) | 34 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
@@ -573,10 +580,12 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
   `kDefaultModeHash` read from QSPI before the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
-  (sound revision 7: `987179706f090560…`, hooks `2c086121ddc937d6…`, and at its own commit
+  (sound revision 7 with the CPU plan's steps 1 and 2: `c165e8ac5ff54cc2…`, hooks
+  `d3911b2b54958503…`; before them `987179706f090560…`, hooks `2c086121ddc937d6…`, and at its own commit
   `54ce912`, before lane D's flags-only `ParamDisplay` change, `ea7c5dfb08cf44e3…`, hooks
   `959493f9b4cf03f2…`; revision 6: `9e07ead26fac7402…`, hooks `bb616b8b55d80185…`; revision 5: `fc2d3076d962a781…`, hooks
-  `e6432e13a7e74c91…`; revision 4: `7c20000633f303ee…`, hooks `176b3797a7977851…`; revision 3:
+  `e6432e13a7e74c91…`; revision 4: `7c20000633f303ee…`, hooks `176b3797a7977851…`; revision 3
+  with steps 1 and 2: `02b4960f03d26a18…`, hooks `fd5bf8353e7df772…`; revision 3:
   `1d6fe1dc41f02fd9…`, hooks `023a9fa933fa9c0d…`; revision 2:
   `89b73b51fe4261bf…`, hooks `71a383520843e671…`; revision 1:
   `4f4ddaa3583e46f2…`, hooks `da7b4f2e9b44aef7…`), and, at every revision, to the M7 oracle
