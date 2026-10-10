@@ -1,42 +1,43 @@
 {
   "schema_version": 1,
-  "id": "corpus.voice_limit",
-  "name": "Voice limit",
+  "id": "corpus.sync_base",
+  "name": "Sync base",
   "family": "none",
   "sound_rev": 9,
-  "sound_hash": "10ae39167914eb06faf4c31e9e79801063b46d814c784d51ebffbe367250ceff",
+  "sound_hash": "5f0112d17277f25e7ed426b94593347b47cab1cf72cd3acf9cc191dc344a91ac",
   "meta": {
     "author": "",
-    "description": "Golden corpus: a dense cloud held to six voices, onset bursts of five stealing the oldest (sound revision 7).",
+    "description": "Golden corpus: a periodic cloud whose grain base delay is synced to an eighth note (sound revision 9), with grain feedback 0.5, whose repeats fall a FIFO pass later than the grid (lint L12); stored at 436364 us per quarter (137.5 BPM), TAP in Subdiv time mode.",
     "tags": []
   },
   "global": {
-    "mix": 0.7
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.9,
-    "jitter": 0.5,
+    "sources": ["periodic", "footswitch", "midi_note"],
+    "overlap": 0.45,
+    "jitter": 0.3,
     "intermittency": 0,
     "burst": {
-      "count": 5,
+      "count": 1,
       "spacing_ms": 0
     }
   },
   "layers": [
     {
-      "voice_count": 6,
+      "voice_count": 64,
       "position": {
         "source": "live",
-        "base_ms": 160,
-        "spray_ms": 40,
+        "base_ms": 250,
+        "spray_ms": 5,
+        "base_sync": "1/8",
         "repeat": 1
       },
-      "size_ms": 200,
+      "size_ms": 80,
       "decay_ms": 0,
       "window": {
         "sustain": 0.3,
-        "skew": 0.4,
+        "skew": 0.5,
         "smoothness": 0.7
       },
       "pitch": {
@@ -48,14 +49,14 @@
         ],
         "select": "cycle",
         "transpose_st": 0,
-        "spread_cents": 0,
+        "spread_cents": 8,
         "reverse_prob": 0
       },
-      "pan_spread": 0.7
+      "pan_spread": 0.5
     }
   ],
   "feedback": {
-    "amount": 0.2
+    "amount": 0.5
   },
   "post": {
     "mod": {
@@ -132,10 +133,10 @@
       "id": "time",
       "targets": [
         {
-          "param": "layer0.position.base_ms",
-          "range": [20, 2000],
+          "param": "layer0.size_ms",
+          "range": [20, 300],
           "in_range": [0, 1],
-          "curve": 2
+          "curve": 1
         }
       ]
     },
@@ -171,11 +172,15 @@
   "controls": {
     "macro_positions": {
       "activity": 0.5,
-      "repeats": 0.5,
+      "repeats": 0.5555556,
       "shape": 0.5,
-      "time": 0.5,
+      "time": 0.2142857,
       "space": 0.5,
-      "filter": 0.5
+      "filter": 1
     }
+  },
+  "performance": {
+    "time_mode": "subdiv",
+    "tempo_us_per_quarter": 436364
   }
 }

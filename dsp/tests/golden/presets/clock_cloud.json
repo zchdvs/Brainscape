@@ -3,8 +3,8 @@
   "id": "corpus.clock_cloud",
   "name": "Clock cloud",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "df7a9aa866363d064923699b41475eb4438bf2f4308f5fbb55d15999072f36b2",
+  "sound_rev": 9,
+  "sound_hash": "e4cb144305e6261ec117ede608a334c5053bd39ddac9f367339bccdd06a364c8",
   "meta": {
     "author": "",
     "description": "Golden corpus: a periodic cloud with clocked hits and onsets held to 12 voices, which the hits steal from (sound revision 8), stored at 436364 us per quarter (137.5 BPM), x2 in Subdiv time mode.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

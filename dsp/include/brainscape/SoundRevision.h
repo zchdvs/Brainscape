@@ -35,7 +35,13 @@ namespace brainscape {
 // follower; the stored performance state played (its tempo, time mode and subdivision, re-coded
 // so 0 is TAP), Restart starting from it; CLOCK births on the grid, triggers with ordinal 3;
 // rows 83-85. No mode before it lists `clock`, so every earlier preset keeps revision 7's bits.
-inline constexpr uint32_t kSoundRevision = 8;
+// 9: synced times (docs/design/clock.md §11.3): post.delay.sync (row 63) a leaf playing §5.2's
+// note values at the committed tempo and effective Subdiv, folded by octaves into 10 ms-4 s on a
+// 4 s line, and a layer's base_sync (folded into 1 ms-5 s); a jump of the committed tempo or a
+// discrete change crossfades the post delay's two heads over 1,024 frames, a clock's deadband
+// commit slews it over about a second, any other change glides; global.tempo_glide (row 86)
+// glides jumps. Row 63 at 0 and base_sync off play revision 8's bits.
+inline constexpr uint32_t kSoundRevision = 9;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

@@ -3,8 +3,8 @@
   "id": "corpus.mono_stutter",
   "name": "Mono stutter",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "068b7b06f0542582820ad3f6e210946e7fb8ecfb2b0ffe3059fae3ec22d0ede6",
+  "sound_rev": 9,
+  "sound_hash": "91dae20705ca253cea979f7415ef3afc4fadad7190b3b8fbe095ccadb83391ab",
   "meta": {
     "author": "",
     "description": "Golden corpus: onsets alone into one voice, bursts of four every 30 ms each cutting the last (sound revision 7).",
@@ -69,7 +69,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

@@ -9,11 +9,13 @@
 #include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
+#include "detail/Tempo.h"
 
-// The tempo core's producer functions (docs/design/clock.md §6.4, §6.6): what the pedal's
+// The tempo core's producer functions (docs/design/clock.md §5.3, §6.4, §6.6): what the pedal's
 // control loop, the plugin and the editor call, never Process. Out of the pedal's ITCM with the
 // rest of the tempo code (§9.6, firmware/CMakeLists.txt). TempoNsFromKnob is an engine entry
-// point, so it owns the FP control word (detail/FpEnvGuard.h); UsesTempo is integer-only.
+// point, so it owns the FP control word (detail/FpEnvGuard.h); UsesTempo and SyncedDuration are
+// integer-only.
 namespace brainscape {
 
 namespace {
@@ -49,6 +51,23 @@ bool SyncCodeNonzero(float v) noexcept {
 uint32_t tempo::TempoNsFromKnob(float m) noexcept {
   const detail::FpEnvGuard guard;
   return TempoNsFromKnobBody(m);
+}
+
+tempo::SyncedTime tempo::SyncedDuration(SyncTarget target, uint8_t code, uint32_t nsPerQuarter,
+                                        uint8_t subdiv, uint8_t timeMode, uint32_t rate) noexcept {
+  SyncedTime out;
+  if (code == 0u || code >= kSyncCodes || nsPerQuarter < kMinNsPerQuarter ||
+      nsPerQuarter > kMaxNsPerQuarter || subdiv >= kSubdivCodes || timeMode >= kTimeModeCodes ||
+      rate < TempoCore::kMinRate || rate > TempoCore::kMaxRate) {
+    return out;
+  }
+  out.subdiv           = timeMode == kTimeModeTempo ? kSubdivTap : subdiv;
+  const bool     post  = target == SyncTarget::PostDelay;
+  const uint32_t lo    = post ? PostSyncMinFrames(rate) : BaseSyncMinFrames(rate);
+  const uint32_t hi    = post ? PostSyncMaxFrames(rate) : BaseSyncMaxFrames(rate);
+  out.frames = FoldedFrames(PFromNs(nsPerQuarter, rate), NoteTicks(code), SubdivTicks(out.subdiv),
+                            lo, hi, &out.octaves);
+  return out;
 }
 
 bool UsesTempo(const PresetState& preset) noexcept {

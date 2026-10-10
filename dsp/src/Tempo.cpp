@@ -65,6 +65,18 @@ uint64_t DurationFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks,
   return MulDivRoundU64(pc, ts, den << -octaves);                   // 576·2^42 < 2^64
 }
 
+uint32_t FoldedFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks, uint32_t minFrames,
+                      uint32_t maxFrames, int32_t* octaves) noexcept {
+  // Every note value and Subdiv at 20-300 BPM and 8-384 kHz settles within 5 halvings and 3
+  // doublings (§5.3); the bounds only keep DurationFrames' octaves in range.
+  int32_t  k = 0;
+  uint64_t f = DurationFrames(pc, noteTicks, subdivTicks, 0);
+  while (f > maxFrames && k > -10) f = DurationFrames(pc, noteTicks, subdivTicks, --k);
+  while (f < minFrames && k < 10) f = DurationFrames(pc, noteTicks, subdivTicks, ++k);
+  *octaves = k;
+  return f > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<uint32_t>(f);
+}
+
 bool ValidPayload(uint8_t type, uint32_t id, uint32_t valueBits, uint32_t* position) noexcept {
   *position = 0;
   switch (type) {
@@ -168,10 +180,6 @@ void TempoCore::Restart() noexcept {
   haveLabel_  = false;
   lastRaw_    = 0;
   Settle();
-}
-
-uint8_t TempoCore::EffectiveSubdiv() const noexcept {
-  return timeMode_ == tempo::kTimeModeTempo ? tempo::kSubdivTap : subdiv_;
 }
 
 void TempoCore::Settle() noexcept {
@@ -851,10 +859,13 @@ void TempoCore::Commit(bool entered, uint32_t prevN, bool fitted) noexcept {
 
 // --- snapshots -----------------------------------------------------------------------------------
 
-TempoStats TempoCore::Counts(uint64_t clockBirths, uint64_t clockDropped) const noexcept {
+TempoStats TempoCore::Counts(uint64_t clockBirths, uint64_t clockDropped, uint64_t crossfades,
+                             uint64_t folds) const noexcept {
   TempoStats s   = stats_;
   s.clockBirths  = clockBirths;
   s.clockDropped = clockDropped;
+  s.crossfades   = crossfades;
+  s.folds        = folds;
   return s;
 }
 

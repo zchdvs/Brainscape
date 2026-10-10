@@ -3,8 +3,8 @@
   "id": "corpus.restart_kept",
   "name": "Restart kept",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "261f5a844c0849d6b87ede9861ba38a867a290e021faf5feec70910ff4c2bd3c",
+  "sound_rev": 9,
+  "sound_hash": "d1e904c68377e33d6264a2fba62f709707dc20679240622ba81b9737de5d0aa0",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Restart preset.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 420,
       "fb": 0.6,
-      "mix": 0.3
+      "mix": 0.3,
+      "sync": 0
     },
     "reverb": {
       "time": 0.7,

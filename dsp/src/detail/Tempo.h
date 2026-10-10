@@ -44,6 +44,20 @@ uint32_t NsFromP(uint64_t p, uint32_t rate) noexcept;
 // (§5.3's fold: Pc·2^j in the numerator, 2^k in the denominator). |octaves| ≤ 10.
 uint64_t DurationFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks,
                         int32_t octaves = 0) noexcept;
+// §5.3's fold: DurationFrames at octaves 0, then halved while above `maxFrames` and doubled while
+// below `minFrames`, each octave computed exactly from Pc (never by halving a rounded count), so
+// the result is §2.3's frames at the octave it settles on, and *octaves that octave. The ranges
+// span more than an octave, so a fold never turns back. The engine's synced post-delay target and
+// base delay (Engine.cpp's rebuilds call it out of line, only when its inputs changed).
+uint32_t FoldedFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks, uint32_t minFrames,
+                      uint32_t maxFrames, int32_t* octaves) noexcept;
+// §5.3's ranges at the integer rate R: the synced post delay 10 ms (rounded up to a frame) to 4 s
+// inclusive, its line round(4·R) + 2 frames (PostChain); the grain base delay base_ms's 1 ms to
+// 5,000 ms. 480-192,000 and 48-240,000 frames at 48 kHz.
+constexpr uint32_t PostSyncMinFrames(uint32_t rate) noexcept { return (rate + 99u) / 100u; }
+constexpr uint32_t PostSyncMaxFrames(uint32_t rate) noexcept { return 4u * rate; }
+constexpr uint32_t BaseSyncMinFrames(uint32_t rate) noexcept { return (rate + 999u) / 1000u; }
+constexpr uint32_t BaseSyncMaxFrames(uint32_t rate) noexcept { return 5u * rate; }
 // §4.1-§4.2: whether an event 6-10's payload is valid. For a valid Start or Locate, *position
 // receives its position (0 otherwise). Any other type is not valid.
 bool ValidPayload(uint8_t type, uint32_t id, uint32_t valueBits, uint32_t* position) noexcept;
@@ -163,8 +177,10 @@ class TempoCore {
   }
   const TempoStats& Stats() const noexcept { return stats_; }
   TempoStats&       MutableStats() noexcept { return stats_; }  // the engine's own counters
-  // The counters with the engine's CLOCK birth and drop counts in place (Engine::TempoCounts).
-  TempoStats Counts(uint64_t clockBirths, uint64_t clockDropped) const noexcept;
+  // The counters with the engine's in place (Engine::TempoCounts): the CLOCK births and drops,
+  // the post chain's crossfades and the synced durations' folds.
+  TempoStats Counts(uint64_t clockBirths, uint64_t clockDropped, uint64_t crossfades,
+                    uint64_t folds) const noexcept;
 
   uint32_t           Rate() const noexcept { return rate_; }
   int64_t            Frame() const noexcept { return frame_; }
@@ -176,8 +192,12 @@ class TempoCore {
   tempo::ClockSource Source() const noexcept { return source_; }
   uint8_t            TimeMode() const noexcept { return timeMode_; }
   uint8_t            Subdiv() const noexcept { return subdiv_; }
-  // §2.4: the stored or live subdivision, except that Tempo time mode forces TAP.
-  uint8_t  EffectiveSubdiv() const noexcept;
+  // §2.4: the stored or live subdivision, except that Tempo time mode forces TAP. Inline, so the
+  // engine's synced times read it from ITCM (§11.14).
+  uint8_t EffectiveSubdiv() const noexcept {
+    return timeMode_ == tempo::kTimeModeTempo ? tempo::kSubdivTap : subdiv_;
+  }
+  // The effective subdivision's ticks: the CLOCK grid G and every synced duration's s (§2.3).
   uint32_t GridTicks() const noexcept { return tempo::SubdivTicks(EffectiveSubdiv()); }
   // The grid's period in frames at P, MulDivRoundU64(P, G, K) (§6.3): an integer below 2^24
   // (96 ticks at 20 BPM and 384 kHz is 4,608,000), the CLOCK jitter's scale. Kept from the last

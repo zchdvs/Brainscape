@@ -3,8 +3,8 @@
   "id": "factory.shards",
   "name": "Shards",
   "family": "misfire",
-  "sound_rev": 8,
-  "sound_hash": "0d4a3b60901644c84f81cd9df09e71bc602a02219c28bf7971c3f8e8d3c0ac2c",
+  "sound_rev": 9,
+  "sound_hash": "fcac49be1441548d68faba8f6989b4cb36f1df1b3ebcfaa87faca9930199c872",
   "meta": {
     "author": "Brainscape",
     "description": "Each attack scatters a stream of octave-up shards of itself, half of them reversed.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 250,
       "fb": 0.5,
-      "mix": 0.45
+      "mix": 0.45,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

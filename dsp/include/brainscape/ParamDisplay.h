@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "brainscape/Params.h"
+#include "brainscape/Tempo.h"
 
 namespace brainscape {
 
@@ -106,5 +107,20 @@ float NormalizedFromPlain(ParamId id, float plain) noexcept;
 // on every target and in any locale: each number is the canonical value rounded to the
 // shown decimals, ties to even, as a correctly rounding printf("%.Nf") gives it.
 size_t FormatPlain(ParamId id, float plain, char* out, size_t outSize) noexcept;
+
+// The effective value of a synced field (docs/design/clock.md §5.3, §5.4): what it plays at the
+// committed tempo, for the editor's and the plugin's displays beside the field; the host's value
+// text for row 63 stays FormatPlain's, the code's name alone, since a host caches value text as
+// a function of the value. `code` is §5.2's (row 63's value read as RoundHalfAwayI32, or a
+// layer's base_sync), `nsPerQuarter`, `subdiv` and `timeMode` as TempoInfo reports them (the
+// committed tempo, the stored or live subdivision and time mode), `rate` the engine's integer
+// rate; the duration is tempo::SyncedDuration's. "Off" for code 0; otherwise the note value's
+// name, " · Subdiv ×1/2" when the effective subdivision is not TAP, " → " and the note value
+// that plays when the subdivision or a fold changes it, then the duration: "1/4 · 500 ms",
+// "2/1 → 1/1 · 2.02 s" (a fold, at 119 BPM), "1/4 · Subdiv ×1/2 → 1/2 · 1.00 s". The × and →
+// are UTF-8. NUL-terminated and truncated to fit; returns the length written, as FormatPlain.
+size_t FormatSyncedTime(tempo::SyncTarget target, uint8_t code, uint32_t nsPerQuarter,
+                        uint8_t subdiv, uint8_t timeMode, uint32_t rate, char* out,
+                        size_t outSize) noexcept;
 
 }  // namespace brainscape

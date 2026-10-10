@@ -89,6 +89,17 @@ int64_t TapSeries(Script& script, int64_t start, const std::vector<int64_t>& int
   return at;
 }
 
+int64_t TempoSweep(Script& script, int64_t start, uint32_t fromNs, uint32_t toNs, uint32_t steps,
+                   int64_t interval) {
+  int64_t at = start;
+  for (uint32_t i = 1; i <= steps; ++i, at += interval) {
+    const int64_t span = static_cast<int64_t>(toNs) - static_cast<int64_t>(fromNs);  // |·| < 2^32
+    script.Tempo(at, static_cast<uint32_t>(static_cast<int64_t>(fromNs) +
+                                           span * static_cast<int64_t>(i) / static_cast<int64_t>(steps)));
+  }
+  return at;
+}
+
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
   auto preset = std::make_unique<PresetState>();
   for (uint32_t i = 0; i < kNumLeafParams; ++i) {
@@ -190,6 +201,9 @@ std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint16_t
     preset->mode.schedule.sources = static_cast<uint8_t>(preset->mode.schedule.sources & ~kSourceClock);
   }
   if ((strip & kStripSubdiv) != 0) preset->performance.subdiv = Subdivision::Tap;
+  if ((strip & kStripSync) != 0) {
+    for (ModeLayer& layer : preset->mode.layers) layer.baseSync = 0;
+  }
   preset->mode.features = RequiredModeFeatures(preset->mode);
   return preset;
 }

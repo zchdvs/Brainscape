@@ -695,6 +695,112 @@ PresetCase TempoJump() {
   return p;
 }
 
+// ── Sound revision 9: synced times (docs/design/clock.md §5-§7, §8.3). ───────────────────────
+// The packages: presets/sync_post.json (onset grains into a post delay at 1/4, feedback 0.6, the
+// time macro sweeping the code 1/8-1/2, Repeats on post.delay.fb; 140 BPM, TAP in Subdiv time
+// mode), sync_base.json (a periodic cloud whose base delay is synced to 1/8, grain feedback 0.5;
+// 137.5 BPM) and sync_fold.json (onset grains into a post delay at 2/1: 3.84 s at its 125 BPM,
+// between time_ms's 2 s and the 4 s line).
+
+constexpr uint32_t kNs90  = 666666667;
+constexpr uint32_t kNs137 = 437956204;  // 137 BPM
+constexpr uint32_t kNs52  = 1153846154;
+constexpr uint32_t kNs58  = 1034482759;
+
+// Row 63 on the committed 140 BPM (§6.1, §7.3): the time macro sweeping the code (discrete:
+// crossfades), a Subdiv jump and a fade chain (the Subdiv knob through all six zones 200 frames
+// apart, each fade starting where the last ends), a Tempo-knob Step (a glide) and a host Jump (a
+// crossfade), and a Subdiv change mid-trail, after the input stops.
+PresetCase SyncPost() {
+  PresetCase p = PackagePreset("sync_post", "sync_post");
+  Script&    s = p.script;
+  for (int k = 0; k <= 6; ++k) s.Macro(S(2 + k) + 101 + 37 * k, P::MacroTime, I2F(k) / 6.0f);
+  s.Macro(S(9) + 7, P::MacroTime, 0.5f);                      // back to 1/4
+  s.Subdivision(S(10) + 13, SubdivField::Subdivision, 3);     // ×2: eighths
+  const uint8_t zones[] = {1, 2, 0, 3, 4, 5};                 // the knob's six zones
+  for (int k = 0; k < 6; ++k) s.Subdivision(S(13) + 29 + 200 * k, SubdivField::Subdivision, zones[k]);
+  s.Subdivision(S(15) + 41, SubdivField::Subdivision, 0);     // TAP
+  s.Tempo(S(17) + 211, kNs137_5);                             // 1.8 %: a Step, which glides
+  s.Tempo(S(20) + 5, kNs90);                                  // a Jump: a crossfade
+  s.Tempo(S(23) + 307, kNs140);                               // and back
+  s.Subdivision(S(28) + 24007, SubdivField::Subdivision, 2);  // ×1/2 in the trail
+  p.require   = {{C::MacroMoves, 8, 8}, {C::SubdivEvents, 9, 9}, {C::Crossfades, 12},
+                 {C::Jumps, 2, 2},       {C::Onsets, 10},       {C::OffGridEvents, 20}};
+  p.ablate    = {Feature::Sync, Feature::Subdiv, Feature::Macro, Feature::Crossfade};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A MIDI clock on the synced echo (§7.1, §7.2): Start, ideal ticks at 137.5 BPM, acquired (a Step
+// from the stored 140, which glides), then at 137 BPM (0.36 %: past rule 3.1's band, a deadband
+// commit, a Drift, which slews), then a step to 150 BPM (re-acquired, a Jump: a crossfade), Stop.
+PresetCase SyncClock() {
+  PresetCase p = PackagePreset("sync_clock", "sync_post");
+  Script&    s = p.script;
+  s.Transport(S(1) - 307, TransportKind::Start, 0, true);
+  int64_t at = ClockTicks(s, S(1), kNs137_5, 330, TickModel::None, 0);  // to about 8.6 s
+  at         = ClockTicks(s, at, kNs137, 420, TickModel::None, 0);        // to about 17.8 s
+  at         = ClockTicks(s, at, kNs150, 300, TickModel::None, 0);        // to about 23.8 s
+  s.Transport(at + 1201, TransportKind::Stop, 0, true);
+  p.require   = {{C::ClockTicks, 1050, 1050}, {C::Commits, 3}, {C::Slews, 1}, {C::Jumps, 1},
+                 {C::Reacquires, 1},          {C::Crossfades, 1}, {C::TransportEvents, 2, 2}};
+  p.ablate    = {Feature::Sync, Feature::TempoEvents};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// A synced base delay with grain feedback (§6.2, Q11; lint L12) at 137.5 BPM: taps to 90 BPM (the
+// base delay follows for grains born after), the Subdiv to ×2 and back, a host Jump.
+PresetCase SyncBase() {
+  PresetCase p = PackagePreset("sync_base", "sync_base");
+  Script&    s = p.script;
+  TapSeries(s, S(3) + 1009, {32000, 32000, 32000}, 0, 0);     // 90 BPM
+  s.Subdivision(S(9) + 77, SubdivField::Subdivision, 3);      // ×2
+  s.Subdivision(S(14) + 131, SubdivField::Subdivision, 0);
+  s.Tempo(S(19) + 43, kNs137_5);
+  s.Param(S(23) + 19, P::Feedback, 0.8f);
+  p.require   = {{C::Taps, 4, 4}, {C::SubdivEvents, 2, 2}, {C::Jumps, 2}, {C::Births, 500},
+                 {C::OffGridEvents, 8}};
+  p.ablate    = {Feature::Sync, Feature::Feedback, Feature::Subdiv};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A tempo sweep across the folds (§5.3): 2/1 from 125 BPM (3.84 s, which draft v1's 2 s line
+// folded) down past 120, where it folds to a whole note (a crossfade: a fold change crosses an
+// octave), the code to 1/1 on the way, which folds below 60 BPM, down to 52 BPM; then a host Jump
+// to 58 BPM, which keeps the fold: a crossfade, or with the crossfade ablation a glide. Every
+// step is within Pc >> 5, a Step: it glides unless the fold changes.
+PresetCase SyncFold() {
+  PresetCase p = PackagePreset("sync_fold", "sync_fold");
+  Script&    s = p.script;
+  const int64_t end = TempoSweep(s, S(2) + 3, 480000000, kNs52, 48, 14400);  // 0.3 s a step
+  s.Param(S(11) + 17, P::DelaySync, 15.0f);                                   // 1/1, at 66 BPM
+  s.Tempo(end + 24011, kNs58);                                                // a Jump
+  p.require   = {{C::Events, 50, 50}, {C::Folds, 20}, {C::Crossfades, 4}, {C::Jumps, 1, 1},
+                 {C::Onsets, 10},     {C::OffGridEvents, 50}};
+  p.ablate    = {Feature::Sync, Feature::Crossfade};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// global.tempo_glide On (D22, §7.1): the jumps of a tapped tempo and a host's glide, the tape
+// swoop; a Subdiv change still crossfades.
+PresetCase SyncGlide() {
+  PresetCase p = PackagePreset("sync_glide", "sync_post");
+  Script&    s = p.script;
+  s.Param(S(1) + 5, P::TempoGlide, 1.0f);
+  TapSeries(s, S(4) + 333, {32000, 32000, 32000}, 0, 0);  // 140 to 90 BPM: a Jump, glided
+  s.Tempo(S(12) + 9, kNs140);                             // a host Jump back, glided
+  s.Subdivision(S(16) + 41, SubdivField::Subdivision, 2);  // discrete: a crossfade
+  s.Param(S(22) + 3, P::TempoGlide, 0.0f);
+  s.Tempo(S(24) + 77, kNs90);                             // Off again: crossfades
+  p.require   = {{C::Jumps, 3, 3}, {C::Crossfades, 2, 2}, {C::Taps, 4, 4}, {C::OffGridEvents, 9}};
+  p.ablate    = {Feature::Sync, Feature::Subdiv};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -785,6 +891,8 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::Clock: return "clock";
     case Feature::TempoEvents: return "tempoEvents";
     case Feature::Subdiv: return "subdiv";
+    case Feature::Sync: return "sync";
+    case Feature::Crossfade: return "crossfade";
   }
   return "unknown";
 }
@@ -883,6 +991,24 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
       out.strip |= kStripSubdiv;
       drop([](const Event& e) { return e.type == EventType::Subdivision && (e.id >> 8) == 0u; });
       break;
+    case Feature::Sync:
+      neutral(P::DelaySync, 0.0f);
+      drop([](const Event& e) {
+        return e.type == EventType::MacroMove || e.type == EventType::Expression;
+      });
+      out.strip |= kStripSync;
+      break;
+    case Feature::Crossfade: {  // the device setting before everything else at frame 0
+      Event e;
+      e.frame = 0;
+      e.type  = EventType::SetParam;
+      e.id    = static_cast<uint32_t>(P::TempoGlide);
+      e.value = 1.0f;
+      events.insert(events.begin(), e);
+      uint32_t seq = 0;
+      for (Event& x : events) x.seq = seq++;
+      break;
+    }
   }
   return out;
 }
@@ -1344,6 +1470,11 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(ClockSong());
     v.presets.push_back(ClockLoads());
     v.presets.push_back(TempoJump());
+    v.presets.push_back(SyncPost());  // sound revision 9 on: synced times
+    v.presets.push_back(SyncClock());
+    v.presets.push_back(SyncBase());
+    v.presets.push_back(SyncFold());
+    v.presets.push_back(SyncGlide());
     corpus.push_back(std::move(v));
   }
 

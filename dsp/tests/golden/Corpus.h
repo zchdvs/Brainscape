@@ -56,7 +56,11 @@ namespace brainscape::golden {
 // verbs Tap, Tempo, Tick, Transport and Subdivision, the ClockTicks and TapSeries generators;
 // the tempo counters (Engine::TempoCounts); the clock, tempoEvents and subdiv ablations; a
 // restart's tail carries the device settings set before it.
-inline constexpr uint32_t kCorpusVersion = 13;
+// 14 (sound revision 9, synced times, docs/design/clock.md §8.3): sync_post, sync_clock,
+// sync_base, sync_fold and sync_glide in plucks_clock_30s, on the packages sync_post, sync_base and
+// sync_fold (row 63 at 1/4 and 2/1, a base_sync of 1/8), at 140, 137.5 and 125 BPM; the TempoSweep
+// generator; the crossfades and folds counted; the sync and crossfade ablations.
+inline constexpr uint32_t kCorpusVersion = 14;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -107,8 +111,8 @@ enum class Counter : uint8_t {
   // and inferred lost ticks; gaps, losses (gaps under a clock) and resumes; Transport and
   // Subdivision events applied; CLOCK births; commits by the clock rules (acquisition and the
   // deadband), early commits; changes of the committed tempo classed Jump and Drift (slews);
-  // the post chain's crossfades and folds, which read 0 until synced times (§11.3); and events
-  // 6-10 ignored for an invalid payload.
+  // since synced times (sound revision 9, §11.3) the post chain's crossfades and the synced
+  // durations' octave folds; and events 6-10 ignored for an invalid payload.
   Taps,
   TapsIgnored,
   TapPhases,
@@ -152,13 +156,18 @@ const char* CounterName(Counter) noexcept;
 // Decay layer0.decay_ms to 0. Sound revision 7: VoiceCount sets layer0.voice_count to 64.
 // Sound revision 8 (docs/design/clock.md §8.3): Clock removes the `clock` source from every
 // loaded mode, TempoEvents drops events 6-10, and Subdiv plays TAP throughout (every loaded
-// preset's stored subdivision TAP, the Subdivision events of field 0 dropped).
+// preset's stored subdivision TAP, the Subdivision events of field 0 dropped). Sound revision 9:
+// Sync plays every synced field unsynced (post.delay.sync at 0 wherever the preset, a load or a
+// SetParam sets it, the macro and expression moves that could set it again dropped, every
+// loaded mode's base_sync off), and Crossfade glides the tempo's jumps (global.tempo_glide On
+// from frame 0). The design's third, slew (drifts glide), has no switch outside the engine; the
+// unit tests check the slew (test_sync.cpp).
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
   Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay, VoiceCount,
-  Clock, TempoEvents, Subdiv,
+  Clock, TempoEvents, Subdiv, Sync, Crossfade,
 };
 const char* FeatureName(Feature) noexcept;
 

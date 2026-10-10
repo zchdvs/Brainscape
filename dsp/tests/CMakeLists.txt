@@ -8,6 +8,7 @@ add_executable(brainscape_tests
   blob/Fixtures.cpp
   test_engine.cpp
   test_state.cpp
+  test_sync.cpp
   test_boundary.cpp
   test_clock.cpp
   test_detmath.cpp

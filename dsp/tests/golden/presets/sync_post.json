@@ -1,42 +1,42 @@
 {
   "schema_version": 1,
-  "id": "corpus.voice_limit",
-  "name": "Voice limit",
+  "id": "corpus.sync_post",
+  "name": "Sync post",
   "family": "none",
   "sound_rev": 9,
-  "sound_hash": "10ae39167914eb06faf4c31e9e79801063b46d814c784d51ebffbe367250ceff",
+  "sound_hash": "8002f58e73b6fe80d56089d51e6397a8c4675e48a79719b4f56963d122b69490",
   "meta": {
     "author": "",
-    "description": "Golden corpus: a dense cloud held to six voices, onset bursts of five stealing the oldest (sound revision 7).",
+    "description": "Golden corpus: onset grains into a post delay synced to a quarter note (sound revision 9), feedback 0.6, the time macro sweeping the note value from 1/8 to 1/2; stored at 428571 us per quarter (140 BPM), TAP in Subdiv time mode.",
     "tags": []
   },
   "global": {
-    "mix": 0.7
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "onset", "footswitch", "midi_note"],
-    "overlap": 0.9,
-    "jitter": 0.5,
+    "sources": ["onset", "footswitch", "midi_note"],
+    "overlap": 0.3,
+    "jitter": 0.1,
     "intermittency": 0,
     "burst": {
-      "count": 5,
+      "count": 1,
       "spacing_ms": 0
     }
   },
   "layers": [
     {
-      "voice_count": 6,
+      "voice_count": 64,
       "position": {
         "source": "live",
-        "base_ms": 160,
-        "spray_ms": 40,
+        "base_ms": 30,
+        "spray_ms": 0,
         "repeat": 1
       },
-      "size_ms": 200,
+      "size_ms": 120,
       "decay_ms": 0,
       "window": {
-        "sustain": 0.3,
-        "skew": 0.4,
+        "sustain": 0.6,
+        "skew": 0.5,
         "smoothness": 0.7
       },
       "pitch": {
@@ -51,11 +51,11 @@
         "spread_cents": 0,
         "reverse_prob": 0
       },
-      "pan_spread": 0.7
+      "pan_spread": 0.3
     }
   ],
   "feedback": {
-    "amount": 0.2
+    "amount": 0
   },
   "post": {
     "mod": {
@@ -64,9 +64,9 @@
     },
     "delay": {
       "time_ms": 350,
-      "fb": 0.3,
-      "mix": 0,
-      "sync": 0
+      "fb": 0.6,
+      "mix": 0.5,
+      "sync": 9
     },
     "reverb": {
       "time": 0.5,
@@ -104,8 +104,8 @@
       "id": "repeats",
       "targets": [
         {
-          "param": "feedback.amount",
-          "range": [0, 0.9],
+          "param": "post.delay.fb",
+          "range": [0.2, 0.9],
           "in_range": [0, 1],
           "curve": 1
         }
@@ -132,10 +132,10 @@
       "id": "time",
       "targets": [
         {
-          "param": "layer0.position.base_ms",
-          "range": [20, 2000],
+          "param": "post.delay.sync",
+          "range": [6, 12],
           "in_range": [0, 1],
-          "curve": 2
+          "curve": 1
         }
       ]
     },
@@ -171,11 +171,15 @@
   "controls": {
     "macro_positions": {
       "activity": 0.5,
-      "repeats": 0.5,
+      "repeats": 0.5714286,
       "shape": 0.5,
       "time": 0.5,
       "space": 0.5,
-      "filter": 0.5
+      "filter": 1
     }
+  },
+  "performance": {
+    "time_mode": "subdiv",
+    "tempo_us_per_quarter": 428571
   }
 }

@@ -25,8 +25,10 @@ namespace brainscape::blobtest {
 // the tempo core's reserved bytes (docs/design/clock.md §11.2): a nonzero SCHD byte 2, which was
 // the scheduler's subdiv, is ModePadding and a nonzero STAT performance byte 3, which was
 // tempo_source, is Performance. Re-minted at sound revision 8 for the samples' soundRev and
-// kSupportedModeFeatures (the clock source, docs/design/clock.md §11.1).
-const char* const kFuzzDigest = "70f1240c0cb8f569ebb2ca2ccaa479838e617bef473a8dfdfc4e7d3e212d7d40";
+// kSupportedModeFeatures (the clock source, docs/design/clock.md §11.1); and at 9 for the same
+// two (base_sync, synced times, §11.3) and the Leaf row 63, which CTRL's and MACR's targets may
+// name.
+const char* const kFuzzDigest = "533cac19af9af8a08236a15d78fb8528e797ee2ee81ac490abe8ea32ec367cb0";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",

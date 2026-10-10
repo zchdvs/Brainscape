@@ -3,8 +3,8 @@
   "id": "factory.retrograde",
   "name": "Retrograde",
   "family": "echoic",
-  "sound_rev": 8,
-  "sound_hash": "81217c556b840e6a58b4a3f684d3dc3af205ba8553a4454bf8f94509d1707758",
+  "sound_rev": 9,
+  "sound_hash": "76c60b835cb715861dc2d9aaa7520404a4f78d0eb841fb709496045b4294b4aa",
   "meta": {
     "author": "Brainscape",
     "description": "A reverse delay in crossfaded chunks.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

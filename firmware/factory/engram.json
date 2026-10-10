@@ -3,8 +3,8 @@
   "id": "factory.engram",
   "name": "Engram",
   "family": "echoic",
-  "sound_rev": 8,
-  "sound_hash": "f3a537060d5d0845c64ec47043d80cf111674bea9782bbc7124bbce9f8a4a6e7",
+  "sound_rev": 9,
+  "sound_hash": "afae8fe7d24b62e553559f446cfdecd6166de4acc88152db746c11efc0074f50",
   "meta": {
     "author": "Brainscape",
     "description": "A clean delay whose repeats land on exact taps; Activity smears what enters it.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 405,
       "fb": 0.45,
-      "mix": 1
+      "mix": 1,
+      "sync": 0
     },
     "reverb": {
       "time": 0.4,

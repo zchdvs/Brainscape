@@ -3,8 +3,8 @@
   "id": "factory.deja-vu",
   "name": "Déjà Vu",
   "family": "reverie",
-  "sound_rev": 8,
-  "sound_hash": "416d47693884dbf68bd9342a8ca2bf56a9716d3a865f9234bab8a7d66ec8d4db",
+  "sound_rev": 9,
+  "sound_hash": "8f466e3aea8c4103345154b609cac26331237900646fc3c2a2563bde58b0fe42",
   "meta": {
     "author": "Brainscape",
     "description": "Phasing copies of the newest onset, fading as it ages.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

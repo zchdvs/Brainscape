@@ -1,6 +1,7 @@
 // The compiler (docs/design/mode-compiler.md §2, §6, §8, §10.1): schema 1 read and validated
 // (E1-E12), the canonical form, the package, decompiling and the round-trip contract.
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -279,7 +280,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"layers[0].position.base_sync", R"("1/4")", kModeFeatureTempoSync, "W2"},
       {"scheduler.steps.entries", R"([{"slot": 1}])", kModeFeatureSteps, "W2"},
       {"scheduler.steps.order", R"("random")", kModeFeatureSteps, "W2"},
       {"layers[0].position.mark.walk", R"("cascade")", kModeFeatureMarkWalk, "W2"},
@@ -410,6 +410,28 @@ TEST_CASE("compile: the performance state and the divisions (docs/design/clock.m
     REQUIRE(p.state->mode.layers[0].baseSync == code);
     RoundTrip(text, AllFeatures());
   }
+  // Synced times (sound revision 9, clock.md §6.1, §6.2): base_sync and row 63 compile in this
+  // build; a build without them (the tempo core's, revision 8) refuses both, naming the wave.
+  bsc::CompileOptions r8;
+  r8.read.supportedFeatures = kSupportedModeFeatures & ~kModeFeatureTempoSync;
+  {
+    const std::string    text = With("layers[0].position.base_sync", Str("1/4"));
+    const DecodedPackage p    = DecodePackage(Ok(text).package.data(), Ok(text).package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.features == kModeFeatureTempoSync);
+    RoundTrip(text);
+    const std::vector<Finding> e = Refused(text, "E6", "/layers/0/position/base_sync", r8);
+    REQUIRE(e[0].message.find("W2 (tempo-synced times)") != std::string::npos);
+  }
+  for (const char* code : {"0", "1", "9", "16"}) {
+    INFO("post.delay.sync " << code);
+    const std::string   text = With("post.delay.sync", Num(code));
+    const CompileResult r    = Ok(text);
+    REQUIRE(r.doc.LeafBits(static_cast<uint32_t>(ParamId::DelaySync)) ==
+            Bits(static_cast<float>(std::atoi(code))));
+    RoundTrip(text);
+  }
+  Refused(With("post.delay.sync", Num("17")), "E4", "/post/delay/sync");
   Refused(With("layers[0].position.base_sync", Str("1/8D")), "E5", "/layers/0/position/base_sync",
           AllFeatures());
   Refused(With("layers[0].position.base_sync", Str("division 3")), "E5",
@@ -581,9 +603,13 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
   Refused(With("layers[0].modifiers", Parse(R"([{"op": "svf"}, {"op": "svf"}])")), "E5",
           "/layers/0/modifiers/1/op", AllFeatures());
   // E6: the feature and the wave that brings it (§2.7; its example, `clock`, compiles since the
-  // tempo core, sound revision 8).
-  const std::vector<Finding> sync =
-      Refused(With("layers[0].position.base_sync", Str("1/4")), "E6", "/layers/0/position/base_sync");
+  // tempo core, sound revision 8, and this one, `base_sync`, since synced times, 9: here on a
+  // build without them).
+  bsc::CompileOptions noSync;
+  noSync.read.supportedFeatures =
+      brainscape::kSupportedModeFeatures & ~brainscape::kModeFeatureTempoSync;
+  const std::vector<Finding> sync = Refused(With("layers[0].position.base_sync", Str("1/4")), "E6",
+                                            "/layers/0/position/base_sync", noSync);
   REQUIRE(sync[0].message ==
           "`base_sync` `1/4` needs W2 (tempo-synced times); this build plays the default structure");
   // A later wave's leaf (wave 1's became Leaf rows as they landed, sound revisions 4-7).

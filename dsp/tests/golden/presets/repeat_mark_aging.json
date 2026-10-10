@@ -3,8 +3,8 @@
   "id": "corpus.repeat_mark_aging",
   "name": "Repeat mark aging",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "fc3ec471549797ec5065091f386b2ee3a6294a63529b36ef2a7a0db8ae2929d0",
+  "sound_rev": 9,
+  "sound_hash": "a11638bb332f4627fb33586326bbd52d7b1354b622e083f6b20cab97a4f15293",
   "meta": {
     "author": "",
     "description": "Golden corpus: 16 reverse passes of 500 ms on one aging mark, reaching the life's far rail before the ring's staleness guard (sound revision 6).",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

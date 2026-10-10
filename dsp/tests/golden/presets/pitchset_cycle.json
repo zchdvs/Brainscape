@@ -3,8 +3,8 @@
   "id": "corpus.pitchset_cycle",
   "name": "Pitch set cycle",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "8a3700f17de4ee1fcd9298990faab45db12911368ba4205eb3e0270832d13776",
+  "sound_rev": 9,
+  "sound_hash": "8b86a18bb737c57c21943ffaa27cdb413fc817b9807aeda80ddcb65bcc9c30b9",
   "meta": {
     "author": "",
     "description": "Golden corpus: a cycled pitch set {0 twice, +12, -12} under the transpose leaf, from the free-running scheduler and the footswitch (sound revision 5).",
@@ -73,7 +73,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

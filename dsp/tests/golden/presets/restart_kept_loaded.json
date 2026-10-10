@@ -3,8 +3,8 @@
   "id": "corpus.restart_kept_loaded",
   "name": "Restart kept loaded",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "44bdb36473eee4a184f777978799f61b3cf0b2bcdc276538e92e58fb0ef137d5",
+  "sound_rev": 9,
+  "sound_hash": "f81f1f7bf3499f8cf06184988227222dba7d0c1d960546c6840afde33f12ba50",
   "meta": {
     "author": "",
     "description": "Golden corpus: the Restart preset’s Spillover load.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 420,
       "fb": 0.6,
-      "mix": 0.3
+      "mix": 0.3,
+      "sync": 0
     },
     "reverb": {
       "time": 0.7,

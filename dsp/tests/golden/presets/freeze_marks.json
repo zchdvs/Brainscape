@@ -3,8 +3,8 @@
   "id": "corpus.freeze_marks",
   "name": "Freeze marks",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "47be2716610977912ed5212b315e057166d6ece0e51fa8bff5dc422464b1f096",
+  "sound_rev": 9,
+  "sound_hash": "e72cc929891adcbd939645ba9afdc7be7dfe53d8a94eff68d633e51b9541465e",
   "meta": {
     "author": "",
     "description": "Golden corpus: freeze with marks newer than the pin.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

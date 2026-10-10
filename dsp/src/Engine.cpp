@@ -51,13 +51,15 @@ constexpr bool RowIsWellFormed(const ParamDescriptor& d) {
   if ((d.domain & ~kAllParamDomains) != 0u) return false;
   // A Leaf row names the revision that made it one, and this build plays it; no other kind
   // has a revision. Rows that hold a value (Leaf, Global) rebuild something, but for
-  // global.tempo_recall, which the engine reads where it acts, at a Spillover load
-  // (docs/design/clock.md §10.4); Macro and Performance rows act through their own events.
+  // global.tempo_recall and global.tempo_glide, which the engine reads where they act, at a
+  // Spillover load and where it classifies a change of the committed tempo (docs/design/clock.md
+  // §7.1, §10.4); Macro and Performance rows act through their own events.
   switch (d.kind) {
     case ParamKind::Leaf:
       return d.sinceRev >= 1u && d.sinceRev <= kSoundRevision && d.domain != kDomainNone;
     case ParamKind::Global:
-      return d.sinceRev == 0u && (d.domain != kDomainNone || d.id == ParamId::TempoRecall);
+      return d.sinceRev == 0u && (d.domain != kDomainNone || d.id == ParamId::TempoRecall ||
+                                  d.id == ParamId::TempoGlide);
     case ParamKind::Macro:
     case ParamKind::Performance: return d.sinceRev == 0u && d.domain == kDomainNone;
     case ParamKind::Reserved: return d.sinceRev == 0u;
@@ -416,6 +418,29 @@ struct Engine::Impl {
   void RebuildDirty() noexcept;
   float Active(ParamId id) const noexcept { return active_[SlotOf(id)]; }
 
+  // Synced times (docs/design/clock.md §5.3, §6.1, §6.2, §7.1; sound revision 9). A synced
+  // duration reads the committed tempo Pc and the effective subdivision's ticks, so after every
+  // tempo call (an event 6-10, a Spillover load's performance state) a change of either marks the
+  // domain of each synced target, and a change of Pc has its class noted for the post delay:
+  // NoteTempo. Each target keeps the inputs it was last computed from, so a rebuild that changes
+  // none of them computes nothing (the tempo core's out-of-line FoldedFrames runs only for a
+  // change), and a change is classed and its folds counted once.
+  // The classes of Pc changes by strength (§7.1, §7.2): a Jump crossfades over anything, a Step
+  // glides over a Drift, and a Drift slews only when every change before the rebuild was one.
+  static constexpr uint8_t kClassNone = 0, kClassDrift = 1, kClassStep = 2, kClassJump = 3;
+  struct SyncedInputs {  // 16 bytes: Impl is in DTCM (kEngineImplBytes)
+    uint64_t pc      = 0;
+    uint32_t frames  = 0;  // the result: exact integer frames, folded
+    uint8_t  ticks   = 0;  // the effective subdivision's (§2.3's s), 3-96
+    int8_t   octaves = 0;  // the fold, within ±5 (§5.3)
+    uint8_t  code    = 0;  // §5.2's code; 0 while unsynced
+  };
+  // Folds `in` to the code at the core's Pc and ticks when any input changed, counting its folds;
+  // true when it changed. Out of line, as NoteTempo: the ITCM holds one copy (detail/Placement.h).
+  BRAINSCAPE_NOINLINE bool Resync(SyncedInputs* in, uint8_t code, uint32_t minFrames,
+                                  uint32_t maxFrames) noexcept;
+  BRAINSCAPE_NOINLINE void NoteTempo() noexcept;
+
   // The pieces of Process: what SetParam, SetFreeze and Trigger queued, applied at the
   // block's first frame; one event, which leaves a Freeze in *freeze for the frame's
   // events to settle; and the render of frames [start, start + count) of the block, which
@@ -450,6 +475,14 @@ struct Engine::Impl {
                                        // see the constant's rationale in Engine.h)
   ActiveMode*  mode_       = nullptr;  // Warm arena: the active mode and CTRL (design §7.3)
   TempoCore*   tempo_      = nullptr;  // Warm arena: the tempo core (clock.md §2.6)
+  // Synced times (NoteTempo): the post delay's target and layer 0's base delay as last computed,
+  // the tempo core's Pc serial as last seen, the class of the Pc changes since the post target
+  // was last computed, and the folds counted (TempoStats::folds).
+  SyncedInputs postSync_{};
+  SyncedInputs baseSync_{};
+  uint32_t     pcSerialSeen_ = 0;
+  uint8_t      pcClass_      = kClassNone;  // kClass* above: the strongest class wins
+  uint64_t     folds_        = 0;
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
   // mix_: the Mix knob, smoothed (its law: detail/MixLaw.h); wetGain_: the wet signal's gain
@@ -560,9 +593,11 @@ TempoInfo Engine::Tempo() const noexcept {
 BRAINSCAPE_COLD TempoStats Engine::TempoCounts() const noexcept {
   const Impl& d = impl();
   if (d.tempo_ == nullptr) return TempoStats{};
-  // The CLOCK births are the grain core's (clock.md §6.3); deferrals wait for the governor. The
-  // copy is the tempo core's, out of ITCM (§11.12).
-  return d.tempo_->Counts(d.granular_.Stats().clockBirths, d.granular_.Stats().clockDropped);
+  // The CLOCK births are the grain core's (clock.md §6.3), the crossfades the post chain's and the
+  // folds the synced times' (§5.3, §7.3); deferrals wait for the governor. The copy is the tempo
+  // core's, out of ITCM (§11.12).
+  return d.tempo_->Counts(d.granular_.Stats().clockBirths, d.granular_.Stats().clockDropped,
+                         d.post_.Crossfades(), d.folds_);
 }
 
 Engine::GrainStats Engine::Stats() const noexcept {
@@ -665,6 +700,11 @@ BRAINSCAPE_COLD bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& a
   // out of line, so none of that code is in ITCM (§11.12).
   tempo_ = TempoCore::Create(reinterpret_cast<unsigned char*>(warm) + kActiveModeBytes,
                              static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
+  postSync_     = SyncedInputs{};
+  baseSync_     = SyncedInputs{};
+  pcSerialSeen_ = tempo_->PcSerial();
+  pcClass_      = kClassNone;
+  folds_        = 0;
   modeSwitches_  = 0;
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
@@ -759,8 +799,11 @@ BRAINSCAPE_COLD void Engine::Impl::Restart() noexcept {
   frozenAnchor_  = 0;
   freezePending_.store(false, std::memory_order_relaxed);
   // The active preset's stored performance state, boundary 0 at frame 0, the follower, tap and
-  // transport cleared (clock.md §2.5): frames restart at 0.
+  // transport cleared (clock.md §2.5): frames restart at 0. Reset rebuilds every domain, the
+  // synced targets from the restarted tempo, and primes the post delay's head on its target.
   tempo_->Restart();
+  pcSerialSeen_ = tempo_->PcSerial();
+  pcClass_      = kClassNone;
   Reset();
 }
 
@@ -828,6 +871,7 @@ void Engine::Impl::ApplySpillover(const float* values, const PresetState& preset
   // global.tempo_recall Preset with the Internal source the stored tempo, phase-continuous, after
   // §3.5's gap rule at this frame; the phasor never moves.
   tempo_->SpilloverLoad(sampleCounter_, preset.performance, RecallPreset());
+  NoteTempo();
   if (style == SwitchStyle::FastCut) granular_.FastCut(sampleCounter_);
   freezePending_.store(false, std::memory_order_relaxed);
   SetFrozen(false);
@@ -862,11 +906,76 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
+void Engine::Impl::NoteTempo() noexcept {
+  const uint32_t serial = tempo_->PcSerial();
+  if (serial != pcSerialSeen_) {
+    pcSerialSeen_ = serial;
+    if (postSync_.code != 0u) {
+      const tempo::PcChange c   = tempo_->LastPcChange();
+      const uint8_t         cls = c == tempo::PcChange::Jump    ? kClassJump
+                                  : c == tempo::PcChange::Drift ? kClassDrift
+                                                                : kClassStep;
+      if (cls > pcClass_) pcClass_ = cls;
+      dirty_ |= kDomainPost;
+    }
+  }
+  const uint32_t ticks = tempo_->GridTicks();
+  if (postSync_.code != 0u && ticks != postSync_.ticks) dirty_ |= kDomainPost;
+  if (baseSync_.code != 0u && (ticks != baseSync_.ticks || tempo_->Pc() != baseSync_.pc)) {
+    dirty_ |= kDomainGranular;
+  }
+}
+
+bool Engine::Impl::Resync(SyncedInputs* in, uint8_t code, uint32_t minFrames,
+                          uint32_t maxFrames) noexcept {
+  if (code == 0u) {
+    const bool was = in->code != 0u;
+    *in            = SyncedInputs{};
+    return was;  // sync off: a discrete change
+  }
+  const uint64_t pc    = tempo_->Pc();
+  const uint32_t ticks = tempo_->GridTicks();
+  if (code == in->code && ticks == in->ticks && pc == in->pc) return false;
+  int32_t        octaves = 0;
+  const uint32_t frames =
+      tempo::FoldedFrames(pc, tempo::NoteTicks(code), ticks, minFrames, maxFrames, &octaves);
+  folds_ += static_cast<uint64_t>(octaves < 0 ? -octaves : octaves);
+  in->pc      = pc;
+  in->frames  = frames;
+  in->ticks   = static_cast<uint8_t>(ticks);     // SubdivTicks: 3-96
+  in->octaves = static_cast<int8_t>(octaves);    // FoldedFrames: within ±10
+  in->code    = code;
+  return true;
+}
+
 void Engine::Impl::RebuildPostParams() noexcept {
   const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   pp_.modRateHz    = get(ParamId::ModRateHz);
   pp_.modDepth     = get(ParamId::ModDepth);
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
+  // Row 63 (clock.md §6.1, sound revision 9): nonzero, the target is its note value at the
+  // committed tempo and effective Subdiv, folded into 10 ms-4 s, in exact frames, and time_ms
+  // waits. Its code is read as a counting leaf is, RoundHalfAwayI32 of the canonical value
+  // (mode-compiler.md §3.7). How the head reaches a new target is the change's (§7.1, §7.3): a
+  // discrete change (the code, the Subdiv, the fold, sync on or off) or a Jump of Pc crossfades,
+  // unless global.tempo_glide is On, which glides a Jump; a Drift slews; any other change glides.
+  {
+    const int32_t raw = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::DelaySync)));
+    assert(raw >= 0 && raw <= static_cast<int32_t>(kMaxSyncDivision));
+    const auto         code = static_cast<uint8_t>(raw);
+    const uint8_t      cls  = pcClass_;
+    pcClass_                = kClassNone;
+    const SyncedInputs was  = postSync_;
+    const uint32_t     rate = tempo_->Rate();
+    if (Resync(&postSync_, code, tempo::PostSyncMinFrames(rate), tempo::PostSyncMaxFrames(rate))) {
+      const bool discrete = code != was.code || postSync_.ticks != was.ticks ||
+                            postSync_.octaves != was.octaves;
+      const bool glideJumps = get(ParamId::TempoGlide) >= 0.5f;
+      if (discrete || (cls == kClassJump && !glideJumps)) ++pp_.delayJump;
+      pp_.delaySlow = !discrete && cls == kClassDrift;
+    }
+    pp_.delaySyncFrames = postSync_.frames;
+  }
   pp_.delayFb      = get(ParamId::DelayFb);
   pp_.delayMix     = get(ParamId::DelayMix);
   pp_.reverbTime = get(ParamId::ReverbTime);
@@ -886,7 +995,16 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   const double sr = cfg_.sampleRate;
 
-  gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
+  // A synced base delay (clock.md §6.2, Q11; sound revision 9): layer 0's base_sync's note value
+  // at the committed tempo and effective Subdiv, folded into base_ms's 1 ms-5 s, an exact integer
+  // number of frames, so the first grain tap lands on the division; base_ms waits. Grains resolve
+  // their position at birth, so a change reaches only grains born after it.
+  const uint32_t rate = tempo_->Rate();
+  Resync(&baseSync_, mode_->mode.layers[0].baseSync, tempo::BaseSyncMinFrames(rate),
+         tempo::BaseSyncMaxFrames(rate));
+  gp_.baseDelayFrames = baseSync_.code != 0u
+                            ? static_cast<double>(baseSync_.frames)
+                            : static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
   gp_.sprayFrames     = static_cast<float>(get(ParamId::SprayMs) * 0.001 * sr);
   // ONE rounded integer drives grain length, spacing, and the voice budget —
   // spacing from the unrounded float opened duty-cycle holes across 80% of the
@@ -1180,6 +1298,7 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       uint32_t bits;
       std::memcpy(&bits, &e.value, sizeof bits);
       tempo_->ApplyEvent(sampleCounter_, type, e.id, bits);
+      NoteTempo();  // a synced target follows a change of Pc or of the subdivision (§6.1, §6.2)
       break;
     }
   }

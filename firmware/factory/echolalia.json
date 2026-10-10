@@ -3,8 +3,8 @@
   "id": "factory.echolalia",
   "name": "Echolalia",
   "family": "reverie",
-  "sound_rev": 8,
-  "sound_hash": "7dd7f86ee8e99924eb7817784ce6d436a2c8bafa29364d1f3ea0873dbf2ac1f8",
+  "sound_rev": 9,
+  "sound_hash": "c65fc9f109e759aa7414be0eb2e2bd03720e44eadc0e791b039820eb0a96929f",
   "meta": {
     "author": "Brainscape",
     "description": "Repeats the newest note over and over, fading as it ages.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

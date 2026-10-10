@@ -3,8 +3,8 @@
   "id": "example.macros",
   "name": "Every macro",
   "family": "reverie",
-  "sound_rev": 8,
-  "sound_hash": "9df44453568362a1dabc469408dda65c0b531b43b01dc9061bc2f9240307c3ec",
+  "sound_rev": 9,
+  "sound_hash": "2eeee2e44fcc15ceaf42afdec8e8ae5d26e79939d1e495f8b644a6e08525c645",
   "meta": {
     "author": "",
     "description": "",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

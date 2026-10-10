@@ -3,8 +3,8 @@
   "id": "corpus.clock_hits",
   "name": "Clock hits",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "32d7778bbed390207abd441370b877b337419909e579fd2d336a70a9e094ec45",
+  "sound_rev": 9,
+  "sound_hash": "1201ebffea95cf028ccd7f81c0400145c76a6ff70223a4a41b97c45cedd3aec3",
   "meta": {
     "author": "",
     "description": "Golden corpus: grains born on the tempo grid alone (sound revision 8), the clock source with footswitch and MIDI triggers and no free-running scheduler, stored at 428571 us per quarter (140 BPM) on TAP.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

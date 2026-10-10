@@ -72,6 +72,55 @@ constexpr uint32_t SubdivTicks(uint8_t code) noexcept {
   }
 }
 
+// The note values of synced fields (§5.2): post.delay.sync (row 63), a layer's base_sync and,
+// in W3, a modulator's sync take 0 (off) or a code 1-16, sixteen note values ordered by duration,
+// each a whole number of 24-ppqn ticks: 1/32, 1/16T, 1/16, 1/8T, 1/16D, 1/8, 1/4T, 1/8D, 1/4,
+// 1/2T, 1/4D, 1/2, 1/1T, 1/2D, 1/1, 2/1. 0 for code 0 and any code above 16. A switch, as
+// SubdivTicks.
+inline constexpr uint8_t kSyncCodes = 17;  // 0 off, then 1-16
+constexpr uint32_t NoteTicks(uint8_t code) noexcept {
+  switch (code) {
+    case 1: return 3;     // 1/32
+    case 2: return 4;     // 1/16T
+    case 3: return 6;     // 1/16
+    case 4: return 8;     // 1/8T
+    case 5: return 9;     // 1/16D
+    case 6: return 12;    // 1/8
+    case 7: return 16;    // 1/4T
+    case 8: return 18;    // 1/8D
+    case 9: return 24;    // 1/4
+    case 10: return 32;   // 1/2T
+    case 11: return 36;   // 1/4D
+    case 12: return 48;   // 1/2
+    case 13: return 64;   // 1/1T
+    case 14: return 72;   // 1/2D
+    case 15: return 96;   // 1/1
+    case 16: return 192;  // 2/1
+    default: return 0;    // off
+  }
+}
+
+// What a synced field plays (§2.3, §5.3), for producers and displays (the editor's and the
+// plugin's "1/1 → 1/2 · 1.00 s", ParamDisplay.h's FormatSyncedTime): a note value at the committed
+// tempo, scaled by the effective subdivision and folded by octaves into its target's range. The
+// engine computes the same from its committed tempo Pc in Q32.32; a producer has it in ns per
+// quarter (TempoInfo::nsPerQuarter), which is exact for every tempo that is a whole number of ns
+// (presets, the Tempo knob, a host) and otherwise within a frame of what plays.
+enum class SyncTarget : uint8_t {
+  PostDelay,  // row 63: 10 ms to 4 s inclusive, round-up(R / 100) to 4·R frames
+  BaseDelay,  // a layer's base_sync: 1 ms to 5 s, round-up(R / 1000) to 5·R frames
+};
+struct SyncedTime {
+  uint32_t frames  = 0;  // what plays, exact integer frames; 0 for code 0 or an invalid input
+  int32_t  octaves = 0;  // the fold: doublings (> 0) or halvings (< 0), §5.3
+  uint8_t  subdiv  = 0;  // the effective subdivision (§2.4: Tempo time mode forces TAP)
+};
+// `code` 0-16 (§5.2), nsPerQuarter in the tempo range, `subdiv` and `timeMode` as stored or last
+// set (TempoInfo::subdiv, timeMode), `rate` the engine's integer rate R (8,000-384,000).
+// Integer-only, out of the pedal's ITCM (TempoProducer.cpp).
+SyncedTime SyncedDuration(SyncTarget target, uint8_t code, uint32_t nsPerQuarter, uint8_t subdiv,
+                          uint8_t timeMode, uint32_t rate) noexcept;
+
 // The exact binary32 bit pattern of an integer n < 2^24, built in integers (+0 for 0): what a
 // producer stores as a Transport position's value.
 constexpr uint32_t IntegerValueBits(uint32_t n) noexcept {
@@ -140,8 +189,8 @@ inline constexpr uint8_t kTempoFlagRunning = 1u << 0;  // the transport runs
 inline constexpr uint8_t kTempoFlagLocked  = 1u << 1;  // the follower's window holds 24 or more
 
 // Counts since Init, which Reset, Restart and loads keep (§2.6). The tempo core counts the tempo
-// group; the engine counts the CLOCK births, the post chain the crossfades and folds (§5.3, §6.3,
-// §7.3). transportsIgnored is an as-built addition (clock.md §11.10): §3.4 counts a host-style
+// group; the engine counts the CLOCK births and the folds, the post chain the crossfades (§5.3,
+// §6.3, §7.3). transportsIgnored is an as-built addition (clock.md §11.10): §3.4 counts a host-style
 // Transport ignored under clock, and §2.6's list had no counter for it.
 struct TempoStats {
   uint64_t taps = 0;                 // valid Tap events
@@ -168,8 +217,9 @@ struct TempoStats {
   uint64_t earlyCommits = 0;         // §7.1 rule 2
   uint64_t jumps = 0;                // changes of Pc classed Jump
   uint64_t slews = 0;                // changes of Pc classed Drift
-  uint64_t crossfades = 0;           // the post chain's (synced times)
-  uint64_t folds = 0;
+  uint64_t crossfades = 0;           // the post chain's: fades between two heads (§7.3)
+  uint64_t folds = 0;                // the engine's: octave folds of each synced duration it
+                                     // computed for a change of its inputs (§5.3)
   uint64_t invalidEvents = 0;        // events 6-10 whose payload breaks §4.1
   uint64_t unknownEvents = 0;        // event types above 10
 };

@@ -3,8 +3,8 @@
   "id": "corpus.clock_recall",
   "name": "Clock recall",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "8e5f6906ee63d0319846a5fc54790de512d76286d4175b5a4d49f216df08af6b",
+  "sound_rev": 9,
+  "sound_hash": "79b8107b2235ff109f7c22740c6270d0f82d8bea14c3781c0d7cf1dd148ebe4c",
   "meta": {
     "author": "",
     "description": "Golden corpus: the clock_hits mode stored at 600000 us per quarter (100 BPM), x1/2 in Subdiv time mode: what a recall plays (sound revision 8).",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

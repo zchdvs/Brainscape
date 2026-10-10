@@ -50,7 +50,7 @@ inline constexpr uint32_t kModeFeaturePitchSet     = 1u << 3;   // W1: a set oth
 inline constexpr uint32_t kModeFeatureClock        = 1u << 4;   // W2 (r8): the `clock` source
 inline constexpr uint32_t kModeFeatureSteps        = 1u << 5;   // W2: a step table or order
 inline constexpr uint32_t kModeFeatureMarkWalk     = 1u << 6;   // W2: mark index, walk, jitter
-inline constexpr uint32_t kModeFeatureTempoSync    = 1u << 7;   // W2: a synced base delay
+inline constexpr uint32_t kModeFeatureTempoSync    = 1u << 7;   // W2 (r9): a synced base delay
 inline constexpr uint32_t kModeFeatureTwoLayers    = 1u << 8;   // W3: a second layer, slot share
 inline constexpr uint32_t kModeFeaturePinPosition  = 1u << 9;   // W3: `pin` and its re-arm
 inline constexpr uint32_t kModeFeatureGridPosition = 1u << 10;  // W3: `grid` positioning
@@ -67,11 +67,12 @@ inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every 
 
 // The features this build plays: sound revision 2's onset source and mark positioning (§7.6
 // item 4, the structure rows 27 and 28 retired into), wave 1's source selection (sound
-// revision 4, §7.5 R9) and pitch sets (5, R10), and the tempo core's CLOCK source (8,
-// docs/design/clock.md §6.3, §11.1). Each feature widens it in its own pull request.
+// revision 4, §7.5 R9) and pitch sets (5, R10), the tempo core's CLOCK source (8,
+// docs/design/clock.md §6.3, §11.1) and synced times' base_sync (9, §6.2). Each feature widens
+// it in its own pull request.
 inline constexpr uint32_t kSupportedModeFeatures = kModeFeatureOnset | kModeFeatureMarkPosition |
                                                    kModeFeatureSources | kModeFeaturePitchSet |
-                                                   kModeFeatureClock;
+                                                   kModeFeatureClock | kModeFeatureTempoSync;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
@@ -122,12 +123,12 @@ enum class SvfBand : uint8_t { Lowpass, Bandpass, Highpass, Notch };
 inline constexpr uint8_t kSvfBandCount = 4;
 enum class CutoffSource : uint8_t { Fixed, Random, Lfo, Envelope };
 inline constexpr uint8_t kCutoffSourceCount = 4;
-inline constexpr uint8_t kMaxSyncDivision   = 16;  // base_sync: 0 off, then divisions (W2)
+inline constexpr uint8_t kMaxSyncDivision   = 16;  // base_sync: 0 off, then clock.md §5.2's codes
 inline constexpr uint16_t kScaleMaskAll     = 0x0FFFu;
 
 struct ModeLayer {  // LAYR entry, 36 bytes: 13 enumerations and a pad, a mask, five floats
   PositionSource source          = PositionSource::Live;
-  uint8_t        baseSync        = 0;  // W2: 0 off, 1-16 a tempo division
+  uint8_t        baseSync        = 0;  // W2 (r9): 0 off, 1-16 a note value (clock.md §5.2, §6.2)
   SprayLaw       sprayLaw        = SprayLaw::Uniform;
   uint8_t        markIndex       = 0;  // W2: 0-15
   MarkWalk       markWalk        = MarkWalk::None;

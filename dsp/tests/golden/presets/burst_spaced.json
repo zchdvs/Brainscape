@@ -3,8 +3,8 @@
   "id": "corpus.burst_spaced",
   "name": "Burst spaced",
   "family": "none",
-  "sound_rev": 8,
-  "sound_hash": "50f153337195a75af8a8be8125beadc5455c82296e211f347cd835792559afc2",
+  "sound_rev": 9,
+  "sound_hash": "41987f38020229af28bb0d4d88a18551c3e60a537e9256b68fd5085558586d66",
   "meta": {
     "author": "",
     "description": "Golden corpus: spaced bursts from onsets and the footswitch, intermittency skipping whole triggers (sound revision 4).",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

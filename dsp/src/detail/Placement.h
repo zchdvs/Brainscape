@@ -17,3 +17,12 @@
 #else
 #define BRAINSCAPE_COLD
 #endif
+
+// A function kept out of line (every target): control-rate code that more than one hot function
+// calls, so the ITCM holds one copy of it rather than one per caller (clock.md §11.14). Inlining
+// never changes what the code computes (the profile's flags forbid contraction across it).
+#if defined(_MSC_VER)
+#define BRAINSCAPE_NOINLINE __declspec(noinline)
+#else
+#define BRAINSCAPE_NOINLINE __attribute__((noinline))
+#endif

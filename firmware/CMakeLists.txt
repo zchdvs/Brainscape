@@ -261,13 +261,16 @@ function(brainscape_firmware_image name)
     # The calls out of ITCM an image may make (cmake/ItcmCheck.cmake): the tempo core's
     # control-rate entry points, which the engine's inline fast paths reach only when a grid
     # position may fire (GridFramesFull) or a gap is due (BeforeEventFull), at an event 6-10 or
-    # of an unknown type, and at a Spillover load (docs/design/clock.md §9.6, §11.12).
+    # of an unknown type, and at a Spillover load (docs/design/clock.md §9.6, §11.12); and the
+    # synced times' fold (tempo::FoldedFrames), which the post and granular rebuilds reach only
+    # when a synced target's inputs changed (sound revision 9, §11.14).
     set(_bs_itcm_veneers
       _ZN10brainscape9TempoCore14GridFramesFullExPNS_7GridHitEm
       _ZN10brainscape9TempoCore15BeforeEventFullEx
       _ZN10brainscape9TempoCore10ApplyEventExhmm
       _ZN10brainscape9TempoCore17CountUnknownEventEx
-      _ZN10brainscape9TempoCore13SpilloverLoadExRKNS_16PerformanceStateEb)
+      _ZN10brainscape9TempoCore13SpilloverLoadExRKNS_16PerformanceStateEb
+      _ZN10brainscape5tempo12FoldedFramesEymmmmPl)
     list(JOIN _bs_itcm_veneers "," _bs_itcm_veneers_arg)
     add_custom_command(TARGET ${name} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -DELF=$<TARGET_FILE:${name}> -DREADELF=${BRAINSCAPE_ARM_READELF}

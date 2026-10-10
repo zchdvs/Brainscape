@@ -3,8 +3,8 @@
   "id": "factory.updraft",
   "name": "Updraft",
   "family": "echoic",
-  "sound_rev": 8,
-  "sound_hash": "9e31f796bb53a2039b6c33bee20dc86cff7c050c00c8313708c492961a2263e0",
+  "sound_rev": 9,
+  "sound_hash": "bd2de869776c40e982b2b453ba0f2665417f9b2dea782d46738fa4237b0e7181",
   "meta": {
     "author": "Brainscape",
     "description": "Echoes that climb an octave with every repeat.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.6,

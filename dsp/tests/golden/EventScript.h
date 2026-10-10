@@ -47,6 +47,7 @@ enum Strip : uint16_t {
   kStripPitchSelect = 1u << 6,  // layer 0's `random` selection becomes `cycle` (revision 5)
   kStripClock       = 1u << 7,  // `clock` leaves scheduler.sources (sound revision 8)
   kStripSubdiv      = 1u << 8,  // the stored subdivision is TAP (sound revision 8)
+  kStripSync        = 1u << 9,  // every layer's base_sync off (sound revision 9)
 };
 
 // A restart at `frame`, before the events stamped there: Engine::Restart, which keeps the
@@ -154,6 +155,12 @@ int64_t ClockTicks(Script& script, int64_t start, uint32_t nsPerQuarter, uint32_
 // [-spread, spread] frames. Returns the last tap's frame.
 int64_t TapSeries(Script& script, int64_t start, const std::vector<int64_t>& intervals,
                   uint32_t spread, uint32_t seed);
+// A tempo sweep (sound revision 9, docs/design/clock.md §8.3's sync_fold): `steps` Tempo events
+// `interval` frames apart from `start`, step i (1 to steps) at
+// fromNs + (toNs - fromNs) · i / steps ns per quarter, exactly, in integers: the Tempo knob turned
+// or a host ramp, one event per step. Returns the frame after the last.
+int64_t TempoSweep(Script& script, int64_t start, uint32_t fromNs, uint32_t toNs, uint32_t steps,
+                   int64_t interval);
 
 // A complete preset (companion §6.1): every leaf, `params` over the defaults.
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params);

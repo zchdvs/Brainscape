@@ -765,7 +765,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
   }
   REQUIRE(kSupportedModeFeatures ==
           (kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources |
-           kModeFeaturePitchSet | kModeFeatureClock));  // CLOCK since sound revision 8
+           kModeFeaturePitchSet | kModeFeatureClock |   // CLOCK since sound revision 8
+           kModeFeatureTempoSync));                     // base_sync since 9
   // Content that needs a feature the package does not declare: FeatureMismatch, named.
   auto s = CompleteState();
   FullMode(&s->mode, s.get());
