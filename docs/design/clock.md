@@ -21,7 +21,7 @@
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
 > finding's disposition. *(2026-10-09: the tempo core is built as a library, §11.10, and wired
 > into the engine as sound revision 8, §11.11, which have the as-built notes; 2026-10-10: amended
-> after its review, §11.12.)*
+> after its review, §11.12, and synced times built as sound revision 9, §11.14.)*
 
 ---
 
@@ -1268,6 +1268,8 @@ case named for a draft-v1 finding reproduces that finding's failure on draft v1'
 - **Ablations,** each of which must change its presets' output and not before the feature acts:
   `clock` (the source removed), `tempoEvents` (events 6–10 dropped), `subdiv` (TAP throughout),
   `sync` (row 63 at 0, `base_sync` off), `crossfade` (jumps glide), `slew` (drifts glide).
+  *(As built, §11.14 note 44: `slew` has no switch a script can reach; the unit tests check the
+  slew.)*
 - **Perturbations,** unchanged, must reproduce every hash: block sizes, the pattern
   {48, 1, 127, 32}, random sizes 1–512, fresh engines and the hostile FP environment
   (`golden_main.cpp`, profile §6.4). **Split delivery** (`EventScript.h:140-145`) has no
@@ -1484,7 +1486,8 @@ H3). So:
   `Tempo()`, `TempoCounts()`, §4.2's payload checks) is thin calls into `Tempo.cpp`. *(As built,
   §11.12 notes 29 and 31: the engine reaches the core on every render span and every event through
   inline fast paths in ITCM, `ItcmCheck` refuses any other call out of ITCM, and the main-thread
-  API left ITCM by function, leaving 4,000 bytes.)* ITCM grows by
+  API left ITCM by function, leaving 4,000 bytes; synced times took 1,936 of them, leaving 2,064,
+  §11.14 note 46.)* ITCM grows by
   the clock offsets in `GranularCore::Process`, the new cases in `ApplyEvent`, the span call in
   `RenderFrames`, and the crossfade and slew in `PostChain`'s per-sample loop: about 1.0–1.6 KiB
   (*estimated*).
@@ -2133,6 +2136,135 @@ re-minted at 8. Continuing the numbering:
     cache lines, against note 30's estimate. §11.7 risk 3 and §11.8 item 1 stand: T0b's
     recordings of real masters may still retune these constants, then as a sound revision of
     its own.
+
+### 11.14 As built: synced times, sound revision 9 (2026-10-10)
+
+Lane T2 under D1 as amended (§5.2–§5.4, §6.1, §6.2, §7, §11.1's lints), one revision on top of
+revision 8, unpushed: row 63 `post.delay.sync` a `Leaf` since 9 playing §5.2's note values, a
+layer's `base_sync` supported, §5.3's folds, the 4 s line, §7.1's classes with the crossfade and the
+slew, row 86 `global.tempo_glide`, lints L12–L14 and L2's synced base delay, the effective-value
+display, corpus version 14. Continuing the numbering:
+
+35. **The durations.** `tempo::NoteTicks` is §5.2's table (`brainscape/Tempo.h`, a switch as
+    `SubdivTicks` is); `tempo::FoldedFrames` (`Tempo.cpp`, QSPI) is §5.3's fold over §2.3's
+    `DurationFrames`, each octave computed from Pc, never by halving a rounded count, so a folded
+    value is §2.3's at its octave exactly. The ranges at the integer rate R: the synced post delay
+    round-up(R/100) to 4·R frames inclusive, the base delay round-up(R/1000) to 5·R (480–192,000
+    and 48–240,000 at 48 kHz). Every code × Subdiv at 20–300 BPM and 8–384 kHz settles within five
+    halvings and three doublings. The producers' form, `tempo::SyncedDuration`
+    (`TempoProducer.cpp`), takes the tempo in ns as `TempoInfo` reports it and the stored or live
+    Subdiv and time mode (Tempo mode forces TAP): exact for every tempo that is a whole ns (stored
+    presets, the Tempo knob, a host), within a frame of what plays for a tapped or fitted Pc.
+36. **The engine reads Pc and the effective Subdiv once per change.** `Engine::Impl` keeps, for
+    the post target and layer 0's base delay, the code, Pc, Subdiv ticks, fold and frames it last
+    computed (16 bytes each), and recomputes (`Resync`, out of line, which calls `FoldedFrames` in
+    QSPI) only when one of them changed, counting that computation's folds (`TempoStats::folds`,
+    so the counter is split-invariant). After every event 6–10 and a Spillover load's performance
+    state (`NoteTempo`, out of line) a changed Pc serial or Subdiv marks `kDomainPost` while row 63
+    is synced, and a changed Pc or Subdiv `kDomainGranular` while `base_sync` is set; nothing is
+    marked for a preset that syncs nothing, so the 52 presets of revision 8 rebuild exactly as
+    before. Pc changes between two rebuilds (two events at one frame) are classed by the strongest:
+    a Jump over anything, a Step over a Drift, so a Drift slews only when every change before the
+    rebuild was one. `global.tempo_glide` is read where the change is classed, its active value
+    after the frame's events.
+37. **The classes on the post delay** (§7.1, §7.3). A change of the synced target is *discrete*
+    when the code, the effective Subdiv's ticks or the fold changed, or sync turned on or off:
+    it raises `PostParams::delayJump` and crossfades whatever `tempo_glide` says (a fold change
+    crosses an octave, §5.3). Otherwise a Pc change of class Jump raises it unless `tempo_glide`
+    is On, which glides the Jump as draft v1 did; a Drift sets `delaySlow`, the slew; a Step, or a
+    Jump under `tempo_glide` On, glides with the 50 ms pair. `tempo_glide` acts on Pc's Jumps only,
+    D22's "jumps glide": a code, Subdiv or fold change still crossfades.
+38. **The crossfade** (`PostChain`, ITCM). At a span's first frame a raised `delayJump` copies the
+    head as the outgoing one, which keeps reading and gliding toward its old target, primes the
+    incoming one on the new target, and counts the fade (`crossfades`); frame n of the fade
+    (n = 1…1,024) mixes them by (1024 − n)/1024 and n/1024, so its last frame is the incoming head
+    alone, and the feedback write takes the mixed read. A jump while a fade runs waits as the
+    latest target (a later jump replaces it, a Step or Drift updates it), and starts the next fade
+    on the frame after the running one ends, inside the per-sample loop (`FadeFrame`), so a
+    chain lands at the same frames for every split (a unit test at block size 1 against 512, 48,
+    441, {48, 1, 127, 32}, {300, 512, 5, 64} and random). A Subdiv knob turned through all six
+    zones 200 frames apart is thus two fades, the first jump's and one to the last zone, never a
+    step. A Step or Drift during a fade retargets the incoming head. A silent stage jumps, a fade
+    under way or waiting going with it, as today.
+39. **The slew** (§7.2): `TapGlide` keeps a `slow` flag that a retarget sets from its class, the
+    Step taking the slew's pair (τ = 1 s per pole) when it is set; a later retarget replaces it,
+    and landing clears it. A 96-frame Drift on a 500 ms echo moves the head at most 0.074 % of a
+    frame per frame (the unit test: under 0.1 %), a quarter of the way after a second.
+40. **The 4 s line** (§5.3, D23): round(4·R) + 2 frames, `BulkFloats` twice that; a synced target
+    reaches 4·R (the line's last two frames are the cubic read's neighbours) and `time_ms` keeps
+    its clamp at round(2·R) − 1, so every unsynced render is revision 8's. PlanMemory's Bulk tier
+    at 48 kHz grows from 17,545,216 to 18,313,232 bytes, and the pedal's Bulk arena from 17 to
+    18 MiB (`firmware/platform/Placement.h`), 561,136 bytes spare; `firmware_arena_plan` and the
+    host's `PlanMemory` test pass. `Engine::Impl` grows to 8,184 bytes on the M7 (of
+    `kEngineImplBytes`' 8,192, unchanged) and 8,320 on x86-64 (of 8,448).
+41. **base_sync** (§6.2, Q11, D6): layer 0's base delay is the folded duration as an exact integer
+    `double`; grains resolve their position at birth, so a change reaches grains born after it.
+    `kModeFeatureTempoSync` is supported, so the compiler reads a division other than `"off"`
+    (layer 1's waits for W3's second layer). L12 warns of grain feedback beside it.
+42. **Lints** (`compiler/src/Lint.cpp`, warnings, `--factory` never errors on them). L12 and L13
+    read a leaf's reach as the stored value and both ends of every macro target and of every
+    expression assignment on it (§6.5's "macros and expression reach row 63"; §6.2 names macro
+    corners only, and the pedal reaches feedback as a macro does). L13 reports each macro target
+    and expression assignment on `post.delay.time_ms` when row 63's lowest reach reads a code of 1
+    or more (RoundHalfAwayI32, computed on the bits), and on a layer's `base_ms` when its
+    `base_sync` is set. L14 names every reachable code from row 63's lowest to its highest reach
+    that folds at the stored tempo and Subdiv at 48 kHz, with its effective value, and a stored
+    `base_sync` that folds. L2 evaluates a layer with `base_sync` at its shortest, 300 BPM under
+    ×8 (any Subdiv is reachable live), against the near guard, exactly (frames against 48 × the
+    guard's binary32 milliseconds, in the lint's wide integers). The reader records where it read
+    a `base_sync` (`base_sync:<layer>`).
+43. **The display** (§5.3, §5.4): `FormatSyncedTime` (`ParamDisplay.h`) writes the effective value
+    beside a synced field: "Off"; the note value's name; " · Subdiv ×1/2" when the effective
+    Subdiv is not TAP; " → " and the note value that plays when the Subdiv or a fold changes it,
+    named from its ticks (3·2^q ticks straight, 2^q a triplet, 9·2^q dotted: "1/32T", "1/256",
+    "8/1"); then the duration through the display's milliseconds rule: "1/4 · 500 ms",
+    "2/1 → 1/1 · 2.02 s" (119 BPM), "1/4 · Subdiv ×1/2 → 1/2 · 1.00 s". Row 63's host text stays
+    the code's name (`FormatPlain`). Row 86 shows Off and On.
+44. **The corpus** (version 14, `plucks_clock_30s`, three new packages): `sync_post` (row 63 at 1/4
+    on 140 BPM: the time macro sweeping 1/8–1/2, a Subdiv jump, the knob's six zones 200 frames
+    apart, a Tempo-knob Step that glides and a host Jump that crossfades, a Subdiv change in the
+    trail after the input stops; 15 crossfades), `sync_clock` (a MIDI clock at 137.5 BPM acquired
+    as a Step, then 137 BPM committed as a Drift, slewed, then 150 BPM re-acquired as a Jump,
+    crossfaded), `sync_base` (`base_sync` 1/8 with grain feedback at 137.5 BPM, taps to 90 BPM, a
+    Subdiv jump), `sync_fold` (2/1 at 125 BPM, 3.84 s, between `time_ms`'s 2 s and the line's 4 s,
+    a 48-step `TempoSweep` to 52 BPM folding it below 120, the code to 1/1, folding below 60, a
+    host Jump to 58 BPM that keeps the fold; 4 crossfades, 41 folds) and `sync_glide`
+    (`tempo_glide` On: a tapped and a host Jump glide, a Subdiv change crossfades; Off again, a
+    Jump crossfades). The verb is the `TempoSweep` generator (integer steps), the counters
+    `crossfades` and `folds`, the ablations `sync` (row 63 at 0 wherever the preset, a load or a
+    SetParam sets it, the macro and expression moves that could set it again dropped, every loaded
+    mode's `base_sync` off) and `crossfade` (`tempo_glide` On from frame 0). §8.3's `slew` ablation
+    (drifts glide) has no switch a script can reach, so the slew is the unit tests' (note 39), as
+    is the "chain at block size 1" of §8.2. Every hash, per-second hash and counter of revision 8's
+    52 presets is reproduced; the 30 that load a package see its `sound_hash` change (STAT gains
+    leaf 63 at 0) and its `control_hash` stay.
+45. **Every package re-stamped and its `sound_hash` changed:** the corpus's 32 (and 3 new), the
+    compiler's 7 examples and the factory's 18, each re-formatted (the canonical form writes
+    `post.delay.sync`) and recompiled at revision 9; every `control_hash` is unchanged. The pull
+    request needs the package-change label with "Package-change: synced times' leaf 63
+    (post.delay.sync) joins every package's STAT at its default (sound revision 9)". The
+    compiler's random-document and reader-fuzz digests and the package fuzzer's verdict digest
+    are re-minted (the stamp, leaf 63, `base_sync` supported).
+46. **ITCM** (*measured*, the images' maps): the live image's `.itcm_text` grows from 61,472 to
+    63,408 bytes, leaving 2,064 of the 65,536 with its 64-byte offset; parity 61,256, bench
+    61,112, bench_hooks 61,368; `ItcmCheck` and `BootCheck` pass on every image, the one new call
+    out of ITCM being `tempo::FoldedFrames`, now on its allow-list. Of the 1,936 bytes, the
+    crossfade's out-of-line `FadeFrame` (the outgoing head's step and Catmull-Rom read) is 872,
+    `NoteTempo` 248, `Resync` 208, `RebuildPostParams`' sync 196, the switch tables of
+    `NoteTicks` and `SubdivTicks` 84, and the per-sample loop 40; §9.6 estimated 1.0–1.6 KiB for
+    T1 and T2's ITCM together. `FadeFrame`, `NoteTempo` and `Resync` are `BRAINSCAPE_NOINLINE`
+    (`detail/Placement.h`) so the ITCM holds one copy each; inlined, the same code took 2,440
+    bytes. `Tempo.cpp`'s QSPI code grows from 16,568 to 16,832 bytes.
+47. **The plugin** registers row 63 as a leaf (§10.4, 17 steps), automatically as a Leaf row;
+    leaves register first, so the host indices of freeze, the macros, `perf.expression` and the
+    effect volume move up one, as at revisions 4, 6 and 7 (before the first public release,
+    compiler §4.5). Its text parser reads the note names back in either case ("1/8D", "1/8d") as
+    well as the code; row 86 is a device setting, not registered (§10.4).
+48. **Not built in T2:** the delay stage's cost with a fade in progress (§7.3, §9.6: both heads in
+    stereo, about 60–80 cycles a sample more, *estimated*), measured on the Rev7, and the cost
+    governor's constant raised from it, are T6's bench with the governor; T5's audition gives
+    Engram and Callback a synced post delay by listening (§6.6). The plugin shows the effective
+    value (note 43) from T3.
 
 ## 12. Evidence
 
