@@ -1052,17 +1052,30 @@ explicit intents. Under ClockFree and ClockRunning, Pc moves to P_fit only by th
    re-asserted tempo (§2.5) is already right and the early commit stays out of the way. Draft
    v1 waited for N = 24, after a stale window had first followed the previous song's slope
    (record §6, P4).
-3. **The deadband,** from N ≥ 24:
-   1. |P_fit − Pc| > Pc >> 9 (0.195 %, about 3.3 σ of the computer-clock fit, never reached by
-      a hardware clock), at once; or
-   2. |P_fit − Pc| > Pc >> 12 (0.024 %) on every fitted tick for 192 consecutive fitted ticks
-      (8 beats). The run counts fitted ticks only; an outlier, or a fitted tick inside the band,
-      resets it.
+3. **The deadband,** from N ≥ 24, two runs of consecutive fitted ticks:
+   1. |P_fit − Pc| > Pc >> 9 (0.195 %, never reached by a hardware clock) on every fitted tick
+      for 48 consecutive fitted ticks (2 beats); or
+   2. |P_fit − Pc| > Pc >> 11 (0.049 %) on every fitted tick for 384 consecutive fitted ticks
+      (16 beats).
 
-Rule 3.2 makes Pc converge on a steady clock, so the post delay's repeats do not drift against
-the grid by the fit's residual. Synced durations change only with Pc, so a jittery clock never
-moves the delay, and TapGlide's `Retarget` ignores an unchanged integer target
-(`dsp/src/detail/PostChain.h:139-145`).
+   Each run counts fitted ticks only, and a fitted tick inside its band resets it. An outlier
+   resets rule 3.2's run and leaves rule 3.1's as it was, neither counting nor resetting it;
+   every commit, by any rule, resets both. *(Owner decision, adopted 2026-10-10: the review's
+   measured candidate, §11.12 note 32, as it was tested, §11.13 note 34. Draft v2 committed by
+   rule 3.1 at once and by rule 3.2 at Pc >> 12 over 192 ticks; rule 3.1's band compares two
+   noisy fits and is only about two σ of their difference at 140 BPM, so a computer clock
+   committed up to 115, 189 and 657 times in ten minutes at 120, 140 and 300 BPM, against
+   §7.4's budget.)*
+
+Rule 3.1 follows a real change of tempo within about two beats of the fit crossing its band;
+rule 3.2 makes Pc converge on a steady clock to within Pc >> 11, so the post delay's repeats do
+not drift against the grid by more than the fit's residual. Measured over ten minutes per tempo
+with §8.3's clock models, counting from the window's filling (§11.13 note 34): a hardware clock
+commits nothing at 60–300 BPM; a computer clock commits at most once at 60, 120 and 140 BPM and
+8 times at 300 BPM, each commit at most 0.34 %, with Pc within 0.097, 0.193, 0.225 and 0.340 % of
+the true tempo; and a 1 % ramp over 600 beats is followed. Synced durations change only with Pc,
+so a jittery clock never moves the delay, and TapGlide's `Retarget` ignores an unchanged integer
+target (`dsp/src/detail/PostChain.h:139-145`).
 
 **Every change of Pc has a class,** computed from engine state alone, so it replays:
 
@@ -1150,6 +1163,16 @@ revision (§9.6).
 | A Step | the glide's own pitch, s² at read speed s (≤ 2.25×), as for `time_ms` | profile §5.6's measurement; S12 by ear |
 | A Drift | the repeats bent at most 0.1 % (§7.2) | S12 by ear, the slew's unit test |
 
+*(2026-10-10, with §7.1's deadband as the owner adopted it, §11.13 note 34: measured over ten
+minutes per tempo with §8.3's models, counting from the window's filling (N = 96), a hardware
+clock commits nothing at 60–300 BPM, and a computer clock at most once at 60–140 BPM and 8 times
+at 300 BPM, each at most 0.34 %, so both clock budgets are met; draft v2's constants met neither,
+a hardware clock committing once at 300 BPM and a computer clock up to 657 times, note 32. Before
+the window fills, the 24-tick fit of an acquisition settles: `clock_midi_computer` commits 4
+times, three acquisitions and one rule-3.1 Drift of 0.58 % 48 fitted ticks after its
+re-acquisition (the window at 88), where draft v2's constants committed 26 times, 23 of them
+Drifts.)*
+
 ## 8. Determinism and testing
 
 ### 8.1 What is guaranteed
@@ -1187,7 +1210,8 @@ case named for a draft-v1 finding reproduces that finding's failure on draft v1'
   dropout of 200 ms infers its ticks; a 38 ms burst neither re-labels nor re-acquires; ticks
   applied at one frame and then a slow-tempo gap infer nothing and divide by nothing (E5); the
   incremental sums equal direct sums over 10⁶ ticks with dropouts and outliers (H4); the nearest
-  tick's tie goes up; rule 3.2's run reset by an outlier.
+  tick's tie goes up; rule 3.2's run reset by an outlier and rule 3.1's kept by one, each band and
+  each run at its exact edge, and every commit resetting both runs (§11.13).
 - **Gaps (E2, E6, P3, P4):** the engine equals a reference that applies each gap at its deadline
   frame and splits there, on streams with ticks, a second of silence and then each event type, a
   Spillover load under recall Preset among them; the snapshot shows Internal after a gap with no
@@ -1673,7 +1697,7 @@ draft v2.
 | D5 | What syncs; Q7 | The post delay (row 63), `base_sync` and CLOCK hits. Q7: in Subdiv and Tempo modes the Time knob never reaches `macro.time`, which expression, MIDI and hosts still do | Modulators wait for W3 and the looper for its design; a mode that wants Time on `macro.time` on stage stays in Free | 6 |
 | D6 | Q11, tempo-exact grain feedback | Rhythmic repeats on the post delay; `base_sync` places the first tap exactly; grain feedback keeps its 10.67 ms pass (lint L12) | No feedback-path rework; grain-feedback echoes drift late against the grid, as echoic modes already do | 6.2 |
 | D7 | Divisions | Subdiv is the Microcosm's six rate multipliers (resolved from its manual), labelled as rates (`x1/4` … `x8`), code 0 = TAP the default; sixteen note values by duration; folding by octaves | CC#5 matches the Microcosm; no screen or document shows "1/4" for a rate; no package re-hashes | 5 |
-| D8 | Smoothing | A least-squares fit over the last 96 tick labels; a two-level deadband; taps averaged over up to four intervals; Pc changes above 3.1 % crossfade, deadband commits slew over about a second, smaller changes glide over 50 ms; after a Start, an early commit at 12 ticks when the tempo moved more than 6.25 % | Clock jitter never moves the delay; a new tapped or song tempo does not swoop; Tempo-knob sweeps still bend like tape; a song's first beat plays at its tempo | 3.3, 7 |
+| D8 | Smoothing | A least-squares fit over the last 96 tick labels; a two-level deadband; taps averaged over up to four intervals; Pc changes above 3.1 % crossfade, deadband commits slew over about a second, smaller changes glide over 50 ms; after a Start, an early commit at 12 ticks when the tempo moved more than 6.25 %. **Amended by the owner 2026-10-10:** the deadband's two levels are runs of consecutive fitted ticks, Pc >> 9 held for 48 and Pc >> 11 held for 384, the review's measured candidate adopted as tested (§11.12 note 32, §11.13 note 34); revision 8 is amended in place | Clock jitter never moves the delay; after lock, a computer clock commits at most once in ten minutes at 60–140 BPM and a hardware clock not at all; a new tapped or song tempo does not swoop; Tempo-knob sweeps still bend like tape; a song's first beat plays at its tempo | 3.3, 7 |
 | D9 | Host tempo | Follow the host by default; ns resolution, 1 µs hysteresis, a tick-aligned anchor carried as a frame offset; "Restart on transport start" stays off by default (it is off, not on) | Live DAW playback tracks the host with no stray hit before the anchor; a reproducible bounce needs the restart setting | 4.4, 10.1 |
 | D10 | MIDI hardware for v1 | MIDI in with the H11L1M (DIN, or TRS Type A); MIDI out populated, with soft thru (default on) and clock out (default off) as the Microcosm's four-way global setting, firmware lane T4b; DIN against TRS at schematic time | The pedal can sit mid-chain and lead a chain from its tap tempo, closing a Microcosm parity gap; about $1 of parts and 1–2 days of firmware; the schematic carries an out jack | 9.1, 9.5 |
 | D11 | Song position | A position in 24-ppqn ticks in Transport's value (Song Position × 6), no separate event; host-style events carry the anchor's frame offset in `id` bits 16–31 | SPP and host locates need no event number of their own; those `id` bits are spent | 4.1 |
@@ -1844,7 +1868,8 @@ intent, as below:
     early acquisition at a fast tempo. Every such commit is a Drift, so the post delay slews and
     never jumps, but `clock_midi_computer`'s counters will exceed §7.4's budget. The constants are
     built as designed; tuning them (§11.7 risk 3, §11.8 item 1) is an owner decision. *(2026-10-10:
-    a measured candidate that meets the budgets at 60–140 BPM is in note 32.)*
+    a measured candidate that meets the budgets at 60–140 BPM is in note 32; the owner adopted it
+    the same day, note 34.)*
 13. **A loss under ClockRunning clears the running bit.** §3.5 keeps P, Pc and the phase and sets
     `resumeRunning`; it does not say whether `TempoInfo`'s "transport running" bit stays set. The
     core clears it with the source, so a display shows a stopped transport while the clock is
@@ -1935,7 +1960,7 @@ intent, as below (continuing §11.10's numbering):
 24. **The commit budgets, in the corpus.** `clock_midi_computer` (137.5 and 150 BPM, a computer's
     jitter) commits 26 times in about 22 seconds of clock, 23 of them drifts, as item 12 measured;
     its counters are minted as they are, and §7.4's budget remains the owner's decision on the
-    constants (note 32).
+    constants (note 32). *(2026-10-10: decided, note 34; it now commits 4 times, one a drift.)*
 
 ### 11.12 As built: the review's amendments (2026-10-10)
 
@@ -2033,7 +2058,8 @@ unchanged) and `tempo_jump` (new events, note 33) changed. Continuing the number
     "at once" to a run reshapes D8's deadband, and §11.7 risk 3 and §11.8 item 1 set these
     constants from T0b's recordings of real masters. The variant is the measured candidate for the
     owner's decision; adopting it changes `clock_midi_computer`'s counters and is revision 8's
-    re-mint if it lands before the next revision, a revision of its own after.
+    re-mint if it lands before the next revision, a revision of its own after. *(2026-10-10: the
+    owner adopted it before the next revision, and revision 8 is re-minted, note 34.)*
 33. **Tests added** (§8.2): every exact integer threshold of §3.3 and §7.1 with a value at it and one
     past it (the dropout's R/10 and four ticks, the outlier's quarter tick and 10 ms, the early
     commit, rules 3.1 and 3.2, the Jump class), which twelve mutants of `Tempo.cpp` had survived;
@@ -2044,10 +2070,69 @@ unchanged) and `tempo_jump` (new events, note 33) changed. Continuing the number
     2^31, 2^32 and 2^33 frames (the window's 32-bit storage, with dropouts, re-acquisitions and
     relabels); and the reference's perturbations for notes 25–27, each caught. The streams send
     a MIDI Start or Continue up to half a second before their first tick, so the hold runs over
-    grid points, and the tempo digest is `0d1b22dd690c3742`. The corpus's `tempo_jump` ends with a
-    MIDI Start whose 49 ticks arrive on one frame, pinning one hit per frame on every leg, the
-    emulated M7's included. The clamp `acc′ = max(1, …)` of §2.2 stays untested: only a placement
-    can leave acc at 7 phasor units or less before a rescale, and it is defensive.
+    grid points, and the tempo digest is `0d1b22dd690c3742` (`5918ba4597cf17ce` since note 34).
+    The corpus's `tempo_jump` ends with a MIDI Start whose 49 ticks arrive on one frame, pinning
+    one hit per frame on every leg, the emulated M7's included. The clamp `acc′ = max(1, …)` of
+    §2.2 stays untested: only a placement can leave acc at 7 phasor units or less before a
+    rescale, and it is defensive.
+
+### 11.13 As built: the owner's deadband constants (2026-10-10)
+
+The owner adopted note 32's candidate on 2026-10-10 (D8 as amended, §7.1, §7.4). Revision 8 is
+still unpushed and no revision follows it, so it is amended in place again and its golden file
+re-minted at 8. Continuing the numbering:
+
+34. **Rule 3 as two runs, as the review tested them.** `TempoCore` keeps rule 3.1's run beside
+    rule 3.2's (`kBandRun` = 48 fitted ticks outside Pc >> 9, `kDriftRun` = 384 outside
+    Pc >> 11, `dsp/src/detail/Tempo.h`): a fitted tick inside a band resets that band's run, and
+    every commit, a gap and `Restart` reset both, as they did rule 3.2's. Note 32's words,
+    "counted like rule 3.2's run, reset by a fitted tick inside the band", leave open what an
+    outlier does to rule 3.1's run; the review's variant neither counted nor reset it, and the
+    build does the same: with an outlier resetting it too, the 120 BPM computer clock commits
+    twice in ten minutes in one seed (three in all), against the once the owner adopted. The
+    other differences from the review's probe (its run kept across other rules' commits, gaps
+    and fresh cores) move no measured number. The review's driver, run against the built core,
+    reproduces its numbers exactly (*measured*; ten minutes, three seeds, commits counted after
+    the window first holds 96 ticks): a hardware clock commits nothing at 60, 120, 140 and
+    300 BPM, its worst |Pc/true − 1| 0.011, 0.007, 0.006 and 0.028 %; a computer clock commits at
+    most 1, 1, 1 and 8 times in a seed (1, 2, 2 and 8 in all), its worst |Pc/true − 1| 0.097,
+    0.193, 0.225 and 0.340 % and its largest commit 0.125, 0.266, 0.297 and 0.340 %; over a 1 %
+    ramp of 600 beats (120 to 121.2 BPM) Pc ends at 121.101 BPM against a fit of 121.289, after
+    6 commits. §7.4's two clock budgets are met.
+
+    **The corpus.** Pc moves no sample at revision 8 (synced durations are T2's), so no hash or
+    per-second hash changes, and only `clock_midi_computer`'s counters do: commits 26 to 4,
+    slews 23 to 1. Its four commits are the acquisition at 1.41 s (1.76 % from the stored
+    140 BPM, a Step), the re-acquisition after the step to 150 BPM at 12.62 s (7.9 %, a Jump),
+    a rule-3.1 Drift of 0.58 % at 13.68 s, 48 fitted ticks after the re-acquired 24-tick fit (the
+    window at 88), and the acquisition after the loss at 25.41 s (9.1 %, a Jump); its coverage
+    minimums follow (commits 4, slews exactly 1). The 45 presets of revision 7 reproduce their
+    hashes, per-second hashes and counters bit for bit, and the other six clock presets every
+    counter.
+
+    **Tests** (§8.2): rule 3.1 exactly at Pc >> 9 (a clock at 1,026 frames a tick on Pc's
+    1,024, for 60 ticks after the window turns over) and one frame a tick past it, committing on
+    the 48th consecutive fitted tick outside and not the 47th; rule 3.2 likewise at Pc >> 11
+    (4,098 and 4,099 frames a tick on 4,096) and on its 384th tick; both against runs counted by
+    hand from the fit the core reports. Rule 3.1's run kept by an outlier and reset by a fitted
+    tick inside its band; a rule-3.2 commit and a re-acquisition's commit each resetting a run
+    under way; rule 3.2's outlier case at 384 ticks. The reference model keeps rule 3.1's run,
+    which joins the compared state, and three perturbations (rule 3.1 at once, rule 3.2 at
+    Pc >> 12 over 192, an outlier resetting rule 3.1's run), each caught by the streams.
+    Thirteen mutants of the rule (each band read as ≥, each run one short and one long, rule 3.2
+    at Pc >> 12, an outlier resetting rule 3.1's run or not rule 3.2's, rule 3.1 at once, rule
+    3.1's run kept by a rule-3.2 commit, an acquisition or a gap) fail the unit tests. The tempo
+    digest is `5918ba4597cf17ce`.
+
+    **Placement** (*measured*, the images' maps): ITCM is unchanged, the live image's
+    `.itcm_text` 61,472 bytes (4,000 spare), parity 59,336, bench 59,192, bench_hooks 59,448;
+    `ItcmCheck` and `BootCheck` pass on every image. `Tempo.cpp`'s QSPI code grows from 15,236
+    to 16,568 bytes, mostly because GCC now inlines `BeforeEventFull` into `ApplyEvent` (616 to
+    1,096 bytes) and both `SpilloverLoad`s (752 to 1,068 and 1,064); `Commit` grows from 400 to
+    504 and `OnClockTick` from 1,656 to 1,760, so a tick's path grows about 250 bytes, eight
+    cache lines, against note 30's estimate. §11.7 risk 3 and §11.8 item 1 stand: T0b's
+    recordings of real masters may still retune these constants, then as a sound revision of
+    its own.
 
 ## 12. Evidence
 
