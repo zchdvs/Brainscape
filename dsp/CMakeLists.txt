@@ -17,6 +17,8 @@ add_library(brainscape_dsp STATIC
   # The tempo core's integer helpers (docs/design/clock.md §2.1), out of line and, on the pedal,
   # out of ITCM (§9.6; firmware/CMakeLists.txt).
   src/IntMath.cpp
+  # The MIDI clock translator (§4.3): producer code, integer-only, out of ITCM.
+  src/MidiClock.cpp
   src/ModeEval.cpp
   src/OnsetDetector.cpp
   src/ParamDisplay.cpp
@@ -38,7 +40,7 @@ add_library(brainscape_dsp STATIC
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   set_source_files_properties(src/blob/Decode.cpp src/blob/Encode.cpp src/blob/Mode.cpp
                               src/blob/Sha256.cpp src/blob/Validate.cpp
-                              src/IntMath.cpp
+                              src/IntMath.cpp src/MidiClock.cpp
                               PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 endif()
 target_include_directories(brainscape_dsp
