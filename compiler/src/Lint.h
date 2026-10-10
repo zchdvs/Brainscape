@@ -17,10 +17,13 @@ struct LintOptions {
   bool factory = false;
 };
 
-// L1-L9 over a document that reads without errors.
+// L1-L9 and L12-L14 over a document that reads without errors (L10 and L11 are the CPU plan's,
+// cpu-budget.md §7.4).
 //   L1 a subnormal was written (it compiles to +0);
 //   L2 the smallest base_ms a layer's leaf and macros reach is below size_ms * (r - 1) for
-//      a pitch entry, so the near guard moves those grains back (engine §3);
+//      a pitch entry, so the near guard moves those grains back (engine §3); for a layer with a
+//      base_sync, the synced base delay at its shortest over the tempo range and the Subdivs
+//      (300 BPM, ×8; docs/design/clock.md §11.1);
 //   L3 activity, repeats or time has no targets;
 //   L4 a targeted leaf (not under editor.detached) shows another value than its macro gives at
 //      the stored position, which is what "further than its display resolution" means here:
@@ -33,7 +36,16 @@ struct LintOptions {
 //   L8 the Filter macro does not run the cutoff from its minimum (the wet kill) to its maximum
 //      (bypass), or the Space macro adds wet at 0;
 //   L9 a product string (id, name, author, description, tags, display names) holds another
-//      maker's mark from the denylist (design §11.2, record §2.2; a floor, not a search).
+//      maker's mark from the denylist (design §11.2, record §2.2; a floor, not a search);
+//   L12 a layer with a base_sync whose feedback.amount is above 0 at the stored value or any
+//      end a macro or the expression pedal reaches: grain-feedback repeats fall 10.67 ms later
+//      per pass than the grid, tempo-exact repeats belong on the post delay (clock.md §6.2, D6);
+//   L13 a macro target or expression assignment on a leaf a sync overrides at every position:
+//      post.delay.time_ms while post.delay.sync is nonzero at every value the controls reach, a
+//      layer's base_ms while its base_sync is not off (clock.md §6.5);
+//   L14 a synced field whose reachable codes fold at the stored tempo and Subdiv, where a sweep
+//      of the code is not monotone (clock.md §5.2, §5.3).
+// All warnings; --factory makes none of L12-L14 an error.
 std::vector<Finding> Lint(const Document& doc, const LintOptions& options = {});
 
 // The denylist L9 matches, whole words, case-insensitively.

@@ -339,7 +339,7 @@ void VisitLayer(V& v, Document& d, uint32_t n) {
     v.Enum("source", L.source, kPositionSpec, true, "source:" + Dec(n));
     v.Leaf("base_ms", id(ParamId::DelayMs, ParamId::L1DelayMs));
     v.Leaf("spray_ms", id(ParamId::SprayMs, ParamId::L1SprayMs));
-    v.Division("base_sync", L.baseSync, kModeFeatureTempoSync);
+    v.Division("base_sync", L.baseSync, kModeFeatureTempoSync, "base_sync:" + Dec(n));
     v.Enum("spray_law", L.sprayLaw, kSprayLawSpec);
     v.Leaf("repeat", id(ParamId::Repeat, ParamId::L1Repeat));
     v.Object("mark", false, [&] {
@@ -688,8 +688,10 @@ class Reader {
   }
 
   // A tempo division (§2.2): "off", or a note value of clock.md §5.2 by name, which needs
-  // `feature` (a synced base delay: tempo-synced times).
-  void Division(const char* key, uint8_t& value, uint32_t feature) {
+  // `feature` (a synced base delay: tempo-synced times). `whereKey` records where it was read,
+  // for the lints (L13, L14).
+  void Division(const char* key, uint8_t& value, uint32_t feature,
+                const std::string& whereKey = std::string()) {
     const json::Member* m = Take(key);
     if (m == nullptr) return;
     if (m->value.type != json::Type::String) {
@@ -697,6 +699,7 @@ class Reader {
       return;
     }
     const Location loc = At(m->value, Pointer(key));
+    if (!whereKey.empty()) d_.where[whereKey] = loc;
     for (uint8_t i = 0; i <= kMaxSyncDivision; ++i) {
       if (m->value.text == kDivisionNames[i]) {
         value = i;
@@ -1937,7 +1940,8 @@ class Writer {
               json::Value::String(value == brainscape::ModulatorType::Envelope ? "env" : "lfo"));
   }
 
-  void Division(const char* key, const uint8_t& value, uint32_t /*feature*/) {
+  void Division(const char* key, const uint8_t& value, uint32_t /*feature*/,
+                const std::string& /*whereKey*/ = std::string()) {
     if (value == 0u && records_ == 0) return;
     Top().Add(key, json::Value::String(value <= kMaxSyncDivision ? kDivisionNames[value] : "?"));
   }
