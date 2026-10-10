@@ -24,6 +24,8 @@ add_library(brainscape_dsp STATIC
   src/ParamDisplay.cpp
   src/PostChain.cpp
   src/SoundRevision.cpp
+  # The tempo core (docs/design/clock.md §2-§3, §6.3): integer-only, out of ITCM (§9.6).
+  src/Tempo.cpp
   src/TestSignal.cpp
   # The preset package (docs/design/mode-compiler.md §5, §6): decoder, validator, encoder
   # and SHA-256, integer-only and FP-free, the part of the mode system the firmware links.
@@ -40,7 +42,7 @@ add_library(brainscape_dsp STATIC
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   set_source_files_properties(src/blob/Decode.cpp src/blob/Encode.cpp src/blob/Mode.cpp
                               src/blob/Sha256.cpp src/blob/Validate.cpp
-                              src/IntMath.cpp src/MidiClock.cpp
+                              src/IntMath.cpp src/MidiClock.cpp src/Tempo.cpp
                               PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 endif()
 target_include_directories(brainscape_dsp

@@ -197,7 +197,7 @@ function(brainscape_firmware_image name)
     # archive no longer fits the 64 KiB at sound revision 2. The tempo core's integer code runs
     # at control rate and stays out too (docs/design/clock.md §9.6, D1 as amended 2026-10-09).
     set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj
-                             IntMath.cpp.obj MidiClock.cpp.obj)
+                             IntMath.cpp.obj MidiClock.cpp.obj Tempo.cpp.obj)
     set(_bs_not_itcm "")
     foreach(a libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a)
       foreach(m IN LISTS _bs_not_itcm_members)
