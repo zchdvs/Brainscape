@@ -313,7 +313,8 @@ TEST_CASE("Follower: lock and accuracy at 20, 120 and 300 BPM, hardware and comp
       REQUIRE(c.Source() == ClockSource::ClockFree);
       REQUIRE(c.Stats().commits >= 1);
       REQUIRE(std::abs(RelErr(c.P(), truth)) < k.bound);
-      // Pc within the deadband of P_fit, never further than the coarse band.
+      // Pc within rule 3.1's band of P_fit at the end: the fit has settled, and a fit outside
+      // the band for 48 fitted ticks would have been committed (§7.1).
       REQUIRE(std::abs(RelErr(c.Pc(), c.P())) <= 1.0 / 512 + 1e-9);
       if (k.model == TickModel::Hardware) REQUIRE(c.Stats().tickOutliers == 0);
       // The commits after the acquisition's (§7.4's budget): see "[experiment]" below.
