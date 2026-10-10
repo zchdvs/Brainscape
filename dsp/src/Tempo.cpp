@@ -355,6 +355,7 @@ void TempoCore::ClearFollower() noexcept {
   lastTickFrame_ = 0;
   outlierRun_    = 0;
   outlierSign_   = 0;
+  bandRun_       = 0;
   driftRun_      = 0;
   earlyArmed_    = false;
 }
@@ -758,7 +759,7 @@ void TempoCore::OnClockTick(int64_t f) noexcept {
         outlierRun_  = 1;
         outlierSign_ = sign;
       }
-      driftRun_ = 0;  // rule 3.2's run is reset by an outlier
+      driftRun_ = 0;  // rule 3.2's run is reset by an outlier (rule 3.1's is not)
     }
   }
   if (fitted) {
@@ -822,7 +823,7 @@ void TempoCore::Commit(bool entered, uint32_t prevN, bool fitted) noexcept {
   if ((entered && winN_ >= kLockTicks) || (prevN < kLockTicks && winN_ >= kLockTicks)) {
     ++stats_.commits;
     SetPc(pFit_, false);
-    driftRun_ = 0;
+    bandRun_ = driftRun_ = 0;
     return;
   }
   // 2. The early commit after a Start or Continue on an empty window, at N = 12.
@@ -831,27 +832,20 @@ void TempoCore::Commit(bool entered, uint32_t prevN, bool fitted) noexcept {
     if (diff > (pc_ >> 4)) {
       ++stats_.earlyCommits;
       SetPc(pFit_, false);
-      driftRun_ = 0;
+      bandRun_ = driftRun_ = 0;
     }
     return;
   }
-  // 3. The deadband, from N ≥ 24.
-  if (winN_ < kLockTicks) return;
-  if (diff > (pc_ >> 9)) {
+  // 3. The deadband, from N ≥ 24: a run of consecutive fitted ticks outside a band commits, 48
+  // outside Pc >> 9 (rule 3.1) or 384 outside Pc >> 11 (rule 3.2). A fitted tick inside a band
+  // resets that band's run, an outlier rule 3.2's only (OnClockTick), and every commit both.
+  if (winN_ < kLockTicks || !fitted) return;
+  bandRun_  = diff > (pc_ >> 9) ? bandRun_ + 1 : 0;
+  driftRun_ = diff > (pc_ >> 11) ? driftRun_ + 1 : 0;
+  if (bandRun_ >= kBandRun || driftRun_ >= kDriftRun) {
     ++stats_.commits;
     SetPc(pFit_, true);
-    driftRun_ = 0;
-    return;
-  }
-  if (!fitted) return;
-  if (diff > (pc_ >> 12)) {
-    if (++driftRun_ >= kDriftRun) {
-      ++stats_.commits;
-      SetPc(pFit_, true);
-      driftRun_ = 0;
-    }
-  } else {
-    driftRun_ = 0;
+    bandRun_ = driftRun_ = 0;
   }
 }
 
@@ -921,6 +915,7 @@ TempoCore::State TempoCore::Capture() const noexcept {
   s.lastTickFrame = haveTickRef_ ? lastTickFrame_ : 0;
   s.outlierRun    = outlierRun_;
   s.outlierSign   = outlierSign_;
+  s.bandRun       = bandRun_;
   s.driftRun      = driftRun_;
   s.earlyArmed    = earlyArmed_;
   return s;

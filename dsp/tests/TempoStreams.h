@@ -67,7 +67,8 @@ inline uint64_t StateDigest(const TempoCore::State& s) {
     f.I(s.ringFrame[i]);
   }
   f.U(s.haveLabel); f.I(s.lastLabel); f.U(s.haveTickRef); f.I(s.lastTickFrame);
-  f.U(s.outlierRun); f.I(s.outlierSign); f.U(s.driftRun); f.U(s.earlyArmed);
+  f.U(s.outlierRun); f.I(s.outlierSign); f.U(s.bandRun); f.U(s.driftRun);
+  f.U(s.earlyArmed);
   return f.h;
 }
 

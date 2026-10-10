@@ -516,9 +516,10 @@ TEST_CASE("Follower: incremental sums equal direct sums (H4)", "[tempo][follower
   REQUIRE(c.Stats().tickOutliers > 0);
 }
 
-TEST_CASE("Follower: rule 3.2's run of 192 fitted ticks, reset by an outlier", "[tempo][follower]") {
-  // Lock at 1,000 frames a tick, then 1,000.6: 0.06 %, between Pc >> 12 (0.024 %) and Pc >> 9
-  // (0.195 %), so only rule 3.2 commits, after 192 consecutive fitted ticks outside the band.
+TEST_CASE("Follower: rule 3.2's run of 384 fitted ticks, reset by an outlier", "[tempo][follower]") {
+  // Lock at 1,000 frames a tick, then 1,000.6: 0.06 %, between Pc >> 11 (0.049 %) and Pc >> 9
+  // (0.195 %), so only rule 3.2 commits, after 384 consecutive fitted ticks outside the band
+  // (the owner's constants, 2026-10-10).
   auto run = [](bool outlier, int64_t* commitTick) {
     TempoCore c = Core();
     int64_t f = Ticks(c, 1000, 1000, 100);
@@ -542,8 +543,9 @@ TEST_CASE("Follower: rule 3.2's run of 192 fitted ticks, reset by an outlier", "
   run(false, &plain);
   run(true, &reset);
   REQUIRE(plain > 0);
+  REQUIRE(plain >= 384);
   REQUIRE(reset > plain);  // the outlier restarted the run
-  REQUIRE(reset >= 150 + 192);
+  REQUIRE(reset >= 150 + 384);
 }
 
 // =================================================================================================
@@ -1025,6 +1027,59 @@ int64_t TicksTo(TempoCore& c, int64_t start, int64_t period, int n) {
   return Ticks(c, start, period, n) - period;
 }
 
+// §7.1 rule 3 counted by hand, with the owner's constants (2026-10-10): rule 3.1 commits on the
+// 48th consecutive fitted tick whose fit lies more than Pc >> 9 from Pc, rule 3.2 on the 384th
+// more than Pc >> 11 from it. A fitted tick inside a band resets that band's run; an outlier
+// neither extends nor resets rule 3.1's run and resets rule 3.2's; a commit resets both. Each
+// tick is played after a lock (N >= 24), and the core must commit exactly when these runs say so.
+struct HandRuns {
+  uint32_t band = 0, drift = 0;  // rule 3.1's and rule 3.2's runs
+  uint32_t longestBand = 0, longestDrift = 0;
+  uint32_t commits = 0, by31 = 0, by32 = 0;
+  uint32_t bandAtCommit = 0;  // rule 3.1's run at the last commit, before the reset
+  bool     fitted = false, outside31 = false, outside32 = false;
+
+  // Plays a tick at `f`; returns whether it committed.
+  bool Play(TempoCore& c, int64_t f) {
+    const uint64_t pc       = c.Pc();
+    const uint64_t outliers = c.Stats().tickOutliers;
+    const uint32_t serial   = c.PcSerial();
+    Tick(c, f);
+    const TempoCore::State st = c.Capture();
+    REQUIRE(st.fitValid);
+    REQUIRE(st.winN >= TempoCore::kLockTicks);
+    const uint64_t diff = st.pFit > pc ? st.pFit - pc : pc - st.pFit;
+    fitted    = c.Stats().tickOutliers == outliers;
+    outside31 = diff > (pc >> 9);
+    outside32 = diff > (pc >> 11);
+    if (fitted) {
+      band  = outside31 ? band + 1 : 0;
+      drift = outside32 ? drift + 1 : 0;
+    } else {
+      drift = 0;
+    }
+    if (band > longestBand) longestBand = band;
+    if (drift > longestDrift) longestDrift = drift;
+    const bool want = band >= 48 || drift >= 384;
+    const bool got  = c.PcSerial() != serial;
+    INFO("tick at " << f << ": runs " << band << ", " << drift << "; fit " << (st.pFit >> 32)
+                    << " Pc " << (pc >> 32));
+    REQUIRE(got == want);
+    if (got) {
+      REQUIRE(c.Pc() == st.pFit);
+      REQUIRE(c.LastPcChange() == PcChange::Drift);
+      ++commits;
+      if (band >= 48) ++by31;
+      else ++by32;
+      bandAtCommit = band;
+      band = drift = 0;
+    }
+    REQUIRE(st.bandRun == band);
+    REQUIRE(st.driftRun == drift);
+    return got;
+  }
+};
+
 }  // namespace
 
 TEST_CASE("Edges: §3.3 dropouts at exactly R/10 and exactly four ticks", "[tempo][follower][edges]") {
@@ -1067,7 +1122,7 @@ TEST_CASE("Edges: §3.3 outliers at exactly a quarter tick and exactly 10 ms",
   }
 }
 
-TEST_CASE("Edges: §7.1's early commit, rule 3.1 and the Jump class exactly at their bands",
+TEST_CASE("Edges: §7.1's early commit and the Jump class exactly at their bands",
           "[tempo][classes][edges]") {
   // The early commit: Pc at 125 BPM (23,040·2^32) and P_fit at 1,020 frames a tick
   // (24,480·2^32): |P_fit − Pc| = 1,440·2^32 = Pc >> 4 exactly, not above it.
@@ -1088,47 +1143,176 @@ TEST_CASE("Edges: §7.1's early commit, rule 3.1 and the Jump class exactly at t
     CHECK(c.LastPcChange() == PcChange::Step);
     CHECK(c.Stats().jumps == 0u);
   }
-  // Rule 3.1: Pc at 24,576·2^32 (1,024 frames a tick), then 96 ticks at 1,026 frames: the fit
-  // rises to 24,624·2^32, exactly Pc >> 9 above Pc only once the window holds the new ticks alone,
-  // with no outlier and rule 3.2's run short of 192. At 1,027 the band is crossed.
+}
+
+TEST_CASE("Edges: §7.1 rule 3.1 exactly at Pc >> 9, and its run of exactly 48 fitted ticks",
+          "[tempo][classes][edges]") {
+  // Pc at 24,576·2^32 (1,024 frames a tick): Pc >> 9 = 48·2^32, two frames a tick. A clock at
+  // 1,026 frames a tick fits exactly on the band once the window holds the new ticks alone, so
+  // rule 3.1's run never starts, though the fit sits there for 60 ticks, longer than the run;
+  // rule 3.2's run (Pc >> 11, half a frame a tick) runs but stays short of 384. At 1,027 the fit
+  // crosses the band and rule 3.1 commits once, a Drift, on the 48th consecutive fitted tick
+  // outside it, and not on the 47th.
   for (int64_t period : {1026, 1027}) {
     TempoCore c = Core(48000, 512000);
     REQUIRE(c.Pc() == (uint64_t{24576} << 32));
     Transport(c, 500, TransportKind::Start, true);
     const int64_t f = TicksTo(c, 1000, 1024, 24);  // the acquisition: Pc = P_fit
     REQUIRE(c.Pc() == (uint64_t{24576} << 32));
-    const uint64_t commits = c.Stats().commits;
-    for (int i = 1; i <= 96; ++i) Tick(c, f + i * period);
-    INFO("period " << period << " pFit " << (c.Capture().pFit >> 32) << " pc " << (c.Pc() >> 32));
+    REQUIRE(c.Stats().commits == 1u);
+    HandRuns h;
+    for (int i = 1; i <= 96 + 60; ++i) h.Play(c, f + i * period);
+    INFO("period " << period);
     REQUIRE(c.Stats().tickOutliers == 0u);
+    REQUIRE(h.longestDrift < 384u);
     if (period == 1026) {
       REQUIRE(c.Capture().pFit == (uint64_t{24624} << 32));
-      CHECK(c.Stats().commits == commits);
+      CHECK(h.longestBand == 0u);
+      CHECK(h.commits == 0u);
+      CHECK(c.Stats().commits == 1u);
     } else {
-      CHECK(c.Stats().commits > commits);
+      CHECK(h.longestBand == 48u);
+      CHECK(h.by31 == 1u);
+      CHECK(h.commits == 1u);
+      CHECK(c.Stats().commits == 2u);
+      CHECK(c.Stats().slews == 1u);
     }
   }
 }
 
-TEST_CASE("Edges: §7.1 rule 3.2 exactly at Pc >> 12", "[tempo][classes][edges]") {
-  // Pc at 98,304·2^32 (4,096 frames a tick): Pc >> 12 = 24·2^32, one frame a tick. A clock at 4,097
-  // frames a tick sits exactly on the band once the window turns over, so rule 3.2's run never
-  // starts; at 4,098 it commits once, a Drift, after 192 fitted ticks.
-  for (int64_t period : {4097, 4098}) {
+TEST_CASE("Edges: §7.1 rule 3.1's run kept by an outlier, reset by a fitted tick inside the band",
+          "[tempo][classes][edges]") {
+  // The clock of the case above at 1,027 frames a tick. An outlier (a tick 1,000 frames late)
+  // 20 ticks into the run neither counts nor resets it, and resets rule 3.2's; a fitted tick
+  // 240 frames early just after the fit crosses the band pulls the fit back inside it, which
+  // resets the run. Either way the commit comes on the 48th fitted tick of an unbroken run.
+  for (int variant = 0; variant < 2; ++variant) {
+    TempoCore c = Core(48000, 512000);
+    Transport(c, 500, TransportKind::Start, true);
+    const int64_t f = TicksTo(c, 1000, 1024, 24);
+    HandRuns h;
+    bool done = false, perturbed = false;
+    for (int i = 1; i <= 3 * 96 && !done; ++i) {
+      int64_t at = f + i * 1027;
+      const bool here = !perturbed && (variant == 0 ? h.band == 20 : h.band == 1);
+      if (here) at += variant == 0 ? 1000 : -240;
+      const uint32_t before = h.band;
+      done = h.Play(c, at);
+      if (here) {
+        perturbed = true;
+        INFO("variant " << variant);
+        if (variant == 0) {
+          REQUIRE_FALSE(h.fitted);  // an outlier: rule 3.1's run kept, rule 3.2's reset
+          REQUIRE(h.band == before);
+          REQUIRE(h.drift == 0u);
+        } else {
+          REQUIRE(h.fitted);  // fitted and inside the band: the run starts again
+          REQUIRE_FALSE(h.outside31);
+          REQUIRE(h.band == 0u);
+        }
+      }
+    }
+    INFO("variant " << variant);
+    REQUIRE(perturbed);
+    REQUIRE(done);
+    CHECK(h.by31 == 1u);
+    CHECK(c.Stats().tickOutliers == (variant == 0 ? 1u : 0u));
+  }
+}
+
+TEST_CASE("Edges: §7.1 every commit resets both of rule 3's runs", "[tempo][classes][edges]") {
+  // A run counts ticks against the Pc it began with, so a commit of any rule starts both again.
+  // Rule 3.2 commits while rule 3.1's run is under way: Pc at 4,096 frames a tick (Pc >> 9 eight
+  // frames a tick, Pc >> 11 two), a clock at 4,103.9 (4,104 with every tenth tick a frame early)
+  // runs rule 3.2's run inside rule 3.1's band; a fitted tick 300 frames late at its 383rd tick
+  // lifts the fit over Pc >> 9 (about 0.19 frames a tick, against a margin of 0.1), so the
+  // 384th commits with rule 3.1's run at 2, and both runs read 0 after it.
+  {
+    TempoCore c = Core(48000, 2048000);
+    Transport(c, 500, TransportKind::Start, true);
+    const int64_t f = TicksTo(c, 1000, 4096, 24);
+    HandRuns h;
+    bool lifted = false, done = false;
+    for (int64_t i = 1; i <= 96 + 400 && !done; ++i) {
+      int64_t at = f + i * 4104 - i / 10;
+      if (!lifted && h.drift == 382) {
+        at += 300;
+        lifted = true;
+      }
+      done = h.Play(c, at);
+    }
+    REQUIRE(lifted);
+    REQUIRE(done);
+    REQUIRE(c.Stats().tickOutliers == 0u);
+    CHECK(h.by32 == 1u);
+    CHECK(h.bandAtCommit == 2u);  // HandRuns checked that the core's reads 0 after the commit
+  }
+  // The re-acquisition's commit, while rule 3.1's run is under way: the clock of the rule 3.1
+  // case at 1,027 frames a tick until the run is 10, then a step to 1,100 frames a tick. Its
+  // first ticks are still fitted and extend the run; then six outliers of one sign (which keep
+  // it) re-acquire, and the window's return to 24 commits Pc, which resets it.
+  {
+    TempoCore c = Core(48000, 512000);
+    Transport(c, 500, TransportKind::Start, true);
+    const int64_t f = TicksTo(c, 1000, 1024, 24);
+    HandRuns h;
+    int64_t i = 1;
+    for (; h.band < 10; ++i) REQUIRE_FALSE(h.Play(c, f + i * 1027));
+    const int64_t step = f + (i - 1) * 1027;
+    uint32_t heldRun = 0;
+    bool     acquired = false;
+    for (int64_t n = 1; n <= 60 && !acquired; ++n) {
+      const uint64_t commits = c.Stats().commits;
+      const uint32_t before  = c.Capture().bandRun;
+      Tick(c, step + n * 1100);
+      const TempoCore::State st = c.Capture();
+      if (c.Stats().reacquires == 1 && st.winN < TempoCore::kLockTicks) {
+        REQUIRE(st.bandRun == before);  // nothing evaluates the deadband below 24
+        heldRun = st.bandRun;
+      }
+      if (c.Stats().commits > commits) {
+        REQUIRE(c.Stats().reacquires == 1u);
+        REQUIRE(st.winN == TempoCore::kLockTicks);  // the re-acquisition's commit
+        CHECK(st.bandRun == 0u);
+        CHECK(st.driftRun == 0u);
+        acquired = true;
+      }
+    }
+    REQUIRE(acquired);
+    CHECK(heldRun > 10u);
+    CHECK(c.Stats().tickOutliers == 6u);
+  }
+}
+
+TEST_CASE("Edges: §7.1 rule 3.2 exactly at Pc >> 11, and its run of exactly 384 fitted ticks",
+          "[tempo][classes][edges]") {
+  // Pc at 98,304·2^32 (4,096 frames a tick): Pc >> 11 = 48·2^32, two frames a tick, and
+  // Pc >> 9 eight. A clock at 4,098 frames a tick fits exactly on rule 3.2's band once the
+  // window turns over, so its run never starts, though the fit sits there for 400 ticks; at
+  // 4,099 rule 3.2 commits once, a Drift, on the 384th consecutive fitted tick outside the band,
+  // and not on the 383rd, while rule 3.1's band is never reached.
+  for (int64_t period : {4098, 4099}) {
     TempoCore c = Core(48000, 2048000);
     REQUIRE(c.Pc() == (uint64_t{98304} << 32));
     Transport(c, 500, TransportKind::Start, true);
     const int64_t f = TicksTo(c, 1000, 4096, 24);
     REQUIRE(c.Pc() == (uint64_t{98304} << 32));
-    const uint64_t commits = c.Stats().commits;
-    for (int i = 1; i <= 96 + 200; ++i) Tick(c, f + i * period);
+    REQUIRE(c.Stats().commits == 1u);
+    HandRuns h;
+    for (int i = 1; i <= 96 + 400; ++i) h.Play(c, f + i * period);
     INFO("period " << period << " pFit " << (c.Capture().pFit >> 32));
     REQUIRE(c.Stats().tickOutliers == 0u);
-    if (period == 4097) {
-      REQUIRE(c.Capture().pFit == (uint64_t{98328} << 32));
-      CHECK(c.Stats().commits == commits);
+    REQUIRE(h.longestBand == 0u);
+    if (period == 4098) {
+      REQUIRE(c.Capture().pFit == (uint64_t{98352} << 32));
+      CHECK(h.longestDrift == 0u);
+      CHECK(h.commits == 0u);
+      CHECK(c.Stats().commits == 1u);
     } else {
-      CHECK(c.Stats().commits == commits + 1u);
+      CHECK(h.longestDrift == 384u);
+      CHECK(h.by32 == 1u);
+      CHECK(h.commits == 1u);
+      CHECK(c.Stats().commits == 2u);
       CHECK(c.LastPcChange() == PcChange::Drift);
     }
   }

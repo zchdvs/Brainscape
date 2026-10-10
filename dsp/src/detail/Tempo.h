@@ -65,7 +65,10 @@ class TempoCore {
   static constexpr uint32_t kEarlyTicks      = 12;   // the early commit after a Start
   static constexpr uint32_t kLockTicks       = 24;   // acquisition and the deadband
   static constexpr uint32_t kReacquireRun    = 6;    // outliers of one sign in a row
-  static constexpr uint32_t kDriftRun        = 192;  // fitted ticks outside Pc >> 12
+  // §7.1 rule 3's runs (the owner's constants, adopted 2026-10-10): a commit needs this many
+  // consecutive fitted ticks outside the band, Pc >> 9 for rule 3.1 and Pc >> 11 for rule 3.2.
+  static constexpr uint32_t kBandRun         = 48;   // fitted ticks outside Pc >> 9
+  static constexpr uint32_t kDriftRun        = 384;  // fitted ticks outside Pc >> 11
 
   // Init: the integer rate R (§1.3; clamped to 8,000-384,000, which Engine::Init enforces), Init's
   // stored performance state (500,000 µs, Free, TAP), then Restart's state; counters zeroed.
@@ -230,6 +233,7 @@ class TempoCore {
     int64_t  lastTickFrame = 0;
     uint32_t outlierRun = 0;
     int32_t  outlierSign = 0;
+    uint32_t bandRun = 0;
     uint32_t driftRun = 0;
     bool     earlyArmed = false;
   };
@@ -352,7 +356,8 @@ class TempoCore {
   int64_t     lastTickFrame_ = 0;
   uint32_t    outlierRun_ = 0;
   int32_t     outlierSign_ = 0;
-  uint32_t    driftRun_ = 0;
+  uint32_t    bandRun_ = 0;   // rule 3.1's run
+  uint32_t    driftRun_ = 0;  // rule 3.2's run
   bool        earlyArmed_ = false;
 
   TempoStats stats_;

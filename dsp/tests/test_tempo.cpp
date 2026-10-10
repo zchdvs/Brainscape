@@ -163,8 +163,8 @@ std::string ExplainState(const RunConfig& cfg0, const std::vector<StreamEvent>& 
   BS_FIELD(lastTap) BS_FIELD(tapN) BS_FIELD(winN) BS_FIELD(sx) BS_FIELD(sy) BS_FIELD(sxx)
   BS_FIELD(sxy) BS_FIELD(fitValid) BS_FIELD(d) BS_FIELD(a) BS_FIELD(b) BS_FIELD(pFit)
   BS_FIELD(ringN) BS_FIELD(haveLabel) BS_FIELD(lastLabel) BS_FIELD(haveTickRef)
-  BS_FIELD(lastTickFrame) BS_FIELD(outlierRun) BS_FIELD(outlierSign) BS_FIELD(driftRun)
-  BS_FIELD(earlyArmed) BS_FIELD(storedUs)
+  BS_FIELD(lastTickFrame) BS_FIELD(outlierRun) BS_FIELD(outlierSign) BS_FIELD(bandRun)
+  BS_FIELD(driftRun) BS_FIELD(earlyArmed) BS_FIELD(storedUs)
 #undef BS_FIELD
   for (uint32_t i = 0; i < TempoCore::kWindowLabels; ++i)
     if (a.winLabel[i] != b.winLabel[i] || a.winFrame[i] != b.winFrame[i]) {
@@ -656,6 +656,9 @@ TEST_CASE("Tempo streams: the perturbed references are caught", "[tempo][referen
       {Perturb::NoHold, Family::Clock, false, "the grid fires while a transport is armed"},
       {Perturb::LocateArmedOnly, Family::Clock, false,
        "Locate under ClockRunning keeps the continue position"},
+      {Perturb::BandAtOnce, Family::Clock, false, "rule 3.1 commits at once (before 2026-10-10)"},
+      {Perturb::DriftBandOld, Family::Clock, false, "rule 3.2 at Pc >> 12 over 192 ticks"},
+      {Perturb::OutlierResetsBand, Family::Clock, false, "an outlier resets rule 3.1's run"},
   };
   for (const Ctl& c : ctls) {
     bool      caught  = false;

@@ -3965,10 +3965,10 @@
             "transportEvents": 0,
             "subdivEvents": 1,
             "clockBirths": 142,
-            "commits": 26,
+            "commits": 4,
             "earlyCommits": 0,
             "jumps": 2,
-            "slews": 23,
+            "slews": 1,
             "crossfades": 0,
             "folds": 0,
             "invalidEvents": 0

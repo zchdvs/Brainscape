@@ -596,6 +596,9 @@ PresetCase ClockMidiHw() {
 
 // A computer's clock at 137.5 BPM (§3.3, §3.5): jitter, held ticks bunching behind them, a
 // 200 ms dropout, a tempo step to 150 BPM re-acquired, then a loss and a tap accepted after it.
+// §7.4's budget with §7.1's constants as the owner adopted them (2026-10-10): three acquisitions
+// and one deadband commit, a Drift, as rule 3.1 settles the re-acquired 24-tick fit; jitter
+// alone commits nothing (26 commits, 23 of them drifts, under the constants before).
 PresetCase ClockMidiComputer() {
   PresetCase p = PackagePreset("clock_midi_computer", "clock_hits");
   Script&    s = p.script;
@@ -606,7 +609,7 @@ PresetCase ClockMidiComputer() {
   ClockTicks(s, S(25), kNs137_5, 220, TickModel::Computer, 23);          // to 29 s
   p.require   = {{C::ClockTicks, 1200}, {C::DropoutTicks, 5}, {C::Reacquires, 1},
                  {C::ClockGaps, 1},     {C::ClockLosses, 1},  {C::Taps, 3, 3},
-                 {C::TickOutliers, 6},  {C::Commits, 10}, {C::Slews, 10}};
+                 {C::TickOutliers, 6},  {C::Commits, 4},  {C::Slews, 1, 1}};
   p.ablate    = {Feature::TempoEvents, Feature::Clock};
   p.invariant = {Invariance::HostileFpEnv};
   return p;

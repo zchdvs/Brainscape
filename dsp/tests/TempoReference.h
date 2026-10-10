@@ -44,6 +44,10 @@ enum class Perturb : uint8_t {
   NoHold,             // the build before note 26: the old grid fires while a transport is armed
   LocateArmedOnly,    // the build before note 27: Locate under ClockRunning keeps the continue
                       // position
+  BandAtOnce,         // §7.1 rule 3.1 before the owner's constants (2026-10-10): a commit at
+                      // once on any tick outside Pc >> 9
+  DriftBandOld,       // §7.1 rule 3.2 before them: 192 fitted ticks outside Pc >> 12
+  OutlierResetsBand,  // an outlier resets rule 3.1's run as it does rule 3.2's
 };
 
 // One event of a stream: an engine event of types 6-10 or above (an unknown), a non-tempo event
@@ -104,6 +108,7 @@ class TempoRef {
     lastLabel_ = lastTickFrame_ = 0;
     outlierRun_ = 0;
     outlierSign_ = 0;
+    bandRun_ = 0;
     driftRun_ = 0;
     earlyArmed_ = false;
   }
@@ -218,6 +223,7 @@ class TempoRef {
     lastTickFrame_ = 0;
     outlierRun_ = 0;
     outlierSign_ = 0;
+    bandRun_ = 0;
     driftRun_ = 0;
     earlyArmed_ = false;
     ++stats_.gaps;
@@ -577,6 +583,7 @@ class TempoRef {
           outlierRun_ = 1;
           outlierSign_ = sign;
         }
+        if (perturb_ == Perturb::OutlierResetsBand) bandRun_ = 0;
         driftRun_ = 0;
       }
     }
@@ -652,6 +659,7 @@ class TempoRef {
     if ((entered && N >= 24) || (prevN < 24 && N >= 24)) {
       ++stats_.commits;
       SetPcRef(pf, false);
+      bandRun_ = 0;
       driftRun_ = 0;
       return;
     }
@@ -660,25 +668,34 @@ class TempoRef {
       if (WU(diff) > I128::FloorDiv(WU(Pc_), W(16))) {  // Pc >> 4
         ++stats_.earlyCommits;
         SetPcRef(pf, false);
+        bandRun_ = 0;
         driftRun_ = 0;
       }
       return;
     }
     if (N < 24) return;
-    if (WU(diff) > I128::FloorDiv(WU(Pc_), W(512))) {
+    // Rule 3 (the owner's constants, 2026-10-10): 48 consecutive fitted ticks outside Pc >> 9
+    // (3.1) or 384 outside Pc >> 11 (3.2). Each run counts fitted ticks only; a fitted tick
+    // inside a band resets that band's run, an outlier rule 3.2's only, and every commit both.
+    if (perturb_ == Perturb::BandAtOnce && WU(diff) > I128::FloorDiv(WU(Pc_), W(512))) {
       ++stats_.commits;
       SetPcRef(pf, true);
+      bandRun_ = 0;
       driftRun_ = 0;
       return;
     }
     if (!fitted) return;
-    if (WU(diff) > I128::FloorDiv(WU(Pc_), W(4096))) {
-      if (++driftRun_ >= 192) {
-        ++stats_.commits;
-        SetPcRef(pf, true);
-        driftRun_ = 0;
-      }
-    } else {
+    const bool     old32     = perturb_ == Perturb::DriftBandOld;
+    const int64_t  band32    = old32 ? 4096 : 2048;  // Pc >> 12 or Pc >> 11
+    const uint32_t run32     = old32 ? 192 : 384;
+    const bool     outside31 = WU(diff) > I128::FloorDiv(WU(Pc_), W(512));
+    const bool     outside32 = WU(diff) > I128::FloorDiv(WU(Pc_), W(band32));
+    if (perturb_ != Perturb::BandAtOnce) bandRun_ = outside31 ? bandRun_ + 1 : 0;
+    driftRun_ = outside32 ? driftRun_ + 1 : 0;
+    if (bandRun_ >= 48 || driftRun_ >= run32) {
+      ++stats_.commits;
+      SetPcRef(pf, true);
+      bandRun_ = 0;
       driftRun_ = 0;
     }
   }
@@ -763,6 +780,7 @@ class TempoRef {
     s.lastTickFrame = haveTickRef_ ? lastTickFrame_ : 0;
     s.outlierRun = outlierRun_;
     s.outlierSign = outlierSign_;
+    s.bandRun = bandRun_;
     s.driftRun = driftRun_;
     s.earlyArmed = earlyArmed_;
     return s;
@@ -802,6 +820,7 @@ class TempoRef {
   int64_t  lastLabel_ = 0, lastTickFrame_ = 0;
   uint32_t outlierRun_ = 0;
   int32_t  outlierSign_ = 0;
+  uint32_t bandRun_ = 0;
   uint32_t driftRun_ = 0;
   bool     earlyArmed_ = false;
   TempoStats stats_;
