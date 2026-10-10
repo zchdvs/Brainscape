@@ -2228,7 +2228,7 @@ display, corpus version 14. Continuing the numbering:
     crossfaded), `sync_base` (`base_sync` 1/8 with grain feedback at 137.5 BPM, taps to 90 BPM, a
     Subdiv jump), `sync_fold` (2/1 at 125 BPM, 3.84 s, between `time_ms`'s 2 s and the line's 4 s,
     a 48-step `TempoSweep` to 52 BPM folding it below 120, the code to 1/1, folding below 60, a
-    host Jump to 58 BPM that keeps the fold; 4 crossfades, 41 folds) and `sync_glide`
+    host Jump to 58 BPM that keeps the fold; 4 crossfades, 42 folds) and `sync_glide`
     (`tempo_glide` On: a tapped and a host Jump glide, a Subdiv change crossfades; Off again, a
     Jump crossfades). The verb is the `TempoSweep` generator (integer steps), the counters
     `crossfades` and `folds`, the ablations `sync` (row 63 at 0 wherever the preset, a load or a
