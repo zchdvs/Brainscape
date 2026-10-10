@@ -347,7 +347,8 @@ void BrainscapeProcessor::ScheduleReasserts(bool presetChange, uint32_t ns) noex
 //    it after them, then anchors a playing transport, §4.4) or a preset change under recall
 //    Preset with the Internal source, which plays its stored tempo; 2. a MIDI master's position,
 //    as the pedal re-asserts it (§2.5 item 2), when the Standalone's translator knows it: Locate
-//    with AtNextTick to the next tick's position, then Continue while the master runs; 3. after a
+//    with AtNextTick to the next tick's position, then Continue while the master runs and the
+//    engine followed it in the last block; 3. after a
 //    restart of the same preset, rows 83 and 84, the live Subdiv and time mode.
 void BrainscapeProcessor::EmitReasserts(uint32_t offset) noexcept {
   if (!reassert_.pending) return;
@@ -357,7 +358,13 @@ void BrainscapeProcessor::EmitReasserts(uint32_t offset) noexcept {
   if (!follower_.Following() && !storedPlays) Emit(TempoEventOf(reassert_.ns), offset);
   if (receiveMidiClock_.load(std::memory_order_relaxed) && midiClock_.PositionKnown()) {
     Emit(TransportEventOf(tempo::TransportKind::Locate, true, midiClock_.NextTickPosition()), offset);
-    if (midiClock_.Running()) Emit(TransportEventOf(tempo::TransportKind::Continue, true), offset);
+    // Continue only while the engine still followed a running master in the last block: a master
+    // gone without its Stop (a cable pulled, the app quit) left the translator running, and an
+    // armed Continue would hold the grid for a tick that never comes (§3.4). The engine's gap rule
+    // (§3.5) has reverted its source to Internal a second after the last tick.
+    if (midiClock_.Running() && lastSource_ == static_cast<uint8_t>(tempo::ClockSource::ClockRunning)) {
+      Emit(TransportEventOf(tempo::TransportKind::Continue, true), offset);
+    }
   }
   if (!reassert_.presetChange) EmitRows(offset);
 }
@@ -461,6 +468,8 @@ BrainscapeProcessor::TempoDisplay BrainscapeProcessor::GetTempoDisplay() const n
   d.nsPerQuarter  = liveNs_.load(std::memory_order_relaxed);
   d.source        = dispSource_.load(std::memory_order_relaxed);
   d.followingHost = dispFollowing_.load(std::memory_order_relaxed);
+  d.hostOctaves   = dispHostOctaves_.load(std::memory_order_relaxed);
+  d.hostClamped   = dispHostClamped_.load(std::memory_order_relaxed);
   const uint8_t flags = dispFlags_.load(std::memory_order_relaxed);
   d.running  = (flags & kTempoFlagRunning) != 0u;
   d.locked   = (flags & kTempoFlagLocked) != 0u;
@@ -1296,8 +1305,12 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
   if (loadPending_) follower_.ResendTempo();
   hostTempoCount_ = follower_.Block(
       transport, tempoSource_.load(std::memory_order_relaxed) == static_cast<uint32_t>(TempoSource::Host),
-      startEdge, numSamples, engineRateInt_, hostRate_.load(std::memory_order_relaxed), hostTempo_.data());
-  midiClockOn_ = receiveMidiClock_.load(std::memory_order_relaxed);
+      startEdge, numSamples, engineRateInt_, hostTempo_.data());
+  // Receive MIDI clock gates the translator: turned off, it forgets the master, whose Stop it will
+  // not see (clock.md §11.16), so a later Exact load re-asserts no stale position or Continue.
+  const bool midiClockOn = receiveMidiClock_.load(std::memory_order_relaxed);
+  if (!midiClockOn && midiClockOn_) midiClock_.Reset();
+  midiClockOn_ = midiClockOn;
 
   // The host buffer is in place (input channel c is output channel c). The input is
   // copied to scratch before Process writes, so no layout can alias (§4.4). A missing or
@@ -1376,6 +1389,8 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
   dispFlags_.store(info.flags, std::memory_order_relaxed);
   dispPosition_.store(info.position, std::memory_order_relaxed);
   dispFollowing_.store(follower_.Following(), std::memory_order_relaxed);
+  dispHostOctaves_.store(static_cast<int8_t>(follower_.Octaves()), std::memory_order_relaxed);
+  dispHostClamped_.store(follower_.Clamped(), std::memory_order_relaxed);
 
   for (int c = 2; c < numOut; ++c) buffer.clear(c, 0, numSamples);
   onsets_.fetch_add(live_->engine.ConsumeOnsetCount(), std::memory_order_relaxed);

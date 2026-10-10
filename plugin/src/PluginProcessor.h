@@ -166,6 +166,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     uint32_t nsPerQuarter  = 500000000;  // the committed tempo
     uint8_t  source        = 0;          // tempo::ClockSource
     bool     followingHost = false;      // the wrapper sends the host's tempo and transport
+    int8_t   hostOctaves   = 0;          // the host's tempo folded into range: 2^octaves beats a quarter
+    bool     hostClamped   = false;      // the host's tempo is out of reach: the grid is off its beats
     bool     running       = false;      // the transport runs
     bool     locked        = false;      // the MIDI clock follower holds 24 ticks or more
     int64_t  position      = -1;         // the phasor's tick: the beat LED
@@ -410,6 +412,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<uint32_t> liveNs_{500000000};
   std::atomic<uint8_t>  dispSource_{0}, dispFlags_{0};
   std::atomic<bool>     dispFollowing_{false};
+  std::atomic<int8_t>   dispHostOctaves_{0};
+  std::atomic<bool>     dispHostClamped_{false};
   std::atomic<int64_t>  dispPosition_{-1};
 
   // The spare's worker. spareState_ says who may touch spare_: the worker while Empty,

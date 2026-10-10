@@ -142,6 +142,23 @@ uint32_t NsPerQuarterFromBpm(double bpm) noexcept;
 // more either way, an ns outside the tempo range or a rate outside 8,000-384,000.
 bool HostAnchor(double ppq, uint32_t ns, uint32_t rate, uint32_t* position, uint32_t* offset) noexcept;
 
+// HostTempoFromBpm: what the plugin follows of a host's tempo (§4.4, clock.md §11.16): q =
+// 6·10^10 / bpm ns per quarter, doubled while below kMinNsPerQuarter and halved while above
+// kMaxNsPerQuarter, at most kMaxHostOctaves times, then rounded and clamped as NsPerQuarterFromBpm
+// rounds and clamps it. octaves > 0 doubled it (a host faster than 300 BPM: one engine quarter is
+// 2^octaves host beats), < 0 halved it (slower than 20 BPM: 2^-octaves engine quarters a beat), so
+// every engine quarter lands on a host beat, or every host beat on one; the follower anchors at
+// ppq·2^-octaves, exactly. `clamped` when the folds did not reach the range (a host below 1.25 or
+// above 4,800 BPM): the grid then runs off the host's beats. nsPerQuarter 0, no event, for a
+// non-finite or non-positive bpm.
+inline constexpr int32_t kMaxHostOctaves = 4;
+struct HostTempo {
+  uint32_t nsPerQuarter = 0;
+  int32_t  octaves      = 0;
+  bool     clamped      = false;
+};
+HostTempo HostTempoFromBpm(double bpm) noexcept;
+
 // The sources (§3.1). The plugin host is not one: its events play as Internal.
 enum class ClockSource : uint8_t { Internal = 0, ClockFree = 1, ClockRunning = 2 };
 

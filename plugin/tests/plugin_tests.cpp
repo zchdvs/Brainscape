@@ -3425,6 +3425,112 @@ TEST_CASE("host tempo: a preset recalled while following plays the host's tempo 
 
 namespace {
 
+// A host tempo ramp from b0 to b1 BPM over d seconds from ppq 0, then b1: the host's tempo and
+// position at time t (seconds), exactly.
+struct Ramp {
+  double b0, b1, d;
+  double Bpm(double t) const { return t <= d ? b0 + (b1 - b0) * t / d : b1; }
+  double Ppq(double t) const {
+    if (t <= d) return (b0 * t + 0.5 * (b1 - b0) * t * t / d) / 60.0;
+    return (b0 * d + 0.5 * (b1 - b0) * d) / 60.0 + b1 * (t - d) / 60.0;
+  }
+};
+
+// A host playing `ramp` from ppq 0 over `seconds` in blocks of `block`, followed with the restart
+// option off: the last CLOCK hit's distance from the host's nearest quarter, in ms (its quarters
+// divided by 2^octaves when the host's tempo is folded), and the transports the engine got.
+struct RampResult {
+  double   offMs      = 0.0;
+  uint64_t transports = 0;
+};
+RampResult RunRamp(const PresetState& clock, const Ramp& ramp, int block, double seconds, double beatsPerQuarter = 1.0) {
+  TestPlayHead head;
+  head.hasBpm = head.hasPpq = true;
+  head.bpm                  = ramp.b0;
+  auto proc    = MakeTempoProcessor(clock, head, TempoSource::Host, false, 4096);
+  head.playing = true;
+  HostRender r;
+  r.pattern     = {block};
+  r.beforeBlock = [&head, &ramp](int pos) {
+    const double t = static_cast<double>(pos) / kRate;
+    head.bpm       = ramp.Bpm(t);
+    head.ppq       = ramp.Ppq(t);
+  };
+  RenderProcessor(*proc, MakeInput(static_cast<int>(seconds * kRate)), {}, r);
+  const TempoInfo info = proc->EngineTempo();
+  REQUIRE(info.lastGridFrame > 0);
+  const double t = static_cast<double>(info.lastGridFrame) / kRate;
+  const double q = ramp.Ppq(t) / beatsPerQuarter;  // in the engine's quarters
+  RampResult   out;
+  out.offMs      = (q - std::round(q)) * beatsPerQuarter * 60.0 / ramp.Bpm(t) * 1000.0;
+  out.transports = proc->EngineTempoCounts().transports;
+  proc->setPlayHead(nullptr);
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("host tempo: a ramp keeps the CLOCK grid on the host's beats (§4.4 step 3, §11.16)") {
+  // The engine plays each host block at the tempo of its first frame, so over a ramp its grid
+  // falls behind or ahead of the host's beats; the follower measures the engine's grid against
+  // the host's position and re-anchors it past half a tick. T3's prediction from the host's own
+  // last position missed it: 60 to 180 BPM at 4,096-frame blocks ended 28.5 ms late, 180 to 60
+  // 85 ms early, with no Locate.
+  const auto clock = GoldenPackage("clock_hits.bsp");
+  struct Case {
+    Ramp ramp;
+    int  block;
+  };
+  for (const Case c : {Case{{60.0, 180.0, 16.0}, 4096}, Case{{180.0, 60.0, 16.0}, 4096},
+                       Case{{90.0, 150.0, 8.0}, 2048}, Case{{60.0, 180.0, 16.0}, 512}}) {
+    INFO(c.ramp.b0 << " to " << c.ramp.b1 << " BPM at blocks of " << c.block);
+    const RampResult r       = RunRamp(*clock, c.ramp, c.block, c.ramp.d + 4.0);
+    const double     halfTick = 0.5 * 60.0 / (24.0 * c.ramp.b1) * 1000.0;
+    CHECK(std::fabs(r.offMs) < halfTick);
+    // At 4,096-frame blocks it drifts past half a tick: the Start, and the Locates that kept it.
+    if (c.block == 4096) CHECK(r.transports >= 2u);
+  }
+  // At a constant tempo the grid never leaves the host's beats: the Start alone.
+  const RampResult still = RunRamp(*clock, {120.0, 120.0, 1.0}, 4096, 20.0);
+  CHECK(std::fabs(still.offMs) < 0.03);
+  CHECK(still.transports == 1u);
+}
+
+TEST_CASE("host tempo: a host tempo outside 20-300 BPM folds by octaves, the grid on its beats "
+          "(§4.4, §11.16)") {
+  // Clamped, the engine ran at 300 BPM under a 400 BPM host, the grid drifting off its beats at
+  // once with the lock dot lit. Folded, the engine runs at 200 BPM with a quarter on every second
+  // host beat, and at 30 BPM under a 15 BPM host with a quarter on every half beat.
+  const auto clock = GoldenPackage("clock_hits.bsp");
+  struct Case {
+    double   bpm;
+    uint32_t ns;
+    int8_t   octaves;
+    double   beatsPerQuarter;
+  };
+  for (const Case c : {Case{400.0, 300000000u, 1, 2.0}, Case{15.0, 2000000000u, -1, 0.5},
+                       Case{1000.0, 240000000u, 2, 4.0}}) {
+    INFO(c.bpm << " BPM");
+    const RampResult r = RunRamp(*clock, {c.bpm, c.bpm, 1.0}, 512, 12.0, c.beatsPerQuarter);
+    CHECK(std::fabs(r.offMs) < 0.05);
+    CHECK(r.transports == 1u);
+    TestPlayHead head;
+    head.hasBpm = head.hasPpq = true;
+    head.bpm                  = c.bpm;
+    head.playing              = true;
+    auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, false);
+    RenderProcessor(*proc, MakeInput(4800), {}, Transport(head, 1.0, c.bpm, {480}));
+    CHECK(proc->EngineTempo().nsPerQuarter == c.ns);
+    const BrainscapeProcessor::TempoDisplay d = proc->GetTempoDisplay();
+    CHECK(d.followingHost);
+    CHECK(d.hostOctaves == c.octaves);
+    CHECK_FALSE(d.hostClamped);
+    proc->setPlayHead(nullptr);
+  }
+}
+
+namespace {
+
 // MIDI messages at absolute frames, handed to processBlock in host blocks of `pattern`.
 using TimedMidi = std::vector<std::pair<int, juce::MidiMessage>>;
 
@@ -3558,6 +3664,54 @@ TEST_CASE("MIDI clock in the Standalone: the device's bytes become §4.3's event
     REQUIRE(counts.transports == 2u);
     REQUIRE(proc->EngineTempo().nsPerQuarter == proc->GetTempoDisplay().nsPerQuarter);
     REQUIRE(proc->EngineTempo().source == static_cast<uint8_t>(tempo::ClockSource::Internal));
+  }
+}
+
+TEST_CASE("MIDI clock in the Standalone: a master gone without its Stop does not hold the grid "
+          "after an Exact load (§3.4, §11.16)") {
+  // The translator kept Running() after the master vanished (a cable pulled, the app quit) or
+  // after its Stop arrived while Receive MIDI clock was off; every Exact load then re-asserted an
+  // armed Continue, which held the CLOCK grid for a tick that never came.
+  const auto clock = GoldenPackage("clock_hits.bsp");
+  const auto standalone = [] {
+    juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Standalone);
+    auto p = MakeProcessor({}, {}, 4096);
+    juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+    return p;
+  };
+  TimedMidi master;
+  master.push_back({100, juce::MidiMessage::midiStart()});
+  for (int f = 1000; f < 3 * 48000; f += 1000) master.push_back({f, juce::MidiMessage::midiClock()});
+
+  SECTION("the master vanishes: no Stop") {
+    auto proc = standalone();
+    REQUIRE(proc->LoadPresetState(*clock));
+    RenderMidi(*proc, MakeInput(3 * 48000), {441}, master);
+    REQUIRE(proc->GetTempoDisplay().source == static_cast<uint8_t>(tempo::ClockSource::ClockRunning));
+    RenderMidi(*proc, MakeInput(2 * 48000), {441}, {});  // past §3.5's second: Internal again
+    REQUIRE(proc->GetTempoDisplay().source == static_cast<uint8_t>(tempo::ClockSource::Internal));
+    proc->prepareToPlay(44100.0, 4096);
+    proc->prepareToPlay(48000.0, 4096);
+    RenderMidi(*proc, MakeInput(5 * 48000), {441}, {});
+    CHECK(proc->EngineTempoCounts().clockBirths >= 8u);
+    CHECK(proc->EngineTempo().lastGridFrame > 0);
+  }
+  SECTION("its Stop arrives while Receive MIDI clock is off") {
+    auto proc = standalone();
+    REQUIRE(proc->LoadPresetState(*clock));
+    RenderMidi(*proc, MakeInput(3 * 48000), {441}, master);
+    WrapperSettings s  = proc->GetSettings();
+    s.receiveMidiClock = false;
+    proc->SetSettings(s);
+    RenderMidi(*proc, MakeInput(2 * 48000), {441}, {{500, juce::MidiMessage::midiStop()}});
+    s.receiveMidiClock = true;
+    proc->SetSettings(s);
+    RenderMidi(*proc, MakeInput(48000), {441}, {});
+    proc->prepareToPlay(44100.0, 4096);
+    proc->prepareToPlay(48000.0, 4096);
+    RenderMidi(*proc, MakeInput(5 * 48000), {441}, {});
+    CHECK(proc->EngineTempoCounts().clockBirths >= 8u);
+    CHECK(proc->EngineTempo().lastGridFrame > 0);
   }
 }
 

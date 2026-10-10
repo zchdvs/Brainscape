@@ -13,7 +13,8 @@ namespace brainscape::plugin {
 
 namespace {
 
-const juce::String kTimes = juce::String::fromUTF8("\xc3\x97");  // ×
+const juce::String kTimes   = juce::String::fromUTF8("\xc3\x97");  // ×
+const juce::String kDivides = juce::String::fromUTF8("\xc3\xb7");  // ÷
 const juce::Colour kAccent = palette::GroupAccent(ParamGroup::Performance);
 
 juce::String BpmText(uint32_t nsPerQuarter) {
@@ -183,7 +184,8 @@ void TempoPanel::Refresh() {
   }
   bool repaintAll = d.nsPerQuarter != shown_.nsPerQuarter || d.source != shown_.source ||
                     d.followingHost != shown_.followingHost || d.locked != shown_.locked ||
-                    d.running != shown_.running || stored != storedUs_ || uses != usesTempo_;
+                    d.running != shown_.running || d.hostOctaves != shown_.hostOctaves ||
+                    d.hostClamped != shown_.hostClamped || stored != storedUs_ || uses != usesTempo_;
   storedUs_  = stored;
   usesTempo_ = uses;
   shown_ = d;
@@ -283,10 +285,16 @@ void TempoPanel::paint(juce::Graphics& g) {
   g.drawText("BPM", bpmArea_.withLeft(bpm_.getRight() + Scaled(3, scale_)), juce::Justification::centredLeft, false);
 
   // The source badge and the lock dot: HOST (the wrapper follows the host), MIDI (the follower
-  // is fitting a clock), INT. The dot: a MIDI clock locked (24 ticks), or the host's transport
-  // running.
+  // is fitting a clock), INT. A host tempo outside 20-300 BPM plays folded by octaves, the badge
+  // saying how ("HOST ÷2": a quarter every two host beats; "HOST ×2": two a beat). The dot: a MIDI
+  // clock locked (24 ticks), or the host's transport running on its beats (not when its tempo is
+  // out of reach).
   const bool   midi   = shown_.source != static_cast<uint8_t>(tempo::ClockSource::Internal);
-  const juce::String source = shown_.followingHost ? "HOST" : midi ? "MIDI" : "INT";
+  juce::String source = shown_.followingHost ? "HOST" : midi ? "MIDI" : "INT";
+  if (shown_.followingHost && shown_.hostOctaves != 0) {
+    const int k = shown_.hostOctaves > 0 ? shown_.hostOctaves : -shown_.hostOctaves;
+    source << " " << (shown_.hostOctaves > 0 ? kDivides : kTimes) << juce::String(1 << k);
+  }
   const juce::Colour ink    = shown_.followingHost ? palette::kIce : midi ? palette::kGood : palette::kTextDim;
   auto               badge  = badgeArea_.withSizeKeepingCentre(badgeArea_.getWidth(), Scaled(20, scale_)).toFloat();
   const float        lockD  = 7.0f * scale_;
@@ -296,9 +304,9 @@ void TempoPanel::paint(juce::Graphics& g) {
   g.setColour(ink.withAlpha(0.7f));
   g.drawRoundedRectangle(pill.reduced(0.5f), 4.0f * scale_, 1.0f);
   g.setColour(ink);
-  g.setFont(UiFont(11.5f * scale_, true).withExtraKerningFactor(0.08f));
+  g.setFont(UiFont((source.length() > 4 ? 10.0f : 11.5f) * scale_, true).withExtraKerningFactor(0.08f));
   g.drawText(source, pill, juce::Justification::centred, false);
-  const bool lockOn = (midi && shown_.locked) || (shown_.followingHost && shown_.running);
+  const bool lockOn = (midi && shown_.locked) || (shown_.followingHost && shown_.running && !shown_.hostClamped);
   const auto lock   = juce::Rectangle<float>(lockD, lockD).withCentre({badge.getRight() - lockD * 0.5f, badge.getCentreY()});
   g.setColour(lockOn ? ink : palette::kControlHover);
   g.fillEllipse(lock);

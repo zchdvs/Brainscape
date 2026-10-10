@@ -84,6 +84,76 @@ TEST_CASE("Host tempo: ns per quarter from the host's BPM, rounded and clamped (
   }
 }
 
+TEST_CASE("Host tempo: a host tempo outside the range folds by octaves into it (§4.4, §11.16)",
+          "[tempo][host]") {
+  using tempo::HostTempoFromBpm;
+  // In range: NsPerQuarterFromBpm's ns, no fold.
+  for (const double bpm : {20.0, 93.75, 120.0, 137.5, 140.0, 300.0}) {
+    const tempo::HostTempo h = HostTempoFromBpm(bpm);
+    REQUIRE(h.nsPerQuarter == NsPerQuarterFromBpm(bpm));
+    REQUIRE(h.octaves == 0);
+    REQUIRE_FALSE(h.clamped);
+  }
+  // Faster than 300 BPM: halved until it fits, one engine quarter every 2^octaves host beats.
+  REQUIRE(HostTempoFromBpm(400.0).nsPerQuarter == 300000000u);  // 200 BPM
+  REQUIRE(HostTempoFromBpm(400.0).octaves == 1);
+  REQUIRE(HostTempoFromBpm(600.0).nsPerQuarter == 200000000u);  // 300 BPM, the range's end
+  REQUIRE(HostTempoFromBpm(600.0).octaves == 1);
+  REQUIRE(HostTempoFromBpm(999.0).nsPerQuarter == 240240240u);  // 249.75 BPM
+  REQUIRE(HostTempoFromBpm(999.0).octaves == 2);
+  REQUIRE(HostTempoFromBpm(4800.0).octaves == 4);
+  REQUIRE_FALSE(HostTempoFromBpm(4800.0).clamped);
+  // Slower than 20 BPM: doubled, 2^-octaves engine quarters a host beat.
+  REQUIRE(HostTempoFromBpm(15.0).nsPerQuarter == 2000000000u);  // 30 BPM
+  REQUIRE(HostTempoFromBpm(15.0).octaves == -1);
+  REQUIRE(HostTempoFromBpm(19.999).octaves == -1);
+  REQUIRE(HostTempoFromBpm(1.25).octaves == -4);
+  REQUIRE(HostTempoFromBpm(1.25).nsPerQuarter == 3000000000u);
+  REQUIRE_FALSE(HostTempoFromBpm(1.25).clamped);
+  // Out of four octaves' reach: clamped as NsPerQuarterFromBpm clamps.
+  REQUIRE(HostTempoFromBpm(1.0).clamped);
+  REQUIRE(HostTempoFromBpm(1.0).nsPerQuarter == 3000000000u);
+  REQUIRE(HostTempoFromBpm(5000.0).clamped);
+  REQUIRE(HostTempoFromBpm(5000.0).nsPerQuarter == 200000000u);
+  REQUIRE(HostTempoFromBpm(std::numeric_limits<double>::denorm_min()).clamped);
+  // No tempo, no event.
+  REQUIRE(HostTempoFromBpm(0.0).nsPerQuarter == 0u);
+  REQUIRE(HostTempoFromBpm(-400.0).nsPerQuarter == 0u);
+  REQUIRE(HostTempoFromBpm(std::numeric_limits<double>::quiet_NaN()).nsPerQuarter == 0u);
+  // The fold is exact: a host at 2^j times an in-range tempo plays the tempo the fewest halvings
+  // (or doublings) bring into the range, NsPerQuarterFromBpm's ns for it.
+  uint32_t seed = 0xf01dU;
+  for (int i = 0; i < 20000; ++i) {
+    const uint32_t m   = 20u * (1u << 20) + Xorshift(seed) % (280u * (1u << 20));
+    const double   bpm = static_cast<double>(m) / static_cast<double>(1u << 20);
+    for (int j = 1; j <= 4; ++j) {
+      INFO("bpm " << bpm << " j " << j);
+      const double           up = bpm * static_cast<double>(1 << j);
+      const tempo::HostTempo hu = HostTempoFromBpm(up);
+      double                 f  = up;
+      int32_t                k  = 0;
+      while (f > 300.0) {
+        f *= 0.5;
+        ++k;
+      }
+      REQUIRE(hu.octaves == k);
+      REQUIRE(hu.nsPerQuarter == NsPerQuarterFromBpm(f));
+      REQUIRE_FALSE(hu.clamped);
+      const double           down = bpm / static_cast<double>(1 << j);
+      const tempo::HostTempo hd   = HostTempoFromBpm(down);
+      f                           = down;
+      k                           = 0;
+      while (f < 20.0) {
+        f *= 2.0;
+        --k;
+      }
+      REQUIRE(hd.octaves == k);
+      REQUIRE(hd.nsPerQuarter == NsPerQuarterFromBpm(f));
+      REQUIRE_FALSE(hd.clamped);
+    }
+  }
+}
+
 TEST_CASE("Host tempo: the conversions own the FP control word", "[tempo][host][fpenv]") {
   // A host thread in round-toward-zero with FTZ and DAZ gets the same answers.
   const double bpms[] = {137.5, 140.0, 97.3, 123.456789};
@@ -96,6 +166,12 @@ TEST_CASE("Host tempo: the conversions own the FP control word", "[tempo][host][
       got = NsPerQuarterFromBpm(bpm);
     }
     REQUIRE(got == want);
+    tempo::HostTempo folded;
+    {
+      const HostileFpScope hostile;
+      folded = tempo::HostTempoFromBpm(bpm * 4.0);
+    }
+    REQUIRE(folded.nsPerQuarter == tempo::HostTempoFromBpm(bpm * 4.0).nsPerQuarter);
     for (double ppq : ppqs) {
       const Anchor a = AnchorOf(ppq, want);
       Anchor       h;

@@ -15,7 +15,7 @@
 // control loop, the plugin and the editor call, never Process. Out of the pedal's ITCM with the
 // rest of the tempo code (§9.6, firmware/CMakeLists.txt). TempoNsFromKnob and the host
 // conversions NsPerQuarterFromBpm and HostAnchor are engine entry points, so they own the FP
-// control word (detail/FpEnvGuard.h); UsesTempo is integer-only.
+// control word (detail/FpEnvGuard.h), as does HostTempoFromBpm; UsesTempo is integer-only.
 namespace brainscape {
 
 namespace {
@@ -47,6 +47,28 @@ BRAINSCAPE_FP_BODY uint32_t NsPerQuarterFromBpmBody(double bpm) noexcept {
   if (q >= static_cast<double>(tempo::kMaxNsPerQuarter)) return tempo::kMaxNsPerQuarter;
   if (q <= static_cast<double>(tempo::kMinNsPerQuarter)) return tempo::kMinNsPerQuarter;
   return static_cast<uint32_t>(detmath::RoundHalfAwayI64(q));
+}
+
+BRAINSCAPE_FP_BODY tempo::HostTempo HostTempoFromBpmBody(double bpm) noexcept {
+  tempo::HostTempo h;
+  if (!FiniteD(bpm) || !(bpm > 0.0)) return h;
+  const auto lo = static_cast<double>(tempo::kMinNsPerQuarter);
+  const auto hi = static_cast<double>(tempo::kMaxNsPerQuarter);
+  double     q  = 6.0e10 / bpm;  // +inf for a subnormal bpm: no fold reaches the range
+  // Doubling and halving are exact: q is §4.4's quotient at the folded tempo.
+  while (q < lo && h.octaves < tempo::kMaxHostOctaves) {
+    q *= 2.0;
+    ++h.octaves;
+  }
+  while (q > hi && h.octaves > -tempo::kMaxHostOctaves) {
+    q *= 0.5;
+    --h.octaves;
+  }
+  h.clamped      = q < lo || q > hi;
+  h.nsPerQuarter = q >= hi   ? tempo::kMaxNsPerQuarter
+                   : q <= lo ? tempo::kMinNsPerQuarter
+                             : static_cast<uint32_t>(detmath::RoundHalfAwayI64(q));
+  return h;
 }
 
 // |ppq| below 2^40 quarters keeps x = 24·ppq below 2^45, inside RoundHalfAwayI64's domain, and k
@@ -100,6 +122,11 @@ uint32_t tempo::TempoNsFromKnob(float m) noexcept {
 uint32_t tempo::NsPerQuarterFromBpm(double bpm) noexcept {
   const detail::FpEnvGuard guard;
   return NsPerQuarterFromBpmBody(bpm);
+}
+
+tempo::HostTempo tempo::HostTempoFromBpm(double bpm) noexcept {
+  const detail::FpEnvGuard guard;
+  return HostTempoFromBpmBody(bpm);
 }
 
 bool tempo::HostAnchor(double ppq, uint32_t ns, uint32_t rate, uint32_t* position,
