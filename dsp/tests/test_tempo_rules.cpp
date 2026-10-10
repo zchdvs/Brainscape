@@ -985,3 +985,28 @@ TEST_CASE("TempoCore fits §2.6's Warm-arena estimate", "[tempo][placement]") {
   INFO("sizeof(TempoCore) = " << sizeof(TempoCore));
   REQUIRE(sizeof(TempoCore) <= 1536);
 }
+
+TEST_CASE("The Tempo knob: 20 to 300 BPM, exponential, guarded (§6.4, D15)", "[tempo][knob]") {
+  using brainscape::tempo::TempoNsFromKnob;
+  REQUIRE(TempoNsFromKnob(0.0f) == 3000000000u);  // 20 BPM fully counter-clockwise
+  REQUIRE(TempoNsFromKnob(1.0f) == 200000000u);   // 300 BPM fully clockwise
+  // 3·10^9 / sqrt(15) = 774,596,669.24: equal turns, equal tempo ratios.
+  REQUIRE(TempoNsFromKnob(0.5f) == 774596669u);
+  // Canonicalized as a macro position: NaN, ±inf and negatives to 0, above 1 to 1.
+  REQUIRE(TempoNsFromKnob(std::nanf("")) == 3000000000u);
+  REQUIRE(TempoNsFromKnob(-0.25f) == 3000000000u);
+  REQUIRE(TempoNsFromKnob(1.5f) == 200000000u);
+  REQUIRE(TempoNsFromKnob(INFINITY) == 3000000000u);
+  // Monotone over every pot step of a 12-bit knob, always in range, and each step's ratio near
+  // 15^(1/4095).
+  uint32_t last = TempoNsFromKnob(0.0f);
+  for (int k = 1; k <= 4095; ++k) {
+    const uint32_t ns = TempoNsFromKnob(static_cast<float>(k) / 4095.0f);
+    REQUIRE(ns < last);
+    REQUIRE(ns >= brainscape::tempo::kMinNsPerQuarter);
+    REQUIRE(ns <= brainscape::tempo::kMaxNsPerQuarter);
+    const double ratio = static_cast<double>(last) / static_cast<double>(ns);
+    REQUIRE(std::fabs(ratio - std::pow(15.0, 1.0 / 4095.0)) < 1e-6);
+    last = ns;
+  }
+}

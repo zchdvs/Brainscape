@@ -123,7 +123,11 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
   CHECK(Format(ParamId::TriggerOffset, 0.0f) == "0%");
   CHECK(Format(ParamId::ReverbMode, 2.0f) == "Large hall");
   CHECK(Format(ParamId::DelaySync, 0.0f) == "Off");
-  CHECK(Format(ParamId::DelaySync, 3.0f) == "Div 3");
+  CHECK(Format(ParamId::DelaySync, 3.0f) == "1/16");  // docs/design/clock.md §5.2
+  CHECK(Format(ParamId::DelaySync, 2.5f) == "1/16");  // RoundHalfAwayI32
+  CHECK(Format(ParamId::DelaySync, 8.0f) == "1/8D");
+  CHECK(Format(ParamId::DelaySync, 13.0f) == "1/1T");
+  CHECK(Format(ParamId::DelaySync, 16.0f) == "2/1");
   CHECK(Format(ParamId::EffectVolumeDb, -3.0f) == "-3.0 dB");
   CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
   CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
@@ -252,8 +256,11 @@ std::string RefFormat(ParamId id, float plain) {
       return kModes[n < 0 ? 0 : (n > 3 ? 3 : n)];
     }
     case DisplayKind::Division: {
+      static const char* kNames[] = {"Off", "1/32", "1/16T", "1/16", "1/8T", "1/16D",
+                                     "1/8", "1/4T", "1/8D",  "1/4",  "1/2T", "1/4D",
+                                     "1/2", "1/1T", "1/2D",  "1/1",  "2/1"};
       const long n = std::lround(v);
-      return n <= 0 ? std::string("Off") : "Div " + std::to_string(n);
+      return kNames[n <= 0 ? 0 : (n > 16 ? 16 : n)];
     }
   }
   return "";

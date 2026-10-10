@@ -29,6 +29,9 @@ target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 # The frozen package fixtures (docs/design/mode-compiler.md §10.3), read by test_blob.cpp.
 target_compile_definitions(brainscape_tests PRIVATE
   BRAINSCAPE_FROZEN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets/frozen")
+# The factory packages and their manifest (UsesTempo on each, docs/design/clock.md §6.6, §8.2).
+target_compile_definitions(brainscape_tests PRIVATE
+  BRAINSCAPE_FACTORY_PACKAGES="${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/factory")
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()

@@ -48,7 +48,8 @@ enum class DisplayKind : uint8_t {
   MsOrOff,       // milliseconds, "Off" at 0 (decay_ms)
   Signed,        // -1..1 shown as -100..+100 %
   ReverbMode,    // 0..3: Bright room, Dark medium, Large hall, Ambient
-  Division,      // post.delay.sync: "Off" at 0, then "Div N" until W2 names the divisions
+  Division,      // post.delay.sync: "Off" at 0, then the note value (docs/design/clock.md §5.2,
+                 // §5.4: "1/8D", "1/16T")
 };
 
 // The post-chain groups follow its signal order (grain-engine.md §2): mod -> delay ->

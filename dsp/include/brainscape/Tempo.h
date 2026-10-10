@@ -102,6 +102,14 @@ constexpr bool DecodePositionBits(uint32_t bits, uint32_t* position) noexcept {
   return true;
 }
 
+// The Tempo knob in Tempo time mode (§6.4, D15): ns per quarter, exponential from 20 BPM at
+// m = 0 to 300 BPM at m = 1, round(3·10^9 · 2^(−m·log2 15)) through DetMath's Exp2D, so equal
+// turns make equal tempo ratios. m is canonicalized as a macro position is (NaN and ±inf to 0,
+// clamped to [0, 1]). A producer function (the pedal's Time knob, a plugin's tempo control), never
+// called by Process: an entry point that owns the FP control word, so every build turns a knob
+// position into the same Tempo event. Always within the tempo range.
+uint32_t TempoNsFromKnob(float m) noexcept;
+
 // The sources (§3.1). The plugin host is not one: its events play as Internal.
 enum class ClockSource : uint8_t { Internal = 0, ClockFree = 1, ClockRunning = 2 };
 

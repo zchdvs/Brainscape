@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "brainscape/Mode.h"
 #include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
@@ -453,13 +454,14 @@ BRAINSCAPE_FP_BODY size_t FormatPlainBody(ParamId id, float plain, char* out,
       break;
     }
     case DisplayKind::Division: {
+      // docs/design/clock.md §5.2, §5.4: the note value's name, its triplet or dotted suffix in
+      // upper case ("1/8D", "1/16T"); the host's text stays the code's name whatever the tempo.
+      static constexpr const char* kNames[] = {"Off",  "1/32", "1/16T", "1/16", "1/8T", "1/16D",
+                                               "1/8",  "1/4T", "1/8D",  "1/4",  "1/2T", "1/4D",
+                                               "1/2",  "1/1T", "1/2D",  "1/1",  "2/1"};
+      static_assert(sizeof kNames / sizeof kNames[0] == kMaxSyncDivision + 1u, "a name a code");
       const int32_t n = detmath::RoundHalfAwayI32(v);
-      if (n <= 0) {
-        t.Put("Off");
-      } else {
-        t.Put("Div ");
-        PutFixed(&t, n, 0, false);
-      }
+      t.Put(kNames[n < 0 ? 0 : (n > 16 ? 16 : n)]);
       break;
     }
   }

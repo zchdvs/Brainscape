@@ -26,6 +26,8 @@ add_library(brainscape_dsp STATIC
   src/SoundRevision.cpp
   # The tempo core (docs/design/clock.md §2-§3, §6.3): integer-only, out of ITCM (§9.6).
   src/Tempo.cpp
+  # The tempo core's producer functions (§6.4's Tempo knob, §6.6's UsesTempo): out of ITCM.
+  src/TempoProducer.cpp
   src/TestSignal.cpp
   # The preset package (docs/design/mode-compiler.md §5, §6): decoder, validator, encoder
   # and SHA-256, integer-only and FP-free, the part of the mode system the firmware links.
