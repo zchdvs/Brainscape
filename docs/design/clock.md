@@ -1829,6 +1829,16 @@ intent, as below:
     early acquisition at a fast tempo. Every such commit is a Drift, so the post delay slews and
     never jumps, but `clock_midi_computer`'s counters will exceed §7.4's budget. The constants are
     built as designed; tuning them (§11.7 risk 3, §11.8 item 1) is an owner decision.
+13. **A loss under ClockRunning clears the running bit.** §3.5 keeps P, Pc and the phase and sets
+    `resumeRunning`; it does not say whether `TempoInfo`'s "transport running" bit stays set. The
+    core clears it with the source, so a display shows a stopped transport while the clock is
+    gone (the snapshot reads the same through the gap predicate), and the resume's implicit
+    Continue sets it again.
+14. **An armed Locate applied on an empty window arms the early commit.** §3.4 applies a Locate
+    armed under ClockRunning "as Start", and a Start on an empty window arms §7.1's early commit,
+    which §7.1 names for Start and Continue only. The core follows §3.4. The case needs a window
+    emptied under ClockRunning, which only an outlier labelled 96 or more past every fitted tick
+    can do.
 
 ## 12. Evidence
 
