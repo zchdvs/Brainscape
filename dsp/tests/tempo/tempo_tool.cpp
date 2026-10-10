@@ -29,16 +29,23 @@ using namespace brainscape::testing;
 
 namespace {
 
-// The committed digest every leg must reproduce (MSVC x64 minted it; GCC, Clang and the M7 under
-// qemu reproduce it). A change to the tempo core's rules or to these streams changes it.
-constexpr const char* kTempoDigest = "8ce535b19275a5bb";
+// The committed digest every leg must reproduce (MSVC x64 Release, Debug and AVX2, GCC 11, Clang 14
+// and the M7 under qemu do). A change to the tempo core's rules or to these streams changes it.
+// The streams draw one random number per statement, since argument evaluation order differs
+// between compilers (it did: GCC and MSVC on x64 against Clang and arm-none-eabi).
+constexpr const char* kTempoDigest = "b5392cdd42931c59";
 
 bool IntMathDigest(Fnv* f) {
   Rng r(0xA5A5u);
   bool ok = true;
   for (int i = 0; i < 200000; ++i) {
-    const uint64_t a = r.Next() >> (r.Next() % 64), b = r.Next() >> (r.Next() % 64);
-    uint64_t c = r.Next() >> (r.Next() % 64);
+    // One draw per statement: the order of operands' evaluation must not depend on the compiler.
+    uint64_t a = r.Next();
+    a >>= r.Next() % 64;
+    uint64_t b = r.Next();
+    b >>= r.Next() % 64;
+    uint64_t c = r.Next();
+    c >>= r.Next() % 64;
     if (c == 0) c = 1;
     uint64_t want;
     if (RefMulDivRoundU64(a, b, c, &want)) {
@@ -77,7 +84,9 @@ void MidiDigest(Fnv* f) {
   const uint8_t common[] = {0xF8, 0xF8, 0xF8, 0xFA, 0xFB, 0xFC, 0xF2, 0x90, 0xB0, 0xC0,
                             0xD0, 0xF0, 0xF7, 0xFE, 0xF1, 0xF3};
   for (int i = 0; i < 100000; ++i) {
-    const uint8_t b = (r.Next() & 1) ? common[r.Next() % 16] : static_cast<uint8_t>(r.Next() & 0x7F);
+    const bool    pick = (r.Next() & 1) != 0;
+    const uint64_t v = r.Next();
+    const uint8_t b = pick ? common[v % 16] : static_cast<uint8_t>(v & 0x7F);
     MidiClockEvent e;
     const auto res = p.Feed(b, &e);
     f->U(static_cast<uint64_t>(res));

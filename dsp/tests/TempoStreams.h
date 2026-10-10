@@ -268,7 +268,11 @@ inline Stream MakeStream(Family fam, uint64_t seed, int seconds, uint32_t rate =
         case 3: ivs.push_back(iv * 7 / 4); ivs.push_back(iv * 7 / 4); break;  // the 1.75 edge
         default: ivs.push_back(iv * 7 / 5 + r.Range(-2, 2)); break;   // the 40 % edge
       }
-      f = s.TapSeries(f, ivs, r.Range(0, 3) * 48, r) + r.Range(rate / 10, 4 * rate);
+      // Every draw in its own statement: function arguments and `+` operands are evaluated in an
+      // unspecified order, and the streams must be the same on every compiler.
+      const int64_t spread = r.Range(0, 3) * 48;
+      f = s.TapSeries(f, ivs, spread, r);
+      f += r.Range(rate / 10, 4 * rate);
     }
     for (int i = 0; i < seconds; ++i) s.Probe(at(0, end - 1));
   }
@@ -291,8 +295,12 @@ inline Stream MakeStream(Family fam, uint64_t seed, int seconds, uint32_t rate =
         case 0: s.Transport(f, tempo::TransportKind::Start, true, 0); break;
         case 1: s.Transport(f, tempo::TransportKind::Continue, true); break;
         case 2: s.Transport(f, tempo::TransportKind::Locate, true, static_cast<uint32_t>(6 * r.Range(0, 16383))); break;
-        case 3: s.Transport(f, tempo::TransportKind::Start, false, static_cast<uint32_t>(r.Range(0, 1000)),
-                            static_cast<uint32_t>(r.Range(0, 2000))); break;
+        case 3: {
+          const auto pos = static_cast<uint32_t>(r.Range(0, 1000));
+          const auto offset = static_cast<uint32_t>(r.Range(0, 2000));
+          s.Transport(f, tempo::TransportKind::Start, false, pos, offset);
+          break;
+        }
         default: break;
       }
       int64_t dropFrom = -1, dropTo = -1;
@@ -308,9 +316,20 @@ inline Stream MakeStream(Family fam, uint64_t seed, int seconds, uint32_t rate =
           case 0: s.Tap(g); break;
           case 1: s.Tempo(g, bpmNs[r.Next() % 8]); break;
           case 2: s.Transport(g, tempo::TransportKind::Stop, true); break;
-          case 3: s.Transport(g, tempo::TransportKind::Locate, r.Chance(50), static_cast<uint32_t>(r.Range(0, 5000))); break;
-          case 4: s.Spill(g, static_cast<uint32_t>(r.Range(200000, 3000000)), static_cast<uint8_t>(r.Next() % 3),
-                          static_cast<uint8_t>(r.Next() % 6), r.Chance(50)); break;
+          case 3: {
+            const bool atNext = r.Chance(50);
+            const auto pos = static_cast<uint32_t>(r.Range(0, 5000));
+            s.Transport(g, tempo::TransportKind::Locate, atNext, pos);
+            break;
+          }
+          case 4: {
+            const auto us = static_cast<uint32_t>(r.Range(200000, 3000000));
+            const auto tm = static_cast<uint8_t>(r.Next() % 3);
+            const auto sd = static_cast<uint8_t>(r.Next() % 6);
+            const bool recall = r.Chance(50);
+            s.Spill(g, us, tm, sd, recall);
+            break;
+          }
           case 5: s.Invalid(g, r); break;
           case 6: s.Unknown(g, static_cast<uint8_t>(r.Range(11, 255))); break;
           case 7: s.Other(g); break;

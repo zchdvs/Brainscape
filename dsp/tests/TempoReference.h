@@ -647,6 +647,15 @@ class TempoRef {
   }
 
   TempoInfo Info(int64_t at) const {
+    // §2.6: the snapshot sees §3.5's gap without applying it. The driver applies gaps eagerly
+    // only while an event is still to come, so a snapshot after the last event reads a copy that
+    // applies the gap.
+    int64_t deadline;
+    if (GapDue(&deadline) && deadline <= at) {
+      TempoRef copy = *this;
+      copy.Gap();
+      return copy.Info(at);
+    }
     TempoInfo i;
     int64_t tick, acc;
     TickAcc(at, &tick, &acc);

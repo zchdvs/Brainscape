@@ -878,3 +878,110 @@ TEST_CASE("Effective subdivision: Tempo time mode forces TAP; leaving it restore
   Subdiv(c, 30, SubdivField::TimeMode, 1);
   REQUIRE(c.GridTicks() == 96);
 }
+
+// =================================================================================================
+// §3.3's bounds at their extremes (overflow, division by zero), hours of running
+// =================================================================================================
+
+namespace {
+
+// The window's sums against direct sums; the fit's numerators against the definitions.
+bool SumsExact(const TempoCore::State& s) {
+  int64_t sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (uint32_t k = 0; k < s.winN; ++k) {
+    const int64_t x = s.winLabel[k] - s.winLabel[0], y = s.winFrame[k] - s.winFrame[0];
+    if (x < 0 || x > 95 || y < 0) return false;
+    sx += x;
+    sy += y;
+    sxx += x * x;
+    sxy += x * y;
+  }
+  if (sx != s.sx || sy != s.sy || sxx != s.sxx || sxy != s.sxy) return false;
+  if (s.winN < 2) return true;
+  const int64_t N = s.winN;
+  return s.d == N * sxx - sx * sx && s.a == N * sxy - sx * sy && s.b == sy * sxx - sx * sxy;
+}
+
+}  // namespace
+
+TEST_CASE("Follower: the bounds' extremes at 384 kHz and 8 kHz", "[tempo][follower][bounds]") {
+  // Ticks just under a second apart at 384 kHz (the gap rule's limit): the slope clamps to 20 BPM
+  // and inference labels the gaps; y stays inside int32 and nothing asserts (Debug checks every
+  // multiply-divide's range).
+  {
+    TempoCore c = Core(384000);
+    int64_t f = 1000;
+    for (int i = 0; i < 300; ++i) {
+      Tick(c, f);
+      f += 383999 - (i % 7) * 1000;
+      REQUIRE(SumsExact(c.Capture()));
+    }
+    REQUIRE(c.Stats().gaps == 0);
+    REQUIRE(c.P() <= tempo::PFromNs(tempo::kMaxNsPerQuarter, 384000));
+    REQUIRE(c.P() >= tempo::PFromNs(tempo::kMinNsPerQuarter, 384000));
+  }
+  // The fastest: 300 BPM at 8 kHz, 66.67 frames a tick, ×8: grid points 200 frames apart, never
+  // more than kMaxClockPerSpan in a 512-frame span.
+  {
+    TempoCore c = Core(8000);
+    Subdiv(c, 0, SubdivField::Subdivision, 5);
+    Rng r(9);
+    int64_t ideal3 = 3000;  // in thirds of a frame
+    uint32_t maxHits = 0;
+    GridHit buf[TempoCore::kMaxClockPerSpan];
+    for (int i = 0; i < 3000; ++i) {
+      const int64_t f = ideal3 / 3;
+      while (c.Frame() < f) {
+        const int64_t e = std::min<int64_t>(c.Frame() + r.Range(1, 512), f);
+        const uint32_t n = c.GridFrames(e, buf, TempoCore::kMaxClockPerSpan);
+        if (n > maxHits) maxHits = n;
+      }
+      c.ApplyEvent(f, tempo::kEventClockTick, 0, 0);
+      ideal3 += 200;
+    }
+    REQUIRE(c.Source() == ClockSource::ClockFree);
+    REQUIRE(c.P() == tempo::PFromNs(tempo::kMinNsPerQuarter, 8000));
+    REQUIRE(maxHits <= TempoCore::kMaxClockPerSpan);
+    REQUIRE(SumsExact(c.Capture()));
+  }
+}
+
+TEST_CASE("Follower: hours of continuous clock at 384 kHz across 2^31 and 2^32 frames",
+          "[tempo][follower][bounds]") {
+#if defined(NDEBUG)
+  const int64_t hours = 4;
+#else
+  const int64_t hours = 1;
+#endif
+  TempoCore c = Core(384000);
+  Transport(c, 100, TransportKind::Start, true);
+  GridHit buf[8];
+  const int64_t tick = 8000;  // 120 BPM
+  const int64_t ticks = hours * 3600 * 48;
+  int64_t hits = 0;
+  bool exact = true;
+  for (int64_t i = 0; i < ticks; ++i) {
+    const int64_t f = 1000 + i * tick;
+    while (c.Frame() < f) hits += c.GridFrames(f, buf, 8);
+    c.ApplyEvent(f, tempo::kEventClockTick, 0, 0);
+    if (i % 4096 == 0 && !SumsExact(c.Capture())) exact = false;
+  }
+  REQUIRE(exact);
+  REQUIRE(c.Source() == ClockSource::ClockRunning);
+  REQUIRE(c.Stats().reacquires == 0);
+  REQUIRE(c.Stats().tickOutliers == 0);
+  REQUIRE(c.Stats().commits == 1);
+  REQUIRE(c.P() == 192000 * kTwo32);
+  REQUIRE(c.Capture().lastLabel == ticks - 1);
+  // One hit per quarter from the Start tick to the last tick (Init's position 0 at frame 0 fired
+  // in the Transport helper's render, not counted here).
+  REQUIRE(hits == ticks / 24);
+  if (hours >= 4) REQUIRE(c.Frame() > (int64_t{1} << 32));
+}
+
+TEST_CASE("TempoCore fits §2.6's Warm-arena estimate", "[tempo][placement]") {
+  // §2.6: the follower's window (96 × two 32-bit words), the 6-tick ring, the tap chain and the
+  // scalars, about 1.1 KiB, plus the counters; inside the Warm arena's 7,968 spare bytes.
+  INFO("sizeof(TempoCore) = " << sizeof(TempoCore));
+  REQUIRE(sizeof(TempoCore) <= 1536);
+}

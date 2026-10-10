@@ -523,6 +523,42 @@ TEST_CASE("Tempo streams: TempoCore equals the reference at every block pattern"
   CHECK(sum.unknownEvents > 0);
 }
 
+TEST_CASE("Tempo streams: a snapshot after the last event reads the gap", "[tempo][reference]") {
+  // §2.6: the snapshot applies §3.5's gap predicate without mutating, so a display never shows a
+  // clock that has gone, even when no event follows the gap to apply it. A probe more than a second
+  // after the last tick, with nothing after it, under ClockFree (no transport) and ClockRunning
+  // (FA first), and the same probe followed by an event that applies the gap.
+  for (int variant = 0; variant < 4; ++variant) {
+    const bool running = (variant & 1) != 0, later = (variant & 2) != 0;
+    Stream s;
+    Rng r(17);
+    if (running) s.Transport(500, TransportKind::Start, true, 0);
+    const int64_t after = s.Ticks(1000, 500000000u, 60, TickModel::Hardware, r);
+    const int64_t lastTick = s.ev.back().frame;
+    s.Probe(lastTick + 48000 - 1);  // just inside the second: still the clock's
+    s.Probe(lastTick + 48000);      // at the deadline: Internal
+    s.Probe(lastTick + 48000 + 700);
+    if (later) s.Other(lastTick + 48000 + 900);
+    const int64_t end = after + 48000 * 2;
+    std::string why;
+    const bool ok = CoreMatchesReference(RunConfig(), s.ev, end, Perturb::None, false, &why);
+    INFO("variant " << variant << ": " << why);
+    REQUIRE(ok);
+    const RunResult got = RunCore(RunConfig(), s.ev, end, Blocks::Const(48));
+    REQUIRE(got.probes.size() == 3);
+    const auto clock = static_cast<uint8_t>(running ? ClockSource::ClockRunning
+                                                    : ClockSource::ClockFree);
+    REQUIRE(got.probes[0].source == clock);
+    REQUIRE((got.probes[0].flags & kTempoFlagLocked) != 0);
+    REQUIRE(((got.probes[0].flags & kTempoFlagRunning) != 0) == running);
+    for (size_t k = 1; k < 3; ++k) {
+      REQUIRE(got.probes[k].source == static_cast<uint8_t>(ClockSource::Internal));
+      REQUIRE(got.probes[k].flags == 0);
+    }
+    REQUIRE(got.stats.gaps == (later ? 1u : 0u));  // the snapshot itself changes nothing
+  }
+}
+
 TEST_CASE("Tempo streams: frame-by-frame reference on short streams", "[tempo][reference]") {
   for (uint64_t seed = 1; seed <= static_cast<uint64_t>(kScale); ++seed) {
     for (Family fam : {Family::Tempo, Family::Mixed}) {

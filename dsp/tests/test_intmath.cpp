@@ -287,13 +287,15 @@ TEST_CASE("MulDivRoundI64: random operands against the reference", "[intmath]") 
   for (int i = 0; i < kRandom; ++i) {
     auto sign = [&rng]() { return (rng.Next() & 1u) ? int64_t{1} : int64_t{-1}; };
     auto signedWide = [&rng, &sign]() {
-      return static_cast<int64_t>(rng.Wide() >> 1) * sign();  // |v| < 2^63
+      const auto m = static_cast<int64_t>(rng.Wide() >> 1);  // |v| < 2^63
+      return m * sign();
     };
     int64_t a = signedWide(), b = signedWide(), c = signedWide();
     if ((i & 3) == 0) {  // a tie: |a·b / c| = odd / 2
       const int64_t m = static_cast<int64_t>((rng.Wide() >> 3) | 1u);
       a = m * sign();
-      b = static_cast<int64_t>(((rng.Next() >> 44) << 1) | 1u) * sign();
+      const auto odd = static_cast<int64_t>(((rng.Next() >> 44) << 1) | 1u);
+      b = odd * sign();
       c = m * 2 * sign();
     }
     if (c == 0) continue;
