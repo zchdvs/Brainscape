@@ -18,6 +18,7 @@ add_executable(brainscape_tests
   test_param_display.cpp
   test_params.cpp
   test_tempo.cpp
+  test_tempo_rules.cpp
   test_testsignal.cpp
   test_wave1.cpp
 )
