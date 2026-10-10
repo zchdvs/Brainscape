@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "brainscape/ParamDisplay.h"
+#include "brainscape/Tempo.h"
 
 namespace brainscape::plugin {
 
@@ -13,8 +14,14 @@ namespace {
 constexpr uint8_t kMagic[4] = {'B', 'S', 'W', 'S'};
 
 enum SettingKey : uint32_t {
-  kInputMode = 1, kInputGainDb = 2, kOutputGainDb = 3, kRestartOnStart = 4, kEffectVolumeDb = 5
+  kInputMode = 1, kInputGainDb = 2, kOutputGainDb = 3, kRestartOnStart = 4, kEffectVolumeDb = 5,
+  kTempoSource = 6, kReceiveMidiClock = 7, kTempoRecall = 8, kTempoNs = 9, kPerfSubdiv = 10,
+  kPerfTimeMode = 11
 };
+
+bool TempoInRange(uint32_t ns) {
+  return ns >= tempo::kMinNsPerQuarter && ns <= tempo::kMaxNsPerQuarter;
+}
 
 // The blocks after the settings (StateCodec.h): tags as four ASCII bytes, read little-endian.
 constexpr uint32_t Tag(char a, char b, char c, char d) {
@@ -122,18 +129,26 @@ void EncodeState(const WrapperState& state, std::vector<uint8_t>& out) {
     PutU32(out, static_cast<uint32_t>(LeafId(i)));
     PutU32(out, Bits(state.plain[i]));
   }
-  PutU32(out, state.hasEffectVolume ? 5u : 4u);
-  PutU32(out, kInputMode);
-  PutU32(out, static_cast<uint32_t>(state.settings.inputMode));
-  PutU32(out, kInputGainDb);
-  PutU32(out, Bits(state.settings.inputGainDb));
-  PutU32(out, kOutputGainDb);
-  PutU32(out, Bits(state.settings.outputGainDb));
-  PutU32(out, kRestartOnStart);
-  PutU32(out, state.settings.restartOnStart ? 1u : 0u);
+  std::vector<std::pair<uint32_t, uint32_t>> settings = {
+      {kInputMode, static_cast<uint32_t>(state.settings.inputMode)},
+      {kInputGainDb, Bits(state.settings.inputGainDb)},
+      {kOutputGainDb, Bits(state.settings.outputGainDb)},
+      {kRestartOnStart, state.settings.restartOnStart ? 1u : 0u}};
   if (state.hasEffectVolume) {
-    PutU32(out, kEffectVolumeDb);
-    PutU32(out, Bits(Canonicalize(ParamId::EffectVolumeDb, state.effectVolumeDb)));
+    settings.push_back({kEffectVolumeDb, Bits(Canonicalize(ParamId::EffectVolumeDb, state.effectVolumeDb))});
+  }
+  settings.push_back({kTempoSource, static_cast<uint32_t>(state.settings.tempoSource)});
+  settings.push_back({kReceiveMidiClock, state.settings.receiveMidiClock ? 1u : 0u});
+  settings.push_back({kTempoRecall, state.settings.tempoRecallPreset ? 1u : 0u});
+  if (TempoInRange(state.tempoNs)) settings.push_back({kTempoNs, state.tempoNs});
+  if (state.hasPerformance) {
+    settings.push_back({kPerfSubdiv, Bits(Canonicalize(ParamId::PerfSubdiv, state.subdivPosition))});
+    settings.push_back({kPerfTimeMode, Bits(Canonicalize(ParamId::PerfTimeMode, state.timeMode))});
+  }
+  PutU32(out, static_cast<uint32_t>(settings.size()));
+  for (const auto& kv : settings) {
+    PutU32(out, kv.first);
+    PutU32(out, kv.second);
   }
   if (state.hasFactory) {
     const WrapperFactoryMode& m      = state.factory;
@@ -194,6 +209,20 @@ bool DecodeState(const void* data, size_t bytes, WrapperState& out) {
     } else if (key == kEffectVolumeDb) {
       s.effectVolumeDb  = Canonicalize(ParamId::EffectVolumeDb, FromBits(bits));
       s.hasEffectVolume = true;
+    } else if (key == kTempoSource) {
+      s.settings.tempoSource = bits == 1u ? TempoSource::Internal : TempoSource::Host;
+    } else if (key == kReceiveMidiClock) {
+      s.settings.receiveMidiClock = bits != 0u;
+    } else if (key == kTempoRecall) {
+      s.settings.tempoRecallPreset = bits == 1u;
+    } else if (key == kTempoNs) {
+      s.tempoNs = TempoInRange(bits) ? bits : 0u;  // out of range: absent
+    } else if (key == kPerfSubdiv) {
+      s.subdivPosition = Canonicalize(ParamId::PerfSubdiv, FromBits(bits));
+      s.hasPerformance = true;
+    } else if (key == kPerfTimeMode) {
+      s.timeMode       = Canonicalize(ParamId::PerfTimeMode, FromBits(bits));
+      s.hasPerformance = true;
     }
   }
   // The blocks. What does not read whole is ignored, as readers before blocks ignored it.

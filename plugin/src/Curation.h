@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -30,6 +31,9 @@ struct PresetSource;
 // derive rule), compiles, writes the stamped canonical JSON (and the package, when one sits
 // beside it or the document came from one), and Spillover-loads what it wrote, so what plays is
 // what was saved. A document that does not compile is written as JSON only, as the editor does.
+// Saving also captures the performance (docs/design/clock.md §10.3): the live committed tempo,
+// rounded to whole µs, and the live Subdiv and time mode (rows 83 and 84) go into the document's
+// `performance`, as derive writes the leaves.
 class CurationSession {
  public:
   explicit CurationSession(BrainscapeProcessor& processor);
@@ -86,12 +90,19 @@ class CurationSession {
   // stamp, and no targeted leaf off its macro's value.
   bool Canonical() const { return canonical_; }
   // Save would change the file: the content differs, a targeted leaf is off its macro's value
-  // (PendingDerives), the stamp is stale, or the file is not in canonical form. A document that
-  // is none of these saves back byte for byte.
-  bool SaveChangesFile() const { return dirty_ || !pending_.empty() || !stampCurrent_ || !canonical_; }
+  // (PendingDerives), the live performance differs from the stored one (PendingPerformance), the
+  // stamp is stale, or the file is not in canonical form. A document that is none of these saves
+  // back byte for byte.
+  bool SaveChangesFile() const {
+    return dirty_ || !pending_.empty() || !pendingPerformance_.empty() || !stampCurrent_ || !canonical_;
+  }
   // What Save's derive will change: one line per targeted leaf that is off its macro's value at
   // the macro's position ("post.delay.fb: 0.4 -> 0.45 (repeats at 0.5)").
   const std::vector<std::string>& PendingDerives() const { return pending_; }
+  // What Save's capture of the performance will change (clock.md §10.3): one line per field of
+  // `performance` whose live value differs from the stored one ("performance.tempo_us_per_quarter:
+  // 428571 -> 500000 (the live tempo)").
+  const std::vector<std::string>& PendingPerformance() const { return pendingPerformance_; }
 
   // Lint of the working document (L1-L9, factory rules for a "factory." id), and after a save
   // the compile errors too. Errors first.
@@ -231,11 +242,13 @@ class CurationSession {
   std::vector<uint32_t>              detached_;
   bool                               dirty_ = false;
   std::vector<std::string>           pending_;
+  std::vector<std::string>           pendingPerformance_;
   std::vector<bsc::Finding>          findings_, saveFindings_, refused_;
   juce::String                       refusedFile_;
   juce::String                       message_;
   // What the last Refresh saw, to rebuild only on change.
   std::vector<uint32_t>              seenBits_;
+  std::array<uint32_t, 2>            seenPerformance_{};
   Side                               side_ = Side::Working;
   std::unique_ptr<PresetState>       workingSnapshot_;  // B while A plays
 

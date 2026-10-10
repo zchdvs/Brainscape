@@ -33,6 +33,8 @@
 #include "PlainAttachment.h"
 #include "gui/CurationViews.h"
 #include "gui/ModeMenu.h"
+#include "gui/TempoPanel.h"
+#include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "StateCodec.h"
 #include "brainscape/Engine.h"
@@ -223,13 +225,20 @@ uint64_t ChunkCalls(const std::vector<int>& pattern, int frames) {
   return calls;
 }
 
-// A host transport the tests start and stop.
+// A host transport the tests start and stop, with a tempo and a position when they set them
+// (docs/design/clock.md §8.4).
 class TestPlayHead final : public juce::AudioPlayHead {
  public:
-  bool playing = false;
+  bool   playing = false;
+  bool   hasBpm  = false;
+  double bpm     = 120.0;
+  bool   hasPpq  = false;
+  double ppq     = 0.0;
   juce::Optional<PositionInfo> getPosition() const override {
     PositionInfo info;
     info.setIsPlaying(playing);
+    if (hasBpm) info.setBpm(bpm);
+    if (hasPpq) info.setPpqPosition(ppq);
     return info;
   }
 };
@@ -470,8 +479,9 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
     p.setValue(0.3f);  // a lossy host set maps through the shared taper
     REQUIRE(Bits(p.Plain()) == Bits(PlainFromNormalized(d.id, 0.3f)));
   }
-  // + freeze, the eight macros, the expression pedal and the effect volume
-  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 11);
+  // + freeze, the eight macros, the expression pedal, the effect volume, perf.subdiv and
+  // perf.time_mode
+  REQUIRE(proc.getParameters().size() == static_cast<int>(kNumLeafParams) + 13);
   REQUIRE(proc.Param(ParamId::DelayMs).getParameterID() == "layer0.position.base_ms");
   // Sound revision 2 retired rows 27 and 28 into mode structure: no longer registered.
   REQUIRE_FALSE(IsLeaf(ParamId::OnsetTrigger));
@@ -488,7 +498,7 @@ TEST_CASE("plain values round-trip exactly through BrainscapeParam") {
 TEST_CASE("the plugin registers the rows of host model (b)") {
   BrainscapeProcessor proc;
   const auto&         params = proc.getParameters();
-  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 11);
+  REQUIRE(params.size() == static_cast<int>(kNumLeafParams) + 13);
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const ParamDescriptor& d = *FindParam(LeafId(i));
     INFO(d.name);
@@ -524,6 +534,21 @@ TEST_CASE("the plugin registers the rows of host model (b)") {
   REQUIRE(proc.EffectVolume().getParameterID() == "global.effect_volume_db");
   REQUIRE(proc.EffectVolume().isAutomatable());
   REQUIRE(BrainscapeParam::EventTypeFor(ParamId::EffectVolumeDb) == WrapperEvent::Type::Param);
+  // The tempo core's Performance rows, appended after 82 (clock.md §10.4): automatable, each a
+  // Subdivision event; row 85, global.tempo_recall, is a device setting and not registered.
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 11] == &proc.SubdivParam());
+  REQUIRE(proc.SubdivParam().getParameterID() == "perf.subdiv");
+  REQUIRE(proc.FindHostParam(ParamId::PerfSubdiv) == &proc.SubdivParam());
+  REQUIRE(params[static_cast<int>(kNumLeafParams) + 12] == &proc.TimeModeParam());
+  REQUIRE(proc.TimeModeParam().getParameterID() == "perf.time_mode");
+  REQUIRE(proc.FindHostParam(ParamId::PerfTimeMode) == &proc.TimeModeParam());
+  for (BrainscapeParam* p : {&proc.SubdivParam(), &proc.TimeModeParam()}) {
+    REQUIRE(p->isAutomatable());
+    REQUIRE(p->isDiscrete());
+  }
+  REQUIRE(proc.SubdivParam().getNumSteps() == 6);
+  REQUIRE(proc.TimeModeParam().getNumSteps() == 3);
+  REQUIRE(proc.FindHostParam(ParamId::TempoRecall) == nullptr);
   REQUIRE(proc.FindHostParam(ParamId::LevelDb) == nullptr);      // Reserved
   REQUIRE(proc.FindHostParam(ParamId::OnsetTrigger) == nullptr); // Retired
   REQUIRE(proc.FindHostParam(ParamId::PerfLoopLevel) == nullptr);
@@ -2129,7 +2154,10 @@ TEST_CASE("the curation session refuses what does not read or compile, and keeps
 
 // Every document of the compiler's examples and the golden corpus, opened and saved unedited:
 // what Save writes is `bspc derive` then `bspc stamp`, and it is the file itself exactly when the
-// session says Save changes nothing (no pending derive, a current stamp).
+// session says Save changes nothing (no pending derive, a current stamp). Under recall Preset a
+// document plays its stored tempo, Subdiv and time mode, so the performance Save captures is the
+// stored one (docs/design/clock.md §10.3); under Keep the running tempo would replace a stored
+// one ("saving a preset captures the live tempo, Subdiv and time mode").
 TEST_CASE("saving an unedited document writes what derive and stamp write") {
   int opened = 0, unchanged = 0;
   for (const char* dir : {BRAINSCAPE_TEST_DATA, BRAINSCAPE_GOLDEN_PRESETS}) {
@@ -2139,12 +2167,16 @@ TEST_CASE("saving an unedited document writes what derive and stamp write") {
       REQUIRE(src.copyFileTo(json));
       const std::string original = Text(json);
       auto              proc     = MakeProcessor({}, {});
+      WrapperSettings   recall   = proc->GetSettings();
+      recall.tempoRecallPreset   = true;
+      proc->SetSettings(recall);
       CurationSession&  s        = proc->Curation();
       juce::String      error;
       if (!s.Open(json, &error)) continue;  // the compiler's refused examples
       ++opened;
       INFO(src.getFileName());
       REQUIRE_FALSE(s.Dirty());
+      REQUIRE(s.PendingPerformance().empty());
       const bool changes = s.SaveChangesFile();
       REQUIRE(changes == (!s.PendingDerives().empty() || !s.StampCurrent() || !s.Canonical()));
       bsc::Document             doc;
@@ -2933,6 +2965,801 @@ TEST_CASE("latency, tail and supported layouts") {
   REQUIRE(proc.checkBusesLayoutSupported(layout(Set::disabled(), Set::stereo())));
   REQUIRE_FALSE(proc.checkBusesLayoutSupported(layout(Set::stereo(), Set::mono())));
   REQUIRE_FALSE(proc.checkBusesLayoutSupported(layout(Set::create5point1(), Set::create5point1())));
+}
+
+// ── The tempo core in the plugin (docs/design/clock.md §4.4, §10, §8.4) ──────────────────────
+
+namespace {
+
+// A golden-corpus package, decoded as a load takes it: clock_hits is a CLOCK mode (grains on the
+// tempo grid alone, no jitter, one grain a hit) stored at 140 BPM on TAP.
+std::unique_ptr<PresetState> GoldenPackage(const char* name) {
+  juce::MemoryBlock bytes;
+  REQUIRE(juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile(name).loadFileAsData(bytes));
+  auto state = std::make_unique<PresetState>();
+  REQUIRE(DecodePreset(bytes.getData(), bytes.getSize(), state.get()));
+  return state;
+}
+
+float FloatOfBits(uint32_t u) {
+  float v = 0.f;
+  std::memcpy(&v, &u, sizeof v);
+  return v;
+}
+
+RefEvent RefTempoEvent(int64_t frame, Engine::EventType type, uint32_t id, uint32_t valueBits = 0u) {
+  RefEvent e;
+  e.frame = frame;
+  e.type  = type;
+  e.id    = id;
+  e.value = FloatOfBits(valueBits);
+  return e;
+}
+RefEvent RefTempo(int64_t frame, uint32_t ns) { return RefTempoEvent(frame, Engine::EventType::Tempo, ns); }
+RefEvent RefSubdiv(int64_t frame, tempo::SubdivField field, uint8_t code) {
+  return RefTempoEvent(frame, Engine::EventType::Subdivision, tempo::SubdivisionId(field, code));
+}
+RefEvent RefHostStart(int64_t frame, uint32_t position, uint32_t offset) {
+  return RefTempoEvent(frame, Engine::EventType::Transport,
+                       tempo::TransportId(tempo::TransportKind::Start, false, offset),
+                       tempo::IntegerValueBits(position));
+}
+RefEvent RefRecall(int64_t frame, bool preset) { return RefParam(frame, ParamId::TempoRecall, preset ? 1.f : 0.f); }
+
+// The engine alone from an Exact load of `state` with `events`, rendered to `frames` in 48-frame
+// blocks: its tempo snapshot and counters at the end (the reference's grid, not its audio).
+struct RefTempoState {
+  TempoInfo  info;
+  TempoStats counts;
+};
+RefTempoState RenderTempoReference(const PresetState& state, int frames, const std::vector<RefEvent>& events) {
+  RefTempoState out;
+  const Stereo  in = MakeInput(frames);
+  EngineConfig  cfg;
+  cfg.sampleRate    = kRate;
+  cfg.maxBlockSize  = 512;
+  cfg.historyFrames = 1u << 22;
+  host::HeapArenas arenas(PlanMemory(cfg));
+  auto             engine = std::make_unique<Engine>();
+  REQUIRE(arenas.ok());
+  REQUIRE(engine->Init(cfg, arenas.get()));
+  engine->LoadPreset(state, LoadMode::Exact);
+  std::vector<float>              l(48), r(48), ol(48), orr(48);
+  std::vector<Engine::BlockEvent> block;
+  size_t                          ei = 0;
+  for (int pos = 0; pos < frames; pos += 48) {
+    const int end = std::min(frames, pos + 48);
+    block.clear();
+    for (; ei < events.size() && events[ei].frame < end; ++ei) {
+      Engine::BlockEvent b;
+      b.offset = static_cast<uint32_t>(std::max<int64_t>(events[ei].frame - pos, 0));
+      b.seq    = static_cast<uint32_t>(ei);
+      b.type   = events[ei].type;
+      b.id     = events[ei].id;
+      b.value  = events[ei].value;
+      b.preset = events[ei].preset;
+      block.push_back(b);
+    }
+    std::copy(in.l.begin() + pos, in.l.begin() + end, l.begin());
+    std::copy(in.r.begin() + pos, in.r.begin() + end, r.begin());
+    const float*           ins[2]  = {l.data(), r.data()};
+    float*                 outs[2] = {ol.data(), orr.data()};
+    Engine::ProcessContext ctx;
+    ctx.in        = ins;
+    ctx.out       = outs;
+    ctx.numFrames = static_cast<uint32_t>(end - pos);
+    ctx.events    = block.data();
+    ctx.numEvents = static_cast<uint32_t>(block.size());
+    engine->Process(ctx);
+  }
+  out.info   = engine->Tempo();
+  out.counts = engine->TempoCounts();
+  return out;
+}
+
+// A processor playing `state` (a preset change before anything plays: an Exact load), its Tempo
+// source and restart option as given, its playhead `head`.
+std::unique_ptr<BrainscapeProcessor> MakeTempoProcessor(const PresetState& state, TestPlayHead& head,
+                                                        TempoSource source, bool restartOnStart,
+                                                        int maxBlock = 4096) {
+  auto            proc = MakeProcessor({}, {}, maxBlock);
+  WrapperSettings s    = proc->GetSettings();
+  s.tempoSource        = source;
+  s.restartOnStart     = restartOnStart;
+  proc->SetSettings(s);
+  REQUIRE(proc->LoadPresetState(state));
+  proc->setPlayHead(&head);
+  return proc;
+}
+
+// The host's transport for a render: from `ppq` at `bpm`, the position of each block's first frame.
+HostRender Transport(TestPlayHead& head, double ppq, double bpm, std::vector<int> pattern) {
+  HostRender r;
+  r.pattern     = std::move(pattern);
+  r.beforeBlock = [&head, ppq, bpm](int pos) { head.ppq = ppq + static_cast<double>(pos) * bpm / (60.0 * kRate); };
+  return r;
+}
+
+// The frame at which the host's quarter `beat` lies, from a transport at `ppq` and `bpm` whose
+// first block starts at frame `start`.
+double HostBeatFrame(double beat, double ppq, double bpm, int64_t start = 0) {
+  return static_cast<double>(start) + (beat - ppq) * 60.0 / bpm * kRate;
+}
+
+}  // namespace
+
+TEST_CASE("rows 83 and 84 are Subdivision events; their typed names read back") {
+  // §10.4: perf.subdiv is the Subdiv knob's position in the Microcosm's CC#5 order, which the
+  // wrapper sends as §5.1's code; perf.time_mode the time mode (field 1). The text parser reads
+  // the rates in ASCII or with the display's multiplication sign (§5.1).
+  auto proc = MakeProcessor({}, {});
+  const Stereo in = MakeInput(480);
+  const uint8_t codes[] = {1, 2, 0, 3, 4, 5};
+  for (int position = 0; position < 6; ++position) {
+    INFO("position " << position);
+    proc->SubdivParam().SetPlainNotifyingHost(static_cast<float>(position));
+    RenderProcessor(*proc, in, {}, {{480}});
+    REQUIRE(proc->EngineTempo().subdiv == codes[position]);
+  }
+  for (int mode = 2; mode >= 0; --mode) {
+    proc->TimeModeParam().SetPlainNotifyingHost(static_cast<float>(mode));
+    RenderProcessor(*proc, in, {}, {{480}});
+    REQUIRE(proc->EngineTempo().timeMode == mode);
+  }
+  // A host's lossy set lands on a position, as every discrete row's does.
+  proc->SubdivParam().setValue(0.61f);
+  RenderProcessor(*proc, in, {}, {{480}});
+  REQUIRE(proc->SubdivParam().Plain() == 3.0f);
+  REQUIRE(proc->EngineTempo().subdiv == 3u);
+
+  const auto parsed = [](ParamId id, const char* text) {
+    float v = -1.f;
+    return ParsePlainText(id, juce::String::fromUTF8(text), v) ? v : -1.f;
+  };
+  REQUIRE(parsed(ParamId::PerfSubdiv, "x1/4") == 0.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "\xC3\x97" "1/2") == 1.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "TAP") == 2.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "X2") == 3.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "\xC3\x97" "8") == 5.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "4") == 4.f);
+  REQUIRE(parsed(ParamId::PerfSubdiv, "1/4") == -1.f);  // a note value, never a rate (§5.1)
+  REQUIRE(parsed(ParamId::PerfTimeMode, "Subdiv") == 1.f);
+  REQUIRE(parsed(ParamId::PerfTimeMode, "tempo") == 2.f);
+  REQUIRE(parsed(ParamId::TempoRecall, "Preset") == 1.f);
+  for (int position = 0; position < 6; ++position) {  // what the display shows reads back
+    const juce::String shown = FormatPlainText(ParamId::PerfSubdiv, static_cast<float>(position));
+    REQUIRE(shown == juce::String::fromUTF8(position == 2 ? "TAP" : position == 0 ? "\xC3\x97" "1/4" : position == 1 ? "\xC3\x97" "1/2"
+                                                       : position == 3 ? "\xC3\x97" "2" : position == 4 ? "\xC3\x97" "4"
+                                                                                                          : "\xC3\x97" "8"));
+    REQUIRE(parsed(ParamId::PerfSubdiv, shown.toRawUTF8()) == static_cast<float>(position));
+  }
+}
+
+TEST_CASE("host tempo: a bounce at a constant tempo is one output at every host block size") {
+  // §8.4, §4.4: with Restart on transport start, a bounce at 137.5 BPM from ppq 3.37 depends on
+  // the first block's ppq and tempo only. The restart's re-asserts (rows 83 and 84, row 85), the
+  // host's Tempo and its anchored Start land at frame 0, so the bounce equals the engine alone
+  // with those events; and the first CLOCK hit is the first quarter after the anchor, on the
+  // host's beat, with none before it.
+  const auto   clock  = GoldenPackage("clock_hits.bsp");
+  const double bpm    = 137.5;
+  const double ppq    = 3.37;
+  const int    frames = 3 * 48000;
+  const Stereo take   = MakeInput(frames);
+  const uint32_t ns   = tempo::NsPerQuarterFromBpm(bpm);
+  uint32_t position = 0, offset = 0;
+  REQUIRE(tempo::HostAnchor(ppq, ns, 48000, &position, &offset));
+  REQUIRE(position == 81u);
+  REQUIRE(offset == 105u);
+  const auto reference = [&](uint8_t subdivCode) {
+    std::vector<RefEvent> ev = {RefSubdiv(0, tempo::SubdivField::Subdivision, subdivCode),
+                                RefSubdiv(0, tempo::SubdivField::TimeMode, 0),
+                                RefRecall(0, false),
+                                RefTempo(0, ns),
+                                RefHostStart(0, position, offset)};
+    return ev;
+  };
+  const Stereo want = RenderStateReference(*clock, take, kRate, reference(0));
+  // No hit before the anchor's first quarter (position 96, ppq 4), then that one at its frame.
+  const double firstBeat = HostBeatFrame(4.0, ppq, bpm);
+  RefTempoState before   = RenderTempoReference(*clock, static_cast<int>(firstBeat) - 1, reference(0));
+  REQUIRE(before.counts.clockBirths == 0u);
+  RefTempoState after = RenderTempoReference(*clock, static_cast<int>(firstBeat) + 48, reference(0));
+  REQUIRE(after.counts.clockBirths == 1u);
+  REQUIRE(std::fabs(static_cast<double>(after.info.lastClockBirth) - firstBeat) <= 1.0);
+  REQUIRE(after.counts.transports == 1u);
+  REQUIRE(after.counts.tempoEvents == 1u);
+  // Without the host's events the grid would be the stored 140 BPM from frame 0: another output.
+  REQUIRE_FALSE(SameBits(want.l, RenderStateReference(*clock, take).l));
+
+  const std::vector<std::vector<int>> patterns = {{37}, {64}, {441}, {512}, {1024}, {4096}};
+  for (const bool offline : {true, false}) {
+    for (const auto& pattern : patterns) {
+      INFO((offline ? "offline " : "real time ") << PatternName(pattern));
+      TestPlayHead head;
+      head.hasBpm = head.hasPpq = true;
+      head.bpm                  = bpm;
+      auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, true);
+      proc->setNonRealtime(offline);
+      // Stopped at another position first: the host's tempo goes out, nothing anchors.
+      head.ppq = 1.0;
+      RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+      if (!offline) REQUIRE(WaitForSpare(*proc));
+      head.playing     = true;
+      const Stereo got = RenderProcessor(*proc, take, {}, Transport(head, ppq, bpm, pattern));
+      head.playing     = false;
+      REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::Restarted);
+      RequireSame(got, want, "a bounce at 137.5 BPM from ppq 3.37");
+      REQUIRE(proc->GetTempoDisplay().followingHost);
+      REQUIRE(proc->GetTempoDisplay().nsPerQuarter == ns);
+      proc->setPlayHead(nullptr);
+    }
+  }
+
+  SECTION("row 83 changed before play: the restart re-asserts it (E7)") {
+    const Stereo x2 = RenderStateReference(*clock, take, kRate, reference(3));
+    REQUIRE_FALSE(SameBits(x2.l, want.l));
+    for (const auto& pattern : std::vector<std::vector<int>>{{441}, {4096}}) {
+      TestPlayHead head;
+      head.hasBpm = head.hasPpq = true;
+      head.bpm                  = bpm;
+      auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, true);
+      proc->setNonRealtime(true);
+      RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+      proc->SubdivParam().SetPlainNotifyingHost(3.0f);  // x2
+      RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+      head.playing = true;
+      RequireSame(RenderProcessor(*proc, take, {}, Transport(head, ppq, bpm, pattern)), x2, "x2 re-asserted");
+      head.playing = false;
+      proc->setPlayHead(nullptr);
+    }
+  }
+  SECTION("a stop and a second play at another ppq anchors its first hit on the host's beat") {
+    TestPlayHead head;
+    head.hasBpm = head.hasPpq = true;
+    head.bpm                  = bpm;
+    auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, true);
+    proc->setNonRealtime(true);
+    head.playing = true;
+    RenderProcessor(*proc, take, {}, Transport(head, ppq, bpm, {441}));
+    head.playing = false;
+    RenderProcessor(*proc, MakeInput(9600), {}, {{441}});
+    const uint64_t births = proc->EngineTempoCounts().clockBirths;  // counts since Init
+    const double ppq2  = 10.123;
+    const double beat2 = HostBeatFrame(11.0, ppq2, bpm);
+    head.playing       = true;
+    RenderProcessor(*proc, MakeInput(static_cast<int>(beat2) + 600), {}, Transport(head, ppq2, bpm, {441}));
+    head.playing = false;
+    const TempoInfo info = proc->EngineTempo();
+    REQUIRE(std::fabs(static_cast<double>(info.lastClockBirth) - beat2) <= 1.0);
+    REQUIRE(proc->EngineTempoCounts().clockBirths == births + 1u);  // the second play's first quarter
+    proc->setPlayHead(nullptr);
+  }
+}
+
+TEST_CASE("host tempo: without the restart option the host's Start anchors the running grid") {
+  // §10.1: "Restart on transport start" stays off by default, and the anchor aligns the grid to
+  // the host's beats either way: the Start applies at the playing block's first frame, its offset
+  // places the next tick, and the hits land on the host's quarters.
+  REQUIRE_FALSE(WrapperSettings{}.restartOnStart);
+  REQUIRE(WrapperSettings{}.tempoSource == TempoSource::Host);
+  const auto clock = GoldenPackage("clock_hits.bsp");
+  for (const auto& pattern : std::vector<std::vector<int>>{{256}, {37}, {1024}}) {
+    INFO(PatternName(pattern));
+    TestPlayHead head;
+    head.hasBpm = head.hasPpq = true;
+    head.bpm                  = 97.0;
+    auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, false);
+    // 0.5 s stopped (the grid runs at the host's tempo from frame 0), then play from ppq 21.7.
+    head.ppq = 21.7;
+    RenderProcessor(*proc, MakeInput(24000), {}, {{256}});
+    const int64_t start = 24000;
+    head.playing        = true;
+    const double next   = HostBeatFrame(22.0, 21.7, 97.0, start);
+    RenderProcessor(*proc, MakeInput(static_cast<int>(next) - start + 300), {},
+                    Transport(head, 21.7, 97.0, pattern));
+    const TempoInfo info = proc->EngineTempo();
+    REQUIRE(proc->GetStatus().lastStart == BrainscapeProcessor::TransportStart::None);
+    REQUIRE((info.flags & kTempoFlagRunning) != 0u);
+    REQUIRE(std::fabs(static_cast<double>(info.lastGridFrame) - next) <= 1.0);
+    REQUIRE(std::fabs(static_cast<double>(info.lastClockBirth) - next) <= 1.0);
+    REQUIRE(info.nsPerQuarter == tempo::NsPerQuarterFromBpm(97.0));
+    proc->setPlayHead(nullptr);
+  }
+}
+
+TEST_CASE("host tempo: stop, loop, jumps and tempo changes") {
+  const auto   clock = GoldenPackage("clock_hits.bsp");
+  TestPlayHead head;
+  head.hasBpm = head.hasPpq = true;
+  head.bpm                  = 120.0;
+  auto proc = MakeTempoProcessor(*clock, head, TempoSource::Host, false);
+  // The host's position, continuous from render to render unless a test moves it.
+  double     ppq  = 0.0;
+  const auto play = [&](int frames, double bpm) {
+    HostRender   r;
+    const double base = ppq;
+    r.pattern         = {512};
+    r.beforeBlock     = [&head, base, bpm](int pos) {
+      head.bpm = bpm;
+      head.ppq = base + static_cast<double>(pos) * bpm / (60.0 * kRate);
+    };
+    RenderProcessor(*proc, MakeInput(frames), {}, r);
+    ppq = base + static_cast<double>(frames) * bpm / (60.0 * kRate);
+  };
+  play(4800, 120.0);  // stopped: the host's tempo goes out, no transport
+  ppq = 0.0;
+  const TempoStats s0 = proc->EngineTempoCounts();
+  REQUIRE(s0.tempoEvents >= 1u);
+  REQUIRE(s0.transports == 0u);
+
+  // Play 8 quarters at 120 BPM from ppq 0: one Start, no Locate (each block where predicted).
+  head.playing  = true;
+  int64_t frame = 4800;
+  play(8 * 24000, 120.0);
+  frame += 8 * 24000;
+  REQUIRE(proc->EngineTempoCounts().transports == 1u);
+  REQUIRE((proc->EngineTempo().flags & kTempoFlagRunning) != 0u);
+
+  SECTION("a loop back to ppq 2 is a Locate, anchored: the next hit on the host's beat") {
+    ppq = 2.0;
+    play(24000 + 3000, 120.0);
+    REQUIRE(proc->EngineTempoCounts().transports == 2u);
+    // Beat 3 of the loop, 24,000 frames into it (1,000 frames a tick at 120 BPM and 48 kHz).
+    REQUIRE(proc->EngineTempo().lastGridFrame == frame + 24000);
+    REQUIRE((proc->EngineTempo().flags & kTempoFlagRunning) != 0u);  // a Locate keeps it running
+  }
+  SECTION("a jump within half a tick is no Locate; past half a tick it is") {
+    ppq += 0.4 / 24.0;
+    play(512, 120.0);
+    REQUIRE(proc->EngineTempoCounts().transports == 1u);
+    ppq += 0.6 / 24.0;
+    play(512, 120.0);
+    REQUIRE(proc->EngineTempoCounts().transports == 2u);
+  }
+  SECTION("Stop at the first block that does not play; the grid runs on") {
+    head.playing = false;
+    play(480, 120.0);
+    REQUIRE(proc->EngineTempoCounts().transports == 2u);
+    REQUIRE((proc->EngineTempo().flags & kTempoFlagRunning) == 0u);
+    play(4800, 120.0);
+    REQUIRE(proc->EngineTempoCounts().transports == 2u);  // one Stop only
+  }
+  SECTION("a tempo change of 1 µs per quarter or more is a Tempo event; rounding noise is not") {
+    const uint64_t before = proc->EngineTempoCounts().tempoEvents;
+    play(2048, 6.0e10 / 500000500.0);  // 0.5 µs per quarter longer
+    REQUIRE(proc->EngineTempoCounts().tempoEvents == before);
+    REQUIRE(proc->EngineTempo().nsPerQuarter == 500000000u);
+    play(512, 6.0e10 / 499999000.0);  // 1 µs shorter
+    REQUIRE(proc->EngineTempoCounts().tempoEvents == before + 1u);
+    REQUIRE(proc->EngineTempo().nsPerQuarter == 499999000u);
+    play(512, 128.0);
+    REQUIRE(proc->EngineTempo().nsPerQuarter == 468750000u);
+    REQUIRE(proc->EngineTempoCounts().transports == 1u);  // a ramp is no jump
+  }
+  proc->setPlayHead(nullptr);
+}
+
+TEST_CASE("host tempo: taps and typed tempos are dropped while the host's tempo is followed") {
+  TestPlayHead head;
+  head.hasBpm = true;
+  head.bpm    = 128.0;
+  auto proc   = MakeProcessor({}, {});
+  proc->setPlayHead(&head);
+  const Stereo block = MakeInput(9600);
+  RenderProcessor(*proc, block, {}, {{480}});
+  REQUIRE(proc->GetTempoDisplay().followingHost);
+  REQUIRE(proc->GetTempoDisplay().nsPerQuarter == 468750000u);
+  for (int k = 0; k < 3; ++k) {
+    proc->TapFromUi();
+    RenderProcessor(*proc, block, {}, {{480}});
+  }
+  REQUIRE(proc->SetTempoFromUi(90.0));
+  RenderProcessor(*proc, block, {}, {{480}});
+  REQUIRE(proc->EngineTempoCounts().taps == 0u);
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 468750000u);
+
+  // Internal: the taps set the tempo (three taps 9,600 frames apart: 300 BPM), then a typed one.
+  WrapperSettings s = proc->GetSettings();
+  s.tempoSource     = TempoSource::Internal;
+  proc->SetSettings(s);
+  RenderProcessor(*proc, block, {}, {{480}});
+  REQUIRE_FALSE(proc->GetTempoDisplay().followingHost);
+  for (int k = 0; k < 3; ++k) {
+    proc->TapFromUi();
+    RenderProcessor(*proc, block, {}, {{480}});
+  }
+  REQUIRE(proc->EngineTempoCounts().taps == 3u);
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 200000000u);
+  REQUIRE(proc->SetTempoFromUi(93.75));
+  REQUIRE_FALSE(proc->SetTempoFromUi(0.0));
+  REQUIRE_FALSE(proc->SetTempoFromUi(std::numeric_limits<double>::quiet_NaN()));
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 640000000u);
+  REQUIRE(proc->GetTempoDisplay().nsPerQuarter == 640000000u);
+  // A host without a tempo (the Standalone, some hosts) is Internal under Host too.
+  s.tempoSource = TempoSource::Host;
+  proc->SetSettings(s);
+  head.hasBpm = false;
+  REQUIRE(proc->SetTempoFromUi(110.0));
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  REQUIRE_FALSE(proc->GetTempoDisplay().followingHost);
+  REQUIRE(proc->EngineTempo().nsPerQuarter == tempo::NsPerQuarterFromBpm(110.0));
+  proc->setPlayHead(nullptr);
+}
+
+TEST_CASE("host tempo: a preset recalled while following plays the host's tempo after its load") {
+  // Under recall Preset a Spillover load plays the preset's stored tempo; the host's goes out
+  // again after it, at the load's frame, so the host keeps the tempo (§3.6: the external source
+  // wins, as a clock does).
+  const auto   clock = GoldenPackage("clock_hits.bsp");  // stored at 140 BPM
+  TestPlayHead head;
+  head.hasBpm = true;
+  head.bpm    = 128.0;
+  auto proc   = MakeProcessor({}, {});
+  WrapperSettings s   = proc->GetSettings();
+  s.tempoRecallPreset = true;
+  proc->SetSettings(s);
+  proc->setPlayHead(&head);
+  RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+  REQUIRE(proc->LoadPresetState(*clock));
+  RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 468750000u);
+  // Internal: the recall plays the stored tempo.
+  s.tempoSource = TempoSource::Internal;
+  proc->SetSettings(s);
+  REQUIRE(proc->LoadPresetState(*clock));
+  RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 428571000u);
+  REQUIRE(proc->GetTempoDisplay().nsPerQuarter == 428571000u);
+  // Keep: a preset change keeps the running tempo.
+  s.tempoRecallPreset = false;
+  proc->SetSettings(s);
+  REQUIRE(proc->SetTempoFromUi(100.0));
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  REQUIRE(proc->LoadPresetState(*clock));
+  RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+  REQUIRE(proc->EngineTempo().nsPerQuarter == 600000000u);
+  proc->setPlayHead(nullptr);
+}
+
+namespace {
+
+// MIDI messages at absolute frames, handed to processBlock in host blocks of `pattern`.
+using TimedMidi = std::vector<std::pair<int, juce::MidiMessage>>;
+
+Stereo RenderMidi(BrainscapeProcessor& p, const Stereo& in, const std::vector<int>& pattern,
+                  const TimedMidi& messages) {
+  const int frames = static_cast<int>(in.l.size());
+  Stereo    io     = in;
+  juce::MidiBuffer midi;
+  midi.ensureSize(8192);
+  size_t   k = 0, mi = 0;
+  int      pos  = 0;
+  uint64_t hits = gAuditHits.load();
+  while (pos < frames) {
+    const int n = std::min(pattern[k++ % pattern.size()], frames - pos);
+    float*    chans[2] = {io.l.data() + pos, io.r.data() + pos};
+    juce::AudioBuffer<float> buffer(chans, 2, n);
+    midi.clear();
+    for (; mi < messages.size() && messages[mi].first < pos + n; ++mi) {
+      midi.addEvent(messages[mi].second, messages[mi].first - pos);
+    }
+    tAudit = true;
+    p.processBlock(buffer, midi);
+    tAudit = false;
+    pos += n;
+  }
+  CHECK(gAuditHits.load() - hits == 0u);
+  return io;
+}
+
+}  // namespace
+
+TEST_CASE("MIDI clock in the Standalone: the device's bytes become §4.3's events at their frames") {
+  // §10.2: the Standalone's MIDI path passes F8, FA, FB, FC and F2 to the translator at their
+  // sample positions, at the MIDI rank, with every other message's bytes in order (a Program
+  // Change before a Song Position, SysEx, Active Sensing, note-ons among the ticks), and Receive
+  // MIDI clock gates it. A clock mode follows: the output equals the engine fed the translator's
+  // events at the same frames.
+  const auto clock = GoldenPackage("clock_hits.bsp");
+  const int  frames = 4 * 48000;
+  TimedMidi  messages;
+  const uint8_t sysex[] = {0x7D, 0x01, 0x02};
+  messages.push_back({200, juce::MidiMessage::programChange(1, 5)});
+  messages.push_back({200, juce::MidiMessage::songPositionPointer(16)});  // 16 sixteenths: tick 96
+  messages.push_back({300, juce::MidiMessage::createSysExMessage(sysex, 3)});
+  messages.push_back({300, juce::MidiMessage(0xFE)});                     // Active Sensing
+  messages.push_back({400, juce::MidiMessage::midiContinue()});
+  const double tick = 48000.0 * 60.0 / 132.0 / 24.0;  // 909.09 frames: 132 BPM
+  int          n    = 0;
+  for (double f = 1000.0; f < frames - 1000; f += tick, ++n) {
+    messages.push_back({static_cast<int>(f), juce::MidiMessage::midiClock()});
+    if (n % 30 == 7) messages.push_back({static_cast<int>(f), juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(90))});
+    if (n == 150) messages.push_back({static_cast<int>(f) + 5, juce::MidiMessage::midiStop()});
+    if (n == 170) messages.push_back({static_cast<int>(f) + 5, juce::MidiMessage::midiStart()});
+  }
+  std::stable_sort(messages.begin(), messages.end(),
+                   [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  // The reference: the processor's frame-0 events (the Exact load is a preset change under Keep:
+  // the running 120 BPM, row 85), then each message's bytes through one translator, and note-ons
+  // as MIDI-note triggers, in message order at their frames.
+  std::vector<RefEvent> ev = {RefTempo(0, 500000000u), RefRecall(0, false)};
+  MidiClockParser       parser;
+  int                   ticks = 0;
+  for (const auto& m : messages) {
+    const juce::MidiMessage& msg = m.second;
+    if (msg.isNoteOn()) ev.push_back(RefTrigger(m.first, Engine::TriggerSource::MidiNote, 90.0f / 127.0f));
+    for (int i = 0; i < msg.getRawDataSize(); ++i) {
+      MidiClockEvent c;
+      if (parser.Feed(msg.getRawData()[i], &c) != MidiClockParser::Result::Event) continue;
+      ticks += c.type == tempo::kEventClockTick ? 1 : 0;
+      ev.push_back(RefTempoEvent(m.first, static_cast<Engine::EventType>(c.type), c.id, c.valueBits));
+    }
+  }
+  REQUIRE(ticks == n);
+  const Stereo in   = MakeInput(frames);
+  const Stereo want = RenderStateReference(*clock, in, kRate, ev);
+  REQUIRE_FALSE(SameBits(want.l, RenderStateReference(*clock, in, kRate, {ev[0], ev[1]}).l));
+
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Standalone);
+  std::unique_ptr<BrainscapeProcessor> app = MakeProcessor({}, {}, 4096);
+  juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+  REQUIRE(app->wrapperType == juce::AudioProcessor::wrapperType_Standalone);
+  REQUIRE(app->GetSettings().receiveMidiClock);
+  for (const auto& pattern : std::vector<std::vector<int>>{{441}, {37}, {4096}, {512, 1, 77}}) {
+    INFO(PatternName(pattern));
+    auto proc = MakeProcessor({}, {}, 4096);
+    REQUIRE(proc->LoadPresetState(*clock));
+    RequireSame(RenderMidi(*proc, in, pattern, messages), want, "MIDI clock at its frames");
+    const TempoStats counts = proc->EngineTempoCounts();
+    REQUIRE(counts.ticks == static_cast<uint64_t>(n));
+    REQUIRE(counts.commits >= 1u);
+    REQUIRE(proc->GetTempoDisplay().source == static_cast<uint8_t>(tempo::ClockSource::ClockRunning));
+    REQUIRE(proc->GetTempoDisplay().locked);
+    REQUIRE(proc->GetTempoDisplay().nsPerQuarter == proc->EngineTempo().nsPerQuarter);
+  }
+  REQUIRE(app->LoadPresetState(*clock));
+  RequireSame(RenderMidi(*app, in, {441}, messages), want, "the Standalone");
+
+  SECTION("Receive MIDI clock off: the bytes reach no translator") {
+    auto            proc = MakeProcessor({}, {}, 4096);
+    WrapperSettings s    = proc->GetSettings();
+    s.receiveMidiClock   = false;
+    proc->SetSettings(s);
+    REQUIRE(proc->LoadPresetState(*clock));
+    std::vector<RefEvent> notes = {ev[0], ev[1]};
+    for (const RefEvent& e : ev) {
+      if (e.type == Engine::EventType::Trigger) notes.push_back(e);
+    }
+    RequireSame(RenderMidi(*proc, in, {441}, messages), RenderStateReference(*clock, in, kRate, notes),
+                "clock off: note-ons only");
+    REQUIRE(proc->EngineTempoCounts().ticks == 0u);
+  }
+  SECTION("an Exact load re-asserts the master's position and that it runs (§2.5 item 2)") {
+    auto proc = MakeProcessor({}, {}, 4096);
+    REQUIRE(proc->LoadPresetState(*clock));
+    const int half = frames / 2;
+    TimedMidi first(messages.begin(), std::find_if(messages.begin(), messages.end(),
+                                                   [&](const auto& m) { return m.first >= half; }));
+    RenderMidi(*proc, Slice(in, 0, half), {441}, first);
+    REQUIRE(proc->GetTempoDisplay().source == static_cast<uint8_t>(tempo::ClockSource::ClockRunning));
+    // A device change restarts the engine (prepareToPlay at another rate, then back).
+    proc->prepareToPlay(96000.0, 4096);
+    proc->prepareToPlay(48000.0, 4096);
+    juce::AudioBuffer<float> buffer(2, 64);
+    buffer.clear();
+    juce::MidiBuffer none;
+    proc->processBlock(buffer, none);
+    const TempoStats counts = proc->EngineTempoCounts();
+    // The restart cleared the counts' engine: the re-asserted Locate and Continue are armed,
+    // waiting for the master's next tick (§3.4), and the tempo crossed the restart.
+    REQUIRE(counts.transports == 2u);
+    REQUIRE(proc->EngineTempo().nsPerQuarter == proc->GetTempoDisplay().nsPerQuarter);
+    REQUIRE(proc->EngineTempo().source == static_cast<uint8_t>(tempo::ClockSource::Internal));
+  }
+}
+
+TEST_CASE("the internal tempo, Subdiv and time mode persist in the session and across a restart") {
+  // §10.1 (P12): the session saves the last committed tempo, so a tapped or typed tempo survives
+  // a session save and restore, a relaunch and a change of rate; rows 83 and 84 with it.
+  auto            a = MakeProcessor({}, {});
+  WrapperSettings s = a->GetSettings();
+  s.tempoSource     = TempoSource::Internal;
+  s.tempoRecallPreset = true;
+  s.receiveMidiClock  = false;
+  a->SetSettings(s);
+  REQUIRE(a->SetTempoFromUi(93.75));
+  a->SubdivParam().SetPlainNotifyingHost(4.0f);    // x4
+  a->TimeModeParam().SetPlainNotifyingHost(2.0f);  // Tempo
+  RenderProcessor(*a, MakeInput(480), {}, {{480}});
+  REQUIRE(a->EngineTempo().nsPerQuarter == 640000000u);
+  juce::MemoryBlock blob;
+  a->getStateInformation(blob);
+  WrapperState st{};
+  REQUIRE(DecodeState(blob.getData(), blob.getSize(), st));
+  REQUIRE(st.tempoNs == 640000000u);
+  REQUIRE(st.hasPerformance);
+  REQUIRE(st.subdivPosition == 4.0f);
+  REQUIRE(st.timeMode == 2.0f);
+  REQUIRE(st.settings.tempoSource == TempoSource::Internal);
+  REQUIRE(st.settings.tempoRecallPreset);
+  REQUIRE_FALSE(st.settings.receiveMidiClock);
+  std::vector<uint8_t> again;
+  EncodeState(st, again);
+  REQUIRE(again.size() == blob.getSize());
+  REQUIRE(std::memcmp(again.data(), blob.getData(), again.size()) == 0);
+
+  const auto check = [](BrainscapeProcessor& p, const char* what) {
+    INFO(what);
+    RenderProcessor(p, MakeInput(480), {}, {{480}});
+    REQUIRE(p.EngineTempo().nsPerQuarter == 640000000u);
+    REQUIRE(p.EngineTempo().subdiv == 4u);
+    REQUIRE(p.EngineTempo().timeMode == 2u);
+    REQUIRE(p.GetTempoDisplay().nsPerQuarter == 640000000u);
+  };
+  SECTION("restored before anything plays (a project reload, a relaunch): an Exact load") {
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    REQUIRE(b->GetTempoDisplay().nsPerQuarter == 640000000u);  // before any audio
+    REQUIRE(b->SubdivParam().Plain() == 4.0f);
+    REQUIRE(b->GetSettings().tempoSource == TempoSource::Internal);
+    check(*b, "restored");
+    b->prepareToPlay(96000.0, 512);  // a change of device rate: Init, an Exact load
+    check(*b, "at 96 kHz");
+    b->prepareToPlay(44100.0, 512);
+    check(*b, "at 44.1 kHz");
+  }
+  SECTION("restored into a processor not yet prepared (the Standalone's launch)") {
+    auto b = std::make_unique<BrainscapeProcessor>();
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    b->setRateAndBufferSizeDetails(kRate, 512);
+    b->prepareToPlay(kRate, 512);
+    check(*b, "prepared after the restore");
+  }
+  SECTION("restored while running: the session's tempo and rows follow its Spillover load") {
+    auto b = MakeProcessor({}, {});
+    RenderProcessor(*b, MakeInput(4800), {}, {{480}});
+    b->setStateInformation(blob.getData(), static_cast<int>(blob.getSize()));
+    check(*b, "restored live");
+  }
+  SECTION("a session without the tempo keys plays the preset's stored ones") {
+    WrapperState old = st;
+    old.tempoNs        = 0;
+    old.hasPerformance = false;
+    std::vector<uint8_t> bytes;
+    EncodeState(old, bytes);
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(bytes.data(), static_cast<int>(bytes.size()));
+    RenderProcessor(*b, MakeInput(480), {}, {{480}});
+    REQUIRE(b->EngineTempo().nsPerQuarter == 500000000u);
+    REQUIRE(b->EngineTempo().subdiv == 0u);
+    REQUIRE(b->SubdivParam().Plain() == 2.0f);  // TAP
+  }
+  SECTION("a same-rate prepareToPlay keeps the running engine, and its tempo") {
+    a->prepareToPlay(kRate, 512);
+    check(*a, "re-prepared");
+  }
+}
+
+TEST_CASE("saving a preset captures the live tempo, Subdiv and time mode") {
+  // §10.3: Save writes the live committed tempo (whole µs), the live Subdiv and time mode into
+  // the document's performance, so what a recall under Preset and every Exact load play is what
+  // the player set. Until then the session lists what Save will store.
+  ScratchDir       scratch;
+  const juce::File json = scratch.dir.getChildFile("clock_hits.json");
+  REQUIRE(juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile("clock_hits.json").copyFileTo(json));
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  juce::String     error;
+  REQUIRE(s.Open(json, &error));
+  // Under Keep the running 120 BPM crosses the load: Save would store it over the stored 140.
+  s.Refresh();
+  REQUIRE(s.PendingPerformance().size() == 1u);
+  REQUIRE(s.PendingPerformance()[0].find("428571 -> 500000") != std::string::npos);
+  REQUIRE(s.SaveChangesFile());
+  REQUIRE_FALSE(s.Dirty());
+
+  REQUIRE(proc->SetTempoFromUi(128.0));
+  proc->SubdivParam().SetPlainNotifyingHost(3.0f);    // x2
+  proc->TimeModeParam().SetPlainNotifyingHost(1.0f);  // Subdiv
+  RenderProcessor(*proc, MakeInput(960), {}, {{480}});
+  s.Refresh();
+  REQUIRE(s.PendingPerformance().size() == 3u);
+  const PerformanceState live = proc->LivePerformance();
+  REQUIRE(live.usPerQuarter == 468750u);
+  REQUIRE(live.subdiv == Subdivision::Double);
+  REQUIRE(live.timeMode == brainscape::TimeMode::Subdivision);
+  const CurationSession::SaveResult r = s.Save();
+  REQUIRE(r.written);
+  REQUIRE(r.compiled);
+  bsc::Document              saved;
+  std::vector<bsc::Finding>  found;
+  REQUIRE(bsc::ReadDocumentText(Text(json), {}, &saved, &found));
+  REQUIRE(saved.state->performance.usPerQuarter == 468750u);
+  REQUIRE(saved.state->performance.subdiv == Subdivision::Double);
+  REQUIRE(saved.state->performance.timeMode == brainscape::TimeMode::Subdivision);
+  REQUIRE(Text(json).find("\"subdiv\": \"x2\"") != std::string::npos);
+  s.Refresh();
+  REQUIRE(s.PendingPerformance().empty());
+  REQUIRE(proc->CurrentMode().performance.usPerQuarter == 468750u);  // what plays is what was saved
+  // The rendered audition is what saves: the current preset carries the live performance.
+  REQUIRE(proc->CurrentPreset()->performance.usPerQuarter == 468750u);
+
+  SECTION("under recall Preset a document plays its stored tempo, so Save stores it unchanged") {
+    WrapperSettings w   = proc->GetSettings();
+    w.tempoRecallPreset = true;
+    proc->SetSettings(w);
+    const juce::File other = scratch.dir.getChildFile("clock_recall.json");
+    REQUIRE(juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile("clock_recall.json").copyFileTo(other));
+    REQUIRE(s.Open(other, &error));
+    s.Refresh();
+    REQUIRE(s.PendingPerformance().empty());
+    REQUIRE(proc->SubdivParam().Plain() == 1.0f);    // x1/2, stored
+    REQUIRE(proc->TimeModeParam().Plain() == 1.0f);  // Subdiv, stored
+    REQUIRE(proc->GetTempoDisplay().nsPerQuarter == 600000000u);
+  }
+}
+
+TEST_CASE("the tempo strip shows the tempo, its source and the rows, and sends taps") {
+  TestPlayHead head;
+  head.hasBpm = true;
+  head.bpm    = 128.0;
+  auto proc   = MakeProcessor({}, {});
+  std::unique_ptr<juce::AudioProcessorEditor> owned(proc->createEditor());
+  auto* editor = dynamic_cast<BrainscapeEditor*>(owned.get());
+  REQUIRE(editor != nullptr);
+  TempoPanel& t = editor->Tempo();
+  editor->RefreshNow();
+  REQUIRE(t.Bpm().getText() == "120.0");
+  REQUIRE_FALSE(t.UsesTempo());  // the default mode reads no tempo (§6.6)
+  REQUIRE(t.SubdivSegment(2).getToggleState());  // TAP
+  REQUIRE(t.TimeSegment(0).getToggleState());    // Free
+  REQUIRE_FALSE(t.Store().isEnabled());          // no document to store into
+
+  proc->setPlayHead(&head);
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  editor->RefreshNow();
+  REQUIRE(t.Bpm().getText() == "128.0");
+  REQUIRE_FALSE(t.Tap().isEnabled());  // the host's tempo is followed: taps are dropped
+  REQUIRE(t.Settings().getButtonText() == "Sync: Host");
+
+  // The menu switches the source; TAP sends a Tap; the segments set rows 83 and 84.
+  WrapperSettings s = proc->GetSettings();
+  s.tempoSource     = TempoSource::Internal;
+  proc->SetSettings(s);
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  editor->RefreshNow();
+  REQUIRE(t.Tap().isEnabled());
+  REQUIRE(t.Settings().getButtonText() == "Sync: Internal");
+  t.Tap().onClick();
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  REQUIRE(proc->EngineTempoCounts().taps == 1u);
+  t.SubdivSegment(5).onClick();
+  t.TimeSegment(2).onClick();
+  REQUIRE(proc->SubdivParam().Plain() == 5.0f);
+  REQUIRE(proc->TimeModeParam().Plain() == 2.0f);
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  REQUIRE(proc->EngineTempo().subdiv == 5u);
+  REQUIRE(proc->EngineTempo().timeMode == 2u);
+  // Typing a tempo sends it.
+  t.Bpm().setText("97.5", juce::sendNotificationSync);
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  editor->RefreshNow();
+  REQUIRE(proc->EngineTempo().nsPerQuarter == tempo::NsPerQuarterFromBpm(97.5));
+  REQUIRE(t.Bpm().getText() == "97.5");
+  // The settings menu offers the source and the recall (and, in the Standalone, MIDI clock).
+  int                   items = 0;
+  const juce::PopupMenu menu  = t.SettingsMenu();
+  for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) items += it.getItem().isSectionHeader ? 0 : 1;
+  REQUIRE(items == 4);
+  // A clock mode uses tempo.
+  REQUIRE(proc->LoadPresetState(*GoldenPackage("clock_hits.bsp")));
+  editor->RefreshNow();
+  REQUIRE(t.UsesTempo());
+  proc->setPlayHead(nullptr);
+  owned.reset();
 }
 
 int main(int argc, char* argv[]) {

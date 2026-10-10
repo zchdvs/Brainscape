@@ -265,6 +265,7 @@ void CurationSession::CloseDocument() {
   workingSnapshot_.reset();
   detached_.clear();
   pending_.clear();
+  pendingPerformance_.clear();
   findings_.clear();
   seenBits_.clear();
   dirty_ = false;
@@ -419,12 +420,24 @@ bool CurationSession::Refresh() {
     for (size_t k = 0; k < kMaxMacros; ++k) bits.push_back(Bits(processor_.Macro(MacroId(k)).Plain()));
     bits.push_back(static_cast<uint32_t>(detached_.size()));
     bits.insert(bits.end(), detached_.begin(), detached_.end());
+    // The live performance, which Save captures: a change of it alone (a tap, a host's tempo)
+    // re-reads what Save will store, and leaves the level match as it is.
+    const PerformanceState          live = processor_.LivePerformance();
+    const std::array<uint32_t, 2> perf = {
+        live.usPerQuarter, static_cast<uint32_t>(live.timeMode) | static_cast<uint32_t>(live.subdiv) << 8};
     if (bits != seenBits_) {
       seenBits_ = std::move(bits);
+      seenPerformance_ = perf;
       RebuildWorking();
       lastChangeMs_ = NowMs();
       lintStale_    = true;
       matchStale_   = matchLevel_;
+      changed       = true;
+    } else if (perf != seenPerformance_) {
+      seenPerformance_ = perf;
+      RebuildWorking();
+      lastChangeMs_ = NowMs();
+      lintStale_    = true;
       changed       = true;
     }
   }
@@ -467,11 +480,44 @@ void CurationSession::RebuildWorking() {
   pending_.clear();
   bsc::Document derived(*working_);
   bsc::Derive(&derived, false, &pending_);
+  // The performance Save captures (clock.md §10.3), apart from the edits: what plays, not what
+  // the curator changed in the document.
+  pendingPerformance_.clear();
+  const PerformanceState& was  = t.performance;
+  const PerformanceState  live = processor_.LivePerformance();
+  static constexpr const char* kSubdivs[] = {"tap", "x1/4", "x1/2", "x2", "x4", "x8"};
+  static constexpr const char* kModes[]   = {"free", "subdiv", "tempo"};
+  const auto subdivName = [](Subdivision v) {
+    const auto i = static_cast<size_t>(v);
+    return i < 6u ? kSubdivs[i] : "?";
+  };
+  const auto modeName = [](brainscape::TimeMode v) {
+    const auto i = static_cast<size_t>(v);
+    return i < 3u ? kModes[i] : "?";
+  };
+  if (live.usPerQuarter != was.usPerQuarter) {
+    pendingPerformance_.push_back("performance.tempo_us_per_quarter: " + std::to_string(was.usPerQuarter) + " -> " +
+                                  std::to_string(live.usPerQuarter) + " (the live tempo)");
+  }
+  if (live.subdiv != was.subdiv) {
+    pendingPerformance_.push_back(std::string("performance.subdiv: ") + subdivName(was.subdiv) + " -> " +
+                                  subdivName(live.subdiv) + " (the live Subdiv)");
+  }
+  if (live.timeMode != was.timeMode) {
+    pendingPerformance_.push_back(std::string("performance.time_mode: ") + modeName(was.timeMode) + " -> " +
+                                  modeName(live.timeMode) + " (the live time mode)");
+  }
 }
 
 std::unique_ptr<bsc::Document> CurationSession::SaveDocument(std::vector<std::string>* derived) const {
   auto d = std::make_unique<bsc::Document>(*working_);
   bsc::Derive(d.get(), false, derived);
+  // Saving captures the performance (clock.md §10.3): the live committed tempo in whole µs, the
+  // live Subdiv and time mode; `reverse` stays the document's until global reverse lands.
+  const PerformanceState live     = processor_.LivePerformance();
+  d->state->performance.usPerQuarter = live.usPerQuarter;
+  d->state->performance.subdiv       = live.subdiv;
+  d->state->performance.timeMode     = live.timeMode;
   return d;
 }
 
