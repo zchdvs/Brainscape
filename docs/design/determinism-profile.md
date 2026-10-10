@@ -391,6 +391,12 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 > A prototype built into revision 7's engine kept 37 of the 45 golden hashes, each identical under
 > every block pattern, delivery and the hostile environment, and passed the forced-flush control.
 > Its §5 gives the arithmetic.
+>
+> *2026-10-10:* the owner's answers add a per-preset switch (row 87, `output.limiter`). With it
+> Off the over is clamped at the same ceiling, and a switch to Off mid-limiting releases the gain
+> to exactly 1 at the fast rate. It is applied through a seventh parameter domain at its event's
+> frame, so the output still stops at 1.0 on every target and every rule above still holds (its
+> §4.7).
 
 ### 3.8 Conforming builds and supported targets
 

@@ -1709,6 +1709,16 @@ each change, its numbers and the owner's answers.
 > proposes sound revision 8, landing before the cost governor and CLOCK's tempo core, and before
 > the knob-rating rows are written. Every mode's S0 Saturation render changes, so a row rated
 > earlier would need a re-listen (its §9.6).
+>
+> *2026-10-10, the owner's answers:* the revision is the next free one after CLOCK's 8 and 9,
+> expected 10. The limiter is no longer without control. Its D5 gives each preset a switch, Leaf
+> row 87, `output.limiter`, default On. Its details:
+> - Off clips at the same ceiling.
+> - No macro or expression target may reach it (E8); hosts register it without automation.
+> - The new lint **L15** makes Off an error under `--factory`, so factory presets keep it On.
+> - The compiler writes the leaf into every document as `"output": { "limiter": 1 }`, after
+>   `wet_trim_db`. So every committed package's `sound_hash` changes at revision 10, with the
+>   package-change label, and no render changes for it (output-limiter.md §7.1, §9.5).
 
 ### 11.4 What waits
 

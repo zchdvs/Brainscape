@@ -1,10 +1,11 @@
 # Output limiter design pass — evidence record
 
 > The evidence behind [output-limiter.md](../output-limiter.md) (draft 2, for the owner's
-> decisions, 2026-10-09): the inputs, what each investigation found and where, the probes the
-> revision ran, where the sources disagreed and how the design resolves it, the alternatives it
-> rejected, and how the three reviews of draft 1 were disposed of (§6). The design document is
-> normative; this record is not. "Design §N" is output-limiter.md, "record §N" this file,
+> decisions, 2026-10-09; draft 3, the owner's answers, 2026-10-10): the inputs, what each
+> investigation found and where, the probes the revision ran, where the sources disagreed and how
+> the design resolves it, the alternatives it rejected, how the three reviews of draft 1 were
+> disposed of (§6), and the owner's answers with what draft 3 decided for them (§7). The design
+> document is normative; this record is not. "Design §N" is output-limiter.md, "record §N" this file,
 > "profile §N" [determinism-profile.md](../determinism-profile.md), "budget §N"
 > [cpu-budget.md](../cpu-budget.md), "clock §N" [clock.md](../clock.md), "compiler §N"
 > [mode-compiler.md](../mode-compiler.md), "companion §N" [companion-app.md](../companion-app.md)
@@ -335,10 +336,11 @@ wet SoftNotes render +0.52 dBFS (65 over), and the S0 Saturation renders +5.53 (
 ## 5. Provenance
 
 Written 2026-10-09 on branch `claude/limiter-design` from `main` at `011b294`. Draft 1, commit
-`5f7357b`, was reviewed the same day by [E], [P] and [H]; draft 2, this revision, applies their
-findings (§6). The design's owner decisions (design §11.2) carry recommended answers until the
-owner confirms or changes them; its open questions (§11.5) are settled by L1b, by listening in
-L2's A/B, and by the control-surface and bypass designs.
+`5f7357b`, was reviewed the same day by [E], [P] and [H]; draft 2, commit `2297cbd`, applies
+their findings (§6), and `13f9e14` moved its revision after CLOCK's T1 and T2. Draft 3
+(2026-10-10) records the owner's answers to design §11.2 and specifies D5's switch (§7). Its
+open questions (§11.5) are settled by L1b, by listening in L2's A/B, and by the control-surface
+and bypass designs.
 
 ## 6. Review of draft 1 and its disposition
 
@@ -372,3 +374,118 @@ applies, because draft 2 has no separate pedal branch. No finding was rejected o
 | H3 | The console reads audio-thread-only APIs from the main loop | applied: `AudioCallback` folds deltas into 32-bit atomics and keeps the lowest gain and highest peak as float bits, cleared on `g_statReset`, read inside `stats`' snapshot; noted as QSPI code in the 15 %; built in draft 2's prototype (7.4, L5) |
 | H4 | The ITCM tally leaves out CLOCK, step 5 and the accessors, and gives `Init`'s share wrongly | applied with draft 2's measured image: the accessors measured (50 bytes) and included in 1,280; `Init` +152 (draft 1's was +112, not 40); the tally restated with CLOCK and step 5: 13,340–13,954 bytes to move, about 2.2–2.9 KB left for step 5; carried into clock §9.6 when D7 is confirmed (8.3, 11.6) |
 | H5 | No firmware path produces D10's test tones | applied: the live-image `tone <hz> <phase> <amplitude bits>` verb through `g_muted`, outside the engine and not a sound revision, in L1b with the expected codec value 8,388,482 (6.4, 11.1) |
+
+## 7. The owner's answers (2026-10-10), and draft 3
+
+### 7.1 The answers
+
+The owner marked the thirteen limiter decisions on the decisions page ("Brainscape Open
+Decisions", its "Output limiter" set, which shows design §11.2's recommendations). The marks were
+saved on 2026-10-10 between 07:25 and 07:27 UTC:
+
+| Decision | Mark | Note |
+|---|---|---|
+| D1–D4, D6–D13 | Agree | none |
+| D5, control | **Change** | none |
+
+The page's D5 note field is empty. The form of the change came with the owner's request to revise
+the design for the answers: **a per-preset switch, a stored preset parameter (a Leaf), so that a
+mode can turn the limiter off on purpose, for example for deliberate clipping; default On.**
+Draft 3 builds on that form. If the owner meant another, design §7.1 and §4.7 are where it
+lands. D7's agreement is with its amended answer, the next free revision expected 10, which the
+page showed.
+
+### 7.2 What draft 3 decided for the switch, and what it rejected
+
+1. **What Off means** (design §4.7). *Chosen:* a clamp at the limiter's own ceiling,
+   max(1, |a|) per channel.
+   - On the pedal, `f2s24(Clamp(s, 1))` equals `f2s24(s)` for every s, so Off plays code for
+     code what the engine without a limiter plays (*calculated* from LD `src/daisy_core.h`'s
+     clamp to ±`FBIPMAX`, design §2.2).
+   - *Rejected:* an Off that passes s unchanged. On the pedal it is the same sound. In the
+     plugin it hands a DAW floats above 1.0, which a floating-point bus plays unclipped, so an
+     Off preset would clip on the pedal and not in the plugin. It would also give up Goal 1 and
+     the audition's "no sample over full scale" for every Off preset.
+2. **Turning Off mid-limiting** (design §4.7). *Chosen:* a drain at k to exactly 1, with no
+   attack and no hold, then the clamp. *Rejected:*
+   - an instant switch, a step of up to 27.7 dB on the goldens, and up to 144.5 dB from the
+     floor;
+   - a crossfade over `kFastCutFrames`, 12 dB in 2.67 ms, about 4.5 dB per ms, which also
+     computes both outputs while it runs;
+   - a longer crossfade, which is a release with more state;
+   - the slow rate, or the current rate, for the drain. The slow rate exists to stop re-attack
+     flutter, which a drain cannot have, and it would take 14.5 s from the floor where k takes
+     3.6 s.
+3. **Turning On** (design §4.7). *Chosen:* from a settled Off, the reset state, so the next over
+   attacks from unity; during a drain, G continues with `releasing` set. *Rejected:* G to 1
+   during a drain, which steps the level up, and G to the frame's requirement, which steps it
+   down.
+4. **How the engine hears the row** (design §4.7, §6.1). *Chosen:* a seventh `ParamDomain` bit
+   whose rebuild calls `Switch` once per span, so only a frame's final value acts and every load
+   applies it by marking all domains. *Rejected:*
+   - row 85's form, no domain and read where it acts, which here would be a per-frame load in
+     the idle path;
+   - applying it inside `ApplyParam`, where an Off and an On at one frame would clear the hold
+     and flags and fail `AmongEdits`.
+5. **The row** (design §7.1). *Chosen:* ID 87; name `output.limiter` in a new `output` object;
+   numeric 0 or 1, read with `>= 0.5f`; the `OffOn` display. *Rejected:*
+   - `global.limiter`, because `global.*` mixes the device settings 81, 82, 85 and 86 with the
+     one preset leaf `global.mix`, and a preset leaf there would read as a device setting;
+   - a JSON boolean, because leaves are numbers (compiler §2.2), and the editor's form, typed
+     text and name-patching treat them so;
+   - draft 2's fallback of a Global device setting, since the owner chose per preset.
+6. **Reach** (design §7.1). *Chosen:* no macro or expression target; registered for hosts
+   without automation. *Rejected:* expression reach. CTRL is outside `sound_hash`, so it could
+   play a package Off whose STAT says On, and a pedal near the threshold would chatter between
+   limiting and clipping.
+7. **The revision that carries the package change** (design §7.1, §10). *Chosen:* the
+   limiter's own, 10, in one commit with its re-mint, with the package-change label and one
+   `Package-change:` line, or one per revision if it shares T2's pull request. *Rejected:*
+   folding it into T2's re-stamp. At revision 9 row 87 does not exist, and profile §5.12's
+   per-commit rule keeps each revision's corpus whole.
+8. **Factory policy** (design §9.5). *Chosen:* factory presets keep it On, enforced by L15
+   under `--factory` and by the pre-screen. *Rejected for now:* Off allowed under a declared
+   `clip` class. No mode asks for it, and the class needs criteria of its own. It stays the path
+   if one ever does.
+
+### 7.3 Checks run for draft 3
+
+- **The drain's frame counts** (design §4.7's table). `limiter-d5/drain.py` iterates
+  G ← min(1, fl(G·k)) with k = `0x3F800325`. Each binary64 product of two binary32 values is
+  exact and is rounded once to binary32. Output:
+
+  | Start | Start bits | Frames to 1.0f | §4.4's figure (measured) less 481 |
+  |---|---|---|---|
+  | −0.1 dB | `0x3F7D11D1` | 120 | 601 − 481 = 120 |
+  | −1.0 dB | `0x3F642905` | 1,200 | 1,681 − 481 = 1,200 |
+  | −2.5 dB | `0x3F3FF911` | 3,000 | 3,481 − 481 = 3,000 |
+  | −6.0 dB | `0x3F004DCE` | 7,199 | 7,680 − 481 = 7,199 |
+  | −11.4 dB | `0x3E89CE7C` | 13,678 | 14,159 − 481 = 13,678 |
+  | −27.7 dB | `0x3D28CB8F` | 33,234 | 33,715 − 481 = 33,234 |
+  | F = 2⁻² | `0x3E800000` | 14,447 | — |
+  | 2⁻²⁴ | `0x33800000` | 173,362 (3.612 s; 14.46 s at k_s) | 173,842 − 481 = 173,361: §4.4's floor row was measured after a burst, one frame later |
+
+- **Row 87.** `Params.h` was read on `main` `011b294` (rows 1–82) and on `claude/tempo-core`
+  `b91b34d` (83–85). Every local and remote branch's `Params.h` and design row tables were
+  searched for a row above 85. Only clock §10.4's 86, `global.tempo_glide`, was found.
+- **The tree at `claude/tempo-core` `b91b34d`,** read for the switch's integration points:
+  - `ParamDisplay.h` and `ParamDisplay.cpp`: the `OffOn` kind at `:429-430` and
+    `HostAutomatable` at `:130-134`;
+  - `compiler/src/Schema.cpp`: `Visit`'s order at `:459-460` and `global.mix`'s E8 at `:1575`;
+  - `dsp/src/blob/Validate.cpp`: `TargetMix` at `:320` and `ExpressionTarget` at `:388-394`;
+  - `plugin/src/BrainscapeParam.cpp`: the `OffOn` text at `:184-186` and `isBoolean` at `:310`;
+  - `dsp/src/Engine.cpp`: the span loop at `:1085-1092`, `RebuildDirty` at `:1190-1215` and
+    the domain assert at `:127`;
+  - `dsp/tests/golden/Corpus.cpp`: `LoneChanges` at `:316-334` and `AmongEdits` at `:980`;
+  - `Corpus.h`: `kCorpusVersion` = 13;
+  - `firmware/live/main.cpp`: the `set` names and `EveryLeafSettable` at `:187-232`;
+  - clock §11.11: items 21–23, the re-stamp, the ITCM at 792 bytes spare and T2's corpus 14.
+- **`tools/audition/ratings.py:20-27`, `:262-278`:** carry-forward by render hash, which moves
+  `sound_hash` without a re-listen (design §9.5).
+- **Not run:** the switch is not prototyped. Its ITCM (100–200 bytes), DTCM (about 36 bytes)
+  and cycle figures (design §8.1) are *estimated*, and L2 measures them.
+
+### 7.4 Where the probes live
+
+`limiter-d5/drain.py` in the session's scratch directory, not committed, beside the earlier
+probes of §1.3.

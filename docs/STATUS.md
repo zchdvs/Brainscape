@@ -176,7 +176,22 @@ No engine change: the set plays at sound revision 7.
   S0 wet SoftNotes render (+0.52 dBFS), which the pre-screen's "S0 highest" line hid; the attack
   modes' SoftNotes corners become limited, not clipped. Peak (moved) becomes zero limiter
   engagement on the class input. It proposes sound revision 8, after a Rev7 DAC test and before
-  the knob-rating rows are written.)*
+  the knob-rating rows are written.)* *(2026-10-10: the owner answered the limiter's thirteen
+  decisions. Twelve are confirmed as recommended, among them the next free sound revision after
+  CLOCK's 8 and 9, expected **10**, before the knob-rating rows and the governor (11). **D5 is
+  changed** to a per-preset switch, a stored Leaf row, **87, `output.limiter`, default On**, so a
+  mode can turn the limiter off on purpose.*
+  - *Off clips at the same ceiling, which on the pedal is code for code the unlimited engine, and
+    in the plugin now matches the pedal.*
+  - *Turning it Off mid-limiting drains the gain at 40 dB/s, then clips.*
+  - *Macros, expression and host automation cannot reach it.*
+  - *Factory presets keep it On, enforced by a new lint, L15.*
+  - *No render changes for it, but every committed package's `sound_hash` does, so revision 10's
+    pull request carries the package-change label.*
+
+  *Row 87 is claimed for it: a lane that appends a parameter row first starts at 88. After
+  CLOCK's tempo core the live image has 792 bytes of ITCM spare, so the limiter lands after the
+  cold-code move that synced times also need. The design is draft 3 on PR #13.)*
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -830,8 +845,10 @@ records live in [docs/design/reviews/](design/reviews/).
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
   `dense_1ms`, a live-image preset, at 118.6 %.
   The fix is designed and owner-approved (2026-10-08: [cpu-budget.md](design/cpu-budget.md), its
-  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor at sound
-  revision 8 (9 if CLOCK's tempo core lands first) that holds any 48 frames to 85 %. Of it, this
+  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor that
+  holds any 48 frames to 85 %. The governor is now expected at sound revision 11, after CLOCK's
+  8 and 9 and the output limiter's 10, by the owner's answers of 2026-10-09 and 2026-10-10;
+  cpu-budget.md's "8, or 9" is amended when its lane starts. Of it, this
   tree has steps 1–2, both bit-exact: the onset hop analysis restructured (P3's rewrite, chosen
   under its D4 because P1's would not fit wave 1's ITCM) and post-chain hygiene; wave 1's ITCM
   leaves too little room for steps 4, 5 and 11 until cold code moves out (cpu-budget.md §7.3).
@@ -1257,20 +1274,22 @@ Steps 1–4 need no hardware.
    *Next:* the owner's knob ratings in the curation view (the factory set's **feel**, which only
    the owner's ears can judge) and the exit criteria; then the keepers join the golden corpus. The
    output safety limiter the owner asked for comes as a sound revision of its own: designed
-   2026-10-09 in [output-limiter.md](design/output-limiter.md), draft 2 for the owner's decisions
-   (its evidence and review dispositions in
-   [reviews/output-limiter-record.md](design/reviews/output-limiter-record.md)). It proposes
-   revision 8, landing before the knob-rating rows, the cost governor and CLOCK's tempo core, so
-   the ratings are given on the limited sound and none needs a re-listen; a Rev7 test of the DAC's
-   inter-sample behaviour (its lane L1b) comes first, so the ceiling is fixed once. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   2026-10-09 in [output-limiter.md](design/output-limiter.md), now draft 3 with the owner's
+   answers of 2026-10-10 (its evidence, review dispositions and the answers in
+   [reviews/output-limiter-record.md](design/reviews/output-limiter-record.md)). It lands as the
+   next free revision after CLOCK's tempo core (8) and synced times (9), expected 10, before the
+   knob-rating rows and the cost governor (11), so the ratings are given on the limited sound and
+   none needs a re-listen; a Rev7 test of the DAC's inter-sample behaviour (its lane L1b) comes
+   first, so the ceiling is fixed once. It carries the owner's per-preset switch (row 87,
+   `output.limiter`, default On; factory presets keep it On). App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
    Next, the CPU budget's fix (owner-approved 2026-10-08, [cpu-budget.md](design/cpu-budget.md);
-   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 8, or 9
-   after CLOCK's tempo core; the worst case is not met yet) and the decisions the pass leaves
+   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 11, after
+   CLOCK's 8 and 9 and the output limiter's 10; the worst case is not met yet) and the decisions the pass leaves
    (polynomial kernels or tables, the pedal's default load mode; explicit FMA is deferred by the
    fix's D10); the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY

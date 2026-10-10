@@ -482,7 +482,11 @@ the 24-bit branch.
 > §4.4 item 7). The wrapper's Output level stays after the engine, outside parity, so a user who
 > raises it can still exceed 0 dBFS. The editor gains a limiter lamp, a mark for when the dry dips
 > too, and the gain-reduction readout at the output meter (its §7.3). There is no control and no
-> latency.
+> latency. *(2026-10-10: the owner's answer to its D5 adds a per-preset switch, Leaf row 87,
+> `output.limiter`, default On. With it Off the engine clips at the same ceiling instead of
+> limiting, so the wrapper still never receives an over that the dry does not carry. The plugin
+> registers it without automation, shows it in the Leaves view and captions the lamp CLIP while it
+> is Off (its §7.1, §7.3). There is still no latency.)*
 
 ### 4.9 Restart, offline renders and reproducible bounces
 
