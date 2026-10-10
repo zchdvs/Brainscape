@@ -110,12 +110,12 @@ void RoundTrip(const std::string& text, const CompileOptions& o = {}) {
 // One layer with every element and the vocabulary of every wave (needs AllFeatures()).
 const char* const kFullStructure = R"({
   "schema_version": 1, "id": "test.full", "name": "Full",
-  "scheduler": {"sources": ["onset", "clock", "midi_note"], "subdiv": "tap",
+  "scheduler": {"sources": ["onset", "clock", "midi_note"],
     "steps": {"order": "shuffle", "entries": [
       {"slot": 0, "pos_sel": 10, "ratio_idx": 1, "gain": 0.5, "prob": 0.75, "flags": 1},
       {"slot": 3}]}},
   "layers": [{"slot_share": 0.5,
-    "position": {"source": "mark", "spray_law": "exp",
+    "position": {"source": "mark", "base_sync": "1/8d", "spray_law": "exp",
                  "mark": {"index": 2, "walk": "cascade", "jitter": 0.25},
                  "pin": {"rearm": "time", "rearm_ms": 2500}},
     "pitch": {"set": [{"st": 0, "weight": 2}, {"st": 12}, {"st": -7.5, "weight": 16}],
@@ -129,8 +129,8 @@ const char* const kFullStructure = R"({
   "routes": [{"from": "modulator0", "to": "cutoff", "amount": 0.5},
              {"from": "modulator1", "to": "pan", "amount": -0.25}],
   "links": [{"from": "grain.pitch", "to": "grain.pan", "amount": 0.4}],
-  "performance": {"reverse": true, "time_mode": "tempo", "subdiv": "2x",
-                  "tempo_source": "midi", "tempo_us_per_quarter": 400000}
+  "performance": {"reverse": true, "time_mode": "tempo", "subdiv": "x2",
+                  "tempo_us_per_quarter": 400000}
 })";
 
 }  // namespace
@@ -281,7 +281,7 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
   const Case cases[] = {
       {"scheduler.sources", R"(["periodic", "clock", "footswitch", "midi_note"])",
        kModeFeatureClock, "W2"},
-      {"scheduler.subdiv", R"("2x")", kModeFeatureClock, "W2"},
+      {"layers[0].position.base_sync", R"("1/4")", kModeFeatureTempoSync, "W2"},
       {"scheduler.steps.entries", R"([{"slot": 1}])", kModeFeatureSteps, "W2"},
       {"scheduler.steps.order", R"("random")", kModeFeatureSteps, "W2"},
       {"layers[0].position.mark.walk", R"("cascade")", kModeFeatureMarkWalk, "W2"},
@@ -330,12 +330,79 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
   REQUIRE(p.state->mode.pitch[0].entries[1].weight == 1u);
   REQUIRE(p.state->mode.steps.entries[1].gain == 1.0f);
   REQUIRE(p.state->performance.usPerQuarter == 400000u);
-  // Performance state, a W2 field, is E6 until CLOCK.
-  Refused(With("performance.reverse", json::Value::Bool(true)), "E6", "/performance/reverse");
-  // Tempo divisions are W2's vocabulary, so E6 even where features are widened.
-  Refused(With("layers[0].position.base_sync", Str("1/4")), "E6", "/layers/0/position/base_sync",
-          AllFeatures());
+  REQUIRE(p.state->performance.subdiv == Subdivision::Double);
+  REQUIRE(p.state->performance.reserved == 0u);
+  REQUIRE(p.state->mode.layers[0].baseSync == 8u);  // 1/8d (docs/design/clock.md §5.2)
+  REQUIRE(p.state->mode.schedule.reserved == 0u);
   Ok(With("layers[0].position.base_sync", Str("off")));
+}
+
+TEST_CASE("compile: the performance state and the divisions (docs/design/clock.md §11.1)",
+          "[compile]") {
+  using namespace brainscape;
+  // The stored tempo, time mode and subdivision come with CLOCK (the tempo core); global reverse
+  // later, so `reverse: true` is E6 wherever CLOCK is supported but global reverse is not.
+  bsc::CompileOptions clockOnly = AllFeatures();
+  clockOnly.read.globalReverse  = false;
+  Refused(With("performance.reverse", json::Value::Bool(true)), "E6", "/performance/reverse");
+  Refused(With("performance.reverse", json::Value::Bool(true)), "E6", "/performance/reverse",
+          clockOnly);
+  const bool tempoCore = (kSupportedModeFeatures & kModeFeatureClock) != 0u;
+  struct Field {
+    const char* path;
+    const char* json;
+  };
+  for (const Field& f : {Field{"performance.time_mode", R"("subdiv")"},
+                         Field{"performance.subdiv", R"("x1/4")"},
+                         Field{"performance.tempo_us_per_quarter", "428571"}}) {
+    INFO(f.path);
+    const std::string text = With(f.path, Parse(f.json));
+    if (tempoCore) {
+      RoundTrip(text);
+    } else {
+      const std::vector<Finding> e = Refused(text, "E6", nullptr);
+      REQUIRE(e[0].message.find("W2 (the tempo core)") != std::string::npos);
+    }
+    RoundTrip(text, clockOnly);
+  }
+  // §5.1: the six positions in code order, TAP the default (code 0, not written).
+  const char* const rates[] = {"tap", "x1/4", "x1/2", "x2", "x4", "x8"};
+  for (uint8_t code = 0; code < kSubdivisionCount; ++code) {
+    const CompileResult  r = Ok(With("performance.subdiv", Str(rates[code])), clockOnly);
+    const DecodedPackage p = DecodePackage(r.package.data(), r.package.size(), AllFeatures());
+    REQUIRE(p.ok);
+    REQUIRE(static_cast<uint8_t>(p.state->performance.subdiv) == code);
+    REQUIRE((code == 0u) == (Parse(r.json).Find("performance") == nullptr));
+  }
+  // The Microcosm's printed labels are E5, never read as rates or note values (P6).
+  for (const char* printed : {"1/4", "1/2", "TAP", "2x", "4x", "8x"}) {
+    INFO(printed);
+    const std::vector<Finding> e =
+        Refused(With("performance.subdiv", Str(printed)), "E5", "/performance/subdiv", clockOnly);
+    REQUIRE(e[0].message.find("are rates") != std::string::npos);
+  }
+  Refused(With("performance.subdiv", Str("x16")), "E5", "/performance/subdiv", clockOnly);
+  // D14 and D3: the scheduler's subdivision and the stored tempo source are withdrawn, E2.
+  const std::vector<Finding> sched =
+      Refused(With("scheduler.subdiv", Str("tap")), "E2", "/scheduler/subdiv", AllFeatures());
+  REQUIRE(sched[0].message.find("performance.subdiv") != std::string::npos);
+  Refused(With("performance.tempo_source", Str("internal")), "E2", "/performance/tempo_source",
+          AllFeatures());
+  // §5.2's sixteen note values by name, round trip; a name outside them is E5.
+  const char* const names[] = {"1/32", "1/16t", "1/16", "1/8t", "1/16d", "1/8",  "1/4t", "1/8d",
+                               "1/4",  "1/2t",  "1/4d", "1/2",  "1/1t",  "1/2d", "1/1",  "2/1"};
+  for (uint8_t code = 1; code <= kMaxSyncDivision; ++code) {
+    INFO(names[code - 1]);
+    const std::string    text = With("layers[0].position.base_sync", Str(names[code - 1]));
+    const CompileResult  r    = Ok(text, AllFeatures());
+    const DecodedPackage p    = DecodePackage(r.package.data(), r.package.size(), AllFeatures());
+    REQUIRE(p.state->mode.layers[0].baseSync == code);
+    RoundTrip(text, AllFeatures());
+  }
+  Refused(With("layers[0].position.base_sync", Str("1/8D")), "E5", "/layers/0/position/base_sync",
+          AllFeatures());
+  Refused(With("layers[0].position.base_sync", Str("division 3")), "E5",
+          "/layers/0/position/base_sync", AllFeatures());
 }
 
 TEST_CASE("compile: wave 1 compiles here as each feature lands", "[compile]") {
@@ -663,7 +730,7 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
 
 TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   const std::string messy = R"({"name": "Messy", "id": "test.messy", "schema_version": 1,
-    "scheduler": {"jitter": 0.250, "sources": ["midi_note", "periodic", "footswitch"], "subdiv": "1/4"},
+    "scheduler": {"jitter": 0.250, "sources": ["midi_note", "periodic", "footswitch"]},
     "layers": [{"size_ms": 1.0e2, "slot_share": 1, "voice_count": 64,
                 "pitch": {"transpose_st": -0, "select": "cycle"},
                 "position": {"spray_ms": 7.0385307e-26, "base_ms": 1e-46}}],
@@ -694,7 +761,6 @@ TEST_CASE("compile: the canonical form (§6.4)", "[compile]") {
   REQUIRE(json::Serialize(*sched.Find("sources")) ==
           "[\"periodic\", \"footswitch\", \"midi_note\"]\n");
   REQUIRE(sched.Find("jitter")->text == "0.25");
-  REQUIRE(sched.Find("subdiv") == nullptr);  // the default structure is not written
   const json::Value& layer = v.Find("layers")->items[0];
   REQUIRE(layer.Find("slot_share") == nullptr);
   REQUIRE(layer.Find("voice_count")->text == "64");  // a Leaf row since sound revision 7

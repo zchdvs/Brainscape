@@ -21,8 +21,11 @@ namespace brainscape::blobtest {
 // 5 for the same two (pitch sets); at 6 for the soundRev and the Leaf rows 29 and 30, which
 // CTRL's and MACR's targets may name; and at 7 for the soundRev and the Leaf row 31. Re-minted
 // at 7 again when the samples' Reserved target moved from row 30 (a Leaf since 6) to row 32
-// (W3), so DecodePreset's UnsupportedTarget is reached again (51 decode codes).
-const char* const kFuzzDigest = "c49c145f723e6dd68b8f4f2a8b9ff61d8b569f8d71b2ffc57bc677a59fed7b68";
+// (W3), so DecodePreset's UnsupportedTarget is reached again (51 decode codes). Re-minted for
+// the tempo core's reserved bytes (docs/design/clock.md §11.2): a nonzero SCHD byte 2, which was
+// the scheduler's subdiv, is ModePadding and a nonzero STAT performance byte 3, which was
+// tempo_source, is Performance.
+const char* const kFuzzDigest = "a6d8f20138ee19919a9188a3af5bd0cdac3f29782db2b3d5a70132afc5c08546";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",
@@ -139,6 +142,23 @@ const Fixture kFixtures[] = {
      "a wave-2 package (a step table of four steps, shuffled): rejected as UnsupportedFeature, "
      "named, until W2 plays step tables (mode-compiler.md §7.5). Its verdict changes in that "
      "pull request",
+     PresetError::None, 0},
+    // The tempo core's reserved bytes (docs/design/clock.md §2.4, §11.2): a package a compiler
+    // wrote before the tempo core, with STAT's `tempo_source` or SCHD's `subdiv` set. No
+    // committed package carries either.
+    {"stat-tempo-source.bsp",
+     "abdaa7fe7ea62fa5e7585eb23fc9881b833d864e317465297ce7557684f96288",
+     PresetError::Performance, 0, 0, false, 0,
+     "STAT's performance byte 3 at 1, `tempo_source` midi as the first schema wrote it: the "
+     "tempo source is a device setting since the tempo core (clock.md D3), so the byte is "
+     "reserved and a nonzero one fails as Performance",
+     PresetError::None, 0},
+    {"schd-subdiv.bsp",
+     "ef95c88ec1141bf9602830d35f23618e696265543c214b26c52afdfebee1a38b",
+     PresetError::ModePadding, kChunkSchd, 0, false, 0,
+     "SCHD's byte 2 at 1, the scheduler's `subdiv` as the first schema wrote it: withdrawn for "
+     "the performance state's one subdivision (clock.md D14), so the byte is reserved and a "
+     "nonzero one fails as ModePadding, named",
      PresetError::None, 0},
 };
 const size_t kFixtureCount = sizeof kFixtures / sizeof kFixtures[0];
@@ -312,6 +332,21 @@ Bytes MakeFixture(size_t index) {
       }
       s->mode.features = RequiredModeFeatures(s->mode);
       return R1Package(*s);
+    }
+    case 18: {
+      // STAT: u32 n, n leaves of 8 bytes, then the performance state; byte 3 was tempo_source.
+      Bytes        b    = R1Package(*s);
+      const size_t stat = FindSection(b, kTagStat) + 8;
+      b[stat + 4 + 8 * Rd32(&b[stat]) + 3] = 1;
+      Rehash(b);
+      return b;
+    }
+    case 19: {
+      // SCHD's payload: sources, layer count, then byte 2, which was the scheduler's subdiv.
+      Bytes b = R1Package(*s);
+      b[FindChunk(b, kChunkSchd) + 8 + 2] = 1;
+      Rehash(b);
+      return b;
     }
     default: return Bytes();
   }

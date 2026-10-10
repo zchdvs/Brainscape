@@ -297,7 +297,7 @@ uint32_t UnsupportedPerformance(const PerformanceState& p) noexcept {
   return static_cast<uint32_t>(p.reverse != def.reverse) +
          static_cast<uint32_t>(p.timeMode != def.timeMode) +
          static_cast<uint32_t>(p.subdiv != def.subdiv) +
-         static_cast<uint32_t>(p.tempoSource != def.tempoSource) +
+         static_cast<uint32_t>(p.reserved != def.reserved) +
          static_cast<uint32_t>(p.usPerQuarter != def.usPerQuarter);
 }
 

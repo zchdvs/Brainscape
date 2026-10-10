@@ -113,7 +113,7 @@ bool WriteMode(Writer& w, const ModeBlob& mode) noexcept {
   Chunk(w, kChunkSchd, 8, [&] {
     w.U8(mode.schedule.sources);
     w.U8(mode.schedule.layerCount);
-    w.U8(static_cast<uint8_t>(mode.schedule.subdiv));
+    w.U8(mode.schedule.reserved);
     w.U8(static_cast<uint8_t>(mode.schedule.stepOrder));
     w.Bytes(mode.schedule.pad, 4);
   });
@@ -208,7 +208,7 @@ void WriteStat(Writer& w, const PresetState& s) noexcept {
   w.U8(s.performance.reverse);
   w.U8(static_cast<uint8_t>(s.performance.timeMode));
   w.U8(static_cast<uint8_t>(s.performance.subdiv));
-  w.U8(static_cast<uint8_t>(s.performance.tempoSource));
+  w.U8(s.performance.reserved);
   w.U32(s.performance.usPerQuarter);
 }
 

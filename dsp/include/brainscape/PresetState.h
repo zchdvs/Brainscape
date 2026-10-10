@@ -39,19 +39,20 @@ struct ControlState {  // 132 bytes
   ExpressionAssignment expressions[kMaxExpressions] = {};
 };
 
-// The stored performance state (§2.6, W2), STAT's tail: what the knobs and switches outside the
-// macros start at. Tempo is integer microseconds per quarter, so no floating point is stored.
+// The stored performance state (§2.6; docs/design/clock.md §2.4), STAT's tail: what the knobs
+// and switches outside the macros start at, played from the tempo core (W2). Tempo is integer
+// microseconds per quarter, so no floating point is stored. Byte 3 was `tempo_source`: the tempo
+// source is a device setting (clock.md D3), so the byte is reserved and must be 0, as
+// DecodePreset requires.
 enum class TimeMode : uint8_t { Free, Subdivision, Tempo };
 inline constexpr uint8_t kTimeModeCount = 3;
-enum class TempoSource : uint8_t { Internal, Midi, Host };
-inline constexpr uint8_t kTempoSourceCount = 3;
 inline constexpr uint32_t kMinUsPerQuarter = 200000;   // 300 BPM
 inline constexpr uint32_t kMaxUsPerQuarter = 3000000;  // 20 BPM
 struct PerformanceState {  // 8 bytes
   uint8_t     reverse      = 0;  // 0 or 1
   TimeMode    timeMode     = TimeMode::Free;
-  Subdivision subdiv       = Subdivision::Quarter;
-  TempoSource tempoSource  = TempoSource::Internal;
+  Subdivision subdiv       = Subdivision::Tap;  // §5.1's codes (Mode.h)
+  uint8_t     reserved     = 0;                 // 0: was tempo_source (D3)
   uint32_t    usPerQuarter = 500000;  // 120 BPM
 };
 
