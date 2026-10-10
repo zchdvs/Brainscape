@@ -139,3 +139,4 @@ add_test(NAME dsp_fp_profile_check
 
 add_subdirectory(golden)
 add_subdirectory(blob)
+add_subdirectory(tempo)
