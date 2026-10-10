@@ -166,6 +166,43 @@ No engine change: the set plays at sound revision 7.
   strict: Peak is judged on the class inputs again and the other inputs' stored peaks are reported
   under Peak (other), never failed. No recipe or stored Mix changed; the re-run pre-screen gives
   the same 1,488 render hashes and all 18 pass, every other input's stored peak under −1 dBFS.
+  *(2026-10-09: the owner asked for the limiter's design to start now. It is
+  [output-limiter.md](design/output-limiter.md), draft 2 for the owner's decisions after three
+  reviews, not built: a zero-latency, linked peak limiter at the end of the engine for the pedal
+  and the plugin, in which the wet gives way first, down to −12 dB, before the dry. It engages
+  only on samples over full scale. So the engaged renders at the stored positions on the class
+  inputs, and every class-input sweep and S11 render, keep their hashes. Every S0 Saturation
+  render changes, and so do Echolalia's S0 OnsetBursts render (+0.14 dBFS today) and Déjà Vu's
+  S0 wet SoftNotes render (+0.52 dBFS), which the pre-screen's "S0 highest" line hid; the attack
+  modes' SoftNotes corners become limited, not clipped. Peak (moved) becomes zero limiter
+  engagement on the class input. It proposes sound revision 8, after a Rev7 DAC test and before
+  the knob-rating rows are written.)* *(2026-10-10: the owner answered the limiter's thirteen
+  decisions. Twelve are confirmed as recommended, among them the next free sound revision after
+  CLOCK's 8 and 9, expected **10**, before the knob-rating rows and the governor (11). **D5 is
+  changed by the owner to a per-preset switch**, chosen in the session from four options after a
+  "Change" with no note on the decisions page: a stored Leaf row, **87, `output.limiter`,
+  default On**, so a mode can turn the limiter off on purpose.*
+  - *Off clips at the same ceiling, the owner's answer to its §11.5 Q1 ("Hard-clip"), as the
+    design recommended: on the pedal that is code for code the unlimited engine, and in the
+    plugin it matches the pedal. Letting overs pass would have split the plugin from the pedal
+    above full scale.*
+  - *Turning it Off mid-limiting drains the gain at 40 dB/s, then clips.*
+  - *Macros, expression and host automation cannot reach it. Users see its states as Limit and
+    Clip, and a Clip preset is shown from its load.*
+  - *Factory presets keep it On: a new owner decision, D14, which the owner confirmed as
+    recommended ("Keep factory On"), enforced by a new lint, L15.*
+  - *No render changes for it but a test preset's, but every committed package's `sound_hash`
+    does, so revision 10's pull request carries the package-change label.*
+
+  *Row 87 is the limiter's switch: a lane that appends a parameter row first starts at 88. After
+  CLOCK's tempo core the live image has 792 bytes of ITCM spare, so the limiter lands after the
+  cold-code move that synced times also need. The design is draft 4 on PR #13, after two reviews
+  of draft 3, corrected the same day: draft 4 had called the switch a proposal, because its
+  reviewers saw only the decisions page. The owner then answered its three open questions in the
+  session, each as recommended: Off hard-clips (Q1), factory presets keep it On (D14), and a Limit
+  preset loading with trails after a Clip one drops at once (Q9, "Instant"; the gradual entry
+  ramp is not built). No limiter question waits on the owner; L1b's DAC test, L2's A/B and bench
+  session 2 settle the rest.)*
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -819,8 +856,10 @@ records live in [docs/design/reviews/](design/reviews/).
   135.5 % (20 ms grains), 168.5 % (1 ms grains) and 146.3 % (under events), and the corpus's
   `dense_1ms`, a live-image preset, at 118.6 %.
   The fix is designed and owner-approved (2026-10-08: [cpu-budget.md](design/cpu-budget.md), its
-  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor at sound
-  revision 8 (9 if CLOCK's tempo core lands first) that holds any 48 frames to 85 %. Of it, this
+  decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor that
+  holds any 48 frames to 85 %. The governor is now expected at sound revision 11, after CLOCK's
+  8 and 9 and the output limiter's 10, by the owner's answers of 2026-10-09 and 2026-10-10;
+  cpu-budget.md's "8, or 9" is amended when its lane starts. Of it, this
   tree has steps 1–2, both bit-exact: the onset hop analysis restructured (P3's rewrite, chosen
   under its D4 because P1's would not fit wave 1's ITCM) and post-chain hygiene; wave 1's ITCM
   leaves too little room for steps 4, 5 and 11 until cold code moves out (cpu-budget.md §7.3).
@@ -1082,7 +1121,14 @@ records live in [docs/design/reviews/](design/reviews/).
   Q13, reversible until the first public revision (a reversal is its own revision). The law raises
   output peaks with the level, by up to 6 dB at Mix 0.5 where dry and wet peak together: on the
   hottest test vector three first-set recipes peak above 0 dBFS at their stored positions, and
-  the engine saturates only near `FLT_MAX`, so the pedal's codec or a host would clip them. Lane
+  the engine saturates only near `FLT_MAX`, so the pedal's codec or a host would clip them
+  *(2026-10-09: [output-limiter.md](design/output-limiter.md), a draft not yet built, designs the
+  engine's safety limiter. It holds every sample at or under full scale on both targets. When the
+  mix would pass full scale the wet gives way first, by up to 12 dB, and the dry dips only past
+  that: on every factory preset at its stored positions, raising the effect volume to +12 dB or
+  the Mix to 0.5 leaves the dry untouched (measured on reconstructed renders). It never acts below
+  full scale, so the law's "dry at unity up to the middle" holds wherever nothing would clip, and
+  wherever the wet alone can absorb the over)*. Lane
   E's trims and input classes and the owner's listening decide whether such a mode wants a lower
   trim or Mix. The knob's taper stays linear, and the plugin's wrapper bypass with its crossfade
   is still to build (plugin gaps, below).
@@ -1238,15 +1284,24 @@ Steps 1–4 need no hardware.
    with the owner's audition set rendered; the owner has heard it (2026-10-08) and keeps all 14.
    *Next:* the owner's knob ratings in the curation view (the factory set's **feel**, which only
    the owner's ears can judge) and the exit criteria; then the keepers join the golden corpus. The
-   output safety limiter the owner asked for comes as a sound revision of its own. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   output safety limiter the owner asked for comes as a sound revision of its own: designed
+   2026-10-09 in [output-limiter.md](design/output-limiter.md), now draft 4 with the owner's
+   answers of 2026-10-10 (its evidence, review dispositions and the answers in
+   [reviews/output-limiter-record.md](design/reviews/output-limiter-record.md)). It lands as the
+   next free revision after CLOCK's tempo core (8) and synced times (9), expected 10, before the
+   knob-rating rows and the cost governor (11), so the ratings are given on the limited sound and
+   none needs a re-listen; a Rev7 test of the DAC's inter-sample behaviour (its lane L1b) comes
+   first, so the ceiling is fixed once. Its D5 is the owner's per-preset switch (row 87,
+   `output.limiter`, default On); by the owner's answers of 2026-10-10, Off clips at the ceiling
+   and factory presets keep it On (D14), so no limiter question waits on the owner. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
    Next, the CPU budget's fix (owner-approved 2026-10-08, [cpu-budget.md](design/cpu-budget.md);
-   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 8, or 9
-   after CLOCK's tempo core; the worst case is not met yet) and the decisions the pass leaves
+   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 11, after
+   CLOCK's 8 and 9 and the output limiter's 10; the worst case is not met yet) and the decisions the pass leaves
    (polynomial kernels or tables, the pedal's default load mode; explicit FMA is deferred by the
    fix's D10); the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY

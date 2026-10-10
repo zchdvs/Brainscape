@@ -371,6 +371,40 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
   subnormal inputs and parameters and requires finite output equal to the sanitized run, over
   several seeds: with one, the overflow above went unnoticed.
 
+> **Update (2026-10-09, the output limiter).** [output-limiter.md](output-limiter.md), a draft for
+> the owner's decisions and not built, adds a last step after the final mix's ±`FLT_MAX`
+> saturation: a peak limiter with a ceiling of exactly 1.0. Today the pedal's codec clamps every
+> over at ±0.999985 (§2.2) and the plugin passes it on, so the two differ above full scale. With
+> the limiter the engine's own output stops at 1.0, the same on every target.
+>
+> It works within this profile's rules:
+> - only +, −, ×, ÷, compares and bit operations, with no transcendental per sample;
+> - its two release steps are computed once at `Init` with `Exp2D`;
+> - its gain never decays toward 0, so §4.3 gains no site;
+> - per-sample state only;
+> - one-sided compares, so NaN still reaches the Debug assertion, and a final clamp that bounds
+>   every limited sample;
+> - each channel's ceiling is max(1, |dry term|), and the wet gives way first, by up to 12 dB, so
+>   this section's sanitized live dry still passes above 0 dBFS unclipped, and Mix 0 stays the
+>   input on hostile input whenever the wet's gain is at −12 dB or above.
+>
+> A prototype built into revision 7's engine kept 37 of the 45 golden hashes, each identical under
+> every block pattern, delivery and the hostile environment, and passed the forced-flush control.
+> Its §5 gives the arithmetic.
+>
+> *2026-10-10:* the owner's answers add a per-preset switch (row 87, `output.limiter`). With it
+> Off the over is clamped at the same ceiling, and a switch to Off mid-limiting releases the gain
+> to exactly 1 at the fast rate. It is applied through a seventh parameter domain at its event's
+> frame, so the output still stops at 1.0 on every target and every rule above still holds (its
+> §4.7). *Draft 4, corrected:* the switch is the owner's choice for that decision, made in the
+> session from four options (draft 4 first called it a proposal). Whether Off clamps, as above,
+> or passes overs is still the owner's question (its §11.5 Q1), with the clamp recommended, which
+> keeps the output at the same ceiling on every target; `Reset` primes the limiter before its
+> own rebuild, so the switch always sees unity gain after a restart (its §6.1).
+>
+> *2026-10-10, the owner's answer:* Off clamps, as above, so the output stops at the same ceiling
+> on every target with the switch On or Off (its §11.5 Q1).
+
 ### 3.8 Conforming builds and supported targets
 
 > **Update (2026-10-07, Rev7 silicon record).** The Cortex-M7 conforms on silicon too: on the

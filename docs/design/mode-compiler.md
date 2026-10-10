@@ -1688,6 +1688,51 @@ output safety limiter, a sound revision of its own, not yet built. All 14 modes 
 pending the owner's knob ratings in the curation slice. `firmware/factory/AUDITION.md` records
 each change, its numbers and the owner's answers.
 
+> **Update (2026-10-09, the output limiter).** The owner asked for the limiter's design to start
+> now. It is [output-limiter.md](output-limiter.md), draft 2 for the owner's decisions after three
+> reviews, and nothing in it is built. It proposes a zero-latency, linked peak limiter at the end
+> of the engine's output pass, for the pedal and the plugin alike:
+> - it engages only on samples that would pass full scale (a hard knee at 1.0), so every render
+>   at or under 0 dBFS keeps its hash;
+> - the wet gives way first, down to −12 dB, and only then the whole mix, so the effect volume
+>   (row 82) and the Mix knob never duck the dry at the first set's stored positions;
+> - it releases at 40 dB/s after an isolated over and at 10 dB/s once overs return during a
+>   release, to exactly unity;
+> - it has no control.
+>
+> Its D8 keeps this table's Peak at stored positions (≤ −1 dBFS on the class inputs). It replaces
+> "≤ 0 dBFS during sweeps and S11" with zero limiter engagement on the class input, read from the
+> engine's count, since no render can then exceed 0 dBFS. Engagement elsewhere is reported per
+> render and never failed: the attack modes' +2.5 dBFS SoftNotes corners, every S0 Saturation
+> render, and two S0 renders over 0 dBFS today that the pre-screen's "S0 highest" line hid,
+> Echolalia's OnsetBursts render (+0.14 dBFS) and Déjà Vu's wet SoftNotes render (+0.52 dBFS). It
+> proposes sound revision 8, landing before the cost governor and CLOCK's tempo core, and before
+> the knob-rating rows are written. Every mode's S0 Saturation render changes, so a row rated
+> earlier would need a re-listen (its §9.6).
+>
+> *2026-10-10, the owner's answers:* the revision is the next free one after CLOCK's 8 and 9,
+> expected 10. The limiter is no longer without control. Its D5 gives each preset a switch, Leaf
+> row 87, `output.limiter`, default On. Its details:
+> - Off clips at the same ceiling.
+> - No macro or expression target may reach it (E8); hosts register it without automation.
+> - The new lint **L15** makes Off an error under `--factory`, so factory presets keep it On.
+> - The compiler writes the leaf into every document as `"output": { "limiter": 1 }`, after
+>   `wet_trim_db`. So every committed package's `sound_hash` changes at revision 10, with the
+>   package-change label, and no render changes for it (output-limiter.md §7.1, §9.5).
+>
+> *2026-10-10, draft 4, corrected:* the per-preset switch above is the owner's own choice for its
+> D5, made in the session from four options after a "Change" with no note on the decisions page
+> (draft 4 first called it a proposal). Row 87 is the switch's. What Off does stays the owner's
+> question (its §11.5 Q1), recommended as above, a clip at the same ceiling. Whether factory
+> presets may set it Off, and so whether L15 is an error under `--factory`, is now the owner's
+> D14, recommended On. The leaf reads as any integer-valued leaf (§2.2, §3.7): a fraction is
+> accepted and plays by the threshold, so this document needs no amendment. Users see its states
+> as Limit and Clip.
+>
+> *2026-10-10, the owner's last answers:* Off clips at the same ceiling, and factory presets keep
+> the switch On (its D14), so L15 is an error under `--factory`; the `--clips` declaration that
+> would let a factory mode clip waits until one asks for it (output-limiter.md §9.5, §11.5).
+
 ### 11.4 What waits
 
 | Microcosm family | Waits for |

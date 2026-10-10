@@ -472,6 +472,29 @@ the 24-bit branch.
   `docs/research/bom-cost-and-product-form.md:133`) and every desktop path, and is part of the
   render recipe (§4.9) and the PARITY request (§7.4).
 
+> **Update (2026-10-09, the output limiter).** [output-limiter.md](output-limiter.md), a draft and
+> not built, puts a safety limiter at the end of the engine. The wrapper therefore receives what
+> the pedal's codec receives, never over full scale unless the dry itself is. Each channel's
+> ceiling is max(1, |dry term|), so the live path keeps its headroom above: no output exceeds
+> that ceiling, and the limiter scales the wet first, by up to 12 dB, before it touches the dry.
+> A dry over 0 dBFS therefore passes at Mix 0 bit for bit whenever the wet's gain is at −12 dB or
+> above. Past that, the gain, linked across channels, can pull a hot dry below its own level (its
+> §4.4 item 7). The wrapper's Output level stays after the engine, outside parity, so a user who
+> raises it can still exceed 0 dBFS. The editor gains a limiter lamp, a mark for when the dry dips
+> too, and the gain-reduction readout at the output meter (its §7.3). There is no control and no
+> latency. *(2026-10-10: the owner's answer to its D5 adds a per-preset switch, Leaf row 87,
+> `output.limiter`, default On. With it Off the engine clips at the same ceiling instead of
+> limiting, so the wrapper still never receives an over that the dry does not carry. The plugin
+> registers it without automation, shows it in the Leaves view and captions the lamp CLIP while it
+> is Off (its §7.1, §7.3). There is still no latency.)* *(Draft 4, 2026-10-10, corrected: the
+> switch is the owner's choice for D5, made in the session from four options; draft 4 first
+> called it a proposal. Whether Off clips, as above, or passes overs to the host unclipped is
+> still the owner's question (its §11.5 Q1), recommended Clip so the plugin matches the pedal.
+> The plugin shows its states as Limit and Clip and tags Clip presets in the Library list and the
+> Modes menu.)* *(2026-10-10, the owner's answers: Off clips, so the plugin clips exactly as the
+> pedal does, and a Limit preset loaded with Trails after a Clip one limits at once, without a
+> ramp (its §11.5 Q1 and Q9).)*
+
 ### 4.9 Restart, offline renders and reproducible bounces
 
 **`Engine::Restart()`** (profile §5.8) returns a running engine to the exact post-`Init` state,
