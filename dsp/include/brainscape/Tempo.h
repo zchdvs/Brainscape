@@ -107,8 +107,8 @@ constexpr uint32_t NoteTicks(uint8_t code) noexcept {
 // quarter (TempoInfo::nsPerQuarter), which is exact for every tempo that is a whole number of ns
 // (presets, the Tempo knob, a host) and otherwise within a frame of what plays.
 enum class SyncTarget : uint8_t {
-  PostDelay,  // row 63: 10 ms to 4 s inclusive, round-up(R / 100) to 4·R frames
-  BaseDelay,  // a layer's base_sync: 1 ms to 5 s, round-up(R / 1000) to 5·R frames
+  PostDelay,  // row 63: round-up(R / 100) to 4·R + (4·R >> 7) frames inclusive (10 ms-4.03 s)
+  BaseDelay,  // a layer's base_sync: round-up(R / 1000) to 5·R + (5·R >> 7) frames (1 ms-5.04 s)
 };
 struct SyncedTime {
   uint32_t frames  = 0;  // what plays, exact integer frames; 0 for code 0 or an invalid input

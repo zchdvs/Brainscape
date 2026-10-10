@@ -22,6 +22,7 @@
 #include "catch.hpp"
 #include "detail/FpEnvGuard.h"
 #include "detail/PostChain.h"
+#include "detail/Smoother.h"
 #include "detail/Tempo.h"
 
 using namespace brainscape;
@@ -109,17 +110,19 @@ Stereo Impulse(size_t frames) {
   return s;
 }
 
-EngineConfig Config() {
+EngineConfig Config(double sampleRate = 48000.0) {
   EngineConfig cfg;
+  cfg.sampleRate      = sampleRate;
   cfg.historyFrames   = 1u << 16;
   cfg.ditherRingWrite = false;
   return cfg;
 }
 
 struct Rig {
+  EngineConfig     cfg;
   host::HeapArenas arenas;
   Engine           engine;
-  explicit Rig(const EngineConfig& cfg = Config()) : arenas(PlanMemory(cfg)) {
+  explicit Rig(const EngineConfig& c = Config()) : cfg(c), arenas(PlanMemory(c)) {
     REQUIRE(arenas.ok());
     REQUIRE(engine.Init(cfg, arenas.get()));
   }
@@ -334,8 +337,8 @@ TEST_CASE("synced durations: §5.2's and §5.3's worked values and the fold edge
   const auto post = [](uint8_t code, uint32_t ns, uint8_t subdiv = 0) {
     return tempo::SyncedDuration(SyncTarget::PostDelay, code, ns, subdiv, 0, kRate);
   };
-  // 1/1 at 120 BPM is 2 s and 2/1 is 4 s exactly, the maximum inclusive: neither folds (with
-  // draft v1's 2 s line both folded at the default tempo, record §6, P5).
+  // 1/1 at 120 BPM is 2 s and 2/1 is 4 s exactly, under the maximum: neither folds (with draft
+  // v1's 2 s line both folded at the default tempo, record §6, P5).
   CHECK(post(15, 500000000).frames == 96000u);
   CHECK(post(15, 500000000).octaves == 0);
   CHECK(post(16, 500000000).frames == 192000u);
@@ -367,11 +370,27 @@ TEST_CASE("synced durations: §5.2's and §5.3's worked values and the fold edge
   CHECK(k == 0);
   CHECK(tempo::FoldedFrames(low - (1ull << 32), 24, 24, 480, 192000, &k) == 958u);
   CHECK(k == 1);
-  // The ranges at 48 kHz: 10 ms-4 s and 1 ms-5 s.
+  // The ranges at 48 kHz: 10 ms to 4 s and 2^-7 of it, 1 ms to 5 s and 2^-7 of it (§11.16).
   CHECK(tempo::PostSyncMinFrames(kRate) == 480u);
-  CHECK(tempo::PostSyncMaxFrames(kRate) == 192000u);
+  CHECK(tempo::PostSyncMaxFrames(kRate) == 193500u);
   CHECK(tempo::BaseSyncMinFrames(kRate) == 48u);
-  CHECK(tempo::BaseSyncMaxFrames(kRate) == 240000u);
+  CHECK(tempo::BaseSyncMaxFrames(kRate) == 241875u);
+  CHECK(tempo::PostSyncMaxFrames(44100) == 177778u);
+  CHECK(tempo::PostSyncMaxFrames(384000) == 1548000u);
+  // The headroom keeps 120 BPM off the fold boundary: a 2/1 a little slower than 120 BPM, as a
+  // clock's fit may commit it (0.05 % slow: 192,096 frames), plays unfolded, as does one at the
+  // maximum itself (1/2D at 44.65 BPM, 3 · 64,500 frames); at 119 BPM (above) it folds.
+  CHECK(post(16, 500250000).frames == 192096u);
+  CHECK(post(16, 500250000).octaves == 0);
+  CHECK(post(14, 1343750000).frames == 193500u);
+  CHECK(post(14, 1343750000).octaves == 0);
+  CHECK(post(14, 1343753500).frames == 96750u);  // 193,501 frames, halved from Pc
+  CHECK(post(14, 1343753500).octaves == -1);
+  // ... and a synced base 2/1 at 96 BPM (5 s) likewise.
+  const tempo::SyncedTime base96 =
+      tempo::SyncedDuration(SyncTarget::BaseDelay, 16, 625000000, 0, 0, kRate);
+  CHECK(base96.frames == 240000u);
+  CHECK(base96.octaves == 0);
   // Inputs out of range give no duration.
   CHECK(post(0, 500000000).frames == 0u);
   CHECK(post(17, 500000000).frames == 0u);
@@ -423,9 +442,10 @@ TEST_CASE("synced durations: the effective value as the editor and the plugin sh
 
 // ── §7.3: the post chain's crossfade, chain of fades and slew ──────────────────────────────────
 
-TEST_CASE("post chain: a synced echo lands on its exact frame, to the 4 s line's end (§6.1)",
+TEST_CASE("post chain: a synced echo lands on its exact frame, to the line's end (§6.1)",
           "[sync]") {
-  for (const uint32_t frames : {480u, 20571u, 20945u, 95999u, 96000u, 191999u, 192000u}) {
+  for (const uint32_t frames : {480u, 20571u, 20945u, 95999u, 96000u, 191999u, 192000u, 193499u,
+                                193500u}) {
     INFO(frames << " frames");
     std::vector<float> in(frames + 64, 0.0f);
     in[0]                      = 1.0f;
@@ -790,4 +810,209 @@ TEST_CASE("synced times: Restart equals Init and an Exact load of the active pre
   Rig b;
   REQUIRE(b.engine.LoadPreset(*preset, LoadMode::Exact));
   CHECK(Same(Render(a.engine, in, {}), Render(b.engine, in, {})));
+}
+
+// ── The reviews' amendments (clock.md §11.16) ───────────────────────────────────────────────────
+
+TEST_CASE("post chain: a Drift's slew is capped at 2^-10 frames a frame on long echoes, within "
+          "§7.4's 0.1 % (§7.2)",
+          "[sync]") {
+  // The head alone, stepped with the slew's pair as PostChain computes it: its position is exact,
+  // so its speed is the bend. Measured commit sizes (§7.1: at most 0.34 % after lock, 0.58 %
+  // before the window fills) on 1 s, 2 s, 4 s and the longest echoes.
+  const float coef = -static_cast<float>(std::expm1(-1.0 / 48000.0));
+  const float keep = 1.0f - coef;
+  struct Case {
+    uint32_t from, to;
+  };
+  for (const Case c : {Case{48000, 48163}, Case{96000, 96326}, Case{96000, 96557},
+                       Case{191300, 191950}, Case{192000, 193113}, Case{24000, 24096}}) {
+    INFO(c.from << " to " << c.to);
+    detail::TapGlide g;
+    g.Prime(c.from);
+    g.Retarget(c.to);
+    g.slow = true;
+    double  prev = c.from, maxSpeed = 0.0;
+    int64_t n    = 0;
+    for (; g.moving && n < 4000000; ++n) {
+      g.Step(coef, keep);
+      const double head = static_cast<double>(g.base) + static_cast<double>(g.frac);
+      maxSpeed          = std::max(maxSpeed, std::fabs(head - prev));
+      prev              = head;
+    }
+    CHECK_FALSE(g.moving);  // landed on the integer tap, exactly
+    CHECK(g.base == c.to);
+    // The head's float fraction rounds each step by at most 2^-25 of a frame.
+    CHECK(maxSpeed <= 0x1p-10 + 0x1p-20);
+    CHECK(maxSpeed < 0.001);
+    // Without the cap the τ = 1 s pair would bend a change of Δ frames by Δ/(e·τ), past the cap
+    // from 128 frames: the long ones run at the cap.
+    if (c.to - c.from > 160u) CHECK(maxSpeed > 0x1p-10 - 0x1p-20);
+  }
+}
+
+TEST_CASE("synced times: a 2/1 at 120 BPM under a block-stamped MIDI clock never folds (D23, "
+          "§5.3)",
+          "[sync]") {
+  // The hardware model of §8.3: ticks of an exact 120 BPM clock stamped at the next 48-frame block
+  // boundary, at 16 phases of the grid. The fit commits a tempo a few ppm off 120 BPM, slow at
+  // some phases, where an inclusive 4·R maximum folded the 2/1 to a whole note (§11.16); with
+  // the headroom it never folds and nothing crossfades.
+  auto preset = Preset(With(Clean(50.0f), {{ParamId::DelayMix, 1.0f}, {ParamId::DelayFb, 0.0f},
+                                           {ParamId::DelaySync, 16.0f}}));
+  const Stereo in{std::vector<float>(450000, 0.0f), std::vector<float>(450000, 0.0f)};
+  int slowPhases = 0;
+  for (int64_t ph = 0; ph < 48; ph += 3) {
+    INFO("phase " << ph);
+    std::vector<Ev> ev = {Event(4000, 0, EvType::Transport,
+                                tempo::TransportId(TransportKind::Start, true), 0.0f)};
+    for (int64_t i = 0; i < 440; ++i) ev.push_back(Tick((4800 + ph + 1000 * i + 47) / 48 * 48));
+    Rig rig;
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    Render(rig.engine, in, Sorted(ev), {48});
+    const TempoStats s = rig.engine.TempoCounts();
+    CHECK(s.ticks == 440u);
+    CHECK(s.folds == 0u);
+    CHECK(s.crossfades == 0u);
+    const uint32_t ns = rig.engine.Tempo().nsPerQuarter;
+    CHECK(ns > 499500000u);
+    CHECK(ns < 500500000u);
+    if (tempo::DurationFrames(tempo::PFromNs(ns, kRate), 192, 24) > 4u * kRate) ++slowPhases;
+  }
+  CHECK(slowPhases > 0);  // the boundary the headroom moved was crossed
+}
+
+TEST_CASE("synced times: at a non-integer sample rate the longest synced echo plays its exact "
+          "frames (§5.3)",
+          "[sync]") {
+  // The line is sized from the tempo core's integer rate R, as the synced targets are: a 1/2D at
+  // 44.65 BPM (stored 1,343,750 µs) is 3 · 64,500 = 193,500 frames at R = 48,000, the maximum.
+  for (const double sr : {48000.0, 47999.6, 47999.5, 48000.4}) {
+    INFO(sr << " Hz");
+    REQUIRE(detail::PostChain::BulkFloats(sr) == 2u * (193500u + 2u));
+    auto dry = Preset(With(Clean(100.0f), {{ParamId::DelayMix, 0.0f}, {ParamId::DelaySync, 14.0f}}),
+                      1343750);
+    auto wet = Preset(With(Clean(100.0f), {{ParamId::DelayMix, 1.0f}, {ParamId::DelayFb, 0.0f},
+                                           {ParamId::DelaySync, 14.0f}}),
+                      1343750);
+    Rig a(Config(sr)), b(Config(sr));
+    REQUIRE(a.engine.LoadPreset(*dry, LoadMode::Exact));
+    REQUIRE(b.engine.LoadPreset(*wet, LoadMode::Exact));
+    const Stereo  in = Impulse(193500 + 12000);
+    const int64_t g  = FirstNonzero(Render(a.engine, in, {}, {256}).l);
+    const int64_t e  = FirstNonzero(Render(b.engine, in, {}, {256}).l);
+    REQUIRE(g > 0);
+    CHECK(e - g == 193500);
+  }
+  REQUIRE(detail::PostChain::BulkFloats(44099.7) == 2u * (177778u + 2u));
+}
+
+TEST_CASE("synced times: Init on a used engine equals a fresh one after a Drift (§2.5)", "[sync]") {
+  // A Drift leaves the post parameters' slew flag set; Init clears the synced cache, and must
+  // clear the flag with it, or a later post.delay.time_ms move slews instead of gliding.
+  const uint32_t us     = 1024u * 24u * 1000u / 48u;  // 1,024 frames a tick
+  auto           synced = Preset(
+      With(Clean(50.0f), {{ParamId::DelayMix, 0.5f}, {ParamId::DelaySync, 9.0f}}), us);
+  auto unsynced = Preset(With(Clean(50.0f), {{ParamId::DelayMix, 0.6f}, {ParamId::DelayFb, 0.4f},
+                                             {ParamId::DelayTimeMs, 300.0f}}));
+  std::vector<Ev> drift;
+  for (int64_t k = 0; k < 40; ++k) drift.push_back(Tick(1000 + k * 1024));
+  for (int64_t k = 40; k < 240; ++k) drift.push_back(Tick(1000 + 40 * 1024 + (k - 40) * 1027));
+  const std::vector<Ev> moves = Sorted({Set(24007, ParamId::DelayTimeMs, 700.0f),
+                                        Set(72011, ParamId::DelayTimeMs, 150.0f)});
+  const Stereo in = Plucks(3 * 48000);
+  Rig fresh;
+  REQUIRE(fresh.engine.LoadPreset(*unsynced, LoadMode::Exact));
+  const Stereo want = Render(fresh.engine, in, moves);
+
+  Rig used;
+  REQUIRE(used.engine.LoadPreset(*synced, LoadMode::Exact));
+  Render(used.engine, Plucks(6 * 48000), Sorted(drift));
+  REQUIRE(used.engine.TempoCounts().slews >= 1u);
+  REQUIRE(used.engine.Init(used.cfg, used.arenas.get()));
+  REQUIRE(used.engine.LoadPreset(*unsynced, LoadMode::Exact));
+  CHECK(Same(Render(used.engine, in, moves), want));
+}
+
+TEST_CASE("synced times: a Spillover load's recalled tempo is a Jump, crossfaded (§2.5, §7.1)",
+          "[sync]") {
+  // The same preset stored at 90 BPM: code, Subdiv and fold unchanged, so only the recall's Jump
+  // of Pc can crossfade it.
+  const Params p = With(Clean(50.0f), {{ParamId::DelayMix, 0.5f}, {ParamId::DelayFb, 0.6f},
+                                       {ParamId::DelaySync, 9.0f}});
+  auto a = Preset(p, kUs140);
+  auto b = Preset(p, 666667);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*a, LoadMode::Exact));
+  Render(rig.engine, Plucks(2 * 48000),
+         Sorted({Set(1001, ParamId::TempoRecall, 1.0f), Load(24007, b.get())}));
+  const TempoStats s = rig.engine.TempoCounts();
+  CHECK(s.jumps == 1u);
+  CHECK(s.crossfades == 1u);
+  // Under Keep the running tempo stays: nothing to fade.
+  Rig keep;
+  REQUIRE(keep.engine.LoadPreset(*a, LoadMode::Exact));
+  Render(keep.engine, Plucks(2 * 48000), Sorted({Load(24007, b.get())}));
+  CHECK(keep.engine.TempoCounts().jumps == 0u);
+  CHECK(keep.engine.TempoCounts().crossfades == 0u);
+}
+
+TEST_CASE("synced times: two changes of Pc at one frame take the strongest class (§7.1)", "[sync]") {
+  auto a = Preset(With(Clean(50.0f), {{ParamId::DelayMix, 0.5f}, {ParamId::DelaySync, 9.0f}}),
+                  kUs140);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*a, LoadMode::Exact));
+  // 140 to 90 BPM (a Jump), then 90 to 91 (a Step), both at frame 24007: one crossfade.
+  Render(rig.engine, Plucks(48000), Sorted({TempoNs(24007, kNs90), TempoNs(24007, 659340659)}));
+  CHECK(rig.engine.TempoCounts().jumps == 1u);
+  CHECK(rig.engine.TempoCounts().crossfades == 1u);
+}
+
+TEST_CASE("post chain: a stage that falls silent mid-fade drops the fade and the jump waiting "
+          "(§7.3)",
+          "[sync]") {
+  detail::PostParams p0 = DelayOnly(12000);
+  p0.delayMix           = 0.5f;
+  detail::PostParams off = p0;
+  off.delayMix           = 0.0f;
+  // The mix goes to 0 at frame F; the chain's smoother (τ = 10 ms) reaches 0 n frames later, the
+  // per-sample gate closing there, and the next span start finds the stage silent.
+  detail::Smoother sm;
+  sm.SetTau(10.0f, 48000.0);
+  sm.Prime(0.5f);
+  sm.target = 0.0f;
+  int64_t n = 0;
+  while (sm.Next() != 0.0f) ++n;
+  const int64_t F = 40000, close = F + n + 1;
+  std::vector<float> in(200000);
+  for (size_t i = 0; i < in.size(); ++i) {
+    const uint32_t u = testsignal::SplitMix32(9, static_cast<uint32_t>(i)) >> 8;
+    in[i]            = (static_cast<float>(u) * (1.0f / 8388608.0f) - 1.0f) * 0.5f;
+  }
+  detail::PostParams jump = off;
+  jump.delaySyncFrames    = 30000;
+  jump.delayJump          = 1;
+  detail::PostParams wait = jump;
+  wait.delaySyncFrames    = 31000;
+  wait.delayJump          = 2;
+  detail::PostParams on   = wait;
+  on.delayMix             = 0.5f;
+  // A jump 500 frames before the gate closes and another waiting behind it, so a fade is under
+  // way and one waits when it does; against the same target set once the stage is silent.
+  const std::vector<float> x = RenderPost(
+      {{0, p0}, {F, off}, {close - 500, jump}, {close - 400, wait}, {close + 40000, on}}, in, {64});
+  const std::vector<float> y =
+      RenderPost({{0, p0}, {F, off}, {close + 10000, wait}, {close + 40000, on}}, in, {64});
+  INFO("gate closes at " << close);
+  CHECK(std::memcmp(x.data() + close + 40000, y.data() + close + 40000,
+                    (in.size() - static_cast<size_t>(close + 40000)) * sizeof(float)) == 0);
+}
+
+TEST_CASE("synced times: folds count every octave (§5.3)", "[sync]") {
+  // 1/32 under ×8 at 300 BPM: 150 frames, doubled twice to 600.
+  auto a = Preset(With(Clean(50.0f), {{ParamId::DelayMix, 0.5f}, {ParamId::DelaySync, 1.0f}}),
+                  200000, 0, 5);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*a, LoadMode::Exact));
+  CHECK(rig.engine.TempoCounts().folds == 2u);
 }

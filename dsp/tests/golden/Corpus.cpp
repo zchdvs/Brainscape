@@ -710,7 +710,9 @@ constexpr uint32_t kNs58  = 1034482759;
 // Row 63 on the committed 140 BPM (§6.1, §7.3): the time macro sweeping the code (discrete:
 // crossfades), a Subdiv jump and a fade chain (the Subdiv knob through all six zones 200 frames
 // apart, each fade starting where the last ends), a Tempo-knob Step (a glide) and a host Jump (a
-// crossfade), and a Subdiv change mid-trail, after the input stops.
+// crossfade), a song recall under tempo_recall Preset back to the stored 140 BPM (a Spillover
+// load of the same package: code, Subdiv and fold unchanged, so only the recall's Jump fades it,
+// §2.5, §7.1), and a Subdiv change mid-trail, after the input stops.
 PresetCase SyncPost() {
   PresetCase p = PackagePreset("sync_post", "sync_post");
   Script&    s = p.script;
@@ -722,10 +724,12 @@ PresetCase SyncPost() {
   s.Subdivision(S(15) + 41, SubdivField::Subdivision, 0);     // TAP
   s.Tempo(S(17) + 211, kNs137_5);                             // 1.8 %: a Step, which glides
   s.Tempo(S(20) + 5, kNs90);                                  // a Jump: a crossfade
-  s.Tempo(S(23) + 307, kNs140);                               // and back
+  s.Param(S(22) + 3, P::TempoRecall, 1.0f);                   // recall Preset
+  s.SpilloverPackage(S(23) + 307, "sync_post");               // 140 BPM recalled: a Jump
   s.Subdivision(S(28) + 24007, SubdivField::Subdivision, 2);  // ×1/2 in the trail
   p.require   = {{C::MacroMoves, 8, 8}, {C::SubdivEvents, 9, 9}, {C::Crossfades, 12},
-                 {C::Jumps, 2, 2},       {C::Onsets, 10},       {C::OffGridEvents, 20}};
+                 {C::Jumps, 2, 2},       {C::Loads, 1, 1},      {C::Onsets, 10},
+                 {C::OffGridEvents, 20}};
   p.ablate    = {Feature::Sync, Feature::Subdiv, Feature::Macro, Feature::Crossfade};
   p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
   return p;

@@ -6,6 +6,7 @@
 
 #include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
+#include "detail/Tempo.h"
 
 namespace brainscape::detail {
 
@@ -49,11 +50,12 @@ constexpr float    kRvTapGain[3] = {0.6f, -0.35f, 0.4f};
 constexpr uint32_t kTamerAp32k[4] = {101, 189, 137, 251};  // L0, L1, R0, R1
 
 // post.delay.time_ms's ceiling: 2 s (the Space-knob delay never needs more; design §2.6), its
-// target clamped at round(2·R) - 1 as it always was. A synced target reaches 4 s inclusive
-// (docs/design/clock.md §5.3, D23, sound revision 9), so the line holds round(4·R) + 2 frames,
-// the two extra for the cubic read's neighbours.
+// target clamped at round(2·R) - 1 as it always was. A synced target reaches
+// tempo::PostSyncMaxFrames(R), 4·R and 2^-7 of it, inclusive (docs/design/clock.md §5.3, D23,
+// sound revision 9, §11.16), so the line holds that and 2 frames more, the cubic read's
+// neighbours, all at the tempo core's integer rate R: at a non-integer host rate a synced target
+// is never clamped short.
 constexpr double   kPostDelayMaxSeconds = 2.0;
-constexpr double   kPostSyncMaxSeconds  = 4.0;
 constexpr uint32_t kPostLineExtraFrames = 2;
 // Each of the tap glide's two poles (TapGlide): a 100 ms change comes within a frame of
 // its target in 0.55 s, a 1 s change (at the speed cap) in 2.3 s.
@@ -62,9 +64,9 @@ constexpr double kPostDelayGlideSeconds = 0.05;
 // delay bends the repeats about 0.07 %.
 constexpr double kPostDelaySlewSeconds = 1.0;
 
-// The post delay's line in frames (BulkFloats holds two channels of it).
+// The post delay's line in frames (BulkFloats holds two channels of it): 193,502 at 48 kHz.
 inline uint32_t PostLineFrames(double sr) noexcept {
-  return static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostSyncMaxSeconds * sr)) +
+  return tempo::PostSyncMaxFrames(static_cast<uint32_t>(detmath::RoundHalfAwayI32(sr))) +
          kPostLineExtraFrames;
 }
 // Mod line: 25 ms, center tap 10 ms, max excursion 4 ms (8 ms at full depth read
@@ -259,8 +261,8 @@ void PostChain::Reset(const PostParams& p) noexcept {
 }
 
 uint32_t PostChain::DelayTarget(const PostParams& p) const noexcept {
-  // A synced target (clock.md §6.1) is exact integer frames in 10 ms-4 s (§5.3); the line's
-  // last two frames are the cubic read's neighbours, so it reaches every one.
+  // A synced target (clock.md §6.1) is exact integer frames in 10 ms to PostSyncMaxFrames (§5.3);
+  // the line's last two frames are the cubic read's neighbours, so it reaches every one.
   if (p.delaySyncFrames != 0u) {
     uint32_t back = p.delaySyncFrames;
     if (back < 2u) back = 2u;

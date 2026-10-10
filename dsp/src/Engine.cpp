@@ -747,6 +747,10 @@ BRAINSCAPE_COLD bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& a
     pending_[i].store(def, std::memory_order_relaxed);
     active_[i] = def;
   }
+  // The post parameters as a freshly constructed engine holds them: RebuildPostParams sets
+  // delaySlow and delayJump only when the synced target changes, and postSync_ was cleared above,
+  // so a Drift's slew flag from before a re-Init would otherwise outlive it (clock.md §11.16).
+  pp_    = detail::PostParams{};
   dirty_ = kAllParamDomains;
   RebuildDirty();
   post_.Reset(pp_);  // primes the post-chain mix smoothers from the ACTUAL params
@@ -954,7 +958,7 @@ void Engine::Impl::RebuildPostParams() noexcept {
   pp_.modDepth     = get(ParamId::ModDepth);
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
   // Row 63 (clock.md §6.1, sound revision 9): nonzero, the target is its note value at the
-  // committed tempo and effective Subdiv, folded into 10 ms-4 s, in exact frames, and time_ms
+  // committed tempo and effective Subdiv, folded into 10 ms-4.03 s, in exact frames, and time_ms
   // waits. Its code is read as a counting leaf is, RoundHalfAwayI32 of the canonical value
   // (mode-compiler.md §3.7). How the head reaches a new target is the change's (§7.1, §7.3): a
   // discrete change (the code, the Subdiv, the fold, sync on or off) or a Jump of Pc crossfades,
@@ -996,9 +1000,10 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   const double sr = cfg_.sampleRate;
 
   // A synced base delay (clock.md §6.2, Q11; sound revision 9): layer 0's base_sync's note value
-  // at the committed tempo and effective Subdiv, folded into base_ms's 1 ms-5 s, an exact integer
-  // number of frames, so the first grain tap lands on the division; base_ms waits. Grains resolve
-  // their position at birth, so a change reaches only grains born after it.
+  // at the committed tempo and effective Subdiv, folded into 1 ms-5.04 s (base_ms's range and
+  // 2^-7 of it, §5.3), an exact integer number of frames, so the first grain tap lands on the
+  // division; base_ms waits. Grains resolve their position at birth, so a change reaches only
+  // grains born after it.
   const uint32_t rate = tempo_->Rate();
   Resync(&baseSync_, mode_->mode.layers[0].baseSync, tempo::BaseSyncMinFrames(rate),
          tempo::BaseSyncMaxFrames(rate));

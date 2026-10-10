@@ -101,7 +101,7 @@ enum class ParamId : uint32_t {
   DelaySync      = 63,  // post.delay.sync: 0 off, then §5.2's sixteen note values by duration
                         // (docs/design/clock.md; a Leaf row since sound revision 9): the post
                         // delay plays the note value at the committed tempo, folded by octaves
-                        // into 10 ms-4 s, instead of post.delay.time_ms
+                        // into 10 ms to a little over 4 s, instead of post.delay.time_ms
   ReverbMode     = 64,  // post.reverb.mode: bright room, dark medium, large hall, ambient
   // ── Modulators (W3) ──────────────────────────────────────────────────────────────
   Modulator0RateHz = 65,  // modulator0.rate_hz

@@ -52,12 +52,20 @@ uint64_t DurationFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks,
 uint32_t FoldedFrames(uint64_t pc, uint32_t noteTicks, uint32_t subdivTicks, uint32_t minFrames,
                       uint32_t maxFrames, int32_t* octaves) noexcept;
 // §5.3's ranges at the integer rate R: the synced post delay 10 ms (rounded up to a frame) to 4 s
-// inclusive, its line round(4·R) + 2 frames (PostChain); the grain base delay base_ms's 1 ms to
-// 5,000 ms. 480-192,000 and 48-240,000 frames at 48 kHz.
+// and 2^-7 of it inclusive, its line that and 2 frames more (PostChain); the grain base delay
+// base_ms's 1 ms to 5,000 ms and 2^-7 of it. 480-193,500 and 48-241,875 frames at 48 kHz. The
+// 2^-7 (0.78 %) of headroom keeps a fold boundary off 120 BPM for 2/1 (60 for 1/1, 96 for a
+// synced base 2/1): a clock-fitted tempo a few ppm either side of it plays the same octave, where
+// an inclusive 4·R folded 2/1 at random under a MIDI clock at 120 BPM (§11.16). A 2/1 at 119 BPM,
+// 193,613 frames, still folds.
 constexpr uint32_t PostSyncMinFrames(uint32_t rate) noexcept { return (rate + 99u) / 100u; }
-constexpr uint32_t PostSyncMaxFrames(uint32_t rate) noexcept { return 4u * rate; }
+constexpr uint32_t PostSyncMaxFrames(uint32_t rate) noexcept {
+  return 4u * rate + ((4u * rate) >> 7);
+}
 constexpr uint32_t BaseSyncMinFrames(uint32_t rate) noexcept { return (rate + 999u) / 1000u; }
-constexpr uint32_t BaseSyncMaxFrames(uint32_t rate) noexcept { return 5u * rate; }
+constexpr uint32_t BaseSyncMaxFrames(uint32_t rate) noexcept {
+  return 5u * rate + ((5u * rate) >> 7);
+}
 // §4.1-§4.2: whether an event 6-10's payload is valid. For a valid Start or Locate, *position
 // receives its position (0 otherwise). Any other type is not valid.
 bool ValidPayload(uint8_t type, uint32_t id, uint32_t valueBits, uint32_t* position) noexcept;

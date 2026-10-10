@@ -19,9 +19,9 @@ namespace brainscape::fw {
 // brainscape_parity_stream --placement uses the same slot):
 //   maxBlockSize  48: Hot 16,768 B   Warm 131,296 B   Bulk 17,545,216 B   Engine 7,168 B (8,192 B at r6)
 //   maxBlockSize 512: Hot 20,480 B   Warm 131,296 B   Bulk 17,545,216 B
-// Since sound revision 9 the post delay's line holds 4 s and two frames (docs/design/clock.md
-// §5.3, D23): Bulk 18,313,232 B (the 2^22 ring's 16,777,216 and the line's 1,536,016), so the
-// Bulk arena grows from 17 to 18 MiB, 561,136 B spare.
+// Since sound revision 9 the post delay's line holds 4 s, 2^-7 of it and two frames
+// (docs/design/clock.md §5.3, D23, §11.16): Bulk 18,325,232 B (the 2^22 ring's 16,777,216 and the
+// line's 1,548,016), so the Bulk arena grows from 17 to 18 MiB, 549,136 B spare.
 // Every image checks PlanMemory against these at boot (CheckPlacement) and refuses to run
 // on a shortfall; the host test firmware_arena_plan does the same on every ctest run.
 inline constexpr size_t kHotArenaBytes    = 24u * 1024u;           // DTCM

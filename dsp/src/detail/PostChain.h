@@ -156,10 +156,13 @@ struct StereoDelaySlice {
 // Since sound revision 9 (docs/design/clock.md §7.2) the pair has a second coefficient set, a
 // slew with τ = 1 s per pole, which a synced target's Drift (a clock's deadband commit) selects
 // (`slow`); every other retarget glides with the 50 ms pair, and a later retarget replaces the
-// choice. The caller passes the chosen pair to Step.
+// choice. The caller passes the chosen pair to Step. The slew's speed is capped at 2^-10 frames a
+// frame, so a Drift bends the repeats at most 0.098 % (§7.4's 0.1 %) on any echo: its τ alone
+// bends a change of Δ frames by Δ/(e·τ), past the budget on echoes longer than about 0.8 s.
 struct TapGlide {
-  static constexpr float kMaxSpeed = 0.5f;      // frames of head movement per frame
-  static constexpr float kSnap     = 0x1p-16f;  // frames from the target that count as on it
+  static constexpr float kMaxSpeed  = 0.5f;      // frames of head movement per frame
+  static constexpr float kSlewSpeed = 0x1p-10f;  // the slew's cap: 0.098 % of playback speed
+  static constexpr float kSnap      = 0x1p-16f;  // frames from the target that count as on it
 
   uint32_t target = 2;    // frames behind the write head, in [2, len - 1]
   uint32_t base   = 2;    // the head: base + frac frames behind the write head
@@ -186,9 +189,10 @@ struct TapGlide {
     lead *= keep;
     FlushTiny(lead);
     const float pos = (static_cast<float>(base) - static_cast<float>(target)) + frac;
-    float speed     = coef * (lead - pos);
-    if (speed > kMaxSpeed) speed = kMaxSpeed;
-    if (speed < -kMaxSpeed) speed = -kMaxSpeed;
+    float       speed = coef * (lead - pos);
+    const float cap   = slow ? kSlewSpeed : kMaxSpeed;
+    if (speed > cap) speed = cap;
+    if (speed < -cap) speed = -cap;
     float f = frac + speed;  // in [-1, 1); the carries below are exact (Sterbenz)
     if (f >= 0.5f) {
       f -= 1.0f;
@@ -274,11 +278,12 @@ struct PostParams {
                                // 0 = exactly transparent
   float delayFrames  = 16800;  // post.delay.time_ms in frames; the tap glides to it (TapGlide)
   // Synced times (sound revision 9, docs/design/clock.md §6.1, §7): with post.delay.sync nonzero,
-  // the target in exact integer frames (§2.3, folded into 10 ms-4 s, §5.3), which replaces
-  // delayFrames; 0 when unsynced. The engine raises delayJump for a change of the target the head
-  // must crossfade to (a Jump of the committed tempo, or a discrete change: the code, the
-  // effective Subdiv, the fold, sync on or off), and sets delaySlow when the target's last change
-  // was a Drift, which the head slews to over about a second; any other change glides.
+  // the target in exact integer frames (§2.3, folded into 10 ms to tempo::PostSyncMaxFrames, a
+  // little over 4 s, §5.3), which replaces delayFrames; 0 when unsynced. The engine raises
+  // delayJump for a change of the target the head must crossfade to (a Jump of the committed
+  // tempo, or a discrete change: the code, the effective Subdiv, the fold, sync on or off), and
+  // sets delaySlow when the target's last change was a Drift, which the head slews to (τ = 1 s, at
+  // most 2^-10 frames a frame); any other change glides.
   uint32_t delaySyncFrames = 0;
   uint32_t delayJump       = 0;
   bool     delaySlow       = false;
@@ -356,10 +361,10 @@ class PostChain {
   float      modCenter_ = 0.f, modMaxExc_ = 0.f;  // frames, fixed at Init
   Smoother   modDepthSm_{};
 
-  // Post delay (stereo, Bulk) with damped, DC-blocked regeneration. The line holds round(4·R) + 2
-  // frames since sound revision 9 (clock.md §5.3): a synced target reaches 4 s, post.delay.time_ms
-  // keeps its clamp at round(2·R) - 1, and a read `back` frames behind the write head returns the
-  // same frame in the longer line.
+  // Post delay (stereo, Bulk) with damped, DC-blocked regeneration. The line holds
+  // tempo::PostSyncMaxFrames(R) + 2 frames since sound revision 9 (clock.md §5.3): a synced target
+  // reaches 4·R and 2^-7 of it, post.delay.time_ms keeps its clamp at round(2·R) - 1, and a read
+  // `back` frames behind the write head returns the same frame in the longer line.
   StereoDelaySlice pd_{};
   TapGlide   pdTap_{};  // the head; during a crossfade the incoming one
   TapGlide   pdOut_{};  // during a crossfade, the outgoing head, still reading and gliding
