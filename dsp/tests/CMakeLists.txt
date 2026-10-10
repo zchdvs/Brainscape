@@ -10,6 +10,7 @@ add_executable(brainscape_tests
   test_state.cpp
   test_boundary.cpp
   test_detmath.cpp
+  test_intmath.cpp
   test_mode_eval.cpp
   test_modes.cpp
   test_onset.cpp

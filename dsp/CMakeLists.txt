@@ -14,6 +14,9 @@ add_library(brainscape_dsp STATIC
   src/EventQueue.cpp
   src/Granular.cpp
   src/InputCondition.cpp
+  # The tempo core's integer helpers (docs/design/clock.md §2.1), out of line and, on the pedal,
+  # out of ITCM (§9.6; firmware/CMakeLists.txt).
+  src/IntMath.cpp
   src/ModeEval.cpp
   src/OnsetDetector.cpp
   src/ParamDisplay.cpp
@@ -30,10 +33,12 @@ add_library(brainscape_dsp STATIC
 )
 # The package code holds no floating-point instruction at all on the Cortex-M7, not even a move:
 # it compares floats as integers, and GCC would otherwise spill to and copy through the FPU's
-# registers (docs/design/mode-compiler.md §5.2; the firmware links it).
+# registers (docs/design/mode-compiler.md §5.2; the firmware links it). The tempo core's integer
+# code is held to the same (docs/design/clock.md §1.4 principle 2: no FP, so no FP guard).
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   set_source_files_properties(src/blob/Decode.cpp src/blob/Encode.cpp src/blob/Mode.cpp
                               src/blob/Sha256.cpp src/blob/Validate.cpp
+                              src/IntMath.cpp
                               PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 endif()
 target_include_directories(brainscape_dsp

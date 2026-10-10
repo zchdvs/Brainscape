@@ -194,8 +194,10 @@ function(brainscape_firmware_image name)
     # rest of the code: the package decoder, encoder and their SHA-256 (a producer decodes a
     # package before it stages the state, mode-compiler.md §5; the golden harness hashes its
     # output with it) and the test-signal generator (the harness's input). With them the
-    # archive no longer fits the 64 KiB at sound revision 2.
-    set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj)
+    # archive no longer fits the 64 KiB at sound revision 2. The tempo core's integer code runs
+    # at control rate and stays out too (docs/design/clock.md §9.6, D1 as amended 2026-10-09).
+    set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj
+                             IntMath.cpp.obj)
     set(_bs_not_itcm "")
     foreach(a libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a)
       foreach(m IN LISTS _bs_not_itcm_members)
