@@ -123,6 +123,9 @@ class TempoCore {
   // §2.4: the stored or live subdivision, except that Tempo time mode forces TAP.
   uint8_t  EffectiveSubdiv() const noexcept;
   uint32_t GridTicks() const noexcept { return tempo::SubdivTicks(EffectiveSubdiv()); }
+  // The grid's period in frames at P, MulDivRoundU64(P, G, K) (§6.3): an integer below 2^24
+  // (96 ticks at 20 BPM and 384 kHz is 4,608,000), the CLOCK jitter's scale.
+  uint32_t GridPeriodFrames() const noexcept;
   // Every change of Pc raises the serial and records its class (§7.1); Init and Restart reset
   // both, the engine rebuilding everything then.
   uint32_t        PcSerial() const noexcept { return pcSerial_; }

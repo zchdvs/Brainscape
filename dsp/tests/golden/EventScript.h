@@ -7,6 +7,7 @@
 #include "brainscape/Engine.h"
 #include "brainscape/EventQueue.h"
 #include "brainscape/Preset.h"
+#include "brainscape/Tempo.h"
 
 // Frame-stamped event scripts (docs/design/determinism-profile.md §5.11): the engine's
 // own events, (absolute frame, sequence number, type, id, value). Frames before an
@@ -36,7 +37,7 @@ struct StagedLoad {
 };
 
 // Structure an ablation switches off (Corpus.h), in every preset a render loads.
-enum Strip : uint8_t {
+enum Strip : uint16_t {
   kStripOnset   = 1u << 0,  // `onset` leaves scheduler.sources
   kStripMark    = 1u << 1,  // layer 0 reads the live position, not marks
   kStripMode    = 1u << 2,  // the default mode and CTRL (Mode.h, PresetState.h); leaves kept
@@ -44,6 +45,8 @@ enum Strip : uint8_t {
   kStripSources = 1u << 4,  // the default sources join scheduler.sources (sound revision 4)
   kStripPitchSet    = 1u << 5,  // layer 0 plays the default set {0: 1} by `cycle` (revision 5)
   kStripPitchSelect = 1u << 6,  // layer 0's `random` selection becomes `cycle` (revision 5)
+  kStripClock       = 1u << 7,  // `clock` leaves scheduler.sources (sound revision 8)
+  kStripSubdiv      = 1u << 8,  // the stored subdivision is TAP (sound revision 8)
 };
 
 // A restart at `frame`, before the events stamped there: Engine::Restart, which keeps the
@@ -89,6 +92,27 @@ class Script {
   void ExactLoadPackage(int64_t frame, const char* package) {
     AddRestart({frame, true, Stage({{package, {}}, SwitchStyle::Trails})});
   }
+  // The tempo core's events (sound revision 8, docs/design/clock.md §4.1, §8.3), payloads as
+  // Tempo.h builds them: a tap; a tempo in ns per quarter; a MIDI clock tick; a transport (Start
+  // and Locate carry a position in 24-ppqn ticks, an exact binary32; AtNextTick for MIDI's, an
+  // anchor offset for the host's); a Subdivision event setting the subdivision (§5.1's code) or
+  // the time mode. No unstamped call exists for them (§2.6): split delivery hands each to the
+  // block that starts at its frame (Render.cpp).
+  void Tap(int64_t frame) { Add(frame, EventType::Tap, 0, 0.f); }
+  void Tempo(int64_t frame, uint32_t nsPerQuarter) {
+    Add(frame, EventType::Tempo, nsPerQuarter, 0.f);
+  }
+  void Tick(int64_t frame) { Add(frame, EventType::ClockTick, 0, 0.f); }
+  void Transport(int64_t frame, tempo::TransportKind kind, uint32_t position = 0,
+                 bool atNextTick = false, uint32_t offset = 0) {
+    Add(frame, EventType::Transport, tempo::TransportId(kind, atNextTick, offset),
+        static_cast<float>(position));  // exact: positions are below 2^24
+  }
+  void Subdivision(int64_t frame, tempo::SubdivField field, uint8_t code) {
+    Add(frame, EventType::Subdivision, tempo::SubdivisionId(field, code), 0.f);
+  }
+  // Any event, raw: an invalid payload or an unknown type (§4.2).
+  void Raw(int64_t frame, EventType type, uint32_t id, float value) { Add(frame, type, id, value); }
 
   // Sorted by (frame, seq); frames are the render's. A SpilloverLoad event carries its
   // staged preset's index in `id` and no `preset`: the render binds the decoded preset and
@@ -114,6 +138,23 @@ class Script {
   uint32_t                  seq_ = 0;
 };
 
+// The clock generators (docs/design/clock.md §8.3), integer-only and seeded through TestSignal.h's
+// SplitMix32. ClockTicks adds `count` ticks at `nsPerQuarter`: the ideal tick i at
+// start + floor(i·ns·48,000 / (24·10^9)), exactly, then the model's jitter: None plays the ideal
+// frame; Hardware stamps it on the pedal's 48-frame block grid (the first block boundary at or
+// after it, uniform over a block); Computer adds the sum of four uniform draws in [-141, 141]
+// (σ ≈ 163 frames, 3.4 ms) and holds every 500th tick 1,843 frames (38.4 ms), the ticks after it
+// bunching behind it. Frames never fall below the script's latest tick. Ticks whose ideal frame
+// lies in [dropFrom, dropTo) are lost (a dropout). Returns the ideal frame of tick `count`, where
+// a continuing run starts.
+enum class TickModel : uint8_t { None, Hardware, Computer };
+int64_t ClockTicks(Script& script, int64_t start, uint32_t nsPerQuarter, uint32_t count,
+                   TickModel model, uint32_t seed, int64_t dropFrom = -1, int64_t dropTo = -1);
+// Taps at `start` and then each interval after the last, each moved by a draw in
+// [-spread, spread] frames. Returns the last tap's frame.
+int64_t TapSeries(Script& script, int64_t start, const std::vector<int64_t>& intervals,
+                  uint32_t spread, uint32_t seed);
+
 // A complete preset (companion §6.1): every leaf, `params` over the defaults.
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params);
 
@@ -126,7 +167,7 @@ bool LoadPackage(const char* name, PresetState* out, PackageInfo* info = nullptr
 // over its leaves, then `strip`'s structure switched off, and the mode and CTRL of `modeFrom`
 // when given (kKeepMode). Null when the package cannot be loaded. *info receives the
 // package's header.
-std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint8_t strip = 0,
+std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint16_t strip = 0,
                                             const PresetState* modeFrom = nullptr,
                                             PackageInfo* info = nullptr);
 
@@ -167,9 +208,14 @@ class EventCursor {
 // call applies at its first frame. A macro or expression move has no unstamped call, so it is
 // what a wrapper without engine-side events would send: its leaves, evaluated with
 // EvalMacro or EvalExpression on `active` (the preset whose mode the engine plays), as
-// SetParams.
+// SetParams. Events 6-10 have none at all (docs/design/clock.md §2.6): the caller hands them to
+// the block that starts at their frame, at offset 0 (IsTempoEvent).
 void ApplyUnstamped(Engine& engine, const Event& e, const StagedPresets& staged,
                     const PresetState& active);
+// Events 6-10 and any later type: what split delivery passes as block events.
+inline bool IsTempoEvent(const Event& e) {
+  return static_cast<uint8_t>(e.type) >= tempo::kEventTap;
+}
 // Engine delivery: the event on the engine timeline that began at render frame `base`,
 // with a SpilloverLoad's staged preset bound.
 Event ToEngineEvent(const Event& e, int64_t base, const StagedPresets& staged);

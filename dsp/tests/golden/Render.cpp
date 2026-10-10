@@ -273,6 +273,7 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   }
   const uint32_t           switchesBefore = engine.ModeSwitches();
   const Engine::GrainStats statsBefore    = engine.Stats();  // counts since Init
+  const TempoStats         tempoBefore    = engine.TempoCounts();
   queue_->Clear();  // the load restarted the engine: a new timeline
   StagedPresets staged;
   for (const StagedLoad& s : p.script.Staged()) {
@@ -381,6 +382,9 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
     // engine settles it; a Spillover load's freeze-off is immediate.
     const Event*   evs = nullptr;
     const uint32_t nev = cursor.Take(end, &evs);
+    // Split delivery has no unstamped call for events 6-10 (docs/design/clock.md §2.6, §8.3): the
+    // block starts at their frame, so they reach it as its block events, at offset 0.
+    uint32_t splitTempo = 0;
     int64_t segStart        = pos;
     bool    frozenAtHop     = false;
     bool    frozenAtHopSeen = false;
@@ -408,7 +412,15 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
         frozenAtHop     = frozen;
         frozenAtHopSeen = true;
       }
-      if (cfg_.delivery == Delivery::Split) {
+      if (cfg_.delivery == Delivery::Split && IsTempoEvent(ev)) {
+        Engine::BlockEvent& b = blockEvents_[splitTempo++];
+        b        = Engine::BlockEvent{};
+        b.offset = 0;  // ev.frame == pos: split delivery cuts at every event
+        b.seq    = ev.seq;
+        b.type   = ev.type;
+        b.id     = ev.id;
+        b.value  = ev.value;
+      } else if (cfg_.delivery == Delivery::Split) {
         ApplyUnstamped(engine, ev, staged, *active);
       } else if (!queue_->Push(ToEngineEvent(ev, base, staged))) {
         return false;  // refused: outside the contract (profile §5.11)
@@ -437,6 +449,11 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
           moved = EvalExpression(active->mode, active->control, ev.value, leaves,
                                  kMaxExpressions * kMaxMacroTargets);
           break;
+        case EventType::Tap:  // counted by the engine (Engine::TempoCounts, below)
+        case EventType::Tempo:
+        case EventType::ClockTick:
+        case EventType::Transport:
+        case EventType::Subdivision: break;
       }
       for (size_t k = 0; k < moved; ++k) track(leaves[k].id, leaves[k].value);
     }
@@ -463,6 +480,9 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
       ctx.numEvents = queue_->PopBlock(pos - base, n, blockEvents_.data(),
                                        static_cast<uint32_t>(blockEvents_.size()));
       if (ctx.numEvents != nev) return false;
+    } else if (splitTempo != 0u) {
+      ctx.events    = blockEvents_.data();
+      ctx.numEvents = splitTempo;
     }
     engine.Process(ctx);
 
@@ -511,6 +531,30 @@ bool Renderer::RenderIn(const VectorCase& v, const std::vector<testsignal::Note>
   At(out, Counter::RepeatPasses) =
       static_cast<int64_t>(stats.repeatPasses - statsBefore.repeatPasses);
   At(out, Counter::Steals) = static_cast<int64_t>(stats.steals - statsBefore.steals);
+  const TempoStats t     = engine.TempoCounts();
+  const auto       delta = [](uint64_t now, uint64_t before) {
+    return static_cast<int64_t>(now - before);
+  };
+  At(out, Counter::Taps)            = delta(t.taps, tempoBefore.taps);
+  At(out, Counter::TapsIgnored)     = delta(t.tapsIgnored, tempoBefore.tapsIgnored);
+  At(out, Counter::TapPhases)       = delta(t.tapPhases, tempoBefore.tapPhases);
+  At(out, Counter::ClockTicks)      = delta(t.ticks, tempoBefore.ticks);
+  At(out, Counter::TickOutliers)    = delta(t.tickOutliers, tempoBefore.tickOutliers);
+  At(out, Counter::Reacquires)      = delta(t.reacquires, tempoBefore.reacquires);
+  At(out, Counter::DropoutTicks)    = delta(t.dropoutTicks, tempoBefore.dropoutTicks);
+  At(out, Counter::ClockGaps)       = delta(t.gaps, tempoBefore.gaps);
+  At(out, Counter::ClockLosses)     = delta(t.losses, tempoBefore.losses);
+  At(out, Counter::ClockResumes)    = delta(t.resumes, tempoBefore.resumes);
+  At(out, Counter::TransportEvents) = delta(t.transports, tempoBefore.transports);
+  At(out, Counter::SubdivEvents)    = delta(t.subdivEvents, tempoBefore.subdivEvents);
+  At(out, Counter::ClockBirths)     = delta(t.clockBirths, tempoBefore.clockBirths);
+  At(out, Counter::Commits)         = delta(t.commits, tempoBefore.commits);
+  At(out, Counter::EarlyCommits)    = delta(t.earlyCommits, tempoBefore.earlyCommits);
+  At(out, Counter::Jumps)           = delta(t.jumps, tempoBefore.jumps);
+  At(out, Counter::Slews)           = delta(t.slews, tempoBefore.slews);
+  At(out, Counter::Crossfades)      = delta(t.crossfades, tempoBefore.crossfades);
+  At(out, Counter::Folds)           = delta(t.folds, tempoBefore.folds);
+  At(out, Counter::InvalidEvents)   = delta(t.invalidEvents, tempoBefore.invalidEvents);
   out->ringReachFrame            = reach;
   hasher.Finish(out);
   return true;

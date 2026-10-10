@@ -90,6 +90,9 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
     case DisplayKind::Count:
     case DisplayKind::ReverbMode:
     case DisplayKind::Division:
+    case DisplayKind::SubdivPosition:
+    case DisplayKind::TimeMode:
+    case DisplayKind::TempoRecall:
       return unit.empty();
   }
   return false;

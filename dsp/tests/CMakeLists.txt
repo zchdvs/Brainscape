@@ -9,6 +9,7 @@ add_executable(brainscape_tests
   test_engine.cpp
   test_state.cpp
   test_boundary.cpp
+  test_clock.cpp
   test_detmath.cpp
   test_intmath.cpp
   test_midiclock.cpp

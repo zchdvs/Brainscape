@@ -279,8 +279,6 @@ TEST_CASE("compile: each later-wave feature is E6 here and compiles where suppor
     const char* wave;
   };
   const Case cases[] = {
-      {"scheduler.sources", R"(["periodic", "clock", "footswitch", "midi_note"])",
-       kModeFeatureClock, "W2"},
       {"layers[0].position.base_sync", R"("1/4")", kModeFeatureTempoSync, "W2"},
       {"scheduler.steps.entries", R"([{"slot": 1}])", kModeFeatureSteps, "W2"},
       {"scheduler.steps.order", R"("random")", kModeFeatureSteps, "W2"},
@@ -364,6 +362,19 @@ TEST_CASE("compile: the performance state and the divisions (docs/design/clock.m
       REQUIRE(e[0].message.find("W2 (the tempo core)") != std::string::npos);
     }
     RoundTrip(text, clockOnly);
+  }
+  // The clock source compiles where CLOCK is supported (the tempo core, sound revision 8).
+  const std::string clocked =
+      With("scheduler.sources", Parse(R"(["periodic", "clock", "footswitch", "midi_note"])"));
+  if (tempoCore) {
+    const CompileResult  r = Ok(clocked);
+    const DecodedPackage p = DecodePackage(r.package.data(), r.package.size());
+    REQUIRE(p.ok);
+    REQUIRE(p.state->mode.features == kModeFeatureClock);
+    REQUIRE(p.state->mode.schedule.sources == (kDefaultSources | kSourceClock));
+    RoundTrip(clocked);
+  } else {
+    Refused(clocked, "E6", "/scheduler/sources");
   }
   // §5.1: the six positions in code order, TAP the default (code 0, not written).
   const char* const rates[] = {"tap", "x1/4", "x1/2", "x2", "x4", "x8"};
@@ -569,12 +580,12 @@ TEST_CASE("compile: errors E1-E12 name the rule and the place", "[compile]") {
   Refused(With("macros", Parse(R"([{"id": "volume"}])")), "E5", "/macros/0/id");
   Refused(With("layers[0].modifiers", Parse(R"([{"op": "svf"}, {"op": "svf"}])")), "E5",
           "/layers/0/modifiers/1/op", AllFeatures());
-  // E6: §2.7's example message.
-  const std::vector<Finding> clock = Refused(
-      With("scheduler.sources", Parse(R"(["clock", "periodic", "footswitch", "midi_note"])")), "E6",
-      "/scheduler/sources");
-  REQUIRE(clock[0].message ==
-          "`clock` needs W2 (CLOCK); this build supports periodic, onset, footswitch, midi_note");
+  // E6: the feature and the wave that brings it (§2.7; its example, `clock`, compiles since the
+  // tempo core, sound revision 8).
+  const std::vector<Finding> sync =
+      Refused(With("layers[0].position.base_sync", Str("1/4")), "E6", "/layers/0/position/base_sync");
+  REQUIRE(sync[0].message ==
+          "`base_sync` `1/4` needs W2 (tempo-synced times); this build plays the default structure");
   // A later wave's leaf (wave 1's became Leaf rows as they landed, sound revisions 4-7).
   Refused(With("layers[0].level_db", Num("-3")), "E6", "/layers/0/level_db");
   Refused(

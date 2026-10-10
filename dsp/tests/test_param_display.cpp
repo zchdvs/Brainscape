@@ -128,6 +128,14 @@ TEST_CASE("the mode system's rows have display metadata (mode-compiler.md §4.3)
   CHECK(Format(ParamId::DelaySync, 8.0f) == "1/8D");
   CHECK(Format(ParamId::DelaySync, 13.0f) == "1/1T");
   CHECK(Format(ParamId::DelaySync, 16.0f) == "2/1");
+  // The tempo core's rows (docs/design/clock.md §5.1, §10.4): Subdiv's knob positions as rates.
+  CHECK(Format(ParamId::PerfSubdiv, 0.0f) == "\xC3\x97" "1/4");
+  CHECK(Format(ParamId::PerfSubdiv, 2.0f) == "TAP");
+  CHECK(Format(ParamId::PerfSubdiv, 5.0f) == "\xC3\x97" "8");
+  CHECK(Format(ParamId::PerfTimeMode, 0.0f) == "Free");
+  CHECK(Format(ParamId::PerfTimeMode, 2.0f) == "Tempo");
+  CHECK(Format(ParamId::TempoRecall, 0.0f) == "Keep");
+  CHECK(Format(ParamId::TempoRecall, 1.0f) == "Preset");
   CHECK(Format(ParamId::EffectVolumeDb, -3.0f) == "-3.0 dB");
   CHECK(Format(ParamId::MacroFilter, 0.5f) == "50%");
   CHECK(Format(ParamId::PerfFreeze, 1.0f) == "On");
@@ -148,7 +156,7 @@ TEST_CASE("host automation follows the host model") {
     const bool automatable = (FindParamDisplay(d.id)->flags & kParamAutomatable) != 0u;
     const auto raw         = static_cast<uint32_t>(d.id);
     const bool want        = d.id == ParamId::Mix || (raw >= 69u && raw <= 80u) ||
-                      d.id == ParamId::EffectVolumeDb;
+                      d.id == ParamId::EffectVolumeDb || raw == 83u || raw == 84u;
     CHECK(automatable == want);
   }
 }
@@ -262,6 +270,18 @@ std::string RefFormat(ParamId id, float plain) {
       const long n = std::lround(v);
       return kNames[n <= 0 ? 0 : (n > 16 ? 16 : n)];
     }
+    case DisplayKind::SubdivPosition: {
+      static const char* kPositions[] = {"\xC3\x97" "1/4", "\xC3\x97" "1/2", "TAP",
+                                         "\xC3\x97" "2",   "\xC3\x97" "4",   "\xC3\x97" "8"};
+      const long n = std::lround(v);
+      return kPositions[n <= 0 ? 0 : (n > 5 ? 5 : n)];
+    }
+    case DisplayKind::TimeMode: {
+      static const char* kModes[] = {"Free", "Subdiv", "Tempo"};
+      const long n = std::lround(v);
+      return kModes[n <= 0 ? 0 : (n > 2 ? 2 : n)];
+    }
+    case DisplayKind::TempoRecall: return v >= 0.5f ? "Preset" : "Keep";
   }
   return "";
 }

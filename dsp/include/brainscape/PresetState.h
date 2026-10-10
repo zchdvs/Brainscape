@@ -40,10 +40,13 @@ struct ControlState {  // 132 bytes
 };
 
 // The stored performance state (§2.6; docs/design/clock.md §2.4), STAT's tail: what the knobs
-// and switches outside the macros start at, played from the tempo core (W2). Tempo is integer
-// microseconds per quarter, so no floating point is stored. Byte 3 was `tempo_source`: the tempo
-// source is a device setting (clock.md D3), so the byte is reserved and must be 0, as
-// DecodePreset requires.
+// and switches outside the macros start at. Tempo is integer microseconds per quarter, so no
+// floating point is stored. Since sound revision 8 the engine plays the time mode, the
+// subdivision and the tempo: they are the active preset's, from which an Exact load and Restart
+// start (clock.md §2.5), and a Spillover load applies the time mode and subdivision (and the
+// tempo under global.tempo_recall Preset); `reverse` waits for global reverse (W2). Byte 3 was
+// `tempo_source`: the tempo source is a device setting (D3), so the byte is reserved and must be
+// 0, as DecodePreset requires.
 enum class TimeMode : uint8_t { Free, Subdivision, Tempo };
 inline constexpr uint8_t kTimeModeCount = 3;
 inline constexpr uint32_t kMinUsPerQuarter = 200000;   // 300 BPM
@@ -116,8 +119,11 @@ struct LoadReport {
   uint32_t duplicateIds  = 0;      // repeated ids: the first leaf counts
   uint32_t changedValues = 0;      // values canonicalization changed (NaN, ±inf, -0,
                                    // subnormals, out of range): packages hold canonical values
-  uint32_t unsupported   = 0;      // stored performance fields away from their defaults, which
-                                   // this build cannot play yet (W2): they load as the defaults
+  uint32_t unsupported   = 0;      // stored performance fields this build cannot play as
+                                   // stored: `reverse` away from its default until global
+                                   // reverse (W2), and a field outside its range or a nonzero
+                                   // reserved byte (never in a decoded package): each loads as
+                                   // its default
 };
 
 // The checks of a load without loading (the report's `applied` stays false), for a producer

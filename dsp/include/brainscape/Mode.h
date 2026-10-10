@@ -47,7 +47,7 @@ inline constexpr uint32_t kModeFeatureOnset        = 1u << 0;   // 3a (r2): `ons
 inline constexpr uint32_t kModeFeatureMarkPosition = 1u << 1;   // 3a (r2): a layer on marks
 inline constexpr uint32_t kModeFeatureSources      = 1u << 2;   // W1: a default source left out
 inline constexpr uint32_t kModeFeaturePitchSet     = 1u << 3;   // W1: a set other than {0: 1}
-inline constexpr uint32_t kModeFeatureClock        = 1u << 4;   // W2: the `clock` source
+inline constexpr uint32_t kModeFeatureClock        = 1u << 4;   // W2 (r8): the `clock` source
 inline constexpr uint32_t kModeFeatureSteps        = 1u << 5;   // W2: a step table or order
 inline constexpr uint32_t kModeFeatureMarkWalk     = 1u << 6;   // W2: mark index, walk, jitter
 inline constexpr uint32_t kModeFeatureTempoSync    = 1u << 7;   // W2: a synced base delay
@@ -66,16 +66,17 @@ inline constexpr uint32_t kModeFeatureDryDuck      = 1u << 19;  // W3: dry-duck 
 inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every defined bit
 
 // The features this build plays: sound revision 2's onset source and mark positioning (§7.6
-// item 4, the structure rows 27 and 28 retired into), and wave 1's source selection (sound
-// revision 4, §7.5 R9) and pitch sets (5, R10). Each wave-1 feature widens it in its own pull
-// request.
-inline constexpr uint32_t kSupportedModeFeatures =
-    kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources | kModeFeaturePitchSet;
+// item 4, the structure rows 27 and 28 retired into), wave 1's source selection (sound
+// revision 4, §7.5 R9) and pitch sets (5, R10), and the tempo core's CLOCK source (8,
+// docs/design/clock.md §6.3, §11.1). Each feature widens it in its own pull request.
+inline constexpr uint32_t kSupportedModeFeatures = kModeFeatureOnset | kModeFeatureMarkPosition |
+                                                   kModeFeatureSources | kModeFeaturePitchSet |
+                                                   kModeFeatureClock;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
 inline constexpr uint8_t kSourcePeriodic   = 1u << 0;  // the free-running scheduler (left out: r4)
-inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2: births on the tempo grid
+inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2 (r8): births on the tempo grid
 inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2): a burst per detected onset (r4)
 inline constexpr uint8_t kSourceFootswitch = 1u << 3;  // footswitch triggers fire (left out: r4)
 inline constexpr uint8_t kSourceMidiNote   = 1u << 4;  // MIDI-note triggers fire (left out: r4)

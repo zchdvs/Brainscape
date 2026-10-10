@@ -1,26 +1,26 @@
 {
   "schema_version": 1,
-  "id": "example.meta-text_1",
-  "name": "Ωmega ✓ 32 bytes of name, ok?",
-  "family": "misfire",
+  "id": "corpus.clock_recall",
+  "name": "Clock recall",
+  "family": "none",
   "sound_rev": 8,
-  "sound_hash": "3d8bf7893f8a70698dd1827b7c53595ae5fad3c856378d02c5e6534cc2e98ee1",
+  "sound_hash": "8e5f6906ee63d0319846a5fc54790de512d76286d4175b5a4d49f216df08af6b",
   "meta": {
-    "author": "Zach & co. — ✓",
-    "description": "Ünïcödé \"quotes\" and \\backslashes\\ / slashes; 🎸 guitar; tabs are not allowed. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "tags": ["ambient", "drone", "\\back", "\"q\"", "日本", "1234567890123456789012345678901", "é", "x"]
+    "author": "",
+    "description": "Golden corpus: the clock_hits mode stored at 600000 us per quarter (100 BPM), x1/2 in Subdiv time mode: what a recall plays (sound revision 8).",
+    "tags": []
   },
   "global": {
-    "mix": 0.5
+    "mix": 0.6
   },
   "scheduler": {
-    "sources": ["periodic", "footswitch", "midi_note"],
-    "overlap": 0.55,
-    "jitter": 0.2,
+    "sources": ["clock", "footswitch", "midi_note"],
+    "overlap": 0.5,
+    "jitter": 0,
     "intermittency": 0,
     "burst": {
       "count": 1,
-      "spacing_ms": 0
+      "spacing_ms": 40
     }
   },
   "layers": [
@@ -28,16 +28,16 @@
       "voice_count": 64,
       "position": {
         "source": "live",
-        "base_ms": 250,
-        "spray_ms": 20,
+        "base_ms": 150,
+        "spray_ms": 10,
         "repeat": 1
       },
       "size_ms": 90,
       "decay_ms": 0,
       "window": {
         "sustain": 0.3,
-        "skew": 0.5,
-        "smoothness": 0.7
+        "skew": 0.4,
+        "smoothness": 0.6
       },
       "pitch": {
         "set": [
@@ -48,14 +48,14 @@
         ],
         "select": "cycle",
         "transpose_st": 0,
-        "spread_cents": 0,
-        "reverse_prob": 0
+        "spread_cents": 10,
+        "reverse_prob": 0.1
       },
-      "pan_spread": 0.5
+      "pan_spread": 0.6
     }
   ],
   "feedback": {
-    "amount": 0
+    "amount": 0.35
   },
   "post": {
     "mod": {
@@ -69,7 +69,7 @@
     },
     "reverb": {
       "time": 0.5,
-      "mix": 0
+      "mix": 0.2
     },
     "filter": {
       "cutoff_hz": 20000,
@@ -176,5 +176,10 @@
       "space": 0.5,
       "filter": 0.5
     }
+  },
+  "performance": {
+    "time_mode": "subdiv",
+    "subdiv": "x1/2",
+    "tempo_us_per_quarter": 600000
   }
 }

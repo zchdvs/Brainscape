@@ -15,6 +15,7 @@
 #include "detail/Granular.h"
 #include "detail/OnsetDetector.h"
 #include "detail/PostChain.h"
+#include "detail/Tempo.h"
 
 using namespace brainscape;
 
@@ -209,15 +210,16 @@ TEST_CASE("PlanMemory sizes all three tiers") {
               detail::PostChain::BulkFloats(cfg.sampleRate) * sizeof(float));
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
-  // The Warm tier ends with the active mode and its CTRL (mode-compiler.md §7.3), rounded up to
-  // 16 bytes.
+  // The Warm tier ends with the active mode and its CTRL (mode-compiler.md §7.3), then the tempo
+  // core (docs/design/clock.md §2.6), each rounded up to 16 bytes.
   const size_t activeMode = (sizeof(ModeBlob) + sizeof(ControlState) + 15u) & ~size_t{15};
+  const size_t tempoCore  = (sizeof(TempoCore) + 15u) & ~size_t{15};
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Warm)] ==
           (512u * 2u + detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
            detail::PostChain::WarmFloats(cfg.sampleRate) +
            detail::OnsetDetector::WarmFloats()) *
                   sizeof(float) +
-              activeMode);
+              activeMode + tempoCore);
   REQUIRE(plan.align[static_cast<size_t>(Tier::Bulk)] == 32);
 }
 
@@ -1756,9 +1758,8 @@ TEST_CASE("sample counter is free-running") {
   Engine::ProcessContext ctx;
   ctx.in               = ins;
   ctx.out              = outs;
-  ctx.numFrames        = 100;
-  ctx.transportPlaying = false;  // counter must advance regardless of transport
-  engine.Process(ctx);
+  ctx.numFrames        = 100;  // the counter advances with every Process call, whatever the
+  engine.Process(ctx);           // tempo core's transport (no ProcessContext field holds one)
   ctx.numFrames = 48;
   engine.Process(ctx);
   REQUIRE(engine.SampleCounter() == 148);

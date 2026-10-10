@@ -118,6 +118,9 @@ constexpr ParamDisplay kDisplayTable[] = {
     {ParamId::PerfLoopLevel,       G::Performance, "Loop level",                   "Loop",     T::Linear,  K::Percent,      0,  kAuto},
     {ParamId::TriggerOffset,       G::Device,      "Trigger offset",               "Offset",   T::Linear,  K::Signed,       0,  kLeaf},
     {ParamId::EffectVolumeDb,      G::Device,      "Effect volume",                "Volume",   T::Linear,  K::Decibels,     0,  kAuto},
+    {ParamId::PerfSubdiv,          G::Performance, "Subdivision",                  "Subdiv",   T::Linear,  K::SubdivPosition, 6, kAutoStep},
+    {ParamId::PerfTimeMode,        G::Performance, "Time mode",                    "Time mode", T::Linear, K::TimeMode,     3,  kAutoStep},
+    {ParamId::TempoRecall,         G::Device,      "Tempo recall",                 "Recall",   T::Linear,  K::TempoRecall,  2,  kLeafStep},
 };
 static_assert(sizeof(kDisplayTable) / sizeof(kDisplayTable[0]) == kNumParams,
               "every descriptor needs a display row");
@@ -139,7 +142,9 @@ constexpr bool DisplayTableMatchesDescriptors() {
     // one by one (mode-compiler.md §4.3).
     if (((m.flags & kParamDiscrete) != 0u) != (m.steps >= 2u)) return false;
     const bool integer = m.kind == DisplayKind::Count || m.kind == DisplayKind::Division ||
-                         m.kind == DisplayKind::ReverbMode;
+                         m.kind == DisplayKind::ReverbMode ||
+                         m.kind == DisplayKind::SubdivPosition ||
+                         m.kind == DisplayKind::TimeMode || m.kind == DisplayKind::TempoRecall;
     if (integer && static_cast<float>(m.steps - 1u) != d.max - d.min) return false;
     if (((m.flags & kParamAutomatable) != 0u) != HostAutomatable(d)) return false;
   }
@@ -464,6 +469,25 @@ BRAINSCAPE_FP_BODY size_t FormatPlainBody(ParamId id, float plain, char* out,
       t.Put(kNames[n < 0 ? 0 : (n > 16 ? 16 : n)]);
       break;
     }
+    case DisplayKind::SubdivPosition: {
+      // §5.1: the knob's positions in the Microcosm's CC#5 order, written as rates (x, U+00D7
+      // in UTF-8), never as note values.
+      static constexpr const char* kPositions[] = {"\xC3\x97" "1/4", "\xC3\x97" "1/2", "TAP",
+                                                   "\xC3\x97" "2",   "\xC3\x97" "4",
+                                                   "\xC3\x97" "8"};
+      const int32_t n = detmath::RoundHalfAwayI32(v);
+      t.Put(kPositions[n < 0 ? 0 : (n > 5 ? 5 : n)]);
+      break;
+    }
+    case DisplayKind::TimeMode: {
+      static constexpr const char* kModes[] = {"Free", "Subdiv", "Tempo"};
+      const int32_t n = detmath::RoundHalfAwayI32(v);
+      t.Put(kModes[n < 0 ? 0 : (n > 2 ? 2 : n)]);
+      break;
+    }
+    case DisplayKind::TempoRecall:
+      t.Put(v >= 0.5f ? "Preset" : "Keep");
+      break;
   }
   return t.Finish();
 }

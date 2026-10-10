@@ -122,6 +122,15 @@ enum class ParamId : uint32_t {
   // ── Device settings (design §3.8): outside presets, kept by every load ───────────
   TriggerOffset  = 81,  // global.trigger_offset: the calibration gesture's offset (phase D)
   EffectVolumeDb = 82,  // global.effect_volume_db: Shift+Mix, the player's wet level
+  // ── The tempo core (sound revision 8, docs/design/clock.md §10.4): appended after 82, as
+  // host indices require. 83 and 84 act through Subdivision events (event 10), whose host face
+  // they are; 85 is a device setting the engine reads at a Spillover load (§2.5).
+  PerfSubdiv     = 83,  // perf.subdiv: the Subdiv knob's position 0-5 (x1/4, x1/2, TAP, x2,
+                        // x4, x8, the Microcosm's CC#5 order); the wrapper sends §5.1's code
+  PerfTimeMode   = 84,  // perf.time_mode: 0 Free, 1 Subdiv, 2 Tempo (Subdivision field 1)
+  TempoRecall    = 85,  // global.tempo_recall: 0 Keep (the running tempo crosses a Spillover
+                        // load), 1 Preset (the preset's stored tempo applies under the
+                        // Internal source)
 
   // The C++ spellings of IDs 4 and 8 before their renames, kept so code written against them
   // (the firmware bring-up branch) still builds; new code uses WetTrimDb and TransposeSt.
@@ -142,7 +151,9 @@ enum class ParamId : uint32_t {
 //
 // A Reserved row is an unbuilt feature's ID under its final name; it takes its kind in the
 // pull request that builds the feature. A Retired row keeps its ID with a null name and is
-// never reused. The engine stores Leaf and Global rows only.
+// never reused. The engine stores Leaf and Global rows only. A stored row rebuilds its domain
+// when it changes, except global.tempo_recall (85), which has none: the engine reads it where it
+// acts, at a Spillover load (docs/design/clock.md §10.4).
 enum class ParamKind : uint8_t { Leaf, Macro, Performance, Global, Reserved, Retired };
 
 // What a change to a row rebuilds (design §4.1, §7.2): a bitmask, since one value can feed
@@ -265,6 +276,9 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::PerfLoopLevel,      "perf.loop_level",              0.0f,    1.0f,     1.0f,     "",   ParamKind::Reserved,    kDomainNone,                   0},
     {ParamId::TriggerOffset,      "global.trigger_offset",        -1.0f,   1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainDetector,               0},
     {ParamId::EffectVolumeDb,     "global.effect_volume_db",      -24.0f,  12.0f,    0.0f,     "dB", ParamKind::Global,      kDomainWet,                    0},
+    {ParamId::PerfSubdiv,         "perf.subdiv",                  0.0f,    5.0f,     2.0f,     "",   ParamKind::Performance, kDomainNone,                   0},
+    {ParamId::PerfTimeMode,       "perf.time_mode",               0.0f,    2.0f,     0.0f,     "",   ParamKind::Performance, kDomainNone,                   0},
+    {ParamId::TempoRecall,        "global.tempo_recall",          0.0f,    1.0f,     0.0f,     "",   ParamKind::Global,      kDomainNone,                   0},
 };
 inline constexpr size_t kNumParams = sizeof(kParamTable) / sizeof(kParamTable[0]);  // every row
 

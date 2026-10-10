@@ -237,12 +237,13 @@ std::string RandomDocument(Rng& r, uint32_t index) {
 // with leaves 57-59 (the random documents draw them too), random source subsets. Re-minted at
 // sound revision 5: the header's sound_rev, random pitch sets (now supported); at 6: the
 // header's sound_rev, STAT with leaves 29 and 30, which the random documents draw too; and
-// at 7 for the stamp and leaf 31 alike.
+// at 7 for the stamp and leaf 31 alike; and at 8 (the tempo core) for the stamp alone: neither
+// draws the clock source or a performance key.
 constexpr uint32_t kRandomDocuments = 400;
 const char* const  kRandomDigest =
-    "e3f8a51eea13912585fce15178cf763d771a6d4c50b8d926f5959ac996883bf5";
+    "4b31d9efd9fff7f9a67049685064a91dd12ea3079d0580bf92aa95fdb98f1771";
 constexpr uint32_t kFuzzMutants = 20000;
-const char* const  kFuzzDigest = "6300cb9b9457fa7f9816b688a0224aeb454edd2e56e211c6b1b8d5208ec58cfc";
+const char* const  kFuzzDigest = "5e0441d6b9065f734e435cf8f92d6d91cbc7e5c400081b1cb9c0ab4c8cb5f6a1";
 
 }  // namespace
 

@@ -165,6 +165,12 @@ uint8_t TempoCore::EffectiveSubdiv() const noexcept {
   return timeMode_ == tempo::kTimeModeTempo ? tempo::kSubdivTap : subdiv_;
 }
 
+uint32_t TempoCore::GridPeriodFrames() const noexcept {
+  // P ≤ the tempo range's largest at R, so the result is at most 96 · 1,152,000 / 24 frames.
+  const uint64_t f = MulDivRoundU64(p_, GridTicks(), static_cast<uint64_t>(kK));
+  return f > 0xFFFFFFu ? 0xFFFFFFu : static_cast<uint32_t>(f);
+}
+
 // --- §2.2 the phasor -----------------------------------------------------------------------------
 
 void TempoCore::AdvanceTo(int64_t frame) noexcept {

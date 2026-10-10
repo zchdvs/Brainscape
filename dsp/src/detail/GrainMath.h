@@ -118,6 +118,12 @@ inline uint32_t RandBits24(int64_t absSample, Draw purpose) noexcept {
   return Hash32(DrawKey(absSample, purpose)) >> 8;
 }
 
+// The same from an extended key: RandBits24 above when layer and ordinal are 0.
+inline uint32_t RandBits24(int64_t absSample, Draw purpose, uint32_t layer,
+                           uint32_t ordinal) noexcept {
+  return Hash32(DrawKey(absSample, purpose, layer, ordinal)) >> 8;
+}
+
 // ── Pitch sets (mode-compiler.md §7.5, R10) ──────────────────────────────────────────────
 // A layer's set holds 1-8 entries, each with a weight of 1-16. Integer-only selection.
 

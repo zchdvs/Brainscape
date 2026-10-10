@@ -21,6 +21,7 @@
 #include "detail/OnsetDetector.h"
 #include "detail/PostChain.h"
 #include "detail/Smoother.h"
+#include "detail/Tempo.h"
 
 namespace brainscape {
 
@@ -48,12 +49,14 @@ constexpr bool RowIsWellFormed(const ParamDescriptor& d) {
   if (!(d.min < d.max) || !(d.def >= d.min) || !(d.def <= d.max)) return false;
   if ((d.domain & ~kAllParamDomains) != 0u) return false;
   // A Leaf row names the revision that made it one, and this build plays it; no other kind
-  // has a revision. Rows that hold a value (Leaf, Global) rebuild something; Macro and
-  // Performance rows act through their own events.
+  // has a revision. Rows that hold a value (Leaf, Global) rebuild something, but for
+  // global.tempo_recall, which the engine reads where it acts, at a Spillover load
+  // (docs/design/clock.md §10.4); Macro and Performance rows act through their own events.
   switch (d.kind) {
     case ParamKind::Leaf:
       return d.sinceRev >= 1u && d.sinceRev <= kSoundRevision && d.domain != kDomainNone;
-    case ParamKind::Global: return d.sinceRev == 0u && d.domain != kDomainNone;
+    case ParamKind::Global:
+      return d.sinceRev == 0u && (d.domain != kDomainNone || d.id == ParamId::TempoRecall);
     case ParamKind::Macro:
     case ParamKind::Performance: return d.sinceRev == 0u && d.domain == kDomainNone;
     case ParamKind::Reserved: return d.sinceRev == 0u;
@@ -137,6 +140,11 @@ struct ActiveMode {
 };
 static_assert(std::is_trivially_destructible<ActiveMode>::value, "the Warm arena never destructs");
 constexpr size_t kActiveModeBytes = (sizeof(ActiveMode) + 15u) & ~size_t{15};
+// The tempo core beside it (docs/design/clock.md §2.6): its follower's window, ring and tap chain
+// are about 1.1 KiB, inside the pedal's Warm arena, not the DTCM-bound Impl.
+static_assert(std::is_trivially_destructible<TempoCore>::value, "the Warm arena never destructs");
+static_assert(alignof(TempoCore) <= 16u && alignof(ActiveMode) <= 16u, "the Warm arena's alignment");
+constexpr size_t kTempoCoreBytes = (sizeof(TempoCore) + 15u) & ~size_t{15};
 
 // Two modes are the same when their content is (design §7.3): compared word by word up to
 // modeHash, which the engine never trusts. ModeBlob has no implicit padding (Mode.h), so every
@@ -178,6 +186,23 @@ static_assert(std::atomic<float>::is_always_lock_free,
 static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
                   detail::TriggerEvents::kMaxOnsets,
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
+
+// A span's CLOCK hits reach the grain core in the onsets' way (docs/design/clock.md §6.3).
+static_assert(detail::TriggerEvents::kMaxClock == TempoCore::kMaxClockPerSpan,
+              "TriggerEvents::kMaxClock must hold a span's grid hits");
+static_assert(kFeedbackDelayFrames <= TempoCore::kMaxSpanFrames,
+              "a render span must stay within the tempo core's largest");
+static_assert(static_cast<uint8_t>(Engine::EventType::Tap) == tempo::kEventTap &&
+                  static_cast<uint8_t>(Engine::EventType::Tempo) == tempo::kEventTempo &&
+                  static_cast<uint8_t>(Engine::EventType::ClockTick) == tempo::kEventClockTick &&
+                  static_cast<uint8_t>(Engine::EventType::Transport) == tempo::kEventTransport &&
+                  static_cast<uint8_t>(Engine::EventType::Subdivision) ==
+                      tempo::kEventSubdivision,
+              "the tempo events' numbers are clock.md §4.1's");
+static_assert(static_cast<uint8_t>(Subdivision::Tap) == tempo::kSubdivTap &&
+                  kSubdivisionCount == tempo::kSubdivCodes && kTimeModeCount == tempo::kTimeModeCodes &&
+                  static_cast<uint8_t>(TimeMode::Tempo) == tempo::kTimeModeTempo,
+              "the performance state's codes are the tempo core's");
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
 static_assert(kMaxPitchEntries == detail::kGranularMaxPitch, "a pitch set's cap differs");
@@ -255,13 +280,13 @@ BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
   // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
   // + onset-detector analysis/FFT/whitening state.
-  // Then the active mode (design §7.3).
+  // Then the active mode (design §7.3), then the tempo core (docs/design/clock.md §2.6).
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
       (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
        detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
        detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
           sizeof(float) +
-      kActiveModeBytes;
+      kActiveModeBytes + kTempoCoreBytes;
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
   // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
@@ -290,15 +315,19 @@ const ParamDescriptor* PlayableLeaf(uint32_t id) noexcept {
                                                                                       : nullptr;
 }
 
-// Stored performance fields this build cannot play (design §7.3 step 4): every field away from
-// its default, until W2 plays them.
+// Stored performance fields this build cannot play as stored (design §7.3 step 4): since sound
+// revision 8 it plays the time mode, the subdivision and the tempo (docs/design/clock.md §2.4,
+// §11.2), so only `reverse` away from its default, until global reverse; and, in a state built
+// in memory (a decoded package never has one), a field outside its range or a nonzero reserved
+// byte, which the tempo core replaces with Init's defaults.
 uint32_t UnsupportedPerformance(const PerformanceState& p) noexcept {
-  const PerformanceState def{};
-  return static_cast<uint32_t>(p.reverse != def.reverse) +
-         static_cast<uint32_t>(p.timeMode != def.timeMode) +
-         static_cast<uint32_t>(p.subdiv != def.subdiv) +
-         static_cast<uint32_t>(p.reserved != def.reserved) +
-         static_cast<uint32_t>(p.usPerQuarter != def.usPerQuarter);
+  const auto mode   = static_cast<uint8_t>(p.timeMode);
+  const auto subdiv = static_cast<uint8_t>(p.subdiv);
+  return static_cast<uint32_t>(p.reverse != 0u) + static_cast<uint32_t>(mode >= kTimeModeCount) +
+         static_cast<uint32_t>(subdiv >= kSubdivisionCount) +
+         static_cast<uint32_t>(p.reserved != 0u) +
+         static_cast<uint32_t>(p.usPerQuarter < kMinUsPerQuarter ||
+                               p.usPerQuarter > kMaxUsPerQuarter);
 }
 
 // Design §7.3 steps 0, 1 and 2, and step 4's count (determinism profile §5.10 with the per-kind
@@ -404,6 +433,11 @@ struct Engine::Impl {
   // active mode by content, and every domain rebuilds.
   void InstallMode(const PresetState& preset) noexcept;
   void ApplySpillover(const float* values, const PresetState& preset, SwitchStyle style) noexcept;
+  // global.tempo_recall (row 85) as the next load reads it: its latest stored value, so an
+  // unstamped SetParam before a direct Spillover call counts as at the load's frame.
+  bool RecallPreset() const noexcept {
+    return pending_[SlotOf(ParamId::TempoRecall)].load(std::memory_order_relaxed) >= 0.5f;
+  }
 
   EngineConfig cfg_{};
   int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
@@ -414,6 +448,7 @@ struct Engine::Impl {
                                        // kFeedbackDelayFrames frames (NOT maxBlockSize —
                                        // see the constant's rationale in Engine.h)
   ActiveMode*  mode_       = nullptr;  // Warm arena: the active mode and CTRL (design §7.3)
+  TempoCore*   tempo_      = nullptr;  // Warm arena: the tempo core (clock.md §2.6)
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
   // mix_: the Mix knob, smoothed (its law: detail/MixLaw.h); wetGain_: the wet signal's gain
@@ -514,6 +549,22 @@ void Engine::Trigger(TriggerSource src, float /*velocity*/, uint32_t /*sampleOff
       .fetch_add(1u, std::memory_order_relaxed);
 }
 
+TempoInfo Engine::Tempo() const noexcept {
+  const Impl& d = impl();
+  if (d.tempo_ == nullptr) return TempoInfo{};
+  return d.tempo_->Info();
+}
+
+TempoStats Engine::TempoCounts() const noexcept {
+  const Impl& d = impl();
+  if (d.tempo_ == nullptr) return TempoStats{};
+  TempoStats s = d.tempo_->Stats();
+  // The CLOCK births are the grain core's (clock.md §6.3); deferrals wait for the governor.
+  s.clockBirths  = d.granular_.Stats().clockBirths;
+  s.clockDropped = d.granular_.Stats().clockDropped;
+  return s;
+}
+
 Engine::GrainStats Engine::Stats() const noexcept {
   const detail::GranularStats& s = impl().granular_.Stats();
   GrainStats out;
@@ -609,6 +660,11 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   warm += detail::OnsetDetector::WarmFloats();
   // The default mode (Mode.h), which plays as sound revision 1 did, until a load brings one.
   mode_          = ::new (static_cast<void*>(warm)) ActiveMode();
+  // The tempo core after it (clock.md §2.6): Init's 120 BPM, Free and TAP, boundary 0 at frame
+  // 0, at the integer rate R (§1.3), 48,000 on every pedal-exact path.
+  tempo_ = ::new (static_cast<void*>(reinterpret_cast<unsigned char*>(warm) + kActiveModeBytes))
+      TempoCore();
+  tempo_->Init(static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
   modeSwitches_  = 0;
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
@@ -702,6 +758,9 @@ void Engine::Impl::Restart() noexcept {
   frozen_        = false;
   frozenAnchor_  = 0;
   freezePending_.store(false, std::memory_order_relaxed);
+  // The active preset's stored performance state, boundary 0 at frame 0, the follower, tap and
+  // transport cleared (clock.md §2.5): frames restart at 0.
+  tempo_->Restart();
   Reset();
 }
 
@@ -727,6 +786,9 @@ bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode, LoadRepo
         pending_[SlotOf(LeafId(i))].store(values[i], std::memory_order_relaxed);
       }
       InstallMode(preset);
+      // Step 4: the stored performance state becomes the active preset's, which the Restart
+      // of step 5 plays (clock.md §2.5); producers re-assert the running performance after it.
+      tempo_->SetStoredPerformance(preset.performance);
       Restart();
     } else {
       ApplySpillover(values, preset, style);
@@ -762,6 +824,10 @@ void Engine::Impl::ApplySpillover(const float* values, const PresetState& preset
                                   SwitchStyle style) noexcept {
   for (size_t i = 0; i < kNumLeafParams; ++i) SetValue(SlotOf(LeafId(i)), values[i]);
   InstallMode(preset);
+  // Step 4 (clock.md §2.5): the stored time mode and subdivision apply, and under
+  // global.tempo_recall Preset with the Internal source the stored tempo, phase-continuous, after
+  // §3.5's gap rule at this frame; the phasor never moves.
+  tempo_->SpilloverLoad(sampleCounter_, preset.performance, RecallPreset());
   if (style == SwitchStyle::FastCut) granular_.FastCut(sampleCounter_);
   freezePending_.store(false, std::memory_order_relaxed);
   SetFrozen(false);
@@ -1048,6 +1114,15 @@ void Engine::Impl::DrainPending() noexcept {
 }
 
 void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
+  // The tempo core sees every event at its frame (clock.md §3.5: the gap rule applies before
+  // an event of any type; §4.2: a type above 10 is ignored and counted, before the switch,
+  // which keeps no default so a new type cannot slip through unhandled).
+  const auto type = static_cast<uint8_t>(e.type);
+  if (type > tempo::kEventLast) {
+    tempo_->CountUnknownEvent(sampleCounter_);
+    return;
+  }
+  tempo_->BeforeEvent(sampleCounter_);
   switch (e.type) {
     case EventType::SetParam: {  // Leaf and Global rows only, as SetParam
       const size_t slot = SlotOf(static_cast<ParamId>(e.id));
@@ -1092,6 +1167,19 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       const size_t n = detail::EvalExpressionBody(mode_->mode, mode_->control, e.value, out,
                                                   kMaxExpressions * kMaxMacroTargets);
       SetLeaves(out, n);
+      break;
+    }
+    // Events 6-10 (clock.md §4.1): the payload is read from the value's bits, never computed,
+    // and an invalid one is ignored and counted (§4.2). A tempo change, a placement or a
+    // Subdivision can make a grid position due, which the next span's catch-up fires here.
+    case EventType::Tap:
+    case EventType::Tempo:
+    case EventType::ClockTick:
+    case EventType::Transport:
+    case EventType::Subdivision: {
+      uint32_t bits;
+      std::memcpy(&bits, &e.value, sizeof bits);
+      tempo_->ApplyEvent(sampleCounter_, type, e.id, bits);
       break;
     }
   }
@@ -1159,6 +1247,24 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
       ev.manualCount < pendingFootswitch_ ? ev.manualCount : pendingFootswitch_;
   pendingFootswitch_ -= fromFootswitch;
   pendingMidi_ -= ev.manualCount - fromFootswitch;
+  // The CLOCK grid (clock.md §6.3): every position due in the span, by the catch-up at its first
+  // frame and then at each F(k), at most kMaxClockPerSpan. The grid runs whatever the mode, so
+  // a mode that lists `clock` never inherits a stale catch-up; only such a mode births on it, and
+  // a mode without it drops the hits still waiting for their jittered frame, as a trigger whose
+  // source the mode leaves out is dropped. The grid's period scales the jitter.
+  {
+    GridHit        hits[TempoCore::kMaxClockPerSpan];
+    const uint32_t nh = tempo_->GridFrames(sampleCounter_ + count, hits, TempoCore::kMaxClockPerSpan);
+    if ((sources & kSourceClock) == 0u) {
+      granular_.ClearClock();
+    } else if (nh != 0u) {
+      ev.clockGridFrames = tempo_->GridPeriodFrames();
+      for (uint32_t i = 0; i < nh; ++i) {
+        assert(hits[i].frame >= sampleCounter_ && hits[i].frame < sampleCounter_ + count);
+        ev.clockOffset[ev.clockCount++] = static_cast<uint32_t>(hits[i].frame - sampleCounter_);
+      }
+    }
+  }
   for (uint32_t n = 0; n < count; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
@@ -1203,8 +1309,14 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
   }
 
   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
+  const uint64_t clockBirths = granular_.Stats().clockBirths;
   granular_.Process(gp_, ev, sampleCounter_, epochStart_, ringStart, frozen_, &frozenAnchor_,
                     count, wetL_, wetR_);
+  // The frame the last CLOCK hit was born at, after its jitter (TempoInfo::lastClockBirth),
+  // when one was born in this span.
+  if (granular_.Stats().clockBirths != clockBirths) {
+    tempo_->NoteClockBirth(granular_.Stats().lastClockBirth);
+  }
 
   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
   // the FIFO (design §2.3: DC/HP/LP/saturator/diffuser sit inside the loop; the

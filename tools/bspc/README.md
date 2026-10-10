@@ -59,8 +59,12 @@ field this build cannot play is error E6, naming the feature and the wave that b
 build compiles the default structure with the onset source and mark positioning (sound revision
 2; rows 27 and 28 until then) and wave 1: source selection with leaves 57–59 (intermittency and
 bursts, revision 4), pitch sets with their selection (revision 5), leaves 29 and 30 (repeat and
-decay, revision 6) and leaf 31 (voice count, revision 7). Wave-2 and wave-3 fields are E6, and the
-leaves of later waves compile only at their defaults. Macros, macro positions and expression
+decay, revision 6) and leaf 31 (voice count, revision 7); and wave 2's tempo core (revision 8,
+[clock.md](../../docs/design/clock.md) §11.1): the `clock` source and the stored performance state's
+`time_mode`, `subdiv` (`tap`, `x1/4`, `x1/2`, `x2`, `x4`, `x8`) and `tempo_us_per_quarter`.
+`performance.reverse: true`, a division other than `"off"` (§5.2's names: `base_sync` needs
+tempo-synced times) and the other wave-2 and wave-3 fields are E6, and the leaves of later waves
+compile only at their defaults. Macros, macro positions and expression
 assignments compile.
 
 **Tests.** `ctest` runs `compiler_unit` (the JSON grammar suite, every rule E1–E12, the

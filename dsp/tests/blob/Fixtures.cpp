@@ -24,8 +24,9 @@ namespace brainscape::blobtest {
 // (W3), so DecodePreset's UnsupportedTarget is reached again (51 decode codes). Re-minted for
 // the tempo core's reserved bytes (docs/design/clock.md §11.2): a nonzero SCHD byte 2, which was
 // the scheduler's subdiv, is ModePadding and a nonzero STAT performance byte 3, which was
-// tempo_source, is Performance.
-const char* const kFuzzDigest = "a6d8f20138ee19919a9188a3af5bd0cdac3f29782db2b3d5a70132afc5c08546";
+// tempo_source, is Performance. Re-minted at sound revision 8 for the samples' soundRev and
+// kSupportedModeFeatures (the clock source, docs/design/clock.md §11.1).
+const char* const kFuzzDigest = "70f1240c0cb8f569ebb2ca2ccaa479838e617bef473a8dfdfc4e7d3e212d7d40";
 
 const Fixture kFixtures[] = {
     {"r1-default-mode.bsp",

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "brainscape/ModeEval.h"
+#include "brainscape/TestSignal.h"
 
 #if defined(BRAINSCAPE_GOLDEN_EMBEDDED_PACKAGES)
 #include "EmbeddedPackages.h"
@@ -35,6 +36,57 @@ void Script::AddRestart(const RestartPoint& r) {
   const auto at = std::upper_bound(restarts_.begin(), restarts_.end(), r.frame,
                                    [](int64_t f, const RestartPoint& p) { return f < p.frame; });
   restarts_.insert(at, r);
+}
+
+int64_t ClockTicks(Script& script, int64_t start, uint32_t nsPerQuarter, uint32_t count,
+                   TickModel model, uint32_t seed, int64_t dropFrom, int64_t dropTo) {
+  // The ideal tick i at start + floor(i·ns·48,000 / (24·10^9)), in exact integer steps.
+  const uint64_t num = static_cast<uint64_t>(nsPerQuarter) * 48000u;
+  const uint64_t den = 24000000000u;
+  const uint64_t q = num / den, rem = num % den;
+  auto ideal = [&](uint32_t i) {
+    return start + static_cast<int64_t>(q * i + rem * i / den);  // rem·i < 2^64 for i < 2^29
+  };
+  int64_t last = 0;  // frames never fall below the script's latest tick
+  for (const Event& e : script.Events()) {
+    if (e.type == EventType::ClockTick && e.frame > last) last = e.frame;
+  }
+  for (uint32_t i = 0; i < count; ++i) {
+    const int64_t at = ideal(i);
+    if (at >= dropFrom && at < dropTo) continue;
+    int64_t f = at;
+    if (model == TickModel::Hardware) {
+      f = (at + 47) / 48 * 48;  // at >= 0: the first block boundary at or after it
+    } else if (model == TickModel::Computer) {
+      int64_t j = 0;
+      for (uint32_t k = 0; k < 4; ++k) {
+        const uint32_t u = testsignal::SplitMix32(seed, 4u * i + k);
+        j += static_cast<int64_t>(u % 283u) - 141;
+      }
+      f = at + j;
+      if (i % 500u == 499u) f = at + 1843;  // a held tick, 38.4 ms
+    }
+    if (f < last) f = last;
+    script.Tick(f);
+    last = f;
+  }
+  return ideal(count);
+}
+
+int64_t TapSeries(Script& script, int64_t start, const std::vector<int64_t>& intervals,
+                  uint32_t spread, uint32_t seed) {
+  int64_t at = start;
+  for (size_t k = 0; k <= intervals.size(); ++k) {
+    if (k > 0) at += intervals[k - 1];
+    int64_t f = at;
+    if (spread > 0u) {
+      const uint32_t u = testsignal::SplitMix32(seed, static_cast<uint32_t>(k));
+      f += static_cast<int64_t>(u % (2u * spread + 1u)) - static_cast<int64_t>(spread);
+    }
+    script.Tap(f);
+    if (k == intervals.size()) return f;
+  }
+  return at;
 }
 
 std::unique_ptr<PresetState> CompletePreset(const ParamList& params) {
@@ -92,7 +144,7 @@ bool LoadPackage(const char* name, PresetState* out, PackageInfo* info) {
   return true;
 }
 
-std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint8_t strip,
+std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint16_t strip,
                                             const PresetState* modeFrom, PackageInfo* info) {
   std::unique_ptr<PresetState> preset;
   if (source.package == nullptr) {
@@ -134,6 +186,10 @@ std::unique_ptr<PresetState> CompletePreset(const PresetSource& source, uint8_t 
     preset->mode.layers[0].pitchSelect = PitchSelect::Cycle;
   }
   if ((strip & kStripPitchSelect) != 0) preset->mode.layers[0].pitchSelect = PitchSelect::Cycle;
+  if ((strip & kStripClock) != 0) {
+    preset->mode.schedule.sources = static_cast<uint8_t>(preset->mode.schedule.sources & ~kSourceClock);
+  }
+  if ((strip & kStripSubdiv) != 0) preset->performance.subdiv = Subdivision::Tap;
   preset->mode.features = RequiredModeFeatures(preset->mode);
   return preset;
 }
@@ -181,6 +237,13 @@ void ApplyUnstamped(Engine& engine, const Event& e, const StagedPresets& staged,
       n = EvalExpression(active.mode, active.control, e.value, out,
                          kMaxExpressions * kMaxMacroTargets);
       break;
+    // No unstamped call (docs/design/clock.md §2.6): the render hands these to the block that
+    // starts at their frame (IsTempoEvent).
+    case EventType::Tap:
+    case EventType::Tempo:
+    case EventType::ClockTick:
+    case EventType::Transport:
+    case EventType::Subdivision: break;
   }
   for (size_t i = 0; i < n; ++i) engine.SetParam(static_cast<ParamId>(out[i].id), out[i].value);
 }

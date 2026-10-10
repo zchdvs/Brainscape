@@ -50,6 +50,10 @@ enum class DisplayKind : uint8_t {
   ReverbMode,    // 0..3: Bright room, Dark medium, Large hall, Ambient
   Division,      // post.delay.sync: "Off" at 0, then the note value (docs/design/clock.md §5.2,
                  // §5.4: "1/8D", "1/16T")
+  SubdivPosition,  // perf.subdiv: the knob's six positions as rates (×1/4, ×1/2, TAP, ×2, ×4,
+                   // ×8; the × is UTF-8), clock.md §5.1
+  TimeMode,      // perf.time_mode: Free, Subdiv, Tempo
+  TempoRecall,   // global.tempo_recall: Keep, Preset
 };
 
 // The post-chain groups follow its signal order (grain-engine.md §2): mod -> delay ->
