@@ -92,6 +92,9 @@ struct ReadOptions {
   // The mode features this build plays (Mode.h); tests widen it to exercise later waves'
   // vocabulary. Leaves of Reserved rows stay unsupported whatever this says.
   uint32_t supportedFeatures = brainscape::kSupportedModeFeatures;
+  // performance.reverse, global reverse (W2, after the tempo core): no build plays it yet
+  // (docs/design/clock.md §11.1), so `reverse: true` is E6 unless a test widens this.
+  bool globalReverse = false;
 };
 
 // Steps 2-4 of §8.2 on a parsed document: keys, types and version (E2, E3, E5), defaults,

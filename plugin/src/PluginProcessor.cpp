@@ -102,6 +102,23 @@ uint64_t ValuesHash(const std::array<float, kNumLeafParams>& v, uint64_t modeHas
 }
 
 constexpr auto kEffectVolume = static_cast<uint32_t>(ParamId::EffectVolumeDb);
+constexpr auto kPerfSubdiv   = static_cast<uint32_t>(ParamId::PerfSubdiv);    // row 83
+constexpr auto kPerfTimeMode = static_cast<uint32_t>(ParamId::PerfTimeMode);  // row 84
+constexpr auto kTempoRecall  = static_cast<uint32_t>(ParamId::TempoRecall);   // row 85
+constexpr auto kTempoGlide   = static_cast<uint32_t>(ParamId::TempoGlide);    // row 86
+
+float FloatOf(uint32_t bits) noexcept {
+  float v = 0.f;
+  std::memcpy(&v, &bits, sizeof v);
+  return v;
+}
+
+// The committed tempo in whole µs per quarter, as STAT stores it (clock.md §10.3): rounded half
+// up, inside the tempo range.
+uint32_t UsFromNs(uint32_t ns) noexcept {
+  const uint32_t us = static_cast<uint32_t>((static_cast<uint64_t>(ns) + 500u) / 1000u);
+  return us < kMinUsPerQuarter ? kMinUsPerQuarter : (us > kMaxUsPerQuarter ? kMaxUsPerQuarter : us);
+}
 
 constexpr size_t kPackageHashAt = 96;  // the package header's package_hash (Preset.h)
 
@@ -176,6 +193,16 @@ BrainscapeProcessor::BrainscapeProcessor()
   effectVolume_ = v.get();
   sentEffectVolume_ = v->Plain();
   addParameter(v.release());
+  // The tempo core's Performance rows (clock.md §10.4), appended after 82. Row 85, a device
+  // setting, is not registered: it is the Tempo panel's, in the session's settings.
+  auto sd     = std::make_unique<BrainscapeParam>(ParamId::PerfSubdiv, sink_);
+  subdiv_     = sd.get();
+  sentSubdiv_ = sd->Plain();
+  addParameter(sd.release());
+  auto tm       = std::make_unique<BrainscapeParam>(ParamId::PerfTimeMode, sink_);
+  timeMode_     = tm.get();
+  sentTimeMode_ = tm->Plain();
+  addParameter(tm.release());
   activeModeHash_ = ModeHash(activeMode_);
   curation_       = std::make_unique<CurationSession>(*this);
   setLatencySamples(0);  // dry is never delayed (§4.5); the resampled mode will report its own
@@ -261,6 +288,11 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
     const uint32_t gen = NextGeneration();
     sink_.SetGeneration(gen);
     generationFloor_ = gen;
+    // A unit still waiting is in the mirrors (and its tempo in liveNs_): a preset change among
+    // them makes this restart one too (clock.md §10.1). Units are posted under controlMutex_.
+    const bool unitPending  = stateSeq_.load(std::memory_order_acquire) != seqApplied_;
+    const bool presetChange = unitPending && stateKind_.load(std::memory_order_relaxed) ==
+                                                 static_cast<uint32_t>(UnitKind::PresetChange);
     seqApplied_      = stateSeq_.load(std::memory_order_acquire);
     loadPending_     = false;
     hostCount_ = uiCount_ = 0;
@@ -280,7 +312,13 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
     live_->mode         = activeMode_;
     live_->effectVolume = sentEffectVolume_;
     sentHash_.store(ValuesHash(sent_, activeModeHash_, sentEffectVolume_), std::memory_order_relaxed);
+    engineRateInt_ = static_cast<uint32_t>(std::lround(sampleRate));
+    afterLoad_     = {};
     LoadAfterRestart();
+    // prepareToPlay and a change of device or rate restart the preset that plays: the next block
+    // re-asserts the committed tempo (the last block's, or a restored session's) and rows 83 and
+    // 84 (clock.md §10.1, P12).
+    ScheduleReasserts(presetChange, liveNs_.load(std::memory_order_relaxed));
   }
   spareWake_.notify_all();
 }
@@ -290,6 +328,113 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
 void BrainscapeProcessor::LoadAfterRestart() noexcept {
   RestartTimeline();
   if (freeze_->get()) live_->engine.SetFreeze(true);
+  recallSent_ = -1;  // rows 85 and 86 go out again: an Init'd or swapped-in engine has its default
+  glideSent_  = -1;
+}
+
+void BrainscapeProcessor::ScheduleReasserts(bool presetChange, uint32_t ns) noexcept {
+  reassert_.pending      = true;
+  reassert_.presetChange = presetChange;
+  reassert_.ns           = ns;
+  // The host's tempo, when it is followed, is re-sent by the follower, and a start anchored.
+  follower_.Reset();
+  // What a second Exact load before the next block carries.
+  const bool storedPlays = presetChange && tempoRecallPreset_.load(std::memory_order_relaxed) &&
+                           lastSource_ == static_cast<uint8_t>(tempo::ClockSource::Internal);
+  carryNs_ = storedPlays ? activeMode_.performance.usPerQuarter * 1000u : ns;
+}
+
+// The re-asserts of clock.md §2.5 and §10.1 at frame 0 of the new timeline, before anything else:
+// 1. the committed tempo the load carried, unless the host's tempo is followed (the follower sends
+//    it after them, then anchors a playing transport, §4.4) or a preset change under recall
+//    Preset with the Internal source, which plays its stored tempo; 2. a MIDI master's position,
+//    as the pedal re-asserts it (§2.5 item 2), when the Standalone's translator knows it: Locate
+//    with AtNextTick to the next tick's position, then Continue while the master runs and the
+//    engine followed it in the last block; 3. after a
+//    restart of the same preset, rows 83 and 84, the live Subdiv and time mode.
+void BrainscapeProcessor::EmitReasserts(uint32_t offset) noexcept {
+  if (!reassert_.pending) return;
+  reassert_.pending = false;
+  const bool storedPlays = reassert_.presetChange && tempoRecallPreset_.load(std::memory_order_relaxed) &&
+                           lastSource_ == static_cast<uint8_t>(tempo::ClockSource::Internal);
+  if (!follower_.Following() && !storedPlays) Emit(TempoEventOf(reassert_.ns), offset);
+  if (receiveMidiClock_.load(std::memory_order_relaxed) && midiClock_.PositionKnown()) {
+    Emit(TransportEventOf(tempo::TransportKind::Locate, true, midiClock_.NextTickPosition()), offset);
+    // Continue only while the engine still followed a running master in the last block: a master
+    // gone without its Stop (a cable pulled, the app quit) left the translator running, and an
+    // armed Continue would hold the grid for a tick that never comes (§3.4). The engine's gap rule
+    // (§3.5) has reverted its source to Internal a second after the last tick.
+    if (midiClock_.Running() && lastSource_ == static_cast<uint8_t>(tempo::ClockSource::ClockRunning)) {
+      Emit(TransportEventOf(tempo::TransportKind::Continue, true), offset);
+    }
+  }
+  if (!reassert_.presetChange) EmitRows(offset);
+}
+
+// A session restored while audio runs is a Spillover load, which plays the package's stored Subdiv
+// and time mode and keeps the running tempo: the session's performance follows it at its frame.
+void BrainscapeProcessor::EmitAfterLoad(uint32_t offset) noexcept {
+  if (!afterLoad_.pending) return;
+  afterLoad_.pending = false;
+  if (afterLoad_.ns != 0u && !follower_.Following()) Emit(TempoEventOf(afterLoad_.ns), offset);
+  EmitRows(offset);
+}
+
+// Rows 83 and 84 as Subdivision events: §5.1's code of the Subdiv knob's position, the time mode.
+void BrainscapeProcessor::EmitRows(uint32_t offset) noexcept {
+  sentSubdiv_   = subdiv_->Plain();
+  sentTimeMode_ = timeMode_->Plain();
+  Emit(SubdivisionEventOf(tempo::SubdivField::Subdivision,
+                          tempo::SubdivCodeFromPosition(SubdivPositionOf(sentSubdiv_))),
+       offset);
+  Emit(SubdivisionEventOf(tempo::SubdivField::TimeMode, TimeModeOf(sentTimeMode_)), offset);
+}
+
+void BrainscapeProcessor::Emit(const TempoEvent& e, uint32_t offset) noexcept {
+  Engine::BlockEvent b;
+  b.offset = offset;
+  b.type   = e.type;
+  b.id     = e.id;
+  b.value  = FloatOf(e.valueBits);
+  Emit(b);
+}
+
+// The Standalone's MIDI clock (clock.md §10.2): every byte of a message, in order, through the one
+// translator (§4.3); its events at the message's frame at the MIDI rank, or, for a message past
+// the block, pending for the next block's first frame.
+void BrainscapeProcessor::FeedMidiClock(const juce::MidiMessageMetadata& m, uint32_t offset, bool pend) noexcept {
+  for (int i = 0; i < m.numBytes; ++i) {
+    MidiClockEvent c;
+    if (midiClock_.Feed(m.data[i], &c) != MidiClockParser::Result::Event) continue;
+    if (pend) {
+      WrapperEvent e{c.type == tempo::kEventClockTick ? WrapperEvent::Type::ClockTick : WrapperEvent::Type::Transport,
+                     WrapperEvent::Source::Midi, c.id, FloatOf(c.valueBits)};
+      e.frame = framePos_;
+      InsertPending(e);
+    } else {
+      Emit({c.type == tempo::kEventClockTick ? Engine::EventType::ClockTick : Engine::EventType::Transport, c.id,
+            c.valueBits},
+           offset);
+    }
+  }
+}
+
+HostTransport BrainscapeProcessor::ReadTransport() const {
+  HostTransport t;
+  if (juce::AudioPlayHead* head = getPlayHead()) {
+    if (const auto position = head->getPosition()) {
+      t.playing = position->getIsPlaying();
+      if (const auto bpm = position->getBpm()) {
+        t.hasBpm = true;
+        t.bpm    = *bpm;
+      }
+      if (const auto ppq = position->getPpqPosition()) {
+        t.hasPpq = true;
+        t.ppq    = *ppq;
+      }
+    }
+  }
+  return t;
 }
 
 void BrainscapeProcessor::RestartTimeline() noexcept {
@@ -309,12 +454,57 @@ void BrainscapeProcessor::TriggerFromUi() noexcept {
               static_cast<uint32_t>(Engine::TriggerSource::Footswitch), 1.0f});
 }
 
+void BrainscapeProcessor::TapFromUi() noexcept {
+  sink_.Post({WrapperEvent::Type::Tap, WrapperEvent::Source::Ui, 0u, 0.0f});
+}
+
+bool BrainscapeProcessor::SetTempoFromUi(double bpm) noexcept {
+  const uint32_t ns = tempo::NsPerQuarterFromBpm(bpm);
+  if (ns == 0u) return false;
+  sink_.Post({WrapperEvent::Type::Tempo, WrapperEvent::Source::Ui, ns, 0.0f});
+  return true;
+}
+
+BrainscapeProcessor::TempoDisplay BrainscapeProcessor::GetTempoDisplay() const noexcept {
+  TempoDisplay d;
+  d.nsPerQuarter  = liveNs_.load(std::memory_order_relaxed);
+  d.source        = dispSource_.load(std::memory_order_relaxed);
+  d.followingHost = dispFollowing_.load(std::memory_order_relaxed);
+  d.hostOctaves   = dispHostOctaves_.load(std::memory_order_relaxed);
+  d.subdiv        = dispSubdiv_.load(std::memory_order_relaxed);
+  d.timeMode      = dispTimeMode_.load(std::memory_order_relaxed);
+  d.rate          = dispRate_.load(std::memory_order_relaxed);
+  d.hostClamped   = dispHostClamped_.load(std::memory_order_relaxed);
+  const uint8_t flags = dispFlags_.load(std::memory_order_relaxed);
+  d.running  = (flags & kTempoFlagRunning) != 0u;
+  d.locked   = (flags & kTempoFlagLocked) != 0u;
+  d.position = dispPosition_.load(std::memory_order_relaxed);
+  return d;
+}
+
+PerformanceState BrainscapeProcessor::LivePerformance() const {
+  PerformanceState p = CurrentMode().performance;
+  p.usPerQuarter     = UsFromNs(liveNs_.load(std::memory_order_relaxed));
+  p.timeMode         = static_cast<brainscape::TimeMode>(TimeModeOf(timeMode_->Plain()));
+  p.subdiv           = static_cast<Subdivision>(tempo::SubdivCodeFromPosition(SubdivPositionOf(subdiv_->Plain())));
+  return p;
+}
+
+TempoInfo BrainscapeProcessor::EngineTempo() const noexcept {
+  return engineReady_ ? live_->engine.Tempo() : TempoInfo{};
+}
+
+TempoStats BrainscapeProcessor::EngineTempoCounts() const noexcept {
+  return engineReady_ ? live_->engine.TempoCounts() : TempoStats{};
+}
+
 void BrainscapeProcessor::PostAt(uint64_t frame, WrapperEvent e) noexcept {
   // Events hold canonical values (profile §3.7), as every other producer's do: the value
   // sent to the engine becomes the parameter's mirror and the session state, so it must
   // be the bits the engine keeps, not the caller's -0, NaN or out-of-range value. A macro's
   // or the pedal's position is its row's value, canonicalized to [0, 1].
-  if ((e.type == WrapperEvent::Type::Param && (IsLeaf(e.id) || e.id == kEffectVolume)) ||
+  if ((e.type == WrapperEvent::Type::Param &&
+       (IsLeaf(e.id) || e.id == kEffectVolume || e.id == kPerfSubdiv || e.id == kPerfTimeMode)) ||
       (e.type == WrapperEvent::Type::Macro && IsMacroRow(static_cast<ParamId>(e.id)))) {
     e.value = Canonicalize(static_cast<ParamId>(e.id), e.value);
   } else if (e.type == WrapperEvent::Type::Expression) {
@@ -331,6 +521,10 @@ void BrainscapeProcessor::SetSettings(const WrapperSettings& s) noexcept {
   inputGainDb_.store(CanonicalGainDb(s.inputGainDb), std::memory_order_relaxed);
   outputGainDb_.store(CanonicalGainDb(s.outputGainDb), std::memory_order_relaxed);
   restartOnStart_.store(s.restartOnStart, std::memory_order_release);
+  tempoSource_.store(static_cast<uint32_t>(s.tempoSource), std::memory_order_relaxed);
+  receiveMidiClock_.store(s.receiveMidiClock, std::memory_order_relaxed);
+  tempoRecallPreset_.store(s.tempoRecallPreset, std::memory_order_relaxed);
+  tempoGlide_.store(s.tempoGlide, std::memory_order_relaxed);
   if (s.restartOnStart) EnsureSpareWorker();
   spareWake_.notify_all();  // the worker prepares or releases the spare
 }
@@ -345,6 +539,12 @@ WrapperSettings BrainscapeProcessor::GetSettings() const noexcept {
   s.inputGainDb    = inputGainDb_.load(std::memory_order_relaxed);
   s.outputGainDb   = outputGainDb_.load(std::memory_order_relaxed);
   s.restartOnStart = restartOnStart_.load(std::memory_order_relaxed);
+  s.tempoSource    = tempoSource_.load(std::memory_order_relaxed) == static_cast<uint32_t>(TempoSource::Internal)
+                         ? TempoSource::Internal
+                         : TempoSource::Host;
+  s.receiveMidiClock  = receiveMidiClock_.load(std::memory_order_relaxed);
+  s.tempoRecallPreset = tempoRecallPreset_.load(std::memory_order_relaxed);
+  s.tempoGlide        = tempoGlide_.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -371,6 +571,8 @@ BrainscapeParam* BrainscapeProcessor::FindHostParam(ParamId id) noexcept {
   if (IsMacroRow(id)) return macros_[MacroIndex(id)];
   if (id == ParamId::PerfExpression) return expression_;
   if (id == ParamId::EffectVolumeDb) return effectVolume_;
+  if (id == ParamId::PerfSubdiv) return subdiv_;
+  if (id == ParamId::PerfTimeMode) return timeMode_;
   return nullptr;
 }
 
@@ -389,6 +591,7 @@ std::unique_ptr<PresetState> BrainscapeProcessor::CurrentPreset() const {
   float values[kNumLeafParams];
   for (size_t i = 0; i < kNumLeafParams; ++i) values[i] = params_[i]->Plain();
   ToPreset(values, CurrentMode(), *preset);
+  preset->performance = LivePerformance();
   ControlState& c = preset->control;
   for (uint32_t k = 0; k < c.macroCount && k < kMaxMacros; ++k) {
     const auto id = static_cast<ParamId>(c.positions[k].macroId);
@@ -413,6 +616,7 @@ void BrainscapeProcessor::SetMacroMirrors(const ControlState& control) noexcept 
 void BrainscapeProcessor::NotifyHostOfMirrors() {
   for (BrainscapeParam* p : params_) p->setValueNotifyingHost(p->getValue());
   for (BrainscapeParam* p : macros_) p->setValueNotifyingHost(p->getValue());
+  for (BrainscapeParam* p : {subdiv_, timeMode_}) p->setValueNotifyingHost(p->getValue());
 }
 
 bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* report,
@@ -444,7 +648,18 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
       mode_ = mode;
     }
     source_ = source;
-    PostStateUnit(plain, mode);
+    // A preset change plays the preset's stored Subdiv and time mode (clock.md §10.1): the rows
+    // take them before the unit goes out, and its load applies them. Under recall Preset with the
+    // internal source it plays the stored tempo too, which the display shows at once.
+    subdiv_->StoreMirror(Canonicalize(ParamId::PerfSubdiv, static_cast<float>(tempo::SubdivPositionFromCode(
+                                                               static_cast<uint8_t>(mode.performance.subdiv)))));
+    timeMode_->StoreMirror(Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(mode.performance.timeMode))));
+    if (tempoRecallPreset_.load(std::memory_order_relaxed) && !dispFollowing_.load(std::memory_order_relaxed) &&
+        dispSource_.load(std::memory_order_relaxed) == static_cast<uint8_t>(tempo::ClockSource::Internal) &&
+        mode.performance.usPerQuarter >= kMinUsPerQuarter && mode.performance.usPerQuarter <= kMaxUsPerQuarter) {
+      liveNs_.store(mode.performance.usPerQuarter * 1000u, std::memory_order_relaxed);
+    }
+    PostStateUnit(plain, mode, UnitKind::PresetChange, 0u);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(plain[i]);
     SetMacroMirrors(mode.control);
     lastLoadInexact_.store(!r.exact, std::memory_order_relaxed);
@@ -482,6 +697,11 @@ void BrainscapeProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.settings          = GetSettings();
     state.effectVolumeDb    = effectVolume_->Plain();
     state.hasEffectVolume   = true;
+    // The tempo core's performance (clock.md §10.1, §10.4): the committed tempo and rows 83, 84.
+    state.tempoNs        = liveNs_.load(std::memory_order_relaxed);
+    state.hasPerformance = true;
+    state.subdivPosition = subdiv_->Plain();
+    state.timeMode       = timeMode_->Plain();
     // While a factory mode plays, the session names its package and keeps the macro mirrors at
     // the positions its CTRL defines (StateCodec.h, FMOD).
     if (source_.factory >= 0 && static_cast<size_t>(source_.factory) < FactoryCount()) {
@@ -525,7 +745,18 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
     }
     source_ = source;
     if (state.hasEffectVolume) effectVolume_->StoreMirror(state.effectVolumeDb);
-    PostStateUnit(state.plain, mode);
+    // A session restore restarts the session's preset with its performance (clock.md §10.1): the
+    // tempo it saved (the internal tempo persists, P12) and rows 83 and 84, or the preset's
+    // stored ones for a session without them. The mirrors go first: the unit's re-asserts read them.
+    subdiv_->StoreMirror(state.hasPerformance
+                             ? state.subdivPosition
+                             : Canonicalize(ParamId::PerfSubdiv, static_cast<float>(tempo::SubdivPositionFromCode(
+                                                                     static_cast<uint8_t>(mode.performance.subdiv)))));
+    timeMode_->StoreMirror(state.hasPerformance
+                               ? state.timeMode
+                               : Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(mode.performance.timeMode))));
+    if (state.tempoNs != 0u) liveNs_.store(state.tempoNs, std::memory_order_relaxed);
+    PostStateUnit(state.plain, mode, UnitKind::SessionRestore, state.tempoNs);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(state.plain[i]);
     SetMacroMirrors(mode.control);
     SetSettings(state.settings);
@@ -539,7 +770,8 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
   freeze_->setValueNotifyingHost(0.0f);
 }
 
-void BrainscapeProcessor::PostStateUnit(const float* plain, const ModeState& mode) noexcept {
+void BrainscapeProcessor::PostStateUnit(const float* plain, const ModeState& mode, UnitKind kind,
+                                        uint32_t tempoNs) noexcept {
   uint32_t words[kModeWords];
   std::memcpy(words, &mode, sizeof mode);
   const uint32_t gen = NextGeneration();
@@ -548,6 +780,8 @@ void BrainscapeProcessor::PostStateUnit(const float* plain, const ModeState& mod
   std::atomic_thread_fence(std::memory_order_release);
   for (size_t i = 0; i < kNumLeafParams; ++i) stateSlot_[i].store(plain[i], std::memory_order_relaxed);
   for (size_t i = 0; i < kModeWords; ++i) modeSlot_[i].store(words[i], std::memory_order_relaxed);
+  stateKind_.store(static_cast<uint32_t>(kind), std::memory_order_relaxed);
+  stateTempoNs_.store(tempoNs, std::memory_order_relaxed);
   stateGen_.store(gen, std::memory_order_relaxed);
   stateSeq_.store(seq + 2u, std::memory_order_release);
   // Only once the slot is complete: whoever pops an event stamped with this generation
@@ -572,7 +806,9 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
     const uint32_t w = modeSlot_[i].load(std::memory_order_relaxed);
     std::memcpy(unit + i * sizeof w, &w, sizeof w);
   }
-  const uint32_t gen = stateGen_.load(std::memory_order_relaxed);
+  const uint32_t gen     = stateGen_.load(std::memory_order_relaxed);
+  const bool     session = stateKind_.load(std::memory_order_relaxed) == static_cast<uint32_t>(UnitKind::SessionRestore);
+  const uint32_t tempoNs = stateTempoNs_.load(std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_acquire);
   if (stateSeq_.load(std::memory_order_relaxed) != seq) return;
   for (size_t i = 0; i < kNumLeafParams; ++i) sent_[i] = plain[i];
@@ -587,28 +823,28 @@ void BrainscapeProcessor::ApplyStateUnit() noexcept {
   generationFloor_ = gen;
   if (framePos_ != 0) {
     loadPending_ = true;
+    afterLoad_   = {session, session ? tempoNs : 0u};
     return;
   }
   live_->engine.LoadPreset(*restore_, LoadMode::Exact);
   live_->preset = sent_;
   live_->mode   = activeMode_;
+  afterLoad_    = {};
+  ScheduleReasserts(!session, session && tempoNs != 0u ? tempoNs : carryNs_);
 }
 
 // ── Restart on transport start (§4.9) ──────────────────────────────────────────────
 
-void BrainscapeProcessor::CheckTransportStart() noexcept {
-  bool playing = false;
-  if (juce::AudioPlayHead* head = getPlayHead()) {
-    if (const auto position = head->getPosition()) playing = position->getIsPlaying();
-  }
+bool BrainscapeProcessor::CheckTransportStart(bool playing) noexcept {
   if (armRequest_.exchange(false, std::memory_order_relaxed)) startArmed_ = true;
   if (!playing) {
     startArmed_ = true;
-    return;
+    return false;
   }
-  if (!startArmed_) return;
+  if (!startArmed_) return false;
   startArmed_ = false;
   if (restartOnStart_.load(std::memory_order_acquire)) RestartAtTransportStart();
+  return true;
 }
 
 void BrainscapeProcessor::RestartAtTransportStart() noexcept {
@@ -621,6 +857,9 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
   // restore this block has already replaced; the effect volume is a Global row (§3.8).
   Values start       = sent_;
   float  startVolume = resendVolume_ ? effectVolume_->Plain() : sentEffectVolume_;
+  // A unit this block folds into the restart: a preset change, or a session with its tempo.
+  const bool     unitThisBlock = loadPending_;
+  const AfterLoad session      = afterLoad_;
   for (const auto& live : {std::make_pair(hostEvents_.data(), hostCount_),
                            std::make_pair(uiEvents_.data(), uiCount_)}) {
     for (size_t k = 0; k < live.second; ++k) {
@@ -670,7 +909,12 @@ void BrainscapeProcessor::RestartAtTransportStart() noexcept {
   loadPending_      = false;  // the restore, if any, is part of the Exact load
   sentEffectVolume_ = startVolume;
   resendVolume_     = false;
+  afterLoad_        = {};
   LoadAfterRestart();
+  // The restart of the same preset (§10.1): the committed tempo it carries, rows 83 and 84; or a
+  // preset change, or a session's tempo, that this block's unit brought.
+  ScheduleReasserts(unitThisBlock && !session.pending,
+                    session.pending && session.ns != 0u ? session.ns : carryNs_);
 }
 
 void BrainscapeProcessor::EnsureSpareWorker() {
@@ -816,6 +1060,18 @@ void BrainscapeProcessor::Emit(const WrapperEvent& e, uint32_t offset) noexcept 
       } else if (e.id == kEffectVolume) {
         sentEffectVolume_ = e.value;
         effectTouched_    = true;
+      } else if (e.id == kPerfSubdiv) {  // row 83: §5.1's code of the knob's position
+        sentSubdiv_    = e.value;
+        subdivTouched_ = true;
+        Emit(SubdivisionEventOf(tempo::SubdivField::Subdivision,
+                                tempo::SubdivCodeFromPosition(SubdivPositionOf(e.value))),
+             offset);
+        return;
+      } else if (e.id == kPerfTimeMode) {  // row 84
+        sentTimeMode_    = e.value;
+        timeModeTouched_ = true;
+        Emit(SubdivisionEventOf(tempo::SubdivField::TimeMode, TimeModeOf(e.value)), offset);
+        return;
       } else {
         return;  // only Leaf rows and the effect volume take SetParam
       }
@@ -838,6 +1094,31 @@ void BrainscapeProcessor::Emit(const WrapperEvent& e, uint32_t offset) noexcept 
       Track(e, sent_, &touched_);
       b.type = Engine::EventType::Expression;
       b.id   = 0;
+      break;
+    // The tempo core's events (clock.md §4.1), their payloads as given: an invalid one is the
+    // engine's to ignore and count (§4.2). Taps and tempos are dropped while the host's tempo is
+    // followed, before they reach the engine (§10.1).
+    case WrapperEvent::Type::Tap:
+      if (follower_.Following()) return;
+      b.type = Engine::EventType::Tap;
+      b.id   = e.id;
+      break;
+    case WrapperEvent::Type::Tempo:
+      if (follower_.Following()) return;
+      b.type = Engine::EventType::Tempo;
+      b.id   = e.id;
+      break;
+    case WrapperEvent::Type::ClockTick:
+      b.type = Engine::EventType::ClockTick;
+      b.id   = e.id;
+      break;
+    case WrapperEvent::Type::Transport:
+      b.type = Engine::EventType::Transport;
+      b.id   = e.id;
+      break;
+    case WrapperEvent::Type::Subdivision:
+      b.type = Engine::EventType::Subdivision;
+      b.id   = e.id;
       break;
   }
   Emit(b);
@@ -866,7 +1147,12 @@ void BrainscapeProcessor::Track(const WrapperEvent& e, Values& values,
       n = EvalExpression(activeMode_.mode, activeMode_.control, e.value, out, kMaxTargets);
       break;
     case WrapperEvent::Type::Freeze:
-    case WrapperEvent::Type::Trigger: return;
+    case WrapperEvent::Type::Trigger:
+    case WrapperEvent::Type::Tap:
+    case WrapperEvent::Type::Tempo:
+    case WrapperEvent::Type::ClockTick:
+    case WrapperEvent::Type::Transport:
+    case WrapperEvent::Type::Subdivision: return;
   }
   for (size_t k = 0; k < n; ++k) {
     const size_t leaf = LeafIndex(out[k].id);
@@ -884,11 +1170,13 @@ void BrainscapeProcessor::EmitPending(size_t from, size_t to, WrapperEvent::Sour
 }
 
 // A parameter or freeze event posted before the last applied restore or Init lost to it
-// (§4.7: the restore arrived later), and a stamp made before a restart is void, late or
-// not. Events stamped for a later frame wait in pending_ and keep their frame order instead.
+// (§4.7: the restore arrived later), and a stamp made before a restart is void, late or not.
+// Momentary events (a trigger, a tap, a clock tick, a transport) always apply. Events stamped
+// for a later frame wait in pending_ and keep their frame order instead.
 bool BrainscapeProcessor::Applies(const WrapperEvent& e) const noexcept {
   if (e.scripted && e.timeline != timeline_.load(std::memory_order_relaxed)) return false;
-  return e.type == WrapperEvent::Type::Trigger ||
+  return e.type == WrapperEvent::Type::Trigger || e.type == WrapperEvent::Type::Tap ||
+         e.type == WrapperEvent::Type::ClockTick || e.type == WrapperEvent::Type::Transport ||
          static_cast<int32_t>(e.generation - generationFloor_) >= 0;
 }
 
@@ -908,6 +1196,25 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
   const bool first  = *frameZero && frame == blockStart;
   size_t     runEnd = *pending;
   while (runEnd < pendingCount_ && pending_[runEnd].frame <= frame) ++runEnd;
+  if (first) {
+    // The tempo core first (clock.md §10.1, §4.4): the re-asserts after an Exact load, then
+    // rows 85 and 86 when they changed (before a load reads 85, and before the block's tempo
+    // changes are classed by 86), the state load and a restored session's performance after it,
+    // then the host's Tempo and Transport.
+    EmitReasserts(offset);
+    const auto device = [this, offset](int value, int* sent, uint32_t id) {
+      if (value == *sent) return;
+      *sent = value;
+      Engine::BlockEvent b;
+      b.offset = offset;
+      b.type   = Engine::EventType::SetParam;
+      b.id     = id;
+      b.value  = value != 0 ? 1.0f : 0.0f;
+      Emit(b);
+    };
+    device(tempoRecallPreset_.load(std::memory_order_relaxed) ? 1 : 0, &recallSent_, kTempoRecall);
+    device(tempoGlide_.load(std::memory_order_relaxed) ? 1 : 0, &glideSent_, kTempoGlide);
+  }
   if (first && loadPending_) {
     Engine::BlockEvent load;
     load.offset = offset;
@@ -915,6 +1222,11 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
     load.preset = restore_.get();
     Emit(load);
     loadPending_ = false;
+  }
+  if (first) {
+    EmitAfterLoad(offset);
+    for (size_t k = 0; k < hostTempoCount_; ++k) Emit(hostTempo_[k], offset);
+    hostTempoCount_ = 0;
   }
   if (first && resendVolume_) {  // the device setting the restore kept (mode-compiler.md §3.8)
     resendVolume_  = false;
@@ -934,6 +1246,7 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
             static_cast<uint32_t>(Engine::TriggerSource::MidiNote), static_cast<float>(m.data[2]) / 127.0f},
            offset);
     }
+    if (midiClockOn_) FeedMidiClock(m, offset, false);
   }
   EmitPending(*pending, runEnd, WrapperEvent::Source::Ui, offset);
   if (first) {
@@ -946,6 +1259,8 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
              offset);
       }
       Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, kEffectVolume, effectVolume_->Plain()}, offset);
+      Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, kPerfSubdiv, subdiv_->Plain()}, offset);
+      Emit({WrapperEvent::Type::Param, WrapperEvent::Source::Ui, kPerfTimeMode, timeMode_->Plain()}, offset);
       Emit({WrapperEvent::Type::Freeze, WrapperEvent::Source::Ui, 0u, freeze_->get() ? 1.0f : 0.0f}, offset);
     }
     *frameZero = false;
@@ -962,6 +1277,9 @@ void BrainscapeProcessor::WriteBackMirrors() noexcept {
   touched_.reset();
   if (effectTouched_) effectVolume_->StoreMirror(sentEffectVolume_);
   effectTouched_ = false;
+  if (subdivTouched_) subdiv_->StoreMirror(sentSubdiv_);
+  if (timeModeTouched_) timeMode_->StoreMirror(sentTimeMode_);
+  subdivTouched_ = timeModeTouched_ = false;
 }
 
 // ── Audio ──────────────────────────────────────────────────────────────────────────
@@ -989,7 +1307,20 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
   }
   resync_ = sink_.TakeResync();
   ApplyStateUnit();
-  CheckTransportStart();
+  // The host's tempo and transport (clock.md §4.4), read once: a transport start restarts first
+  // (with the option on), so the follower's events come after the restart's re-asserts. A
+  // Spillover load this block may play its stored tempo (recall Preset): the host's goes after it.
+  const HostTransport transport = ReadTransport();
+  const bool          startEdge = CheckTransportStart(transport.playing);
+  if (loadPending_) follower_.ResendTempo();
+  hostTempoCount_ = follower_.Block(
+      transport, tempoSource_.load(std::memory_order_relaxed) == static_cast<uint32_t>(TempoSource::Host),
+      startEdge, numSamples, engineRateInt_, hostTempo_.data());
+  // Receive MIDI clock gates the translator: turned off, it forgets the master, whose Stop it will
+  // not see (clock.md §11.16), so a later Exact load re-asserts no stale position or Continue.
+  const bool midiClockOn = receiveMidiClock_.load(std::memory_order_relaxed);
+  if (!midiClockOn && midiClockOn_) midiClock_.Reset();
+  midiClockOn_ = midiClockOn;
 
   // The host buffer is in place (input channel c is output channel c). The input is
   // copied to scratch before Process writes, so no layout can alias (§4.4). A missing or
@@ -1049,10 +1380,30 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
       e.frame = framePos_;
       InsertPending(e);
     }
+    if (midiClockOn_) FeedMidiClock(m, 0u, true);
   }
   hostCount_ = uiCount_ = 0;
   WriteBackMirrors();
   sentHash_.store(ValuesHash(sent_, activeModeHash_, sentEffectVolume_), std::memory_order_relaxed);
+
+  // Engine::Tempo() is the audio thread's (§2.6): the BPM panel, the session and the re-asserts
+  // read copies. The committed tempo waits while a newer unit (a restored session's tempo) has not
+  // applied yet.
+  const TempoInfo info = live_->engine.Tempo();
+  carryNs_             = info.nsPerQuarter;
+  lastSource_          = info.source;
+  if (stateSeq_.load(std::memory_order_acquire) == seqApplied_) {
+    liveNs_.store(info.nsPerQuarter, std::memory_order_relaxed);
+  }
+  dispSource_.store(info.source, std::memory_order_relaxed);
+  dispSubdiv_.store(info.subdiv, std::memory_order_relaxed);
+  dispTimeMode_.store(info.timeMode, std::memory_order_relaxed);
+  dispRate_.store(engineRateInt_, std::memory_order_relaxed);
+  dispFlags_.store(info.flags, std::memory_order_relaxed);
+  dispPosition_.store(info.position, std::memory_order_relaxed);
+  dispFollowing_.store(follower_.Following(), std::memory_order_relaxed);
+  dispHostOctaves_.store(static_cast<int8_t>(follower_.Octaves()), std::memory_order_relaxed);
+  dispHostClamped_.store(follower_.Clamped(), std::memory_order_relaxed);
 
   for (int c = 2; c < numOut; ++c) buffer.clear(c, 0, numSamples);
   onsets_.fetch_add(live_->engine.ConsumeOnsetCount(), std::memory_order_relaxed);

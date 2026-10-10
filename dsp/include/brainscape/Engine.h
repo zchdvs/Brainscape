@@ -6,6 +6,7 @@
 #include "brainscape/Memory.h"
 #include "brainscape/Params.h"
 #include "brainscape/PresetState.h"
+#include "brainscape/Tempo.h"
 
 namespace brainscape {
 
@@ -168,6 +169,19 @@ class Engine {
     Expression    = 5,  // id: 0; value: the pedal position, canonicalized to [0, 1]. The
                         // active CTRL's assignments apply in order through EvalExpression: a
                         // leaf is set, a macro moves. Without assignments it does nothing
+    // The tempo core's events (sound revision 8, docs/design/clock.md §4.1; payloads and
+    // helpers in Tempo.h). Tempo exists only as events: no unstamped call sets it (§2.6). A
+    // payload that breaks §4.1's table is ignored and counted (invalidEvents), never clamped;
+    // a type above 10 is ignored and counted (unknownEvents). Before every event of any type
+    // the engine applies §3.5's gap rule at the event's frame.
+    Tap           = 6,   // id 0, value +0: tap tempo (§3.2), or a downbeat under ClockFree
+    Tempo         = 7,   // id: ns per quarter, 2e8-3e9; value +0: phase-continuous, committed
+                         // at once under the Internal source, ignored under a clock (§3.6)
+    ClockTick     = 8,   // id 0, value +0: a MIDI clock pulse, 24 per quarter (§3.3)
+    Transport     = 9,   // id: tempo::TransportId (kind, AtNextTick, the host anchor's offset);
+                         // value: Start's and Locate's position in 24-ppqn ticks (§3.4)
+    Subdivision   = 10,  // id: tempo::SubdivisionId (the subdivision §5.1's code, or the time
+                         // mode); value +0 (§2.4)
   };
   // A stamped event, as producers, scripts and the transport (EventQueue.h) carry it.
   struct Event {
@@ -203,11 +217,9 @@ class Engine {
     // oversized block, null buffers) still applies its events, after its frames.
     const BlockEvent* events    = nullptr;
     uint32_t          numEvents = 0;
-    // Never read by the engine (mode-compiler.md §7.4): per-block fields would make output
-    // depend on the block grid, so a wrapper turns host tempo and transport into events (W2).
-    double   tempoBpm       = 120.0;
-    int64_t  timelinePos    = 0;
-    bool     transportPlaying = false;
+    // No tempo, position or transport fields: per-block fields would make output depend on
+    // the block grid (mode-compiler.md §7.4), so a wrapper turns host tempo and transport into
+    // Tempo and Transport events (docs/design/clock.md §2.6, §4.4).
   };
   // Audio thread only. No allocation, no locks, no syscalls, no exceptions, no RTTI.
   // On an invalid call (not Init'd, null buffers, a block size outside 1..maxBlockSize)
@@ -243,7 +255,7 @@ class Engine {
   // does not skip it (mode-compiler.md §7.5); a trigger whose source the mode leaves out is
   // dropped at the first frame it is due. velocity is not yet read (W2); sampleOffset is
   // ignored (a Trigger event carries the offset). A SIDECHAIN audio input is not yet
-  // expressible through ProcessContext at all (reserved, like tempoBpm).
+  // expressible through ProcessContext at all (reserved).
   void Trigger(TriggerSource src = TriggerSource::Footswitch, float velocity = 1.f,
                uint32_t sampleOffset = 0) noexcept;
 
@@ -285,6 +297,33 @@ class Engine {
   };
   // Audio thread only (plain 64-bit counts, as SampleCounter).
   GrainStats Stats() const noexcept;
+
+  // The tempo core (sound revision 8, docs/design/clock.md §2.6). Audio thread only, read like
+  // Stats(): Tempo() is the snapshot at the last rendered frame, with §3.5's gap predicate
+  // applied without changing anything, so a display never shows a clock that has gone; what
+  // displays, logs and producers read (the committed tempo a producer re-asserts after an Exact
+  // load, §2.5). TempoCounts() are counts since Init, which Reset, Restart and loads keep.
+  //
+  // The producers' re-assert contract (§2.5, D4, D17; lanes T3 and T4): an Exact load and
+  // Restart start from the active preset's stored performance state (its tempo, time mode and
+  // subdivision; Init's 120 BPM, Free and TAP before any load), whatever played before. A
+  // producer that carries the performance across an Exact load pushes, as logged events at
+  // frame 0 of the new timeline before audio resumes: (1) a Tempo event with the committed tempo
+  // read just before the load (Tempo().nsPerQuarter), when global.tempo_recall is Keep or a
+  // clock or the host was being followed, and nothing under Preset with the Internal source;
+  // (2) on the pedal, when MidiClockParser knows the master's position, Transport Locate with
+  // AtNextTick to the next tick's position and, when the master runs, Continue with AtNextTick;
+  // (3) after a restart of the same preset only (the plugin's transport-start restart,
+  // prepareToPlay, a session restore), Subdivision events with the live subdivision and time
+  // mode. A Spillover load keeps the running tempo unless global.tempo_recall is Preset under
+  // the Internal source, and never moves the beat.
+  //
+  // The Time knob (§6.4, D5): in Free time mode it sends MacroMove(macro.time); in Subdiv mode
+  // Subdivision events and in Tempo mode Tempo events (TempoNsFromKnob, Tempo.h), never
+  // macro.time, which expression, MIDI and hosts still reach in every mode. The producer reads
+  // the time mode from Tempo().timeMode; the engine itself plays every MacroMove it is given.
+  TempoInfo  Tempo() const noexcept;
+  TempoStats TempoCounts() const noexcept;
 
   // Dry path is never block-delayed (design §2.5).
   uint32_t LatencySamples() const noexcept { return 0; }

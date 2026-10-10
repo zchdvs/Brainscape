@@ -641,16 +641,19 @@ TEST_CASE("STAT rules: count, length, order, canonical values, performance", "[b
          PresetError::Performance);
   Expect(edit([&](Bytes& b) { Wr32(&b[perf + 4], kMaxUsPerQuarter + 1); }),
          PresetError::Performance);
+  // Byte 3 was tempo_source: reserved since sound revision 8 (docs/design/clock.md §11.2, D3).
+  Expect(edit([&](Bytes& b) { b[perf + 3] = 1; }), PresetError::Performance);
   const Decoded r = Decode(edit([&](Bytes& b) {
     b[perf]     = 1;
     b[perf + 1] = 2;
     b[perf + 2] = 5;
-    b[perf + 3] = 2;
     Wr32(&b[perf + 4], kMinUsPerQuarter);
   }));
   REQUIRE(r.ok);
   REQUIRE(r.s->performance.reverse == 1u);
-  REQUIRE(r.s->performance.tempoSource == TempoSource::Host);
+  REQUIRE(r.s->performance.timeMode == TimeMode::Tempo);
+  REQUIRE(r.s->performance.subdiv == Subdivision::Octuple);
+  REQUIRE(r.s->performance.reserved == 0u);
   // In memory, nothing past the count (as in CTRL and MACR): a stale leaf would give two states
   // one encoding. The encoder refuses it; the decoder zeroes those slots.
   for (const PresetLeaf stale : {PresetLeaf{200, 1.0f}, PresetLeaf{0, 1.0f}, PresetLeaf{3, 0.0f}}) {
@@ -762,7 +765,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
   }
   REQUIRE(kSupportedModeFeatures ==
           (kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources |
-           kModeFeaturePitchSet));
+           kModeFeaturePitchSet | kModeFeatureClock |   // CLOCK since sound revision 8
+           kModeFeatureTempoSync));                     // base_sync since 9
   // Content that needs a feature the package does not declare: FeatureMismatch, named.
   auto s = CompleteState();
   FullMode(&s->mode, s.get());
@@ -791,7 +795,6 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
       {kModeFeatureMarkPosition, [](ModeBlob& m) { m.layers[0].source = PositionSource::Mark; }},
       {kModeFeatureSources, [](ModeBlob& m) { m.schedule.sources = kSourcePeriodic; }},
       {kModeFeaturePitchSet, [](ModeBlob& m) { m.layers[0].pitchSelect = PitchSelect::Random; }},
-      {kModeFeatureClock, [](ModeBlob& m) { m.schedule.subdiv = Subdivision::Tap; }},
       {kModeFeatureClock, [](ModeBlob& m) { m.schedule.sources |= kSourceClock; }},
       {kModeFeatureSteps, [](ModeBlob& m) { m.schedule.stepOrder = StepOrder::Random; }},
       {kModeFeatureMarkWalk, [](ModeBlob& m) { m.layers[0].markIndex = 3; }},
@@ -813,7 +816,8 @@ TEST_CASE("MODE rules: features declared, required and supported", "[blob][decod
     t->mode.features = k.feature;
     ExpectValid(*t, PresetError::None, kAnyDetail, kModeFeatureAll);
     if ((k.feature & kSupportedModeFeatures) != 0u) {
-      ExpectValid(*t, PresetError::None);  // onset and mark (r2), sources (r4), pitch sets (r5)
+      ExpectValid(*t, PresetError::None);  // onset and mark (r2), sources (r4), pitch sets (r5),
+                                           // CLOCK (r8)
     } else {
       ExpectValid(*t, PresetError::UnsupportedFeature, k.feature);
     }
@@ -835,7 +839,13 @@ TEST_CASE("MODE rules: values, ranges, padding, macro layout", "[blob][decode]")
   const size_t target = macr + 4 + 8 * m;  // the first target
   Expect(edit([&](Bytes& b) { b[schd + 4] = 1; }), PresetError::ModePadding, kChunkSchd);
   Expect(edit([&](Bytes& b) { b[schd] |= 0x20; }), PresetError::ModeEnum, kChunkSchd);
-  Expect(edit([&](Bytes& b) { b[schd + 2] = 6; }), PresetError::ModeEnum, kChunkSchd);
+  // Byte 2 was `subdiv`: reserved since sound revision 8 (docs/design/clock.md §2.4, D14), so
+  // any nonzero value is padding, the old codes 1-5 included.
+  for (const int v : {1, 2, 5, 6, 255}) {
+    Expect(edit([&](Bytes& b) { b[schd + 2] = static_cast<uint8_t>(v); }),
+           PresetError::ModePadding, kChunkSchd);
+  }
+  Expect(edit([&](Bytes& b) { b[schd + 3] = 3; }), PresetError::ModeEnum, kChunkSchd);
   Expect(edit([&](Bytes& b) { b[layr] = 4; }), PresetError::ModeEnum, kChunkLayr);
   Expect(edit([&](Bytes& b) { b[layr + 13] = 1; }), PresetError::ModePadding, kChunkLayr);
   Expect(edit([&](Bytes& b) { b[layr + 3] = 16; }), PresetError::ModeRange, kChunkLayr);
@@ -1375,7 +1385,7 @@ TEST_CASE("Re-encoding into an existing package: pedal-side edits", "[blob][enco
 // ── Frozen fixtures and the fuzzer ────────────────────────────────────────────────────────
 
 TEST_CASE("Frozen fixtures: their bytes and verdicts", "[blob][fixtures]") {
-  REQUIRE(kFixtureCount == 18u);
+  REQUIRE(kFixtureCount == 20u);
   for (size_t i = 0; i < kFixtureCount; ++i) {
     const Fixture&    f    = kFixtures[i];
     const std::string path = std::string(BRAINSCAPE_FROZEN_FIXTURES) + "/" + f.file;

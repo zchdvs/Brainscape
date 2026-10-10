@@ -124,7 +124,7 @@ bool ReadMode(const uint8_t* p, uint32_t length, uint32_t supported, ModeBlob* m
         if (len != 8u) return Fail(d, PresetError::ChunkLength, tag);
         mode->schedule.sources    = c[0];
         mode->schedule.layerCount = c[1];
-        mode->schedule.subdiv     = static_cast<Subdivision>(c[2]);
+        mode->schedule.reserved   = c[2];
         mode->schedule.stepOrder  = static_cast<StepOrder>(c[3]);
         for (int i = 0; i < 4; ++i) mode->schedule.pad[i] = c[4 + i];
         // The layer count sizes LAYR and PSET.
@@ -533,7 +533,7 @@ bool DecodePresetWith(const void* bytes, size_t length, PresetState* out, Preset
     out->performance.reverse     = perf[0];
     out->performance.timeMode    = static_cast<TimeMode>(perf[1]);
     out->performance.subdiv      = static_cast<Subdivision>(perf[2]);
-    out->performance.tempoSource = static_cast<TempoSource>(perf[3]);
+    out->performance.reserved    = perf[3];
     out->performance.usPerQuarter = Rd32(perf + 4);
   }
   if (!ReadMode(p + mode.offset, mode.length, supported, &out->mode, d)) return false;

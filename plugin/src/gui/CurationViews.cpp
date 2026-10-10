@@ -656,6 +656,7 @@ void DocumentPanel::Refresh() {
       const int derives = static_cast<int>(session_.PendingDerives().size());
       state  = session_.Dirty()          ? juce::String("Unsaved changes")
                : derives > 0             ? "Save will derive " + juce::String(derives) + " leaf value(s)"
+               : !session_.PendingPerformance().empty() ? juce::String("Save will store the live tempo and Subdiv")
                : !session_.StampCurrent() ? juce::String("Save will restamp")
                                           : juce::String("Save will rewrite it in canonical form");
       if (session_.Dirty() && derives > 0) state << " " << kDot << " Save derives " << derives << " leaf value(s)";
@@ -786,6 +787,9 @@ void FindingsPanel::Refresh() {
     }
     for (const std::string& line : session_.PendingDerives()) {
       rows.push_back({Row::Kind::Derive, "derive", juce::String::fromUTF8(line.c_str())});
+    }
+    for (const std::string& line : session_.PendingPerformance()) {  // clock.md §10.3
+      rows.push_back({Row::Kind::Derive, "store", juce::String::fromUTF8(line.c_str())});
     }
     if (rows.empty()) rows.push_back({Row::Kind::Note, "ok", "Compiles; no lint findings; nothing to derive."});
   } else {

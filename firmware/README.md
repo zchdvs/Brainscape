@@ -495,7 +495,13 @@ libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetPa
 with the CPU plan's steps 1–2 (7.4 KiB at revision 3). A wave that grows the engine past that
 places the engine by function rather than by object, so the main-thread-only API leaves ITCM
 first; `Validate` (it runs inside `Process` at every Spillover load) moves out only after bench
-session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3).
+session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3). Sound
+revision 8 (the tempo core, [clock.md](../docs/design/clock.md) §11.11–§11.12) does so: functions
+marked `BRAINSCAPE_COLD` (`dsp/src/detail/Placement.h`; the engine's construction, `Init`, Exact
+loads, `Restart` and the console's accessors) go to `.text_cold`, which the ITCM patterns do not
+match, and `ItcmCheck` refuses any call out of ITCM other than the tempo core's control-rate entry
+points. At revision 8 the live image's ITCM holds 61,472 bytes, 4,000 spare, and the parity, bench
+and bench_hooks images 59,336, 59,192 and 59,448.
 
 ### Memory map
 
@@ -507,11 +513,11 @@ session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md)
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
 | Backup SRAM | libDaisy's `boot_info` (the Daisy bootloader's handshake, kept first: linker-checked), then the fault record | 148 B |
-| SDRAM | Bulk arena (17 MiB; 16.73 MiB asked: the 2²² ring and the post delay), the bench's per-block results, the heap (the harness's containers only, never engine state) | 17 MiB + heap |
+| SDRAM | Bulk arena (18 MiB since sound revision 9, 17 MiB before; 17.46 MiB asked: the 2²² ring and the post delay's 4 s line, [clock.md](../docs/design/clock.md) §5.3), the bench's per-block results, the heap (the harness's containers only, never engine state) | 18 MiB + heap |
 
 The arenas live in sections named `.bss.brainscape_{dtcm,axi,sdram}_*`
 ([`platform/Placement.cpp`](platform/Placement.cpp)), which the compiler emits as NOBITS (libDaisy's
-own `.dtcmram_bss`/`.sdram_bss` names produce 17 MiB object files) and the linker script
+own `.dtcmram_bss`/`.sdram_bss` names produce 18 MiB object files) and the linker script
 ([`linker/seed_h750.ld.in`](linker/seed_h750.ld.in), derived from libDaisy's) routes to their regions
 and checks: region overflow, 32 KiB left for the stack in DTCM, and the heap's minimum. Every image
 also checks `PlanMemory` against the arenas at boot, and the host test `firmware_arena_plan` does on

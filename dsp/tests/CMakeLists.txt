@@ -8,13 +8,20 @@ add_executable(brainscape_tests
   blob/Fixtures.cpp
   test_engine.cpp
   test_state.cpp
+  test_sync.cpp
   test_boundary.cpp
+  test_clock.cpp
   test_detmath.cpp
+  test_host_tempo.cpp
+  test_intmath.cpp
+  test_midiclock.cpp
   test_mode_eval.cpp
   test_modes.cpp
   test_onset.cpp
   test_param_display.cpp
   test_params.cpp
+  test_tempo.cpp
+  test_tempo_rules.cpp
   test_testsignal.cpp
   test_wave1.cpp
 )
@@ -25,6 +32,9 @@ target_include_directories(brainscape_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 # The frozen package fixtures (docs/design/mode-compiler.md §10.3), read by test_blob.cpp.
 target_compile_definitions(brainscape_tests PRIVATE
   BRAINSCAPE_FROZEN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets/frozen")
+# The factory packages and their manifest (UsesTempo on each, docs/design/clock.md §6.6, §8.2).
+target_compile_definitions(brainscape_tests PRIVATE
+  BRAINSCAPE_FACTORY_PACKAGES="${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/factory")
 if(MSVC)
   target_compile_options(brainscape_tests PRIVATE /EHsc /bigobj)
 endif()
@@ -135,3 +145,4 @@ add_test(NAME dsp_fp_profile_check
 
 add_subdirectory(golden)
 add_subdirectory(blob)
+add_subdirectory(tempo)

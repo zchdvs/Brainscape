@@ -94,7 +94,8 @@ bool GrainFitsRing(const Grain& g, uint32_t bufLen) noexcept {
 }  // namespace
 
 void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
-                                 uint32_t anchorFrame, uint32_t liveFrame) noexcept {
+                                 uint32_t anchorFrame, uint32_t liveFrame,
+                                 uint32_t drawOrdinal) noexcept {
   // One pass's length L (the grain length); a voice reads its region `passes` times
   // (mode-compiler.md §7.5, R11), so its life is passes * L.
   uint32_t       total   = p.totalFrames >= 1u ? p.totalFrames : 1u;
@@ -103,16 +104,20 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment. The pitch is the
   // set's entry plus the transpose leaf, then detune, then the clamp (mode-compiler.md §7.5).
-  float st = p.pitchSt[PickPitch(p, drawKey)];
+  // Each draw at the birth's key and ordinal (kOrdinalClock for a CLOCK hit, else 0, whose keys
+  // are revision 1's: RandUnit(key, purpose, 0, 0) is RandUnit(key, purpose)).
+  const uint32_t ord = drawOrdinal;
+  float st = p.pitchSt[PickPitch(p, drawKey, ord)];
   if (p.spreadCents > 0.f) {
-    st += (RandUnit(drawKey, Draw::Detune) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
+    st += (RandUnit(drawKey, Draw::Detune, 0u, ord) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
   }
   // Enforce the design's r_max = 4 ratio ceiling on the COMPOSED value — detune
   // on top of a maxed pitch otherwise exceeds what the guards/budgets assume.
   if (st > 24.f) st = 24.f;
   if (st < -24.f) st = -24.f;
   const float ratio   = grainmath::SemitonesToRatio(st);
-  const bool  reverse = p.reverseProb > 0.f && RandUnit(drawKey, Draw::Reverse) < p.reverseProb;
+  const bool  reverse =
+      p.reverseProb > 0.f && RandUnit(drawKey, Draw::Reverse, 0u, ord) < p.reverseProb;
 
   // Position: POS_LIVE (base delay behind the anchor) or POS_MARK (the most
   // recent eligible onset mark — the Strum family's mechanism, design §4).
@@ -178,7 +183,8 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     if (bounds.hi < bounds.lo) bounds.lo = bounds.hi;
   }
   if (p.sprayFrames > 0.f) {
-    d += static_cast<double>((RandUnit(drawKey, Draw::Spray) * 2.0f - 1.0f) * p.sprayFrames);
+    d += static_cast<double>((RandUnit(drawKey, Draw::Spray, 0u, ord) * 2.0f - 1.0f) *
+                             p.sprayFrames);
     d = grainmath::ReflectIntoBounds(d, bounds);
   } else {
     d = d < bounds.lo ? bounds.lo : (d > bounds.hi ? bounds.hi : d);
@@ -218,7 +224,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.tier       = slot < kHiFiGrains ? 0 : 1;
 
   // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
-  const float pan = 0.5f + p.panSpread * (RandUnit(drawKey, Draw::Pan) - 0.5f);
+  const float pan = 0.5f + p.panSpread * (RandUnit(drawKey, Draw::Pan, 0u, ord) - 0.5f);
   double panSin, panCos;
   detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &panSin, &panCos);
   g.gainL = static_cast<float>(panCos);
@@ -231,11 +237,14 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.active = true;
 }
 
-uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey) noexcept {
+uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey,
+                                 uint32_t drawOrdinal) noexcept {
   // `random`: the birth's own draw (purpose 8, R8's extended key), so births at one frame share
-  // it as they share every draw; `cycle`: every birth advances it, from any source.
+  // it as they share every draw, but for a CLOCK hit's, at its own ordinal; `cycle`: every birth
+  // advances it, from any source.
   if (p.pitchRandom) {
-    return grainmath::RandomEntry(grainmath::RandBits24(drawKey, Draw::PitchSelect), p.pitchWeight,
+    const uint32_t bits = grainmath::RandBits24(drawKey, Draw::PitchSelect, 0u, drawOrdinal);
+    return grainmath::RandomEntry(bits, p.pitchWeight,
                                   p.pitchCount, p.pitchWeightSum);
   }
   return grainmath::NextCycleEntry(&pitchCycle_, p.pitchWeight, p.pitchCount);
@@ -375,7 +384,7 @@ void GranularCore::FastCut(int64_t abs) noexcept {
 void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
                                 uint32_t anchorFrame, uint32_t liveFrame,
                                 uint32_t* renderedTo, uint32_t n, int64_t absSample,
-                                float* wetL, float* wetR) noexcept {
+                                float* wetL, float* wetR, uint32_t drawOrdinal) noexcept {
   // Flush up to the trigger sample so a reused/stolen slot's tail is emitted. Every grain that
   // ended by birthAbs is then retired, so orderCount_ counts the voices sounding there.
   RenderSpan(*renderedTo, n, absSample, wetL, wetR);
@@ -401,7 +410,7 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
     for (uint32_t i = 1; i < orderCount_; ++i) order_[i - 1] = order_[i];
     --orderCount_;
   }
-  ScheduleGrain(slot, p, birthAbs, anchorFrame, liveFrame);
+  ScheduleGrain(slot, p, birthAbs, anchorFrame, liveFrame, drawOrdinal);
   order_[orderCount_++] = static_cast<uint8_t>(slot);
   ++stats_.births;
 }
@@ -415,9 +424,22 @@ bool GranularCore::FireTrigger(const GranularParams& p, uint32_t ordinal, int64_
     ++stats_.skips;
     return false;
   }
-  FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR);
+  // A CLOCK hit's grain draws at its own ordinal (docs/design/clock.md §6.3); an onset's and a
+  // manual trigger's at 0, as before sound revision 8.
+  FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR,
+               ordinal == kOrdinalClock ? kOrdinalClock : 0u);
   if (p.burstCount > 1u) AddBurst(birthAbs + p.burstSpacing, p.burstSpacing, p.burstCount - 1u);
   return true;
+}
+
+void GranularCore::AddClockHit(int64_t due) noexcept {
+  if (clockPending_ == kMaxClockPending) {
+    ++stats_.clockDropped;
+    return;
+  }
+  uint32_t i = clockPending_++;
+  for (; i > 0u && clockDue_[i - 1u] > due; --i) clockDue_[i] = clockDue_[i - 1u];
+  clockDue_[i] = due;
 }
 
 void GranularCore::AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept {
@@ -444,7 +466,7 @@ void GranularCore::FireBurst(const GranularParams& p, int64_t birthAbs, uint32_t
     if (b.next > birthAbs) continue;
     // Each grain with its own frame's draws; a deferred grain keeps the spacing from where it
     // fired.
-    FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR);
+    FireExternal(p, birthAbs, anchorFrame, liveFrame, renderedTo, n, absSample, wetL, wetR, 0u);
     ++stats_.burstBirths;
     if (--b.remaining == 0u) {
       for (uint32_t k = i + 1u; k < burstCount_; ++k) bursts_[k - 1u] = bursts_[k];
@@ -488,6 +510,10 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
   // sample; TODO(§8): revisit segment batching before the M7 budget pass.
   uint32_t renderedTo = 0;
   uint32_t evIdx      = 0;
+  uint32_t clockIdx   = 0;
+  // The CLOCK hit's jitter (docs/design/clock.md §6.3): half the grid's period, exact (an integer
+  // below 2^24), for (jitter * u) * half below, in binary32 in that order.
+  const float clockHalf = 0.5f * static_cast<float>(ev.clockGridFrames);
 
   // Re-anchor-on-wrap (design §2.4 decided behavior): once the live write head
   // has consumed 3/4 of the ring behind the pin, re-pin to the present. The
@@ -530,6 +556,36 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
         fired = true;
       }
       ++evIdx;
+    }
+
+    // CLOCK (docs/design/clock.md §6.3, sound revision 8). A grid position enters the queue at
+    // its grid frame, delayed by the jitter: a draw u at that frame (purpose Interval, ordinal
+    // 3), (jitter * u) * (gridFrames / 2) frames, never early and never accumulating. Then the
+    // earliest hit due fires as a trigger (manual/MIDI, onset, clock, burst, scheduler: D13's
+    // order), one per frame: a second due at this frame waits for the next. Intermittency
+    // skips a whole hit, its burst included. No admission control exists yet, so every hit is
+    // born at its (jittered) frame: the cost governor (cpu-budget.md §5) and its 48-frame
+    // lateness cap for CLOCK hits (kClockLateFrames, clockDeferred, clock.md §6.3) land with
+    // whichever of the two revisions comes second (§11.3).
+    for (; clockIdx < ev.clockCount && ev.clockOffset[clockIdx] == n; ++clockIdx) {
+      uint32_t delay = 0;
+      if (p.jitter > 0.f) {
+        const float u = RandUnit(abs - drawEpoch, Draw::Interval, 0u, kOrdinalClock);
+        const float d = (p.jitter * u) * clockHalf;
+        assert(d >= 0.f && d < 8388608.f);  // jitter, u in [0, 1]; the half below 2^23
+        delay = static_cast<uint32_t>(d);
+      }
+      AddClockHit(abs + delay);
+    }
+    if (clockPending_ != 0u && clockDue_[0] <= abs) {
+      for (uint32_t i = 1; i < clockPending_; ++i) clockDue_[i - 1u] = clockDue_[i];
+      --clockPending_;
+      if (FireTrigger(p, kOrdinalClock, abs, anchor, live, &renderedTo, n, absSample, wetL,
+                      wetR)) {
+        fired = true;
+        ++stats_.clockBirths;
+        stats_.lastClockBirth = abs;
+      }
     }
 
     // A burst's next grain, unless a trigger fired at this frame: it waits for the next.
@@ -575,7 +631,7 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
         RenderSpan(renderedTo, n, absSample, wetL, wetR);
         renderedTo = n;
 
-        ScheduleGrain(slot, p, abs, anchor, live);
+        ScheduleGrain(slot, p, abs, anchor, live, 0u);
         order_[orderCount_++] = static_cast<uint8_t>(slot);
         ++stats_.births;
       }

@@ -19,7 +19,11 @@
 > parity, the musician and the product, the firmware and hardware), with the answers to the 23
 > decisions of §11.5, which the owner confirmed as proposed;
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
-> finding's disposition. Nothing is built.
+> finding's disposition. *(2026-10-09: the tempo core is built as a library, §11.10, and wired
+> into the engine as sound revision 8, §11.11, which have the as-built notes; 2026-10-10: amended
+> after its review, §11.12, its deadband constants as the owner adopted them, §11.13, synced
+> times built as sound revision 9, §11.14, the plugin's lane T3, §11.15, and both lanes'
+> review amendments and their merge, §11.16.)*
 
 ---
 
@@ -272,7 +276,9 @@ So Keep holds across every load, as the Microcosm's global tempo does, and a pre
 a running master keeps the band's beat, which is principle 5's point; draft v1 restored only a
 clock's tempo, so an Exact load threw away a tapped tempo even under Keep and left CLOCK hits
 off the master's beat until its next Start (record §6, P2 and E8). The engine's start state is
-still the package's, and parity holds because every re-assert is a logged event.
+still the package's, and parity holds because every re-assert is a logged event. *(2026-10-10:
+and the restarted grid fires nothing at frame 0 while the re-asserted Continue waits for the
+master's tick, by §3.4's hold, §11.12 note 26.)*
 
 **`global.tempo_recall`** (row 85, a `Global` device setting, §10.4): **Keep** (0, default, the
 Microcosm's global tempo) or **Preset** (1, a song preset recalls its tempo, as Strymon's Tap
@@ -346,8 +352,10 @@ The flag means "the master is stopped now": draft v1's `transportSeen` stayed se
 Stop until a Restart, so after song 1 any one-second clock gap left the pedal free-running for
 the rest of the set (record §6, P3). **Clock without any transport message** (some clock boxes
 never send Start; peers follow it, §12) enters ClockFree after 24 ticks: tempo and tick phase
-lock to the master, and the beat label is the pedal's own until a Start, Continue or Song
-Position arrives, or a tap marks the downbeat (§3.2).
+lock to the master, and the beat label is the pedal's own until a Start or Continue applies at
+a tick (from a Song Position's position, if one came first), or a tap marks the downbeat (§3.2).
+*(Amended 2026-10-10 to §3.4's table, §11.12 note 28: a Song Position alone sets only the continue
+position.)*
 
 ### 3.2 Tap
 
@@ -488,12 +496,16 @@ it, the plugin host's events do not.
 |---|---|---|
 | Start, position p | armed; at the next tick, that tick's label becomes p (the window relabelled, keeping its tempo data), `lastFired` = p − 1, the phasor placed (§3.3 step 4) so the downbeat fires at that tick or by catch-up, `masterStopped` cleared; source ClockRunning; if the window was empty before that tick, §7.1's early commit is armed | boundary p placed at the event's frame plus its offset (§2.2, §4.1), `lastFired` = p − 1; the transport runs; source unchanged |
 | Continue | armed; as Start with p = the stored continue position | as Start with the stored position |
-| Locate p (Song Position × 6) | when not ClockRunning: the continue position := p at once; when ClockRunning: armed, applied as Start | as Start, the transport's running state unchanged |
+| Locate p (Song Position × 6) | the continue position := p at once; when ClockRunning also armed, applied as Start *(the continue position under ClockRunning too since 2026-10-10, §11.12 note 27)* | as Start, the transport's running state unchanged |
 | Stop | at its frame: **cancels any armed Transport** (`transportsCancelled`); ClockRunning → Internal (phase and tempo kept), the continue position := last label + 1, `masterStopped` set; ticks keep the window warm | at its frame: the transport stops; nothing else changes, the grid runs on |
 
 A host-style Transport (no flag) under ClockFree or ClockRunning is ignored and counted: two
 transports cannot both own the position. An armed event waits until a tick arrives; `Restart`
-and Stop clear it, and a later armed event replaces it. Draft v1 let Stop leave an armed Start
+and Stop clear it, and a later armed event replaces it. *(2026-10-10, §11.12 note 26:)* **While an
+event is armed the CLOCK grid is held:** nothing fires and the grid positions passed count as
+fired, so the tick that applies it places the downbeat with no hit of the old grid just before it,
+and an Exact load under a running master fires nothing at frame 0 before the re-asserted Continue
+applies (§2.5). Draft v1 let Stop leave an armed Start
 in place, so FA, then FC, then the ticks many masters send while stopped started the pedal on a
 stopped master (record §6, E10). Start's position is 0; the MIDI translator sends Song Position
 as Locate with 6 × its 16th-note count, the plugin its tick-aligned host position and frame
@@ -635,6 +647,11 @@ guarded `dsp/` functions, so every build computes the same frames:
 
 - `uint32_t NsPerQuarterFromBpm(double bpm)`: round(6·10¹⁰ / bpm), clamped to the tempo range; 0
   for a non-finite or non-positive bpm (no event).
+- `HostTempo HostTempoFromBpm(double bpm)` *(added 2026-10-10, §11.16 note 68)*: what the
+  wrapper follows, 6·10¹⁰ / bpm doubled or halved (exactly, at most four times) into the tempo
+  range, then rounded and clamped as above, with the number of octaves, so a host outside
+  20–300 BPM plays a power of two of its tempo and the follower reads its position in those
+  quarters (ppq · 2^-octaves); `clamped` beyond four octaves.
 - `bool HostAnchor(double ppq, uint32_t ns, uint32_t rate, uint32_t* position, uint32_t* offset)`:
   with x = 24·ppq, the first tick at or after the block's start, k = ⌈x⌉ (x within 10⁻⁹ of an
   integer counts as that integer), and its frame offset round((k − x)·ns·rate / (24·10⁹)), at
@@ -650,9 +667,13 @@ guarded `dsp/` functions, so every build computes the same frames:
    event, then Transport Start at the block's first frame carrying `HostAnchor`'s position and
    offset (§4.1), so the anchor's boundary lies at the first frame plus the offset however short
    the host block is. Without a ppq, Start at position 0 and offset 0.
-3. **While playing,** predict this block's x from the last block's x and frames at the last
-   tempo; when the reported x differs by more than half a tick (a loop wrap, a jump), Transport
-   Locate at the block's first frame, anchored as in 2.
+3. **While playing,** predict this block's x from the engine's grid since the last anchor:
+   every block's frames at the tempo the engine was sent, at its integer rate; when the reported
+   x differs by more than half a tick (a loop wrap, a jump, or the drift a tempo ramp leaves,
+   since the engine plays a block at its first frame's tempo), Transport Locate at the block's
+   first frame, anchored as in 2. Not while the host's tempo is clamped. *(Amended 2026-10-10,
+   §11.16 note 67: predicted from the host's own last position, a ramp left the grid off the
+   host's beats for good.)*
 4. **Transport stop:** Transport Stop at the first non-playing block's first frame.
 
 **Reproducible:** at a constant tempo, with "Restart on transport start" on (§10.1), every event
@@ -804,9 +825,9 @@ above the maximum, doubled while below the minimum, each fold counted (`folds`):
 
 | Target | Minimum | Maximum |
 |---|---|---|
-| Post delay, synced | 10 ms (480 frames at 48 kHz, `post.delay.time_ms`'s minimum, `Params.h:203`) | **4.0·R frames inclusive** (192,000 at 48 kHz): a whole note at 60 BPM, a `2/1` at 120 |
+| Post delay, synced | 10 ms (480 frames at 48 kHz, `post.delay.time_ms`'s minimum, `Params.h:203`) | **4.0·R frames inclusive** (192,000 at 48 kHz): a whole note at 60 BPM, a `2/1` at 120. *As built: 4·R + (4·R >> 7), 193,500 at 48 kHz, so a clock-fitted 120 BPM never sits on the boundary (§11.16 note 61)* |
 | Post delay, `time_ms` | 10 ms, as today | unchanged: round(2.0·R) − 1 = 95,999 (`PostChain.cpp:148-150`, `:240-248`) |
-| Grain base delay | 1 ms (48 frames, `base_ms`'s minimum) | 5,000 ms (240,000 frames, `base_ms`'s maximum, `Params.h:186`) |
+| Grain base delay | 1 ms (48 frames, `base_ms`'s minimum) | 5,000 ms (240,000 frames, `base_ms`'s maximum, `Params.h:186`). *As built: 5·R + (5·R >> 7), 241,875* |
 
 **The post-delay line grows to round(4.0·R) + 2 frames** in the synced-times revision
 (`kPostDelayMaxSeconds`, `PostChain.cpp:52`, `:177`), the two extra frames for the cubic read's
@@ -895,7 +916,10 @@ event that made it due. For each render span [s, e), `TempoCore::GridFrames`:
    g fires at s and `lastFired` := g. In steady running this is exactly the position whose
    boundary lies inside the frame before s (acc < K, F(g) = s); after a placement, a tap or a
    tempo rescale it is the one position the jump made due, the largest only (a forward jump
-   skips the rest);
+   skips the rest). *(2026-10-10, §11.12 note 25:)* A change of the grid G under a still phasor
+   (a Subdivision event, a load's stored Subdiv or time mode) is no jump: the new grid starts at
+   its next position, its positions whose first frames lie before the change counting as fired,
+   and only one due at the change's frame itself (F(g) = s) fires there;
 2. then fires each grid position k > max(`tick`, `lastFired`) with F(k) < e at F(k), and sets
    `lastFired` to the last.
 
@@ -1039,17 +1063,30 @@ explicit intents. Under ClockFree and ClockRunning, Pc moves to P_fit only by th
    re-asserted tempo (§2.5) is already right and the early commit stays out of the way. Draft
    v1 waited for N = 24, after a stale window had first followed the previous song's slope
    (record §6, P4).
-3. **The deadband,** from N ≥ 24:
-   1. |P_fit − Pc| > Pc >> 9 (0.195 %, about 3.3 σ of the computer-clock fit, never reached by
-      a hardware clock), at once; or
-   2. |P_fit − Pc| > Pc >> 12 (0.024 %) on every fitted tick for 192 consecutive fitted ticks
-      (8 beats). The run counts fitted ticks only; an outlier, or a fitted tick inside the band,
-      resets it.
+3. **The deadband,** from N ≥ 24, two runs of consecutive fitted ticks:
+   1. |P_fit − Pc| > Pc >> 9 (0.195 %, never reached by a hardware clock) on every fitted tick
+      for 48 consecutive fitted ticks (2 beats); or
+   2. |P_fit − Pc| > Pc >> 11 (0.049 %) on every fitted tick for 384 consecutive fitted ticks
+      (16 beats).
 
-Rule 3.2 makes Pc converge on a steady clock, so the post delay's repeats do not drift against
-the grid by the fit's residual. Synced durations change only with Pc, so a jittery clock never
-moves the delay, and TapGlide's `Retarget` ignores an unchanged integer target
-(`dsp/src/detail/PostChain.h:139-145`).
+   Each run counts fitted ticks only, and a fitted tick inside its band resets it. An outlier
+   resets rule 3.2's run and leaves rule 3.1's as it was, neither counting nor resetting it;
+   every commit, by any rule, resets both. *(Owner decision, adopted 2026-10-10: the review's
+   measured candidate, §11.12 note 32, as it was tested, §11.13 note 34. Draft v2 committed by
+   rule 3.1 at once and by rule 3.2 at Pc >> 12 over 192 ticks; rule 3.1's band compares two
+   noisy fits and is only about two σ of their difference at 140 BPM, so a computer clock
+   committed up to 115, 189 and 657 times in ten minutes at 120, 140 and 300 BPM, against
+   §7.4's budget.)*
+
+Rule 3.1 follows a real change of tempo within about two beats of the fit crossing its band;
+rule 3.2 makes Pc converge on a steady clock to within Pc >> 11, so the post delay's repeats do
+not drift against the grid by more than the fit's residual. Measured over ten minutes per tempo
+with §8.3's clock models, counting from the window's filling (§11.13 note 34): a hardware clock
+commits nothing at 60–300 BPM; a computer clock commits at most once at 60, 120 and 140 BPM and
+8 times at 300 BPM, each commit at most 0.34 %, with Pc within 0.097, 0.193, 0.225 and 0.340 % of
+the true tempo; and a 1 % ramp over 600 beats is followed. Synced durations change only with Pc,
+so a jittery clock never moves the delay, and TapGlide's `Retarget` ignores an unchanged integer
+target (`dsp/src/detail/PostChain.h:139-145`).
 
 **Every change of Pc has a class,** computed from engine state alone, so it replays:
 
@@ -1085,7 +1122,9 @@ frames and bends the repeats by up to 3 % (half a semitone) for about a tenth of
 retarget selects its pair by its class, and a later retarget replaces both. A 0.4 % commit on a
 500 ms delay (96 frames) then bends the repeats by about 0.07 % (1.2 cents), where the 50 ms
 glide bent them 1.5 % (25 cents), and the echoes sit at most 2 ms off the grid for about a
-second (*calculated*). Draft v1 glided drift commits, an audible wobble on long trails
+second (*calculated*). The slew's speed is capped at 2^-10 frames a frame (0.098 %), so a Drift
+on an echo longer than about 0.8 s, which τ alone would bend past §7.4's 0.1 %, takes longer
+to land instead *(added 2026-10-10, §11.16 note 63)*. Draft v1 glided drift commits, an audible wobble on long trails
 recurring through a set (record §6, P8).
 
 A silent stage jumps instead (`PostChain.cpp:323-334`). Whether these feel right is a listening
@@ -1137,6 +1176,16 @@ revision (§9.6).
 | A Step | the glide's own pitch, s² at read speed s (≤ 2.25×), as for `time_ms` | profile §5.6's measurement; S12 by ear |
 | A Drift | the repeats bent at most 0.1 % (§7.2) | S12 by ear, the slew's unit test |
 
+*(2026-10-10, with §7.1's deadband as the owner adopted it, §11.13 note 34: measured over ten
+minutes per tempo with §8.3's models, counting from the window's filling (N = 96), a hardware
+clock commits nothing at 60–300 BPM, and a computer clock at most once at 60–140 BPM and 8 times
+at 300 BPM, each at most 0.34 %, so both clock budgets are met; draft v2's constants met neither,
+a hardware clock committing once at 300 BPM and a computer clock up to 657 times, note 32. Before
+the window fills, the 24-tick fit of an acquisition settles: `clock_midi_computer` commits 4
+times, three acquisitions and one rule-3.1 Drift of 0.58 % 48 fitted ticks after its
+re-acquisition (the window at 88), where draft v2's constants committed 26 times, 23 of them
+Drifts.)*
+
 ## 8. Determinism and testing
 
 ### 8.1 What is guaranteed
@@ -1174,7 +1223,8 @@ case named for a draft-v1 finding reproduces that finding's failure on draft v1'
   dropout of 200 ms infers its ticks; a 38 ms burst neither re-labels nor re-acquires; ticks
   applied at one frame and then a slow-tempo gap infer nothing and divide by nothing (E5); the
   incremental sums equal direct sums over 10⁶ ticks with dropouts and outliers (H4); the nearest
-  tick's tie goes up; rule 3.2's run reset by an outlier.
+  tick's tie goes up; rule 3.2's run reset by an outlier and rule 3.1's kept by one, each band and
+  each run at its exact edge, and every commit resetting both runs (§11.13).
 - **Gaps (E2, E6, P3, P4):** the engine equals a reference that applies each gap at its deadline
   frame and splits there, on streams with ticks, a second of silence and then each event type, a
   Spillover load under recall Preset among them; the snapshot shows Internal after a gap with no
@@ -1231,6 +1281,8 @@ case named for a draft-v1 finding reproduces that finding's failure on draft v1'
 - **Ablations,** each of which must change its presets' output and not before the feature acts:
   `clock` (the source removed), `tempoEvents` (events 6–10 dropped), `subdiv` (TAP throughout),
   `sync` (row 63 at 0, `base_sync` off), `crossfade` (jumps glide), `slew` (drifts glide).
+  *(As built, §11.14 note 44: `slew` has no switch a script can reach; the unit tests check the
+  slew.)*
 - **Perturbations,** unchanged, must reproduce every hash: block sizes, the pattern
   {48, 1, 127, 32}, random sizes 1–512, fresh engines and the hostile FP environment
   (`golden_main.cpp`, profile §6.4). **Split delivery** (`EventScript.h:140-145`) has no
@@ -1253,6 +1305,10 @@ row 83 changed before play (the restart re-asserts it, §10.1; record §6, E7); 
 another ppq still aligns its first hit to the anchor; under the Internal source a tapped tempo
 survives a session save and restore and a `prepareToPlay`; the Standalone's MIDI path turns a
 byte stream with interleaved real-time bytes into the events of §4.3 at their sample positions.
+*(Added 2026-10-10, §11.16:)* a host ramp of 60 to 180 BPM (and 180 to 60) at 4,096-frame
+blocks ends with its last CLOCK hit within half a tick of the host's quarter; a host at 400 and
+15 BPM keeps every hit on a host beat; a MIDI master gone without its Stop does not hold the
+grid after a device change.
 
 ### 8.5 Audition
 
@@ -1444,7 +1500,11 @@ H3). So:
 - **The tempo core stays thin in ITCM.** `Tempo.cpp`, `IntMath.cpp`, `MidiClock.cpp` and the
   host-conversion object join `_bs_not_itcm_members`, checked by `NOT_ITCM`
   (`firmware/CMakeLists.txt:251-258`); `Engine.cpp`'s new code (load step 4's performance state,
-  `Tempo()`, `TempoCounts()`, §4.2's payload checks) is thin calls into `Tempo.cpp`. ITCM grows by
+  `Tempo()`, `TempoCounts()`, §4.2's payload checks) is thin calls into `Tempo.cpp`. *(As built,
+  §11.12 notes 29 and 31: the engine reaches the core on every render span and every event through
+  inline fast paths in ITCM, `ItcmCheck` refuses any other call out of ITCM, and the main-thread
+  API left ITCM by function, leaving 4,000 bytes; synced times took 1,936 of them, leaving 2,064,
+  §11.14 note 46.)* ITCM grows by
   the clock offsets in `GranularCore::Process`, the new cases in `ApplyEvent`, the span call in
   `RenderFrames`, and the crossfade and slew in `PostChain`'s per-sample loop: about 1.0–1.6 KiB
   (*estimated*).
@@ -1625,7 +1685,7 @@ reproduce its hashes and counters, as at every wave-1 revision.
 | **T5** audition | S12, the beat-lock metric, the Lock row; re-rate the echoic modes' Time; Engram and Callback given a synced post delay by listening (§6.6) | `tools/audition/`, `firmware/factory/` | after T2 | 3–5 plus listening |
 | **T6** bench | DWT at revision N + 1 on the Rev7, with the CPU fix: hits with bursts, bunched ticks, the crossfade | `firmware/` | after T2, with the governor | 1–2 |
 
-**Order:** T0b now; the ITCM gate passed (§9.6), the CPU plan's FFT choice being settled and
+**Order** (amended 2026-10-09, D1): T1, T2 and T3 now, for a plugin build the owner can test, with the tempo code outside ITCM unless it fits; T4 after T0b and the ITCM gate. As first written: T0b now; the ITCM gate passed (§9.6), the CPU plan's FFT choice being settled and
 applied (2026-10-08: P3's rewrite, cpu-budget.md §4.1); the first set's knob ratings
 (`docs/STATUS.md:57`); T1, then T2, each one revision, with T3 and T4 alongside; T4b; T5; T6;
 then the rest of W2 (steps, mark walk, global reverse, velocity) and step 4's rhythmic second set
@@ -1650,14 +1710,14 @@ draft v2.
 
 | # | Decision | Answer (confirmed by the owner, 2026-10-08) | Consequence | § |
 |---|---|---|---|---|
-| D1 | Order | Keep W2 after the first set's knob ratings; start the breadboard (T0b) now; land the tempo core before steps, mark walk, global reverse and velocity; enter T1 and T2 only through the ITCM gate (8 KiB spare after the CPU plan) | Nothing here changes the sound before the ratings and the CPU plan's FFT choice; T0b's data arrives before the thresholds freeze | 11.4, 9.6 |
+| D1 | Order | Keep W2 after the first set's knob ratings; start the breadboard (T0b) now; land the tempo core before steps, mark walk, global reverse and velocity; enter T1 and T2 only through the ITCM gate (8 KiB spare after the CPU plan). **Amended by the owner 2026-10-09:** T1, T2 and T3 start now, ahead of the knob ratings, so the owner can test tempo in the plugin; T1 and T2 place their code outside ITCM unless it fits the live image's spare (the firmware's ItcmCheck decides); T4 still waits for T0b and the ITCM gate | Nothing here changes the sound before the ratings and the CPU plan's FFT choice; T0b's data arrives before the thresholds freeze. The amendment keeps that: no factory mode uses tempo, so their renders, and the ratings made on them, carry across revisions N and N + 1 unchanged except where N + 1's new leaf re-stamps package hashes (§11.3) | 11.4, 9.6 |
 | D2 | Sources and priority | The Microcosm's: Start and Continue switch to external clock at the next tick and set the position; Stop reverts to internal keeping tempo and phase, and cancels an armed Start; tap and the Tempo knob are ignored under a running master. Added: clock without transport is followed after 24 ticks while the master is not stopped; a second without a tick reverts to internal and clears the window in any source; a loss mid-song resumes ClockRunning after 24 ticks; host tempo is the wrapper's, which drops taps while following it | A clock box that never sends Start still locks; a cable knock costs a beat or two of free-running, not the rest of the set; tap is unavailable while a master runs | 3 |
 | D3 | Tempo source per preset or global | Global: "receive MIDI clock" (pedal) and the Tempo source (plugin) are device settings; STAT's `tempo_source` byte is reserved | A preset change can never unhook the pedal from the band's clock, and presets that sound the same hash the same; no preset can opt out of clock | 2.4, 3.6 |
 | D4 | What a load does to tempo | In the engine: Exact plays the stored tempo, time mode and subdivision; Spillover applies the stored time mode and subdivision and keeps the running tempo unless `tempo_recall` is Preset with the internal source; no load moves the beat. Producers re-assert at frame 0 after every Exact load: the committed tempo under Keep or a followed clock or host, the master's position under a running clock, and the live Subdiv after a restart of the same preset | Keep is a true global tempo, and a preset change mid-song keeps the band's beat; the engine's start state is still the package's, and every re-assert is in the log | 2.5, 9.3, 10.1 |
 | D5 | What syncs; Q7 | The post delay (row 63), `base_sync` and CLOCK hits. Q7: in Subdiv and Tempo modes the Time knob never reaches `macro.time`, which expression, MIDI and hosts still do | Modulators wait for W3 and the looper for its design; a mode that wants Time on `macro.time` on stage stays in Free | 6 |
 | D6 | Q11, tempo-exact grain feedback | Rhythmic repeats on the post delay; `base_sync` places the first tap exactly; grain feedback keeps its 10.67 ms pass (lint L12) | No feedback-path rework; grain-feedback echoes drift late against the grid, as echoic modes already do | 6.2 |
 | D7 | Divisions | Subdiv is the Microcosm's six rate multipliers (resolved from its manual), labelled as rates (`x1/4` … `x8`), code 0 = TAP the default; sixteen note values by duration; folding by octaves | CC#5 matches the Microcosm; no screen or document shows "1/4" for a rate; no package re-hashes | 5 |
-| D8 | Smoothing | A least-squares fit over the last 96 tick labels; a two-level deadband; taps averaged over up to four intervals; Pc changes above 3.1 % crossfade, deadband commits slew over about a second, smaller changes glide over 50 ms; after a Start, an early commit at 12 ticks when the tempo moved more than 6.25 % | Clock jitter never moves the delay; a new tapped or song tempo does not swoop; Tempo-knob sweeps still bend like tape; a song's first beat plays at its tempo | 3.3, 7 |
+| D8 | Smoothing | A least-squares fit over the last 96 tick labels; a two-level deadband; taps averaged over up to four intervals; Pc changes above 3.1 % crossfade, deadband commits slew over about a second, smaller changes glide over 50 ms; after a Start, an early commit at 12 ticks when the tempo moved more than 6.25 %. **Amended by the owner 2026-10-10:** the deadband's two levels are runs of consecutive fitted ticks, Pc >> 9 held for 48 and Pc >> 11 held for 384, the review's measured candidate adopted as tested (§11.12 note 32, §11.13 note 34); revision 8 is amended in place | Clock jitter never moves the delay; after lock, a computer clock commits at most once in ten minutes at 60–140 BPM and a hardware clock not at all; a new tapped or song tempo does not swoop; Tempo-knob sweeps still bend like tape; a song's first beat plays at its tempo | 3.3, 7 |
 | D9 | Host tempo | Follow the host by default; ns resolution, 1 µs hysteresis, a tick-aligned anchor carried as a frame offset; "Restart on transport start" stays off by default (it is off, not on) | Live DAW playback tracks the host with no stray hit before the anchor; a reproducible bounce needs the restart setting | 4.4, 10.1 |
 | D10 | MIDI hardware for v1 | MIDI in with the H11L1M (DIN, or TRS Type A); MIDI out populated, with soft thru (default on) and clock out (default off) as the Microcosm's four-way global setting, firmware lane T4b; DIN against TRS at schematic time | The pedal can sit mid-chain and lead a chain from its tap tempo, closing a Microcosm parity gap; about $1 of parts and 1–2 days of firmware; the schematic carries an out jack | 9.1, 9.5 |
 | D11 | Song position | A position in 24-ppqn ticks in Transport's value (Song Position × 6), no separate event; host-style events carry the anchor's frame offset in `id` bits 16–31 | SPP and host locates need no event number of their own; those `id` bits are spent | 4.1 |
@@ -1672,7 +1732,7 @@ draft v2.
 | D20 | Pedal event timing | Block-grid stamps at a fixed latency (two blocks; five for the tap); ring entries tagged with a timeline epoch; at most two ticks per block; the tap switch sampled each audio callback with a state debounce; interrupt priorities unchanged; sub-block stamps only if T0b shows the need | 2 ms of control latency (5 ms for tap); an Exact load cannot freeze control; a block's tick handling is bounded | 4.5, 9.2, 9.3 |
 | D21 | Presets that do not use tempo | `UsesTempo` derived from the package, never stored; in such a preset the time-mode gesture does nothing and the tap LED is steady, while tap still sets the global tempo; T5 gives Engram and Callback a synced post delay by listening | Tap is audible in factory presets at launch, or, if the listening rejects it, inert in the first set until the rhythmic second set | 6.6 |
 | D22 | Tempo jumps | `global.tempo_glide` Off by default, so jumps crossfade; On restores the tape glide for them; the default confirmed by ear on S12 | A new tapped tempo or a song recall switches cleanly; the swoop is a choice, not a side effect | 7.1 |
-| D23 | The synced post-delay maximum | 4 s inclusive for synced targets (+768 KB of SDRAM, the Bulk arena 17 → 18 MiB, an Exact load about 2 ms longer); `time_ms` keeps 2 s | Every note value fits at 120 BPM and above and unsynced presets are unchanged; slower songs still fold | 5.3 |
+| D23 | The synced post-delay maximum | 4 s inclusive for synced targets (+768 KB of SDRAM, the Bulk arena 17 → 18 MiB, an Exact load about 2 ms longer); `time_ms` keeps 2 s. *As built (2026-10-10, §11.16 note 61): 4 s and 2^-7 of it, so a MIDI clock at 120 BPM never folds a `2/1`; an owner check* | Every note value fits at 120 BPM and above and unsynced presets are unchanged; slower songs still fold | 5.3 |
 
 ### 11.6 Design decisions taken
 
@@ -1754,6 +1814,701 @@ docs/STATUS.md, and in the record. The same day, once the CPU plan's steps 1–2
 and 3,208 with steps 1–2), and the CPU proposal's citations now point at cpu-budget.md. The
 implementing pull requests amend the code comments that cite the old meanings (`Mode.h:86-97`,
 `PresetState.h:42-56`, `Engine.h:206-210`).
+
+### 11.10 As built: the tempo core as a library (2026-10-09)
+
+Lane T1's first part, under D1 as amended: the tempo core as library code that nothing in the
+engine calls yet, so it changes no output (sound-neutral commits before revision 8). Built:
+`dsp/src/detail/IntMath.h` and `dsp/src/IntMath.cpp` (§2.1's helpers);
+`dsp/include/brainscape/Tempo.h` (events 6–10's numbers and payloads, `TempoInfo`, `TempoStats`);
+`dsp/include/brainscape/MidiClock.h` and `dsp/src/MidiClock.cpp` (§4.3); `dsp/src/detail/Tempo.h`
+and `dsp/src/Tempo.cpp` (`TempoCore`: §2.1–§2.5, §3, §4.2, §6.3's `GridFrames`, §7.1's commits and
+classes). The three objects join `_bs_not_itcm_members` (§9.6) and compile `-mgeneral-regs-only`
+on the M7. §8.2's unit tests are `dsp/tests/test_intmath.cpp`, `test_midiclock.cpp`,
+`test_tempo.cpp` (TempoCore against a reference model written from this document,
+`dsp/tests/TempoReference.h`: the phasor in closed form in exact 128-bit arithmetic, the grid
+frame by frame, the follower's sums computed directly, gaps applied at their deadlines; random and
+adversarial streams at block sizes 1, 48, 441, 512, {48, 1, 127, 32}, {300, 512, 5, 64} and random,
+each comparison failing on a perturbed reference) and `test_tempo_rules.cpp` (each rule against
+hand-worked numbers); `brainscape_tempo_tool --check` repeats the comparison on every CI leg and on
+the emulated M7 with a committed digest. Record §1.3's probes are in `tools/parity/clock/`.
+
+Where the text left a choice, or read differently in two places, the build follows the design's
+intent, as below:
+
+1. **FC carries AtNextTick.** §4.3's table gives FC as a plain Transport Stop, but §3.4 tells
+   MIDI's Stop (it cancels an armed transport, reverts a clock source to Internal, sets the
+   continue position and `masterStopped`) from the host's (it stops the transport) by that flag,
+   and §3.6 ignores a host-style Transport under clock. The translator sends FC as Stop with
+   AtNextTick, which still applies at its own frame.
+2. **`transportsIgnored`** joins `TempoStats`: §3.4 counts a host-style Transport ignored under
+   clock, and §2.6's list had no field for it. A bounce counts in `tapsIgnored`, beside taps under
+   ClockRunning.
+3. **Positions are read in integers.** A Transport's value is checked and converted from its
+   binary32 bits by integer arithmetic (`DecodePositionBits`), not in floating point inside the
+   guard as §4.1 and principle 2 say: the same positions and the same refusals (−0, fractions,
+   subnormals, infinities, NaNs, the range), and principle 2's two floating-point steps become
+   one, the CLOCK jitter. A value that must be +0 is checked by its bits, so −0 is invalid (§4.2).
+4. **Acquisition and commits need a valid fit.** §3.3 step 6 enters a clock state at N = 24 and
+   commits P_fit; with every fitted tick at one frame (A = 0) there is no P_fit, so the core
+   acquires, places and commits only on a valid fit (D > 0, A > 0), and until then the ticks feed
+   the window as under Internal.
+5. **The first label.** "The last label + 1" needs a first: a tick with no labelled tick before it
+   since `Init` or `Restart` takes the phasor's nearest tick (ties up), so ClockFree's labels
+   continue the phasor's (§3.1) from the start. Labels survive a gap, which clears the window, the
+   ring and the dropout reference only (§3.5).
+6. **MIDI's Stop in every source.** It reverts ClockFree to Internal as well as ClockRunning
+   (§3.1's table: ClockFree is "left by … Stop"), and sets the continue position to the last label
+   + 1 whenever a tick has been labelled.
+7. **Continue reads the continue position when it applies**, at the next tick, so a Song Position
+   that arrives between FB and that tick (while not ClockRunning) is honoured.
+8. **The phase tap's δ** lies in (−48, 48]: §3.2's formula, 96·FloorDiv(k_n + 48, 96) − k_n, sends
+   a position exactly 48 past a bar line up, where the text says −48 ≤ δ < 48. The formula is
+   built.
+9. **A Spillover load sets the stored performance state** that `Restart` plays (§2.5: the active
+   preset's, "the last loaded preset's STAT").
+10. **The grid runs whatever the mode.** `GridFrames` advances the grid and `lastFired` in every
+    span, so switching to a mode that lists `clock` never fires a stale catch-up; whether a hit
+    becomes a birth, and §6.3's one hit per frame, are the engine's (T1's second part). Noted for
+    the owner: a Subdivision event to a finer grid makes §6.3's catch-up fire the largest grid
+    position already passed, at the event's frame (×1/4 to ×8 mid-bar fires the 32nd just passed),
+    as the rule says for any jump; whether a Subdiv change should rather skip passed positions is
+    a listening question for T5. *(2026-10-10: it skips them now, note 25.)*
+11. **The translator's `Reset()`** forgets the running state with the position: a UART restart may
+    have lost bytes, a Stop among them.
+12. **§7.4's commit budgets against §7.1's constants, measured** (ten minutes per case with §8.3's
+    clock models, the hidden `[experiment]` case of `test_tempo_rules.cpp`). A hardware clock
+    commits nothing after the acquisition at 60, 120 and 140 BPM, but once at 300 BPM (rule 3.2,
+    0.026 %), against a budget of none. A computer clock commits 1–2 times at 60 BPM, 19–117 times
+    at 120, 150–190 at 140 and 520–710 at 300, nearly all by rule 3.1, each 0.2–0.5 %, against "at
+    most one per minute, each ≤ 0.4 %". The fit itself is as §3.3 calculates (P_fit's σ 0.029 %,
+    0.059 %, 0.070 % and 0.105 % at those tempos), but rule 3.1's band, Pc >> 9 = 0.195 %, compares
+    two noisy fits (Pc is a committed P_fit), and the fit's σ grows with the tempo, so at 140 BPM
+    the band is about two σ of the difference; rule 3.2's run likewise outlasts 192 ticks after an
+    early acquisition at a fast tempo. Every such commit is a Drift, so the post delay slews and
+    never jumps, but `clock_midi_computer`'s counters will exceed §7.4's budget. The constants are
+    built as designed; tuning them (§11.7 risk 3, §11.8 item 1) is an owner decision. *(2026-10-10:
+    a measured candidate that meets the budgets at 60–140 BPM is in note 32; the owner adopted it
+    the same day, note 34.)*
+13. **A loss under ClockRunning clears the running bit.** §3.5 keeps P, Pc and the phase and sets
+    `resumeRunning`; it does not say whether `TempoInfo`'s "transport running" bit stays set. The
+    core clears it with the source, so a display shows a stopped transport while the clock is
+    gone (the snapshot reads the same through the gap predicate), and the resume's implicit
+    Continue sets it again.
+14. **An armed Locate applied on an empty window arms the early commit.** §3.4 applies a Locate
+    armed under ClockRunning "as Start", and a Start on an empty window arms §7.1's early commit,
+    which §7.1 names for Start and Continue only. The core follows §3.4. The case needs a window
+    emptied under ClockRunning, which only an outlier labelled 96 or more past every fitted tick
+    can do.
+
+### 11.11 As built: the tempo core wired in, sound revision 8 (2026-10-09)
+
+Lane T1's second part, under D1 as amended. Two sound-neutral commits first: the schema half
+(§2.4, §5.1, §11.1, §11.2: `Subdivision` re-coded so code 0 is TAP; SCHD's byte 2 and STAT's
+performance byte 3 reserved, a nonzero one `ModePadding` and `Performance`, pinned by two new
+frozen fixtures; `scheduler.subdiv` and `performance.tempo_source` withdrawn as E2; the Subdiv
+labels in code order with the Microcosm's printed ones E5; the performance support bit split into
+the stored tempo, time mode and subdivision, which come with CLOCK, and global reverse; §5.2's
+names for divisions), and the producer functions (`UsesTempo` beside `EvalMacro`, reported by
+`bspc lint`; `tempo::TempoNsFromKnob`; row 63's note-value names), in `dsp/src/TempoProducer.cpp`
+out of ITCM. Then revision 8 as one commit: events 6–10 in `Engine::EventType` and `ApplyEvent`
+(the gap rule before every event, unknown types and invalid payloads counted), the stored
+performance state applied at load step 4 and played by `Restart`, Spillover's time mode,
+subdivision and recall, CLOCK births in `GranularCore` (§6.3, D13), `Engine::Tempo()` and
+`TempoCounts()`, rows 83–85, CLOCK supported, corpus version 13 (seven clock presets on
+`plucks_clock_30s` at 140 and 137.5 BPM over three packages, the five script verbs, the
+`ClockTicks` and `TapSeries` generators, twenty counters, the `clock`, `tempoEvents` and `subdiv`
+ablations) and the re-mint: all 45 presets of revision 7 reproduce their hashes, per-second hashes
+and counters bit for bit. `dsp/tests/test_clock.cpp` checks the wiring (hits at F(k) for four
+grids, block-split invariance with every event type, D13's steal, the jitter's bound, no stale
+hit on a switch to a clock mode, `Restart` against `Init` and an Exact load, Spillover recall).
+
+Where the text left a choice, or the code read differently, the build follows the design's
+intent, as below (continuing §11.10's numbering):
+
+15. **The Time knob's routing is the producers'.** §6.4 and Q7 keep the Time knob from
+    `macro.time` in Subdiv and Tempo modes while expression, MIDI and hosts still reach it, but
+    every one of them reaches it as the same MacroMove event, which carries no origin. So the
+    engine plays every MacroMove it is given, and the routing is the producers' (T3, T4): the
+    engine's side is the time mode itself (Subdivision field 1, reported in `Tempo().timeMode`),
+    the effective subdivision Tempo mode forces, and `TempoNsFromKnob` for the Tempo knob's
+    events. `Engine.h` states it beside the re-assert contract of §2.5.
+16. **No lateness cap yet.** The cost governor does not exist, so no hit waits for admission:
+    each is born at its (jittered) frame, `clockDeferred` and `clockDeferredFrames` read 0, and
+    `kClockLateFrames` lands with whichever of the governor's revision and this one comes second,
+    as §11.3 says, i.e. with the governor. Hits waiting for their jittered frame queue in
+    `GranularCore`, at most eight (two at most at jitter 1, since a hit waits at most half a grid
+    period); one past that is dropped and counted in `clockDropped`, which only placements at
+    nearly every frame could reach.
+17. **Row 85 has no domain.** A Global row rebuilds something everywhere else; `tempo_recall`
+    acts only where a Spillover load reads it, so the table's well-formedness rule admits it as
+    the one Global row without a domain. A load reads its latest stored value, so an unstamped
+    `SetParam` before a direct Spillover call counts as at the load's frame, which split delivery
+    needs. Rows 83 and 84 are Performance rows, automatable as §10.4 lists them, and act only
+    through Subdivision events: a `SetParam` on them does nothing, and the plugin does not
+    register them yet (T3).
+18. **Split delivery of events 6–10.** As §8.3 says, the harness hands each to the block that
+    starts at its frame, at offset 0. At a frame shared with an unstamped event the unstamped one
+    applies first (a direct Spillover load at once, a `SetParam` at the block's start), where the
+    engine's transport would apply them in sequence order; the corpus keeps such frames apart,
+    and no preset reorders.
+19. **A restart's tail sets the device settings.** RestartTail renders from Init's device
+    settings, while a restart keeps them, so `clock_loads` (a recall set to Preset before its
+    Exact load) could not be rebuilt. The tail now sets, at its frame 0, every Global row the
+    script set before the restart; no earlier preset sets one before a restart, so no earlier check changes.
+20. **`lastClockBirth`** is the grain core's last CLOCK birth, taken when the span's count of
+    them grew, so a `Restart` never reports the frame of an earlier timeline.
+21. **Every package re-stamped.** As at revision 5, the corpus's 29 packages, the compiler's 7
+    examples and the factory's 18 carry `sound_rev` 8: each package hash changes, every
+    `sound_hash` and `control_hash` stays, and the sound-revision gate's package rule passes
+    without the package-change label. The compiler's two digests (the stamp alone) and the blob
+    fuzzer's verdict digest (the samples' revision and CLOCK supported) are re-minted.
+22. **ITCM** (*measured*, the live image's map): `.itcm_text` grows from 62,256 to 64,680 bytes
+    (`Engine.cpp` 15,222 to 16,148, `Granular.cpp` 11,404 to 12,812), leaving 792 bytes of the
+    65,536 with its 64-byte offset; `ItcmCheck` and `BootCheck` pass on every image. The tempo
+    objects stay in QSPI: `Tempo.cpp` 14,008 bytes and `IntMath.cpp` 1,256 (`MidiClock.cpp` and
+    `TempoProducer.cpp` are not linked into the live image). §9.6 estimated 1.0–1.6 KiB of ITCM
+    for T1 and T2 together; T1 alone takes 2.4 KiB, mostly the CLOCK path and the draw ordinal in
+    `GranularCore`. §9.6's cold-code move (the main-thread API out of `Engine.cpp`'s ITCM object,
+    or placement by function) is not built: D1 as amended keeps code that fits in ITCM, and it
+    fits. T2's crossfade and slew in `PostChain`'s per-sample loop will not fit 792 bytes without
+    it. *(2026-10-10: built by function, note 31: 61,472 bytes, 4,000 spare.)*
+23. **Not built in T1:** the nightly ten-minute render of §8.3 (a CI schedule) and §8.2's post-
+    chain cases, `sync_post`, `sync_base`, `sync_fold` and the `sync`, `crossfade` and `slew`
+    ablations, which belong with synced times (T2, corpus version 14). `crossfades` and `folds`
+    read 0 until then.
+24. **The commit budgets, in the corpus.** `clock_midi_computer` (137.5 and 150 BPM, a computer's
+    jitter) commits 26 times in about 22 seconds of clock, 23 of them drifts, as item 12 measured;
+    its counters are minted as they are, and §7.4's budget remains the owner's decision on the
+    constants (note 32). *(2026-10-10: decided, note 34; it now commits 4 times, one a drift.)*
+
+### 11.12 As built: the review's amendments (2026-10-10)
+
+Three reviews of lane T1 at `b91b34d` (determinism and exactness, behaviour against this design,
+the embedded side) found no correctness, determinism or portability defect and four places where
+the text, read literally, gave behaviour its own intent rules out. Revision 8 is amended in place,
+before any later revision and unpushed, so it stays revision 8 with its golden file re-minted:
+the 45 presets of revision 7 still reproduce their hashes, per-second hashes and counters bit for
+bit, and of the seven clock presets `clock_internal` (five CLOCK births fewer, note 25),
+`clock_loads` (the frame-0 hit, note 26; its output, rendered from a ring the load cleared, is
+unchanged) and `tempo_jump` (new events, note 33) changed. Continuing the numbering:
+
+25. **A change of the grid starts the new grid at its next position** (§6.3's step 1 amended).
+    The catch-up exists for a jump of the phasor: the boundary inside the frame before a span's
+    start, and the one position a placement, a tap or a rescale made due. A change of G (a
+    Subdivision event, either field; a load's stored Subdiv or time mode; D18's gesture) moves no
+    boundary, but read literally the catch-up then fired the finer grid's last passed position at
+    the change's frame, up to a whole new-grid period late: TAP to ×2 to ×4 to ×8 turned 18 ticks
+    into a beat at 120 BPM fired an eighth 6,000 frames (125 ms) late and a sixteenth 300 frames
+    late, on the main performance control (CC#5). Now the new grid's positions whose first frames
+    lie before the change count as fired, and one due exactly at the change's frame (F(g) = s,
+    acc < K) still fires there. A load that also recalls a tempo applies the grid after the
+    rescale, as a Tempo event and then the grid would. Coarser grids never caught up (they nest).
+    Note 10's listening question is answered by this rule.
+26. **The grid is held while a MIDI transport is armed** (§3.4 and §2.5 amended). An armed
+    Start, Continue or Locate waits for its tick, which relabels and places the phasor; until
+    then the old grid ran on. So after an Exact load under a running master the restarted grid
+    fired position 0 at frame 0 (with its burst), off the master's beat, before the re-asserted
+    Continue applied, which D4's "a preset change under a running master keeps the band's beat"
+    rules out; and FA under ClockFree at ×8 let the old grid's hit fire 6–20 frames before the
+    downbeat's own (a flam, at 21 of 48 phases probed). Now nothing fires while an event is
+    armed, and the grid positions passed count as fired, so a Stop that cancels the event lets
+    the grid resume at its next position. The hold changes only at events, so it is block-split
+    invariant. An armed event that no tick follows holds the grid until a Stop, a later armed
+    event's tick or `Restart`, as a slave waits for the clock after Start.
+27. **Song Position under ClockRunning sets the continue position too** (§3.4's Locate row). It is
+    armed and applies at the next tick as Start, as before; a Continue that replaces it before
+    that tick (a master relocating with F2 then FB, no FC) read the continue position of the last
+    Stop and left the grid about 4,000 frames off every beat until the next Start. §3.4: Continue
+    resumes "from the last stop point or Song Position".
+28. **Song Position under ClockFree sets only the continue position** (§3.1's sentence amended to
+    §3.4's table, which the code follows): the beat label stays the pedal's own until a Start or
+    Continue applies at a tick, or a tap marks the downbeat.
+29. **The engine's calls into the core stay in ITCM unless something can happen** (§9.6). Since
+    revision 8 `RenderFrames` called `GridFrames` on every render span of every preset, and
+    `ApplyEvent` called `BeforeEvent` before every event, both in QSPI: about 2–4k cycles a block
+    with a cold I-cache (*estimated*, §9.6's 100–200 cycles a line), which §9.6's table did not
+    count, and the firmware comment said the tempo code ran at control rate. Now `detail/Tempo.h`
+    has inline fast paths compiled into `Engine.cpp`: a span that ends at or before the first
+    frame at which a grid position can fire (kept by the full path after every span that may fire,
+    cleared by every event and load) only advances the phasor, at most eight loop turns; an event
+    with no gap due needs nothing; the grid's period and Pc in ns are kept from their last change,
+    so a hit's jitter and `Tempo()` divide nothing, and `Info()` is inline (the audio callback reads
+    it after every block, §9.3, §9.5). The core's state is unchanged (Euclidean advance), so no
+    golden hash or digest moved for this. `ItcmCheck` now refuses any veneer in ITCM, i.e. any
+    call out of ITCM, other than the five control-rate entry points it names (`GridFramesFull`,
+    `BeforeEventFull`, `ApplyEvent`, `CountUnknownEvent`, `SpilloverLoad`), so a hot call into
+    QSPI fails the build; there were ten such veneers at `b91b34d`, five remain.
+30. **A ClockTick's cost, and the dropout tick.** The window's eviction re-based all four sums once
+    per leaving tick (six 64-bit products each), so one tick cost O(evicted): a dropout tick at 140
+    BPM evicts up to 55 entries, at 300 BPM the whole window. It now subtracts each leaving tick's
+    own terms (two products) and re-bases once, the same exact integers (the digests and every
+    reference comparison are unchanged by it), and clears in O(1) when every entry leaves: about 36
+    instructions per evicted entry on the M7, from about 94 (*measured* in the disassembly). The
+    tick path's code is about 6.4 KiB at -O3 (`OnClockTick` 1,656 bytes, `ApplyEvent` 616,
+    `WindowEvict` 654, `BeforeEventFull` 442, `Commit` 400, `Refit` 338, `PlaceOnLine` 244,
+    `WindowAdd` 234, `IntMath`'s multiply-divide 814 and its wrappers; *measured*), three to four
+    times §9.6's 1–2 KiB, so a tick with a cold I-cache may refetch up to about 200 lines, 20–40k
+    cycles (*estimated*), against §9.6's 3–10k. T6's worst-tick bench, with the I-cache invalidated,
+    must include a dropout tick that evicts most of the window and ticks bunched two to a block;
+    the governor's event reserve (24k cycles, a placeholder) is sized from it, and if it does not
+    fit, the tick handler moves into ITCM (§9.6), which now has room (note 31).
+31. **Main-thread engine code out of ITCM** (§9.6's cold-code move, by function). Functions
+    marked `BRAINSCAPE_COLD` (`dsp/src/detail/Placement.h`: `Engine`'s constructor, `Init`,
+    `LoadPreset`, `Restart`, `ClearHistory`, `SetParam`, `GetParam`, `TempoCounts` and
+    `Descriptors`, `Impl`'s `Init`, `Restart`, `ClearHistory`, `LoadPreset`, `SetParam` and
+    `GetParam`, and `PlanMemory`) go to `.text_cold`, which the ITCM input patterns do not match
+    and the QSPI `.text` section's `*(.text*)` does; only on bare-metal Arm, so the firmware's and
+    the emulated M7's archives stay byte-identical and nothing else changes. The core is created
+    and its counters copied out of line (`TempoCore::Create`, `Counts`), so none of that code is in
+    ITCM either. The live image's `.itcm_text` goes from 64,680 to 61,472 bytes (*measured*;
+    `Engine.cpp` 16,148 to 12,980), leaving **4,000 bytes** of the 65,536 with its 64-byte offset;
+    parity 59,336, bench 59,192, bench_hooks 59,448 (62,544, 62,400 and 62,880 at `b91b34d`). The
+    fast paths of note 29 cost 380 bytes of it. Moving `Validate` and the rest of §9.6's list
+    stays for when T2 or the governor needs it, after bench session 2 (cpu-budget.md §7.3).
+32. **The commit budgets, measured against a candidate** (notes 12 and 24; §11.7 risk 3). A review
+    measured ten minutes per case, three seeds, commits counted after the window reached 96: as
+    built, a computer clock's worst is 115 commits at 120 BPM, 189 at 140 and 657 at 300, and a
+    hardware clock's one at 300 BPM. A variant where rule 3.1's band must be exceeded on 48
+    consecutive fitted ticks (counted like rule 3.2's run, reset by a fitted tick inside the band)
+    and rule 3.2 moves to Pc >> 11 over 384 fitted ticks commits at most once at 60, 120 and 140 BPM
+    and 8 times at 300 with a computer clock, never with a hardware clock; its worst |Pc/true − 1|
+    is 0.097, 0.193, 0.225 and 0.340 %, and it still follows a 1 % ramp over 600 beats. Rule 3.1 at
+    Pc >> 8 alone fails at 300 BPM (189). The constants stay as designed: changing rule 3.1 from
+    "at once" to a run reshapes D8's deadband, and §11.7 risk 3 and §11.8 item 1 set these
+    constants from T0b's recordings of real masters. The variant is the measured candidate for the
+    owner's decision; adopting it changes `clock_midi_computer`'s counters and is revision 8's
+    re-mint if it lands before the next revision, a revision of its own after. *(2026-10-10: the
+    owner adopted it before the next revision, and revision 8 is re-minted, note 34.)*
+33. **Tests added** (§8.2): every exact integer threshold of §3.3 and §7.1 with a value at it and one
+    past it (the dropout's R/10 and four ticks, the outlier's quarter tick and 10 ms, the early
+    commit, rules 3.1 and 3.2, the Jump class), which twelve mutants of `Tempo.cpp` had survived;
+    notes 25–28 case by case; the engine's one CLOCK hit per frame (a Start whose first ticks
+    arrive bunched on one frame: the catch-up and the next grid point at one frame), a jittered
+    hit dropped by a load to a mode without `clock`, the gap rule before a `SetParam`, and an
+    Exact load under a running master firing nothing before its tick; the reference model across
+    2^31, 2^32 and 2^33 frames (the window's 32-bit storage, with dropouts, re-acquisitions and
+    relabels); and the reference's perturbations for notes 25–27, each caught. The streams send
+    a MIDI Start or Continue up to half a second before their first tick, so the hold runs over
+    grid points, and the tempo digest is `0d1b22dd690c3742` (`5918ba4597cf17ce` since note 34).
+    The corpus's `tempo_jump` ends with a MIDI Start whose 49 ticks arrive on one frame, pinning
+    one hit per frame on every leg, the emulated M7's included. The clamp `acc′ = max(1, …)` of
+    §2.2 stays untested: only a placement can leave acc at 7 phasor units or less before a
+    rescale, and it is defensive.
+
+### 11.13 As built: the owner's deadband constants (2026-10-10)
+
+The owner adopted note 32's candidate on 2026-10-10 (D8 as amended, §7.1, §7.4). Revision 8 is
+still unpushed and no revision follows it, so it is amended in place again and its golden file
+re-minted at 8. Continuing the numbering:
+
+34. **Rule 3 as two runs, as the review tested them.** `TempoCore` keeps rule 3.1's run beside
+    rule 3.2's (`kBandRun` = 48 fitted ticks outside Pc >> 9, `kDriftRun` = 384 outside
+    Pc >> 11, `dsp/src/detail/Tempo.h`): a fitted tick inside a band resets that band's run, and
+    every commit, a gap and `Restart` reset both, as they did rule 3.2's. Note 32's words,
+    "counted like rule 3.2's run, reset by a fitted tick inside the band", leave open what an
+    outlier does to rule 3.1's run; the review's variant neither counted nor reset it, and the
+    build does the same: with an outlier resetting it too, the 120 BPM computer clock commits
+    twice in ten minutes in one seed (three in all), against the once the owner adopted. The
+    other differences from the review's probe (its run kept across other rules' commits, gaps
+    and fresh cores) move no measured number. The review's driver, run against the built core,
+    reproduces its numbers exactly (*measured*; ten minutes, three seeds, commits counted after
+    the window first holds 96 ticks): a hardware clock commits nothing at 60, 120, 140 and
+    300 BPM, its worst |Pc/true − 1| 0.011, 0.007, 0.006 and 0.028 %; a computer clock commits at
+    most 1, 1, 1 and 8 times in a seed (1, 2, 2 and 8 in all), its worst |Pc/true − 1| 0.097,
+    0.193, 0.225 and 0.340 % and its largest commit 0.125, 0.266, 0.297 and 0.340 %; over a 1 %
+    ramp of 600 beats (120 to 121.2 BPM) Pc ends at 121.101 BPM against a fit of 121.289, after
+    6 commits. §7.4's two clock budgets are met.
+
+    **The corpus.** Pc moves no sample at revision 8 (synced durations are T2's), so no hash or
+    per-second hash changes, and only `clock_midi_computer`'s counters do: commits 26 to 4,
+    slews 23 to 1. Its four commits are the acquisition at 1.41 s (1.76 % from the stored
+    140 BPM, a Step), the re-acquisition after the step to 150 BPM at 12.62 s (7.9 %, a Jump),
+    a rule-3.1 Drift of 0.58 % at 13.68 s, 48 fitted ticks after the re-acquired 24-tick fit (the
+    window at 88), and the acquisition after the loss at 25.41 s (9.1 %, a Jump); its coverage
+    minimums follow (commits 4, slews exactly 1). The 45 presets of revision 7 reproduce their
+    hashes, per-second hashes and counters bit for bit, and the other six clock presets every
+    counter.
+
+    **Tests** (§8.2): rule 3.1 exactly at Pc >> 9 (a clock at 1,026 frames a tick on Pc's
+    1,024, for 60 ticks after the window turns over) and one frame a tick past it, committing on
+    the 48th consecutive fitted tick outside and not the 47th; rule 3.2 likewise at Pc >> 11
+    (4,098 and 4,099 frames a tick on 4,096) and on its 384th tick; both against runs counted by
+    hand from the fit the core reports. Rule 3.1's run kept by an outlier and reset by a fitted
+    tick inside its band; a rule-3.2 commit and a re-acquisition's commit each resetting a run
+    under way; rule 3.2's outlier case at 384 ticks. The reference model keeps rule 3.1's run,
+    which joins the compared state, and three perturbations (rule 3.1 at once, rule 3.2 at
+    Pc >> 12 over 192, an outlier resetting rule 3.1's run), each caught by the streams.
+    Thirteen mutants of the rule (each band read as ≥, each run one short and one long, rule 3.2
+    at Pc >> 12, an outlier resetting rule 3.1's run or not rule 3.2's, rule 3.1 at once, rule
+    3.1's run kept by a rule-3.2 commit, an acquisition or a gap) fail the unit tests. The tempo
+    digest is `5918ba4597cf17ce`.
+
+    **Placement** (*measured*, the images' maps): ITCM is unchanged, the live image's
+    `.itcm_text` 61,472 bytes (4,000 spare), parity 59,336, bench 59,192, bench_hooks 59,448;
+    `ItcmCheck` and `BootCheck` pass on every image. `Tempo.cpp`'s QSPI code grows from 15,236
+    to 16,568 bytes, mostly because GCC now inlines `BeforeEventFull` into `ApplyEvent` (616 to
+    1,096 bytes) and both `SpilloverLoad`s (752 to 1,068 and 1,064); `Commit` grows from 400 to
+    504 and `OnClockTick` from 1,656 to 1,760, so a tick's path grows about 250 bytes, eight
+    cache lines, against note 30's estimate. §11.7 risk 3 and §11.8 item 1 stand: T0b's
+    recordings of real masters may still retune these constants, then as a sound revision of
+    its own.
+
+### 11.14 As built: synced times, sound revision 9 (2026-10-10)
+
+Lane T2 under D1 as amended (§5.2–§5.4, §6.1, §6.2, §7, §11.1's lints), one revision on top of
+revision 8, unpushed: row 63 `post.delay.sync` a `Leaf` since 9 playing §5.2's note values, a
+layer's `base_sync` supported, §5.3's folds, the 4 s line, §7.1's classes with the crossfade and the
+slew, row 86 `global.tempo_glide`, lints L12–L14 and L2's synced base delay, the effective-value
+display, corpus version 14. Continuing the numbering:
+
+35. **The durations.** `tempo::NoteTicks` is §5.2's table (`brainscape/Tempo.h`, a switch as
+    `SubdivTicks` is); `tempo::FoldedFrames` (`Tempo.cpp`, QSPI) is §5.3's fold over §2.3's
+    `DurationFrames`, each octave computed from Pc, never by halving a rounded count, so a folded
+    value is §2.3's at its octave exactly. The ranges at the integer rate R: the synced post delay
+    round-up(R/100) to 4·R frames inclusive, the base delay round-up(R/1000) to 5·R (480–192,000
+    and 48–240,000 at 48 kHz). Every code × Subdiv at 20–300 BPM and 8–384 kHz settles within five
+    halvings and three doublings. The producers' form, `tempo::SyncedDuration`
+    (`TempoProducer.cpp`), takes the tempo in ns as `TempoInfo` reports it and the stored or live
+    Subdiv and time mode (Tempo mode forces TAP): exact for every tempo that is a whole ns (stored
+    presets, the Tempo knob, a host), within a frame of what plays for a tapped or fitted Pc.
+36. **The engine reads Pc and the effective Subdiv once per change.** `Engine::Impl` keeps, for
+    the post target and layer 0's base delay, the code, Pc, Subdiv ticks, fold and frames it last
+    computed (16 bytes each), and recomputes (`Resync`, out of line, which calls `FoldedFrames` in
+    QSPI) only when one of them changed, counting that computation's folds (`TempoStats::folds`,
+    so the counter is split-invariant). After every event 6–10 and a Spillover load's performance
+    state (`NoteTempo`, out of line) a changed Pc serial or Subdiv marks `kDomainPost` while row 63
+    is synced, and a changed Pc or Subdiv `kDomainGranular` while `base_sync` is set; nothing is
+    marked for a preset that syncs nothing, so the 52 presets of revision 8 rebuild exactly as
+    before. Pc changes between two rebuilds (two events at one frame) are classed by the strongest:
+    a Jump over anything, a Step over a Drift, so a Drift slews only when every change before the
+    rebuild was one. `global.tempo_glide` is read where the change is classed, its active value
+    after the frame's events.
+37. **The classes on the post delay** (§7.1, §7.3). A change of the synced target is *discrete*
+    when the code, the effective Subdiv's ticks or the fold changed, or sync turned on or off:
+    it raises `PostParams::delayJump` and crossfades whatever `tempo_glide` says (a fold change
+    crosses an octave, §5.3). Otherwise a Pc change of class Jump raises it unless `tempo_glide`
+    is On, which glides the Jump as draft v1 did; a Drift sets `delaySlow`, the slew; a Step, or a
+    Jump under `tempo_glide` On, glides with the 50 ms pair. `tempo_glide` acts on Pc's Jumps only,
+    D22's "jumps glide": a code, Subdiv or fold change still crossfades.
+38. **The crossfade** (`PostChain`, ITCM). At a span's first frame a raised `delayJump` copies the
+    head as the outgoing one, which keeps reading and gliding toward its old target, primes the
+    incoming one on the new target, and counts the fade (`crossfades`); frame n of the fade
+    (n = 1…1,024) mixes them by (1024 − n)/1024 and n/1024, so its last frame is the incoming head
+    alone, and the feedback write takes the mixed read. A jump while a fade runs waits as the
+    latest target (a later jump replaces it, a Step or Drift updates it), and starts the next fade
+    on the frame after the running one ends, inside the per-sample loop (`FadeFrame`), so a
+    chain lands at the same frames for every split (a unit test at block size 1 against 512, 48,
+    441, {48, 1, 127, 32}, {300, 512, 5, 64} and random). A Subdiv knob turned through all six
+    zones 200 frames apart is thus two fades, the first jump's and one to the last zone, never a
+    step. A Step or Drift during a fade retargets the incoming head. A silent stage jumps, a fade
+    under way or waiting going with it, as today.
+39. **The slew** (§7.2): `TapGlide` keeps a `slow` flag that a retarget sets from its class, the
+    Step taking the slew's pair (τ = 1 s per pole) when it is set; a later retarget replaces it,
+    and landing clears it. A 96-frame Drift on a 500 ms echo moves the head at most 0.074 % of a
+    frame per frame (the unit test: under 0.1 %), a quarter of the way after a second.
+40. **The 4 s line** (§5.3, D23): round(4·R) + 2 frames, `BulkFloats` twice that; a synced target
+    reaches 4·R (the line's last two frames are the cubic read's neighbours) and `time_ms` keeps
+    its clamp at round(2·R) − 1, so every unsynced render is revision 8's. PlanMemory's Bulk tier
+    at 48 kHz grows from 17,545,216 to 18,313,232 bytes, and the pedal's Bulk arena from 17 to
+    18 MiB (`firmware/platform/Placement.h`), 561,136 bytes spare; `firmware_arena_plan` and the
+    host's `PlanMemory` test pass. `Engine::Impl` grows to 8,184 bytes on the M7 (of
+    `kEngineImplBytes`' 8,192, unchanged) and 8,320 on x86-64 (of 8,448).
+41. **base_sync** (§6.2, Q11, D6): layer 0's base delay is the folded duration as an exact integer
+    `double`; grains resolve their position at birth, so a change reaches grains born after it.
+    `kModeFeatureTempoSync` is supported, so the compiler reads a division other than `"off"`
+    (layer 1's waits for W3's second layer). L12 warns of grain feedback beside it.
+42. **Lints** (`compiler/src/Lint.cpp`, warnings, `--factory` never errors on them). L12 and L13
+    read a leaf's reach as the stored value and both ends of every macro target and of every
+    expression assignment on it (§6.5's "macros and expression reach row 63"; §6.2 names macro
+    corners only, and the pedal reaches feedback as a macro does). L13 reports each macro target
+    and expression assignment on `post.delay.time_ms` when row 63's lowest reach reads a code of 1
+    or more (RoundHalfAwayI32, computed on the bits), and on a layer's `base_ms` when its
+    `base_sync` is set. L14 names every reachable code from row 63's lowest to its highest reach
+    that folds at the stored tempo and Subdiv at 48 kHz, with its effective value, and a stored
+    `base_sync` that folds. L2 evaluates a layer with `base_sync` at its shortest, 300 BPM under
+    ×8 (any Subdiv is reachable live), against the near guard, exactly (frames against 48 × the
+    guard's binary32 milliseconds, in the lint's wide integers). The reader records where it read
+    a `base_sync` (`base_sync:<layer>`).
+43. **The display** (§5.3, §5.4): `FormatSyncedTime` (`ParamDisplay.h`) writes the effective value
+    beside a synced field: "Off"; the note value's name; " · Subdiv ×1/2" when the effective
+    Subdiv is not TAP; " → " and the note value that plays when the Subdiv or a fold changes it,
+    named from its ticks (3·2^q ticks straight, 2^q a triplet, 9·2^q dotted: "1/32T", "1/256",
+    "8/1"); then the duration through the display's milliseconds rule: "1/4 · 500 ms",
+    "2/1 → 1/1 · 2.02 s" (119 BPM), "1/4 · Subdiv ×1/2 → 1/2 · 1.00 s". Row 63's host text stays
+    the code's name (`FormatPlain`). Row 86 shows Off and On.
+44. **The corpus** (version 14, `plucks_clock_30s`, three new packages): `sync_post` (row 63 at 1/4
+    on 140 BPM: the time macro sweeping 1/8–1/2, a Subdiv jump, the knob's six zones 200 frames
+    apart, a Tempo-knob Step that glides and a host Jump that crossfades, a Subdiv change in the
+    trail after the input stops; 15 crossfades), `sync_clock` (a MIDI clock at 137.5 BPM acquired
+    as a Step, then 137 BPM committed as a Drift, slewed, then 150 BPM re-acquired as a Jump,
+    crossfaded), `sync_base` (`base_sync` 1/8 with grain feedback at 137.5 BPM, taps to 90 BPM, a
+    Subdiv jump), `sync_fold` (2/1 at 125 BPM, 3.84 s, between `time_ms`'s 2 s and the line's 4 s,
+    a 48-step `TempoSweep` to 52 BPM folding it below 120, the code to 1/1, folding below 60, a
+    host Jump to 58 BPM that keeps the fold; 4 crossfades, 42 folds) and `sync_glide`
+    (`tempo_glide` On: a tapped and a host Jump glide, a Subdiv change crossfades; Off again, a
+    Jump crossfades). The verb is the `TempoSweep` generator (integer steps), the counters
+    `crossfades` and `folds`, the ablations `sync` (row 63 at 0 wherever the preset, a load or a
+    SetParam sets it, the macro and expression moves that could set it again dropped, every loaded
+    mode's `base_sync` off) and `crossfade` (`tempo_glide` On from frame 0). §8.3's `slew` ablation
+    (drifts glide) has no switch a script can reach, so the slew is the unit tests' (note 39), as
+    is the "chain at block size 1" of §8.2. Every hash, per-second hash and counter of revision 8's
+    52 presets is reproduced; the 30 that load a package see its `sound_hash` change (STAT gains
+    leaf 63 at 0) and its `control_hash` stay.
+45. **Every package re-stamped and its `sound_hash` changed:** the corpus's 32 (and 3 new), the
+    compiler's 7 examples and the factory's 18, each re-formatted (the canonical form writes
+    `post.delay.sync`) and recompiled at revision 9; every `control_hash` is unchanged. The pull
+    request needs the package-change label with "Package-change: synced times' leaf 63
+    (post.delay.sync) joins every package's STAT at its default (sound revision 9)". The
+    compiler's random-document and reader-fuzz digests and the package fuzzer's verdict digest
+    are re-minted (the stamp, leaf 63, `base_sync` supported).
+46. **ITCM** (*measured*, the images' maps): the live image's `.itcm_text` grows from 61,472 to
+    63,408 bytes, leaving 2,064 of the 65,536 with its 64-byte offset; parity 61,256, bench
+    61,112, bench_hooks 61,368; `ItcmCheck` and `BootCheck` pass on every image, the one new call
+    out of ITCM being `tempo::FoldedFrames`, now on its allow-list. Of the 1,936 bytes, the
+    crossfade's out-of-line `FadeFrame` (the outgoing head's step and Catmull-Rom read) is 872,
+    `NoteTempo` 248, `Resync` 208, `RebuildPostParams`' sync 196, the switch tables of
+    `NoteTicks` and `SubdivTicks` 84, and the per-sample loop 40; §9.6 estimated 1.0–1.6 KiB for
+    T1 and T2's ITCM together. `FadeFrame`, `NoteTempo` and `Resync` are `BRAINSCAPE_NOINLINE`
+    (`detail/Placement.h`) so the ITCM holds one copy each; inlined, the same code took 2,440
+    bytes. `Tempo.cpp`'s QSPI code grows from 16,568 to 16,832 bytes.
+47. **The plugin** registers row 63 as a leaf (§10.4, 17 steps), automatically as a Leaf row;
+    leaves register first, so the host indices of freeze, the macros, `perf.expression` and the
+    effect volume move up one, as at revisions 4, 6 and 7 (before the first public release,
+    compiler §4.5). Its text parser reads the note names back in either case ("1/8D", "1/8d") as
+    well as the code; row 86 is a device setting, not registered (§10.4).
+48. **Not built in T2:** the delay stage's cost with a fade in progress (§7.3, §9.6: both heads in
+    stereo, about 60–80 cycles a sample more, *estimated*), measured on the Rev7, and the cost
+    governor's constant raised from it, are T6's bench with the governor; T5's audition gives
+    Engram and Callback a synced post delay by listening (§6.6). The plugin shows the effective
+    value (note 43) from T3.
+
+### 11.15 As built: the plugin, lane T3 (2026-10-10)
+
+Lane T3 under D1 as amended, on `claude/tempo-plugin` from revision 8 with the owner's deadband
+constants (`45097f1`): §4.4 and §10, producer code only, so no sound revision, no golden hash and
+no package hash moves, and ITCM is unchanged (the live image's `.itcm_text` 61,472 bytes). Built:
+`NsPerQuarterFromBpm` and `HostAnchor` (`dsp/include/brainscape/Tempo.h`,
+`dsp/src/TempoProducer.cpp`, out of ITCM and not linked into the live image), with row 83's
+position-to-code mapping (`SubdivCodeFromPosition`, `SubdivPositionFromCode`) and their tests
+(`dsp/tests/test_host_tempo.cpp`); and in `plugin/`, the host follower (`src/HostTempo.h`), the
+wrapper's events 6–10 (`WrapperEvent::Type` gains Tap, Tempo, ClockTick, Transport and
+Subdivision), the re-asserts, the Standalone's MIDI clock, rows 83 and 84 registered after the
+effect volume, row 85 as a device setting, the session's tempo keys, saving the performance, and
+the BPM panel, a strip under the pedal view's knobs (`src/gui/TempoPanel.h`). Where the text left a
+choice, the build follows the design's intent, as below (continuing the numbering):
+
+49. **`HostAnchor`'s refusals and its arithmetic.** It returns false, writing nothing, for a
+    non-finite ppq or one of 2⁴⁰ quarters or more either way (x stays inside
+    `RoundHalfAwayI64`'s domain), an ns outside the tempo range or a rate outside 8–384 kHz.
+    k is the integer nearest x, or the next one when x lies more than 10⁻⁹ above it (x − n is
+    exact, by Sterbenz), and the offset is `RoundHalfAwayI64(((k − x)·ns)·rate / (24·10⁹))` in
+    binary64 inside the guard, at most one tick rounded to a frame. The tests check it against
+    exact integer readings of §4.4 on 100,000 positions (agreeing everywhere a quotient is not
+    within 10⁻⁶ of a half) and in `TempoCore`: a host-style Start with the anchor fires its first
+    grid position at the anchor and every hit within 1.5 frames of the host's beat.
+50. **Following begins at a start.** §4.4 anchors at "the edge `CheckTransportStart` already
+    detects": a playing block after one that did not play, `prepareToPlay` or a switch to offline.
+    The follower also starts (a Tempo event, then an anchored Start) at the first playing block
+    it follows: after the Tempo source changes to Host, when a host starts reporting a tempo, and
+    after every Exact load, whose re-asserts reset it, so a restart while the host plays (a
+    device change) anchors the restarted grid. Each block sends at most one Tempo event (always
+    at a start, as §4.4 step 2 wants it before the Start); the prediction of step 3 uses the
+    last block's reported BPM at the host's rate.
+51. **A Spillover load while following re-sends the host's tempo after it.** Under recall Preset a
+    preset change while the host plays applies the stored tempo, which the host's would replace
+    only when it next moved by 1 µs, possibly never; so after any Spillover load the next Tempo
+    event goes out unconditionally, after the load at its frame. The external source wins, as a
+    clock does (§3.6).
+52. **The order at frame 0.** After an Exact load: the re-asserted tempo (§10.1 item 1; none when
+    the host is followed, whose Tempo is the follower's, nor after a preset change under recall
+    Preset with the internal source), then the MIDI master's position, then rows 83 and 84
+    (item 2), then row 85 when it is to be sent, then, in any block, the state load, a restored
+    session's performance after it (note 54), and the host's Tempo and Transport (item 3, §4.4),
+    ahead of the block's host automation: the Host rank's front. Same-frame order changes no state
+    between these (a grid change at the restart's frame fires nothing, §6.3 note 25).
+53. **The MIDI master's position in the Standalone.** §10.1's list has no MIDI item, but the
+    Standalone follows a MIDI clock through the pedal's translator, and a device change runs an
+    Exact load while the master plays; the wrapper re-asserts §2.5 item 2 as the pedal does
+    (Locate with AtNextTick to the next tick's position, and Continue while the master runs) when
+    Receive MIDI clock is on and the translator knows the position.
+54. **A session restore is a restart of the same preset, Exact or not.** §10.1 lists it among the
+    restarts whose re-asserts carry the session's rows 83 and 84 and its tempo; before anything
+    plays (a project reload, a relaunch, a restore before `prepareToPlay`) it is an Exact load
+    with those re-asserts, and while audio runs a Spillover load, after which, at its frame, the
+    session's tempo (unless the host's is followed) and rows 83 and 84 go out, so the host's view
+    of the rows and the session's tempo hold either way. A preset change (a document, a factory
+    mode, A/B, Save's reload) instead sets rows 83 and 84 to the preset's stored values and tells
+    the host, and re-asserts no Subdivision.
+55. **The session.** BSWS v1 gains setting keys, which older readers skip: 6 the Tempo source, 7
+    Receive MIDI clock, 8 row 85, 9 the last committed tempo in ns (written in range only), 10
+    and 11 rows 83 and 84. §10.4 names the first three and the tempo; rows 83 and 84 are saved
+    too, since they are the live Subdiv and time mode a session restore re-asserts, and a host
+    restores a plugin's parameters from its state. A session without keys 9–11 plays the preset's
+    stored ones. Row 85 is a wrapper setting, not a registered parameter, sent to the engine as a
+    SetParam at the first frame after every restart (an Init'd or swapped-in engine holds its
+    default) and whenever it changes, before a state load in the same block.
+56. **Saving captures the performance, apart from edits.** The curation session lists what Save
+    will store (`PendingPerformance`, shown as `store` lines beside the leaves derive will change)
+    and counts it in `SaveChangesFile`, not in `Dirty`: it is what plays, not an edit. Under Keep
+    a document's stored tempo gives way to the running one when it is saved, as §10.3 says; under
+    recall Preset the document plays, and so saves, its own. `CurrentPreset()` carries the live
+    performance, so the audition render and A/B's return to B play it. The panel's **Store**
+    saves the document; the stored tempo beside the live one is the open document's, else the
+    playing preset's, and with no document open Store is disabled.
+57. **Momentary and dropped events.** Taps, clock ticks and transports always apply, as triggers
+    do; Tempo and Subdivision events from producers follow the restore generations, as parameter
+    events do. While the host's tempo is followed the wrapper drops every Tap and Tempo event
+    from other producers (the panel's TAP, a typed tempo, a scripted one) before stamping them.
+    A queue overflow loses them, counted, since no mirror holds them.
+58. **Receive MIDI clock gates the bytes in every format.** No plugin format delivers MIDI clock
+    (§3.1), so the setting is offered in the Standalone's menu only; JUCE's Standalone opens the
+    MIDI inputs chosen in Options > Audio/MIDI Settings, none by default.
+59. **The editor.** The BPM panel is a strip of the pedal view between the knobs and the document
+    (the Leaves view has none); the minimum window height grows from 600 to 660 pixels for it. Row
+    83's display, the first non-ASCII one a registered parameter shows (×1/4 … ×8), made
+    `FormatPlainText` read the display as UTF-8, and the text parser reads the rates (`x1/4`,
+    `×1/4`, `tap`), the time modes and the recall's two values.
+60. **Not built here** (row 86 and the synced-time display since built at the merge, note 71). T2's row 86 (`global.tempo_glide`) and the synced-time display (§5.3: "1/1
+    → 1/2 · 1,000 ms") join the panel with synced times: its settings menu and its strip carry
+    the hooks (`src/gui/TempoPanel.cpp`). The Time knob's routing (§6.4, note 15) is not in the
+    pedal view: its Time knob moves `macro.time` in every time mode, and rows 83 and 84 and the
+    panel's tempo are how the plugin sets the Subdiv, the time mode and the tempo. MIDI clock
+    keeps JUCE's arrival stamps (§10.2's DLL is a later refinement).
+
+**Tests** (§8.4): `plugin_wrapper` gains the bounce at 137.5 BPM from ppq 3.37 with Restart on
+play at host blocks of 37, 64, 441, 512, 1,024 and 4,096 frames, offline and with the spare, equal
+bit for bit to the engine fed the restart's re-asserts, the host's Tempo and the anchored Start
+(tick 81, 105 frames in), whose first CLOCK hit lands within a frame of the host's beat at ppq 4
+and none before; row 83 changed before play and re-asserted (E7); a second play at another ppq;
+the host's Start anchoring a running grid with the restart off; Stop, a loop's Locate, jumps either
+side of half a tick, the 1 µs hysteresis and a tempo change without a Locate; taps and typed tempos dropped
+while following; a recall while following, under Preset and under Keep; the Standalone's MIDI
+clock (ticks, FA, FB, FC, F2 after a Program Change, SysEx, Active Sensing and note-ons) equal to
+the engine fed one translator's events at block patterns {441}, {37}, {4096} and {512, 1, 77};
+Receive MIDI clock off; the master's position re-asserted after a device change; the session's
+tempo (typed, and a tapped one to the ns), rows and settings restored before and while playing, before `prepareToPlay` and across 96
+and 44.1 kHz, and an older session; Save capturing the performance; and the strip. The editor
+snapshot adds the strip's frames (`editor-tempo-*.png`).
+
+### 11.16 As built: the reviews' amendments and the merge (2026-10-10)
+
+T2's two reviews (determinism; the sound) and T3's (the plugin) were applied, each finding taken
+that survived the integrator's check, on each lane's own branch: revision 9 amended in place on
+`claude/tempo-core` (no third bump; its golden file re-minted at 9), T3's fixes on
+`claude/tempo-plugin` as producer code; then `claude/tempo-plugin` merged into
+`claude/tempo-core` and T3's hooks wired to T2's row 86 and the synced-time display. Continuing
+the numbering:
+
+61. **The synced maxima carry 2^-7 of headroom** (the sound review's finding 1, §5.3, D23):
+    `PostSyncMaxFrames(R)` is 4·R + (4·R >> 7) and `BaseSyncMaxFrames(R)` 5·R + (5·R >> 7),
+    193,500 and 241,875 frames at 48 kHz (4.031 s and 5.039 s). An inclusive 4·R put a `2/1` at
+    120 BPM (and a `1/1` at 60, a synced base `2/1` at 96) exactly on the fold boundary, so a
+    committed tempo a few ppm slow folded it to a whole note: under a MIDI clock at exactly
+    120 BPM, the hardware model's block-grid stamps folded it at 24 of 48 grid phases (Pc
+    0.0487 % slow, inside rule 3.2's band, never corrected), the computer model at 6 of 12
+    seeds, and deadband commits flipped it mid-song (*measured*, record of the review). The
+    boundary now lies at 119.07 BPM for `2/1` (59.53 for `1/1`): §5.3's worked example (a `2/1`
+    at 119 BPM, 193,613 frames, folds to 96,807) still holds, as does D23's consequence ("every
+    note value fits at 120 BPM and above"), now under a clock too. This changes D23's "4 s
+    inclusive" by 2^-7, in the service of its stated consequence; the review's alternative,
+    hysteresis on the fold, would still need the longer line and makes the fold depend on the
+    path, so it was not taken. *The owner may prefer it.* `sync_fold`'s sweep folds at the same
+    steps (its tempo steps pass 120 and 60 BPM by more than 0.78 %), so its render is unchanged.
+    The test: a `2/1` under a block-stamped 120 BPM clock at 16 grid phases never folds and
+    never crossfades, the phases whose fit is slow crossing the old boundary.
+62. **The post-delay line at the integer rate** (the determinism review's finding 2):
+    `PostLineFrames(sr)` = `PostSyncMaxFrames(R)` + 2 with R = `RoundHalfAwayI32(sr)`, the rate
+    the synced targets are computed at. Sized from the double rate, the line was 1–2 frames
+    short of 4·R for sr in [R − 0.5, R − 0.125), so the longest synced echoes played early there
+    (47,999.6 Hz: 191,998 for 192,000). Identical at every integer rate. PlanMemory's Bulk tier
+    at 48 kHz is 18,325,232 bytes (the line 1,548,016), 549,136 spare in the 18 MiB arena;
+    `firmware_arena_plan` and the memory-plan test pass.
+63. **The slew's speed is capped at 2^-10 frames a frame** (the sound review's finding 3,
+    §7.2, §7.4): `TapGlide::Step` clamps a slewing head (`slow`) to ±0x1p-10 instead of the
+    glide's 0.5, so a Drift bends the repeats at most 0.098 %, within §7.4's 0.1 % on any echo.
+    τ alone bends a change of Δ frames by Δ/(e·τ): a 0.34 % commit bent a 2 s echo 0.25 % and a
+    4 s one 0.50 %, a 0.58 % one a 2 s echo 0.43 % (*measured*). Echoes under about 0.8 s never
+    reach the cap and slew as before (`sync_clock`'s render is unchanged); a long one lands
+    later, a 650-frame Drift on a 4 s echo in about 14 s, its echoes up to 13.5 ms off the grid
+    meanwhile, the price of the budget. The ITCM cost is 16 bytes.
+64. **`Engine::Init` resets `PostParams`** (the determinism review's finding 1): its slew flag
+    and jump serial are set only when the synced target changes, and Init cleared the synced
+    cache without them, so after a Drift a re-Init'd engine (the plugin re-Inits on every rate
+    change) slewed the next `time_ms` move instead of gliding it. A fresh engine already held
+    the reset value; no golden render changes.
+65. **The corpus and the tests** (the determinism review's findings 3 and 4): `sync_post`
+    replaces its tempo change back to 140 BPM with a song recall under `tempo_recall` Preset, a
+    Spillover load of the same package, which only the recall's Jump crossfades (removing
+    `NoteTempo` after `SpilloverLoad` passed every test and the corpus before). `test_sync.cpp`
+    adds the recall's crossfade, two Pc changes at one frame taking the strongest class, a stage
+    falling silent mid-fade dropping the fade and the jump waiting, folds counted per octave, the
+    slew's cap on 1–4 s echoes, the 120 BPM clock, the longest echo at four non-integer rates and
+    the re-Init; each fails on the mutant it targets. Re-minted at 9: only `sync_post`'s render
+    moves (one more load event, its hash `f229eab8…`); the other 56 presets keep every hash,
+    per-second hash and counter, and no package changes, so the package-change line of note 45
+    stands as it was.
+66. **Not taken: classing a Step of a long synced echo by its size in frames** (the sound
+    review's finding 2). A Pc change within Pc >> 5 glides at the 50 ms pair, which bends a 1/1
+    or 2/1 echo by up to the glide's cap (5 semitones to an octave for 1.7–2.4 % changes,
+    *measured*). The review proposed crossfading such Steps when they move the target more than
+    R >> 7 frames. That contradicts D8 as the owner confirmed it ("smaller changes glide over
+    50 ms … Tempo-knob sweeps still bend like tape"), §7.1's classes and §7.2's accelerando, and
+    §7.4 budgets a Step at the glide's own pitch (s² at read speed s, ≤ 2.25×), which these
+    bends stay within. It is the owner's call, by ear on S12 (§11.8): a recall or a host change
+    within 3.1 % on a long echo swoops unless `tempo_glide`'s Off is extended to large Steps.
+67. **The host follower measures the engine's grid** (T3's review, finding 1; §4.4 step 3 as
+    amended): from each Start or Locate it advances the grid's position by every block's frames
+    at the tempo the engine was sent (`sentNs_`, after the 1 µs hysteresis), at the engine's
+    integer rate, and Locates, anchored, when the host's position is more than half a tick away.
+    T3 predicted each block from the host's own last position, which catches a jump inside one
+    block but never the engine's drift: the engine plays a block at the tempo of its first frame,
+    so a ramp left the CLOCK grid behind or ahead for good (60 to 180 BPM at 4,096-frame blocks
+    ended 28.5 ms late, 180 to 60 85.4 ms early, a stepped tempo map +18.6 ms, with no Locate;
+    *measured*). Now every ramp lands within half a tick, a few Locates on the way at large
+    blocks; a constant tempo still sends the Start alone. `HostFollower::Block` no longer takes
+    the host's rate.
+68. **A host tempo outside 20–300 BPM folds by octaves** (T3's review, finding 3; §4.4):
+    `tempo::HostTempoFromBpm` (`TempoProducer.cpp`, under the FP guard) doubles or halves
+    6·10¹⁰ / bpm (exactly) until it lies in the tempo range, at most four times, and the follower
+    reads the host's position in the folded quarters (ppq · 2^-octaves, exact), so a host at
+    400 BPM plays 200 with a quarter every two host beats, one at 15 BPM plays 30 with a quarter
+    each half beat, and every engine quarter stays on a host beat. Clamped, as T3 built it, the
+    grid drifted off the host's beats at once with the lock dot lit. The panel's badge says the
+    fold ("HOST ÷2", "HOST ×2"); beyond four octaves (below 1.25 or above 4,800 BPM) the tempo is
+    clamped, the lock dot is off and the alignment check of note 67 is skipped (it would Locate
+    every few blocks).
+69. **A vanished MIDI master no longer holds the grid** (T3's review, finding 2): the
+    Standalone's translator is reset when Receive MIDI clock turns off (it would not see the
+    master's Stop), and an Exact load re-asserts Continue only when the engine still followed a
+    running master in the last block (`ClockRunning`; §3.5's gap rule reverts it to Internal a
+    second after the last tick). A master gone without its Stop left `Running()` set, and every
+    later Exact load (a device or rate change) armed a Continue that held the CLOCK grid for a
+    tick that never came, until a relaunch. The Locate stays: it only sets the continue position
+    under Internal. *The pedal's re-asserts (§2.5 item 2) carry the same hazard: T4/T5 must gate
+    its Continue the same way.*
+70. **The merge.** T2's as-built section stays §11.14 (notes 35–48), T3's becomes §11.15 (its
+    notes renumbered 49–60), and this one follows. Conflicts: `TempoProducer.cpp` (both lanes'
+    producer functions), `BrainscapeParam.cpp` (the text parser reads row 63's note names and
+    rows 83–85's labels), this document's header and sections, `STATUS.md`. The merged tree needed
+    no further change to build and pass: row 63 registers as a leaf ahead of rows 83 and 84,
+    whose host indices move up one with the rest (note 47).
+71. **T3's hooks wired to T2.** Row 86, `global.tempo_glide`, is a wrapper device setting saved
+    in the session (BSWS setting key 12, which older readers skip), offered in the Sync menu
+    ("Crossfade to the new time" or "Glide, bending the repeats") and sent to the engine as a
+    SetParam at the first frame after every restart and whenever it changes, as row 85 is. The
+    strip gains a second line, SYNCED: row 63's echo and layer 0's `base_sync` through
+    `FormatSyncedTime` at the committed tempo, the live Subdiv and time mode and the engine's
+    integer rate (copied once per block), "Echo 1/4 · Subdiv ×1/2 → 1/2 · 1.00 s"; the editor's
+    minimum height grows from 660 to 676 pixels for it. The Leaves view dims
+    `post.delay.time_ms` while row 63 is set and the grain delay's `base_ms` while layer 0's
+    `base_sync` is, their tooltips naming what plays, and row 63's tooltip says what it plays.
+    Row 63's host value text stays the note name (§5.3).
+72. **Measured after the merge** (*measured*, the images' maps and the harness): the live image's
+    `.itcm_text` is 63,424 bytes, 2,048 spare with its 64-byte offset (parity 61,272, bench
+    61,128, bench_hooks 61,384); `BootCheck` and `ItcmCheck` pass on every image, the calls out
+    of ITCM unchanged; the firmware and emulated-M7 engine archives are byte-identical. The
+    pull request needs the package-change label and note 45's Package-change line, unchanged.
 
 ## 12. Evidence
 

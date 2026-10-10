@@ -157,6 +157,66 @@ the build's package is not the one saved), and the views open its document again
 session plays the default mode, as do sessions read by builds before the block, and recalling
 one closes the document.
 
+## Tempo, tap and host sync
+
+The strip under the pedal's knobs is the tempo core's panel (docs/design/clock.md §10, sound
+revisions 8 and 9): what drives CLOCK births and the synced delays.
+
+- **The tempo** to 0.1 BPM, with where it comes from: **HOST** (the plugin follows the host's
+  tempo and transport; **HOST ÷2** or **HOST ×2** when a host tempo outside 20-300 BPM plays
+  folded by octaves, a quarter every two host beats or two a beat), **MIDI** (the Standalone
+  follows a MIDI clock) or **INT**, a dot lit while a MIDI clock is locked or the host's
+  transport runs on its beats, and a beat LED from the grid's
+  position (the bar's first beat in the panel's yellow). Double-click the number to type a
+  tempo (20-300 BPM). **TAP** taps it: two taps set it, up to four are averaged, a pause
+  re-arms, and after a pause the first tap is the bar's first beat (clock.md §3.2).
+- **SUBDIV** (row 83, `perf.subdiv`) and **TIME** (row 84, `perf.time_mode`) are host
+  parameters, automatable: Subdiv's six positions are the Microcosm's rate multipliers, ×1/4
+  (whole notes) to ×8 (thirty-seconds) with TAP the quarter; Tempo time mode forces TAP. Both
+  are dimmed, and the panel says **unused here**, in a preset that reads no tempo (no `clock`
+  source, no synced time; clock.md §6.6). Typed values read `x1/4` or `×1/4`, `tap`, `free`,
+  `subdiv`, `tempo`.
+- **STORED** is the open document's stored tempo, else the playing preset's (amber when the
+  live one differs), and **Store** saves the document: **Save** captures the live tempo (whole µs), Subdiv and time
+  mode into its `performance`, and **Compile · lint** lists them as `store` lines beside the
+  leaves derive will change (clock.md §10.3).
+- **Sync** is the menu of the device settings, saved in the session: the **Tempo source**
+  (**Host**, the default: follow the host's tempo and transport whenever the host reports a
+  tempo, drop taps and typed tempos meanwhile, and behave as Internal when it reports none; or
+  **Internal**), **tempo recall** (row 85, `global.tempo_recall`: **Keep** the running tempo
+  across preset changes, the default, or play the preset's stored one), **tempo glide** (row 86,
+  `global.tempo_glide`: a tempo jump **crossfades** a synced echo to its new time, the default,
+  or **glides** it, bending the repeats like tape), and, in the Standalone, **Receive MIDI
+  clock** (on by default).
+- **SYNCED**, the strip's second line, is what the synced times play (clock.md §5.3): row 63
+  `post.delay.sync`'s echo and, when the mode sets it, layer 0's `base_sync`, each at the
+  committed tempo, scaled by the Subdiv and folded by octaves into its range ("Echo 1/4 ·
+  Subdiv ×1/2 → 1/2 · 1.00 s"). In the Leaves view `post.delay.time_ms` is dimmed while row 63
+  is set, and the grain delay's Time while `base_sync` is (each waits), and the tooltips say what
+  plays.
+
+Following the host (clock.md §4.4): at each host block the plugin sends a Tempo event when the
+host's tempo moved by 1 µs per quarter or more, and at a transport start a Tempo event and a
+Start anchored on the first 24-ppqn tick at or after the block's first frame (`HostAnchor`, a
+frame offset inside the block), so CLOCK hits land on the host's beats with nothing before the
+anchor; a loop wrap, a jump, or the engine's grid drifting more than half a tick from the
+host's position (the engine plays each block at the tempo of its first frame, so a tempo ramp
+leaves it behind or ahead) is a Locate anchored the same way, and a stop is a Stop. A host tempo
+outside 20-300 BPM plays folded by octaves (up to four), so the grid stays on the host's beats.
+**Restart on play** stays off by default: the anchor aligns the grid either way, and a bounce is
+reproducible at every host block size with it on.
+
+Across restarts (prepareToPlay, a change of device or rate, Restart on play, a session
+restore) the plugin re-asserts the committed tempo (the host's when it is followed) and rows 83
+and 84; a preset change plays the preset's stored Subdiv and time mode (and, under tempo recall
+Preset, its stored tempo). The session keeps the committed tempo, so the Standalone and a DAW set
+to Internal keep a tapped or typed tempo across relaunch, project reload and device changes.
+
+MIDI clock (the Standalone, clock.md §10.2): enable a MIDI input in **Options > Audio/MIDI
+Settings**; its F8, FA, FB, FC and F2 bytes go through the same translator as the pedal's
+(`brainscape::MidiClockParser`) at their sample positions. No plugin format delivers MIDI clock
+to a plugin.
+
 ## Load the VST3
 
 Copy the `Brainscape.vst3` folder to your VST3 folder (`C:\Program Files\Common Files\VST3`,
@@ -239,13 +299,33 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   block (an Exact restore saved back byte for byte, a recall over an open document, readers
   without the block, unknown and truncated blocks, a mode the build lacks or packages
   differently).
+  The tempo core's part (docs/design/clock.md §8.4): rows 83 and 84 as Subdivision events with
+  their typed names; a bounce at 137.5 BPM from ppq 3.37 with Restart on play equal, bit for bit,
+  to the engine fed the restart's re-asserts, the host's Tempo and its anchored Start at host
+  blocks of 37, 64, 441, 512, 1,024 and 4,096 frames (offline and with the spare), its first
+  CLOCK hit on the host's beat and none before the anchor, row 83 changed before play
+  re-asserted, and a second play at another ppq anchored again; the host's Start anchoring the
+  running grid with the restart option off; Stop, a loop's Locate, a jump within and past half a
+  tick, the tempo's 1 µs hysteresis; taps and typed tempos dropped while following and applied
+  under Internal or a host without a tempo; a preset recalled while following (the host's tempo
+  after the load), under Preset and under Keep; the Standalone's MIDI clock (ticks, Start, Stop,
+  Continue, Song Position after a Program Change, SysEx and Active Sensing among note-ons) equal
+  to the engine fed one translator's events at four block patterns, Receive MIDI clock off, and
+  the master's position re-asserted after a device change; the session's tempo (typed, and a
+  tapped one to the ns), rows and settings (restored before and while playing, before `prepareToPlay`, across rate changes, and
+  an older session without them); Save capturing the live tempo, Subdiv and time mode (and
+  storing the stored one under recall Preset); and the tempo strip (its display, TAP, the
+  segments, typing and the menu).
 - `plugin_editor_snapshot`: renders the editor offscreen to PNG files in
   `build/plugin/plugin/screenshots/`: both views with no document and with a scratch copy of
   `compiler/tests/data/engram.json` open (a knob waiting for pickup, a hand-edited leaf, Shift, A
   playing, a finished render) at the default, minimum, large and 2× sizes, a 44.1 kHz frozen
   frame with Restart on play on, a factory mode and a reserve chosen from the Modes menu (with
-  the menu itself drawn as the look and feel draws it, `editor-modes-menu.png`), and the
-  Standalone's editor after an audition render, which it also writes there.
+  the menu itself drawn as the look and feel draws it, `editor-modes-menu.png`), the
+  Standalone's editor after an audition render, which it also writes there, and the tempo strip
+  (`editor-tempo-*.png`: a clock preset's document under a tapped tempo with Subdiv ×2 in Subdiv
+  time mode, the host's 128 BPM followed at the default and minimum sizes, the Sync menu in a
+  plugin and in the Standalone, and the Standalone following a MIDI clock at 132 BPM).
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
   in-place audio in odd host blocks equals the engine reference, and that an offline export
@@ -277,13 +357,20 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   automatable, every other leaf is registered but not. A macro's fan-out updates the leaves the
   editor shows, but hosts are not told of it yet.
 - **Session state is a provisional binary v1** (exact plain values plus the input mode, levels,
-  the restart option and the effect volume, and a factory mode by reference): it holds no
+  the restart option and the effect volume, the tempo core's settings and performance (the
+  Tempo source, Receive MIDI clock, tempo recall, the committed tempo, Subdiv and time mode),
+  and a factory mode by reference): it holds no
   package, so a session saved with a document file (a copy of a factory mode included) plays the
   default mode. The preset library and the device link are not built, and the Leaves view's
   audition renders no event script (the Pedal view's **Render** runs the scripts).
 - **Not yet built from §4:** the wrapper-owned bypass with crossfade (JUCE's default bypass
   stops the engine, so trails do not continue), the resampled 48 kHz mode, MIDI CC mapping, LV2
   and CLAP.
+- **Tempo, not yet:** the pedal view's Time knob still moves `macro.time` in every time mode (the Microcosm's routing of it to the Subdiv zone
+  or the tempo, clock.md §6.4, is the control surface's); MIDI clock timestamps are the
+  device's arrival scaled into the block (a DLL mapping is a later refinement, §10.2). Host
+  bounces are reproducible only at a constant tempo with Restart on play (clock.md §4.4's list
+  of what is not).
 - **Event timing:** host automation, editor edits, freeze and triggers apply at the start of the
   next host block (VST3 hands automation over per block), MIDI at its sample offset.
   `BrainscapeProcessor::PostAt` applies an event at an absolute frame of the engine's timeline,

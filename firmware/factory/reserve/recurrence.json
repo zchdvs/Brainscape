@@ -3,8 +3,8 @@
   "id": "factory.recurrence",
   "name": "Recurrence",
   "family": "recall",
-  "sound_rev": 7,
-  "sound_hash": "a0d1eb6a93adffa72c8f25a402aef0282c7e1d8e5154c1cacc4bacbbb35f98b4",
+  "sound_rev": 9,
+  "sound_hash": "ad7c6200908c3354531ae53a0c2c2ffec685873ee3e3e98f8168bac3fe86e886",
   "meta": {
     "author": "Brainscape",
     "description": "Free-running loops at pitch and an octave down; Activity sets how many play.",
@@ -69,7 +69,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

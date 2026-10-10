@@ -3,8 +3,8 @@
   "id": "example.leaves",
   "name": "Every leaf",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "37a9826bd794d3794714d882830461f0ab7f1ceb744c30be7d31030539f3c4c6",
+  "sound_rev": 9,
+  "sound_hash": "4f782e852443502fadbf09e731ed5224b9490ec08170c5e371f16fd67501baf6",
   "meta": {
     "author": "",
     "description": "",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 2000,
       "fb": 0.9,
-      "mix": 0.5
+      "mix": 0.5,
+      "sync": 0
     },
     "reverb": {
       "time": 1,

@@ -98,7 +98,10 @@ enum class ParamId : uint32_t {
   StepCount      = 60,  // scheduler.steps.count, integer
   LayerMix       = 61,  // layer_mix
   DryDuckDepth   = 62,  // dry_duck.depth
-  DelaySync      = 63,  // post.delay.sync: 0 off, then tempo divisions (discrete)
+  DelaySync      = 63,  // post.delay.sync: 0 off, then §5.2's sixteen note values by duration
+                        // (docs/design/clock.md; a Leaf row since sound revision 9): the post
+                        // delay plays the note value at the committed tempo, folded by octaves
+                        // into 10 ms to a little over 4 s, instead of post.delay.time_ms
   ReverbMode     = 64,  // post.reverb.mode: bright room, dark medium, large hall, ambient
   // ── Modulators (W3) ──────────────────────────────────────────────────────────────
   Modulator0RateHz = 65,  // modulator0.rate_hz
@@ -122,6 +125,19 @@ enum class ParamId : uint32_t {
   // ── Device settings (design §3.8): outside presets, kept by every load ───────────
   TriggerOffset  = 81,  // global.trigger_offset: the calibration gesture's offset (phase D)
   EffectVolumeDb = 82,  // global.effect_volume_db: Shift+Mix, the player's wet level
+  // ── The tempo core (sound revision 8, docs/design/clock.md §10.4): appended after 82, as
+  // host indices require. 83 and 84 act through Subdivision events (event 10), whose host face
+  // they are; 85 is a device setting the engine reads at a Spillover load (§2.5).
+  PerfSubdiv     = 83,  // perf.subdiv: the Subdiv knob's position 0-5 (x1/4, x1/2, TAP, x2,
+                        // x4, x8, the Microcosm's CC#5 order); the wrapper sends §5.1's code
+  PerfTimeMode   = 84,  // perf.time_mode: 0 Free, 1 Subdiv, 2 Tempo (Subdivision field 1)
+  TempoRecall    = 85,  // global.tempo_recall: 0 Keep (the running tempo crosses a Spillover
+                        // load), 1 Preset (the preset's stored tempo applies under the
+                        // Internal source)
+  // ── Synced times (sound revision 9, clock.md §7.1, §10.4): a device setting the engine reads
+  // where it classifies a change of the committed tempo.
+  TempoGlide     = 86,  // global.tempo_glide: 0 Off (a tempo Jump crossfades the synced post
+                        // delay), 1 On (it glides, the tape swoop)
 
   // The C++ spellings of IDs 4 and 8 before their renames, kept so code written against them
   // (the firmware bring-up branch) still builds; new code uses WetTrimDb and TransposeSt.
@@ -142,7 +158,10 @@ enum class ParamId : uint32_t {
 //
 // A Reserved row is an unbuilt feature's ID under its final name; it takes its kind in the
 // pull request that builds the feature. A Retired row keeps its ID with a null name and is
-// never reused. The engine stores Leaf and Global rows only.
+// never reused. The engine stores Leaf and Global rows only. A stored row rebuilds its domain
+// when it changes, except global.tempo_recall (85) and global.tempo_glide (86), which have none:
+// the engine reads each where it acts, at a Spillover load and where it classifies a change of
+// the committed tempo (docs/design/clock.md §7.1, §10.4).
 enum class ParamKind : uint8_t { Leaf, Macro, Performance, Global, Reserved, Retired };
 
 // What a change to a row rebuilds (design §4.1, §7.2): a bitmask, since one value can feed
@@ -179,8 +198,8 @@ struct ParamDescriptor {
 //
 // Range notes: Feedback reaches 1.1, the design's bounded self-oscillation (§2.3, §11).
 // "global.mix" is outside the macro namespace: no macro may target it (design §3.1).
-// FilterCutoffHz's default sits at its max = exact stage bypass. Rows 63 and 65-68 have
-// provisional ranges (the division list and the modulators are designed with W2 and W3).
+// FilterCutoffHz's default sits at its max = exact stage bypass. Row 63's 0-16 are clock.md
+// §5.2's codes; rows 65-68 have provisional ranges (the modulators are designed with W3).
 inline constexpr ParamDescriptor kParamTable[] = {
     // id                         name                            min      max       def       unit  kind                    domain                         since
     {ParamId::DelayMs,            "layer0.position.base_ms",      1.0f,    5000.0f,  250.0f,   "ms", ParamKind::Leaf,        kDomainGranular,               1},
@@ -245,7 +264,7 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::StepCount,          "scheduler.steps.count",        1.0f,    16.0f,    16.0f,    "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::LayerMix,           "layer_mix",                    0.0f,    1.0f,     0.5f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::DryDuckDepth,       "dry_duck.depth",               0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainMix,                    0},
-    {ParamId::DelaySync,          "post.delay.sync",              0.0f,    16.0f,    0.0f,     "",   ParamKind::Reserved,    kDomainPost,                   0},
+    {ParamId::DelaySync,          "post.delay.sync",              0.0f,    16.0f,    0.0f,     "",   ParamKind::Leaf,        kDomainPost,                   9},
     {ParamId::ReverbMode,         "post.reverb.mode",             0.0f,    3.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainPost,                   0},
     {ParamId::Modulator0RateHz,   "modulator0.rate_hz",           0.01f,   10.0f,    0.4f,     "Hz", ParamKind::Reserved,    kDomainGranular,               0},
     {ParamId::Modulator0Depth,    "modulator0.depth",             0.0f,    1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainGranular,               0},
@@ -265,6 +284,10 @@ inline constexpr ParamDescriptor kParamTable[] = {
     {ParamId::PerfLoopLevel,      "perf.loop_level",              0.0f,    1.0f,     1.0f,     "",   ParamKind::Reserved,    kDomainNone,                   0},
     {ParamId::TriggerOffset,      "global.trigger_offset",        -1.0f,   1.0f,     0.0f,     "",   ParamKind::Reserved,    kDomainDetector,               0},
     {ParamId::EffectVolumeDb,     "global.effect_volume_db",      -24.0f,  12.0f,    0.0f,     "dB", ParamKind::Global,      kDomainWet,                    0},
+    {ParamId::PerfSubdiv,         "perf.subdiv",                  0.0f,    5.0f,     2.0f,     "",   ParamKind::Performance, kDomainNone,                   0},
+    {ParamId::PerfTimeMode,       "perf.time_mode",               0.0f,    2.0f,     0.0f,     "",   ParamKind::Performance, kDomainNone,                   0},
+    {ParamId::TempoRecall,        "global.tempo_recall",          0.0f,    1.0f,     0.0f,     "",   ParamKind::Global,      kDomainNone,                   0},
+    {ParamId::TempoGlide,         "global.tempo_glide",           0.0f,    1.0f,     0.0f,     "",   ParamKind::Global,      kDomainNone,                   0},
 };
 inline constexpr size_t kNumParams = sizeof(kParamTable) / sizeof(kParamTable[0]);  // every row
 

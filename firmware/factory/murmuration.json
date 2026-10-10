@@ -3,8 +3,8 @@
   "id": "factory.murmuration",
   "name": "Murmuration",
   "family": "reverie",
-  "sound_rev": 7,
-  "sound_hash": "1417835778fe02f9c504ff78fcf3548e74aa34caacb0269e5202f7760ef37d1f",
+  "sound_rev": 9,
+  "sound_hash": "489f9be3feb9567ad865a862cb5173100b6b55f98af91dcd7af7dc53140bb4b3",
   "meta": {
     "author": "Brainscape",
     "description": "A dense, randomized grain cloud that flocks around the playing.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.7,

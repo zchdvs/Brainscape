@@ -3,8 +3,8 @@
   "id": "corpus.voice_limit",
   "name": "Voice limit",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "624072f47399330d0850910b6813457387daf6162c85d31ffd56bcfefab52df2",
+  "sound_rev": 9,
+  "sound_hash": "10ae39167914eb06faf4c31e9e79801063b46d814c784d51ebffbe367250ceff",
   "meta": {
     "author": "",
     "description": "Golden corpus: a dense cloud held to six voices, onset bursts of five stealing the oldest (sound revision 7).",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

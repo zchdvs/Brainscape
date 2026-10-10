@@ -88,15 +88,18 @@ int main(int argc, char* argv[]) {
     Check(host->checkBusesLayoutSupported(layout), "mono in, stereo out supported");
     layout.inputBuses.getReference(0) = juce::AudioChannelSet::stereo();
 
-    bool haveDelay = false, haveFreeze = false;
+    bool haveDelay = false, haveFreeze = false, haveSubdiv = false;
     for (auto* p : host->getParameters()) {
       haveDelay |= p->getName(64) == "Delay time";
       haveFreeze |= p->getName(64) == "Freeze";
+      haveSubdiv |= p->getName(64) == "Subdivision";
     }
     // The Leaf rows, freeze, the eight macros, the expression pedal, the effect volume
-    // (mode-compiler.md §9.2), and the bypass JUCE's VST3 wrapper adds.
-    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 12 && haveDelay && haveFreeze,
-          juce::String(host->getParameters().size()) + " host parameters, engine and freeze present");
+    // (mode-compiler.md §9.2), perf.subdiv and perf.time_mode (docs/design/clock.md §10.4), and
+    // the bypass JUCE's VST3 wrapper adds.
+    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 14 && haveDelay && haveFreeze &&
+              haveSubdiv,
+          juce::String(host->getParameters().size()) + " host parameters, engine, freeze and Subdiv present");
 
     // A session state with exact values: the record's two awkward ones (companion-app
     // record §2.5) on top of the busy preset.

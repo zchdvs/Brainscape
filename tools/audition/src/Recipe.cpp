@@ -52,6 +52,11 @@ const char* EventTypeName(Engine::EventType t) {
     case Engine::EventType::SpilloverLoad: return "SpilloverLoad";
     case Engine::EventType::MacroMove: return "MacroMove";
     case Engine::EventType::Expression: return "Expression";
+    case Engine::EventType::Tap: return "Tap";
+    case Engine::EventType::Tempo: return "Tempo";
+    case Engine::EventType::ClockTick: return "ClockTick";
+    case Engine::EventType::Transport: return "Transport";
+    case Engine::EventType::Subdivision: return "Subdivision";
   }
   return "unknown";
 }

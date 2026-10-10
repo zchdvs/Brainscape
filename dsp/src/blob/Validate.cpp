@@ -32,11 +32,13 @@ bool CheckSchedule(const ModeSchedule& s, PresetDiagnostic* d) noexcept {
   if (s.layerCount < 1u || s.layerCount > kMaxModeLayers) {
     return Fail(d, PresetError::ModeCount, kChunkSchd);
   }
-  if (static_cast<uint8_t>(s.subdiv) >= kSubdivisionCount ||
-      static_cast<uint8_t>(s.stepOrder) >= kStepOrderCount) {
+  if (static_cast<uint8_t>(s.stepOrder) >= kStepOrderCount) {
     return Fail(d, PresetError::ModeEnum, kChunkSchd);
   }
-  if (!AllZero(s.pad, sizeof s.pad)) return Fail(d, PresetError::ModePadding, kChunkSchd);
+  // Byte 2 was `subdiv`, withdrawn for the performance state's (docs/design/clock.md §2.4, D14).
+  if (s.reserved != 0u || !AllZero(s.pad, sizeof s.pad)) {
+    return Fail(d, PresetError::ModePadding, kChunkSchd);
+  }
   return true;
 }
 
@@ -412,7 +414,7 @@ bool CheckStat(const PresetState& s, PresetDiagnostic* d) noexcept {
   const PerformanceState& p = s.performance;
   if (p.reverse > 1u || static_cast<uint8_t>(p.timeMode) >= kTimeModeCount ||
       static_cast<uint8_t>(p.subdiv) >= kSubdivisionCount ||
-      static_cast<uint8_t>(p.tempoSource) >= kTempoSourceCount ||
+      p.reserved != 0u ||  // was tempo_source, a device setting since clock.md's D3
       p.usPerQuarter < kMinUsPerQuarter || p.usPerQuarter > kMaxUsPerQuarter) {
     return Fail(d, PresetError::Performance);
   }

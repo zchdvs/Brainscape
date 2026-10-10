@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "brainscape/Mode.h"
 #include "detail/Canonical.h"
 #include "detail/DetMath.h"
 #include "detail/FpEnvGuard.h"
@@ -117,6 +118,10 @@ constexpr ParamDisplay kDisplayTable[] = {
     {ParamId::PerfLoopLevel,       G::Performance, "Loop level",                   "Loop",     T::Linear,  K::Percent,      0,  kAuto},
     {ParamId::TriggerOffset,       G::Device,      "Trigger offset",               "Offset",   T::Linear,  K::Signed,       0,  kLeaf},
     {ParamId::EffectVolumeDb,      G::Device,      "Effect volume",                "Volume",   T::Linear,  K::Decibels,     0,  kAuto},
+    {ParamId::PerfSubdiv,          G::Performance, "Subdivision",                  "Subdiv",   T::Linear,  K::SubdivPosition, 6, kAutoStep},
+    {ParamId::PerfTimeMode,        G::Performance, "Time mode",                    "Time mode", T::Linear, K::TimeMode,     3,  kAutoStep},
+    {ParamId::TempoRecall,         G::Device,      "Tempo recall",                 "Recall",   T::Linear,  K::TempoRecall,  2,  kLeafStep},
+    {ParamId::TempoGlide,          G::Device,      "Tempo glide",                  "Glide",    T::Linear,  K::OffOn,        2,  kLeafStep},
 };
 static_assert(sizeof(kDisplayTable) / sizeof(kDisplayTable[0]) == kNumParams,
               "every descriptor needs a display row");
@@ -138,7 +143,9 @@ constexpr bool DisplayTableMatchesDescriptors() {
     // one by one (mode-compiler.md §4.3).
     if (((m.flags & kParamDiscrete) != 0u) != (m.steps >= 2u)) return false;
     const bool integer = m.kind == DisplayKind::Count || m.kind == DisplayKind::Division ||
-                         m.kind == DisplayKind::ReverbMode;
+                         m.kind == DisplayKind::ReverbMode ||
+                         m.kind == DisplayKind::SubdivPosition ||
+                         m.kind == DisplayKind::TimeMode || m.kind == DisplayKind::TempoRecall;
     if (integer && static_cast<float>(m.steps - 1u) != d.max - d.min) return false;
     if (((m.flags & kParamAutomatable) != 0u) != HostAutomatable(d)) return false;
   }
@@ -271,6 +278,36 @@ void PutFixed(Text* t, double x, uint32_t decimals, bool plus, const char* suffi
   t->Put(suffix);
 }
 
+// §5.2's note values by code, as row 63 shows them (clock.md §5.4).
+constexpr const char* kDivisionNames[] = {"Off",  "1/32", "1/16T", "1/16", "1/8T", "1/16D",
+                                          "1/8",  "1/4T", "1/8D",  "1/4",  "1/2T", "1/4D",
+                                          "1/2",  "1/1T", "1/2D",  "1/1",  "2/1"};
+static_assert(sizeof kDivisionNames / sizeof kDivisionNames[0] == kMaxSyncDivision + 1u &&
+                  kMaxSyncDivision + 1u == tempo::kSyncCodes,
+              "a name a code");
+
+// The straight note value of 3 · 2^q ticks, 2^(q - 5) whole notes: "1/32" at q = 0, "1/1" at 5,
+// "2/1" at 6, "1/64" at -1.
+void PutStraight(Text* t, int32_t q) noexcept {
+  if (q < -20) q = -20;  // never: a duration at the folds' and Subdivs' extremes is within ±10
+  if (q > 20) q = 20;
+  char           digits[12];
+  uint32_t       n = 0;
+  const uint32_t v = 1u << static_cast<uint32_t>(q <= 5 ? 5 - q : q - 5);
+  for (uint32_t w = v; w != 0u; w /= 10u) digits[n++] = static_cast<char>('0' + w % 10u);
+  if (q <= 5) t->Put("1/");
+  while (n > 0u) t->Put(digits[--n]);
+  if (q > 5) t->Put("/1");
+}
+
+// A note value of odd · 2^p ticks (odd 1, 3 or 9), named as §5.2 names them: 3 · 2^p straight,
+// 2^p a triplet of the straight 3 · 2^(p - 1), 9 · 2^p dotted, of the straight 3 · 2^(p + 1).
+void PutNote(Text* t, uint32_t odd, int32_t p) noexcept {
+  if (odd == 3u) return PutStraight(t, p);
+  PutStraight(t, odd == 1u ? p - 1 : p + 1);
+  t->Put(odd == 1u ? 'T' : 'D');
+}
+
 void FormatMs(Text* t, float v) noexcept {
   if (v < 10.0f) return PutFixed(t, v, 2, false, " ms");
   if (v < 100.0f) return PutFixed(t, v, 1, false, " ms");
@@ -301,6 +338,44 @@ void FormatMorph(Text* t, float v) noexcept {
 }
 
 // ── Bodies of the entry points (detail/FpEnvGuard.h explains the split) ───────────
+
+BRAINSCAPE_FP_BODY size_t FormatSyncedTimeBody(tempo::SyncTarget target, uint8_t code,
+                                               uint32_t nsPerQuarter, uint8_t subdiv,
+                                               uint8_t timeMode, uint32_t rate, char* out,
+                                               size_t outSize) noexcept {
+  Text t(out, outSize);
+  if (code == 0u) {
+    t.Put("Off");
+    return t.Finish();
+  }
+  const tempo::SyncedTime d =
+      tempo::SyncedDuration(target, code, nsPerQuarter, subdiv, timeMode, rate);
+  if (d.frames == 0u) return t.Finish();  // an input out of range: no text
+  // §5.1's rates by code (TAP, ×1/4, ×1/2, ×2, ×4, ×8), the × in UTF-8.
+  static constexpr const char* kRates[] = {"TAP", "\xC3\x97" "1/4", "\xC3\x97" "1/2",
+                                           "\xC3\x97" "2", "\xC3\x97" "4", "\xC3\x97" "8"};
+  t.Put(kDivisionNames[code]);
+  if (d.subdiv != tempo::kSubdivTap) {
+    t.Put(" \xC2\xB7 Subdiv ");
+    t.Put(kRates[d.subdiv]);
+  }
+  if (d.subdiv != tempo::kSubdivTap || d.octaves != 0) {
+    // What plays: the note's ticks as odd · 2^p, times the Subdiv's s / 24 (3 · 2^k ticks, so
+    // 2^(k - 3)) and the fold's 2^octaves.
+    uint32_t odd = tempo::NoteTicks(code);
+    int32_t  p   = d.octaves - 3;
+    while ((odd & 1u) == 0u) {
+      odd >>= 1u;
+      ++p;
+    }
+    for (uint32_t s = tempo::SubdivTicks(d.subdiv) / 3u; s > 1u; s >>= 1u) ++p;
+    t.Put(" \xE2\x86\x92 ");
+    PutNote(&t, odd, p);
+  }
+  t.Put(" \xC2\xB7 ");
+  FormatMs(&t, static_cast<float>(static_cast<double>(d.frames) * 1000.0 / rate));
+  return t.Finish();
+}
 
 BRAINSCAPE_FP_BODY float PlainFromNormalizedBody(ParamId id, float normalized) noexcept {
   const ParamDescriptor* d = FindParam(id);
@@ -453,15 +528,31 @@ BRAINSCAPE_FP_BODY size_t FormatPlainBody(ParamId id, float plain, char* out,
       break;
     }
     case DisplayKind::Division: {
+      // docs/design/clock.md §5.2, §5.4: the note value's name, its triplet or dotted suffix in
+      // upper case ("1/8D", "1/16T"); the host's text stays the code's name whatever the tempo.
       const int32_t n = detmath::RoundHalfAwayI32(v);
-      if (n <= 0) {
-        t.Put("Off");
-      } else {
-        t.Put("Div ");
-        PutFixed(&t, n, 0, false);
-      }
+      t.Put(kDivisionNames[n < 0 ? 0 : (n > 16 ? 16 : n)]);
       break;
     }
+    case DisplayKind::SubdivPosition: {
+      // §5.1: the knob's positions in the Microcosm's CC#5 order, written as rates (x, U+00D7
+      // in UTF-8), never as note values.
+      static constexpr const char* kPositions[] = {"\xC3\x97" "1/4", "\xC3\x97" "1/2", "TAP",
+                                                   "\xC3\x97" "2",   "\xC3\x97" "4",
+                                                   "\xC3\x97" "8"};
+      const int32_t n = detmath::RoundHalfAwayI32(v);
+      t.Put(kPositions[n < 0 ? 0 : (n > 5 ? 5 : n)]);
+      break;
+    }
+    case DisplayKind::TimeMode: {
+      static constexpr const char* kModes[] = {"Free", "Subdiv", "Tempo"};
+      const int32_t n = detmath::RoundHalfAwayI32(v);
+      t.Put(kModes[n < 0 ? 0 : (n > 2 ? 2 : n)]);
+      break;
+    }
+    case DisplayKind::TempoRecall:
+      t.Put(v >= 0.5f ? "Preset" : "Keep");
+      break;
   }
   return t.Finish();
 }
@@ -493,6 +584,14 @@ size_t FormatPlain(ParamId id, float plain, char* out, size_t outSize) noexcept 
   if (out == nullptr || outSize == 0) return 0;
   const detail::FpEnvGuard guard;
   return FormatPlainBody(id, plain, out, outSize);
+}
+
+size_t FormatSyncedTime(tempo::SyncTarget target, uint8_t code, uint32_t nsPerQuarter,
+                        uint8_t subdiv, uint8_t timeMode, uint32_t rate, char* out,
+                        size_t outSize) noexcept {
+  if (out == nullptr || outSize == 0) return 0;
+  const detail::FpEnvGuard guard;
+  return FormatSyncedTimeBody(target, code, nsPerQuarter, subdiv, timeMode, rate, out, outSize);
 }
 
 }  // namespace brainscape

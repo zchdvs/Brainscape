@@ -30,8 +30,19 @@ namespace brainscape {
 // position reference ages, as leaves 29 and 30; repeat 1 and decay 0 keep revision 5's bits.
 // 7: wave 1's voice count (mode-compiler.md §7.5 R12): at most layer0.voice_count (leaf 31)
 // voices sound, free-running births beyond it refused and triggers stealing the oldest; 64
-// keeps revision 6's bits.
-inline constexpr uint32_t kSoundRevision = 7;
+// keeps revision 6's bits. 8: the tempo core (docs/design/clock.md §11.3): events 6-10 (tap,
+// tempo, MIDI clock, transport, subdivision) on an integer phasor with a tap chain and a clock
+// follower; the stored performance state played (its tempo, time mode and subdivision, re-coded
+// so 0 is TAP), Restart starting from it; CLOCK births on the grid, triggers with ordinal 3;
+// rows 83-85. No mode before it lists `clock`, so every earlier preset keeps revision 7's bits.
+// 9: synced times (docs/design/clock.md §11.3): post.delay.sync (row 63) a leaf playing §5.2's
+// note values at the committed tempo and effective Subdiv, folded by octaves into 10 ms to 4 s
+// and 2^-7 of it, on a line that long, and a layer's base_sync (folded into 1 ms to 5 s and 2^-7
+// of it); a jump of the committed tempo or a discrete change crossfades the post delay's two heads
+// over 1,024 frames, a clock's deadband commit slews it (τ = 1 s, at most 2^-10 frames a frame),
+// any other change glides; global.tempo_glide (row 86) glides jumps. Row 63 at 0 and base_sync off
+// play revision 8's bits.
+inline constexpr uint32_t kSoundRevision = 9;
 
 // The toolchain that compiled this dsp/ library (profile §5.12): compiler, version,
 // target and the floating-point flags. For triage only, carried in the parity reply and

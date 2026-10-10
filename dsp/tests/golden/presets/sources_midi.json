@@ -3,8 +3,8 @@
   "id": "corpus.sources_midi",
   "name": "Sources MIDI",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "bd6d4e95817672800f1df6be0483e8ad6391d86bb777bbdcca76f0de125095c9",
+  "sound_rev": 9,
+  "sound_hash": "5ed336028fd6b34c6cc6843ea570a5e652be52b81ea9a60208373a5f1d9e4364",
   "meta": {
     "author": "",
     "description": "Golden corpus: MIDI notes trigger and the footswitch does not (sound revision 4), over one free-running voice, in bursts of 3 every 40 ms.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

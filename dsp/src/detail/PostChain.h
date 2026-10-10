@@ -7,6 +7,7 @@
 
 #include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
+#include "detail/Placement.h"
 #include "detail/Smoother.h"
 
 // Post chain (docs/design/grain-engine.md §2.6) and the fixed feedback taming
@@ -149,22 +150,32 @@ struct StereoDelaySlice {
 // the glide existed.
 //
 // The head is base + frac with frac in [-0.5, 0.5): the fraction keeps full float
-// precision anywhere in a 2 s line, a retarget never moves the head, and the head lands
+// precision anywhere in a 4 s line, a retarget never moves the head, and the head lands
 // from either side without the stall a fraction just below 1 would hit.
+//
+// Since sound revision 9 (docs/design/clock.md §7.2) the pair has a second coefficient set, a
+// slew with τ = 1 s per pole, which a synced target's Drift (a clock's deadband commit) selects
+// (`slow`); every other retarget glides with the 50 ms pair, and a later retarget replaces the
+// choice. The caller passes the chosen pair to Step. The slew's speed is capped at 2^-10 frames a
+// frame, so a Drift bends the repeats at most 0.098 % (§7.4's 0.1 %) on any echo: its τ alone
+// bends a change of Δ frames by Δ/(e·τ), past the budget on echoes longer than about 0.8 s.
 struct TapGlide {
-  static constexpr float kMaxSpeed = 0.5f;      // frames of head movement per frame
-  static constexpr float kSnap     = 0x1p-16f;  // frames from the target that count as on it
+  static constexpr float kMaxSpeed  = 0.5f;      // frames of head movement per frame
+  static constexpr float kSlewSpeed = 0x1p-10f;  // the slew's cap: 0.098 % of playback speed
+  static constexpr float kSnap      = 0x1p-16f;  // frames from the target that count as on it
 
   uint32_t target = 2;    // frames behind the write head, in [2, len - 1]
   uint32_t base   = 2;    // the head: base + frac frames behind the write head
   float    frac   = 0.f;
   float    lead   = 0.f;  // the first pole's position minus target
   bool     moving = false;
+  bool     slow   = false;  // the last retarget was a Drift: Step takes the slew's pair
 
   void Prime(uint32_t t) noexcept {
     target = base = t;
     frac = lead = 0.f;
     moving = false;
+    slow   = false;
   }
   void Retarget(uint32_t t) noexcept {
     if (t == target) return;
@@ -178,9 +189,10 @@ struct TapGlide {
     lead *= keep;
     FlushTiny(lead);
     const float pos = (static_cast<float>(base) - static_cast<float>(target)) + frac;
-    float speed     = coef * (lead - pos);
-    if (speed > kMaxSpeed) speed = kMaxSpeed;
-    if (speed < -kMaxSpeed) speed = -kMaxSpeed;
+    float       speed = coef * (lead - pos);
+    const float cap   = slow ? kSlewSpeed : kMaxSpeed;
+    if (speed > cap) speed = cap;
+    if (speed < -cap) speed = -cap;
     float f = frac + speed;  // in [-1, 1); the carries below are exact (Sterbenz)
     if (f >= 0.5f) {
       f -= 1.0f;
@@ -265,6 +277,16 @@ struct PostParams {
                                // dry term always survives (chorus, not vibrato);
                                // 0 = exactly transparent
   float delayFrames  = 16800;  // post.delay.time_ms in frames; the tap glides to it (TapGlide)
+  // Synced times (sound revision 9, docs/design/clock.md §6.1, §7): with post.delay.sync nonzero,
+  // the target in exact integer frames (§2.3, folded into 10 ms to tempo::PostSyncMaxFrames, a
+  // little over 4 s, §5.3), which replaces delayFrames; 0 when unsynced. The engine raises
+  // delayJump for a change of the target the head must crossfade to (a Jump of the committed
+  // tempo, or a discrete change: the code, the effective Subdiv, the fold, sync on or off), and
+  // sets delaySlow when the target's last change was a Drift, which the head slews to (τ = 1 s, at
+  // most 2^-10 frames a frame); any other change glides.
+  uint32_t delaySyncFrames = 0;
+  uint32_t delayJump       = 0;
+  bool     delaySlow       = false;
   float delayFb      = 0.3f;
   float delayMix     = 0.0f;   // equal-power; 0 = exactly transparent
   float reverbTime   = 0.5f;
@@ -279,6 +301,11 @@ struct PostParams {
 
 class PostChain {
  public:
+  // A jump of the post delay's target (docs/design/clock.md §7.3): the outgoing head and the
+  // incoming one, primed on the new target, mixed over this many frames with gains
+  // (1024 - n) / 1024 and n / 1024 (n = 1-1024), exact multiples of 2^-10. 21.3 ms at 48 kHz.
+  static constexpr uint32_t kXfadeFrames = 1024;
+
   // Warm arena: mod lines + reverb tank. Bulk arena: the stereo post-delay buffer.
   static uint32_t WarmFloats(double sampleRate) noexcept;
   static uint32_t BulkFloats(double sampleRate) noexcept;
@@ -295,9 +322,36 @@ class PostChain {
   // (its buffers freeze while bypassed — normal bypass semantics).
   void Process(const PostParams& p, uint32_t numFrames, float* l, float* r) noexcept;
 
+  // Crossfades started since Init (Engine::TempoCounts' crossfades, clock.md §7.3).
+  uint64_t Crossfades() const noexcept { return crossfades_; }
+
  private:
   void     UpdateFilterCoefs(float cutoff, float res, float morph) noexcept;  // control rate
-  uint32_t DelayTarget(float delayFrames) const noexcept;
+  // The head's target: the synced frames when the engine gives them, else post.delay.time_ms's,
+  // each clamped into the line.
+  uint32_t DelayTarget(const PostParams& p) const noexcept;
+  // A crossfade from the head as it is to a head primed on `tap` (§7.3).
+  void StartFade(uint32_t tap) noexcept {
+    pdOut_ = pdTap_;
+    pdTap_.Prime(tap);
+    pdFadePos_ = 0;
+    pdFading_  = true;
+    ++crossfades_;
+  }
+  // One frame of a head: its glide or slew step when it moves, then its read.
+  void HeadFrame(TapGlide& head, float* l, float* r) noexcept {
+    if (head.moving) {
+      head.Step(head.slow ? pdSlewCoef_ : pdGlideCoef_, head.slow ? pdSlewKeep_ : pdGlideKeep_);
+      head.Read(pd_, l, r);
+    } else {
+      const float* f = pd_.Frame(head.base);
+      *l             = f[0];
+      *r             = f[1];
+    }
+  }
+  // One frame of a crossfade (§7.3), out of line: it runs for 1,024 frames a jump, and the head
+  // frame it repeats is the per-sample loop's, which stays inline.
+  BRAINSCAPE_NOINLINE void FadeFrame(float* tapL, float* tapR) noexcept;
 
   double sr_ = 48000.0;
 
@@ -307,10 +361,22 @@ class PostChain {
   float      modCenter_ = 0.f, modMaxExc_ = 0.f;  // frames, fixed at Init
   Smoother   modDepthSm_{};
 
-  // Post delay (stereo, Bulk) with damped, DC-blocked regeneration.
+  // Post delay (stereo, Bulk) with damped, DC-blocked regeneration. The line holds
+  // tempo::PostSyncMaxFrames(R) + 2 frames since sound revision 9 (clock.md §5.3): a synced target
+  // reaches 4·R and 2^-7 of it, post.delay.time_ms keeps its clamp at round(2·R) - 1, and a read
+  // `back` frames behind the write head returns the same frame in the longer line.
   StereoDelaySlice pd_{};
-  TapGlide   pdTap_{};
+  TapGlide   pdTap_{};  // the head; during a crossfade the incoming one
+  TapGlide   pdOut_{};  // during a crossfade, the outgoing head, still reading and gliding
+  uint32_t   pdTimeMax_ = 2;      // post.delay.time_ms's clamp: round(2·R) - 1, fixed at Init
+  uint32_t   pdJumpSeen_ = 0;     // PostParams::delayJump as last seen
+  uint32_t   pdFadePos_  = 0;     // frames of the crossfade done, 1-kXfadeFrames
+  uint32_t   pdPendingTap_ = 0;   // the latest jump's target while a fade runs
+  bool       pdFading_  = false;
+  bool       pdPending_ = false;  // a jump waits for the fade in progress to end
+  uint64_t   crossfades_ = 0;
   float      pdGlideCoef_ = 1.f, pdGlideKeep_ = 0.f;  // fixed at Init
+  float      pdSlewCoef_ = 1.f, pdSlewKeep_ = 0.f;    // fixed at Init: τ = 1 s (clock.md §7.2)
   float      pdLpL_ = 0.f, pdLpR_ = 0.f;  // loop damping LP state
   float      pdDcL_ = 0.f, pdDcR_ = 0.f;  // loop DC-blocker state
   float      pdLpCoef_ = 1.f, pdDcCoef_ = 0.f;

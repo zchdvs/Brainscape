@@ -14,10 +14,12 @@
 #include "Audition.h"
 #include "BrainscapeParam.h"
 #include "EventQueue.h"
+#include "HostTempo.h"
 #include "StateCodec.h"
 #include "TestInput.h"
 #include "brainscape/Engine.h"
 #include "brainscape/HostArenas.h"
+#include "brainscape/MidiClock.h"
 #include "brainscape/Preset.h"
 
 namespace brainscape::plugin {
@@ -97,6 +99,13 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   }
   BrainscapeParam& Expression() noexcept { return *expression_; }
   BrainscapeParam& EffectVolume() noexcept { return *effectVolume_; }
+  // Rows 83 and 84 (docs/design/clock.md §10.4), registered after the effect volume: perf.subdiv,
+  // the Subdiv knob's position 0-5 (×1/4 … ×8, TAP at 2), and perf.time_mode (Free, Subdiv,
+  // Tempo). Performance rows, automatable: a change is a Subdivision event with §5.1's code or the
+  // time mode. Their mirrors are the live Subdiv and time mode, which the re-asserts after a
+  // restart of the same preset carry (§10.1) and a preset change sets to the preset's.
+  BrainscapeParam& SubdivParam() noexcept { return *subdiv_; }
+  BrainscapeParam& TimeModeParam() noexcept { return *timeMode_; }
   // Any registered row's parameter but freeze's, or null.
   BrainscapeParam* FindHostParam(ParamId id) noexcept;
   TestInput&       GetTestInput() noexcept { return testInput_; }
@@ -116,12 +125,15 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // pickup references never re-applied (§3.5), and freeze goes off. Refused, with nothing
   // changed, when its mode is invalid; *report says how faithfully it loads. `source` says
   // what it is (CurrentSource): a session saved while a factory package plays restores it.
+  // Rows 83 and 84 take the preset's stored Subdiv and time mode (clock.md §10.1), and the host
+  // is told.
   bool LoadPresetState(const PresetState& state, LoadReport* report = nullptr,
                        const PresetSource& source = {});
   // What the last load or session restore played, by name (any thread but the audio thread).
   PresetSource CurrentSource() const;
-  // What the wrapper plays now, as a preset: the leaf mirrors, the current mode, and CTRL with
-  // the macro mirrors as its positions. Not on the audio thread.
+  // What the wrapper plays now, as a preset: the leaf mirrors, the current mode, CTRL with the
+  // macro mirrors as its positions, and the live performance (LivePerformance: what saving a
+  // preset captures, clock.md §10.3). Not on the audio thread.
   std::unique_ptr<PresetState> CurrentPreset() const;
   ModeState                    CurrentMode() const;
   // Message thread: counts the loads that replaced the preset (LoadPresetState and session
@@ -141,6 +153,37 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
 
   // A momentary footswitch-style trigger (companion §5.7), applied at the next block.
   void TriggerFromUi() noexcept;
+
+  // The BPM panel (clock.md §10.3), any thread: a Tap event, and a typed tempo as a Tempo event
+  // (false, nothing sent, for a bpm that is no tempo), each at the next block's first frame at the
+  // UI rank. While the wrapper follows the host's tempo it drops both (§10.1).
+  void TapFromUi() noexcept;
+  bool SetTempoFromUi(double bpm) noexcept;
+
+  // What the BPM panel shows (§10.3): Engine::Tempo() after the last block, copied to atomics,
+  // and whether the wrapper followed the host's tempo in it. Any thread.
+  struct TempoDisplay {
+    uint32_t nsPerQuarter  = 500000000;  // the committed tempo
+    uint8_t  source        = 0;          // tempo::ClockSource
+    bool     followingHost = false;      // the wrapper sends the host's tempo and transport
+    int8_t   hostOctaves   = 0;          // the host's tempo folded into range: 2^octaves beats a quarter
+    uint8_t  subdiv        = 0;          // the live Subdiv's code and time mode (TempoInfo's), and
+    uint8_t  timeMode      = 0;          // the engine's integer rate R: what a synced time needs
+    uint32_t rate          = 48000;
+    bool     hostClamped   = false;      // the host's tempo is out of reach: the grid is off its beats
+    bool     running       = false;      // the transport runs
+    bool     locked        = false;      // the MIDI clock follower holds 24 ticks or more
+    int64_t  position      = -1;         // the phasor's tick: the beat LED
+  };
+  TempoDisplay GetTempoDisplay() const noexcept;
+  // The performance as it plays (§10.3): the committed tempo rounded to whole µs, and rows 83 and
+  // 84 as §5.1's code and the time mode; `reverse` as the preset stores it. What CurrentPreset()
+  // and so every save carry into STAT. Any thread.
+  PerformanceState LivePerformance() const;
+
+  // Tests, with processBlock quiesced: the live engine's tempo snapshot and counters.
+  TempoInfo  EngineTempo() const noexcept;
+  TempoStats EngineTempoCounts() const noexcept;
 
   // Scripted producers: applies `e` at absolute engine frame `frame`, counted from the
   // last Init or restart (companion §4.10); a stamp made before a restart is void. A
@@ -203,11 +246,26 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   using Values = std::array<float, kNumLeafParams>;
   static constexpr size_t kModeWords = sizeof(ModeState) / sizeof(uint32_t);
 
+  // A state unit is a preset change (LoadPresetState) or a session restore (setStateInformation,
+  // which carries the session's tempo): clock.md §10.1's re-asserts differ.
+  enum class UnitKind : uint32_t { PresetChange = 0, SessionRestore = 1 };
+
   void     InitEngine(double sampleRate);
   void     LoadAfterRestart() noexcept;
+  // §2.5 and §10.1: after an Exact load, what the next block's first frame re-asserts before its
+  // own events. `presetChange`: a new preset's stored Subdiv and time mode play (rows 83 and 84
+  // already hold them), and so does its stored tempo under recall Preset with the Internal
+  // source; otherwise `ns`, the committed tempo the load carries, and rows 83 and 84.
+  void     ScheduleReasserts(bool presetChange, uint32_t ns) noexcept;
+  void     EmitReasserts(uint32_t offset) noexcept;
+  void     EmitAfterLoad(uint32_t offset) noexcept;
+  void     EmitRows(uint32_t offset) noexcept;
+  void     Emit(const TempoEvent& e, uint32_t offset) noexcept;
+  void     FeedMidiClock(const juce::MidiMessageMetadata& m, uint32_t offset, bool pend) noexcept;
+  HostTransport ReadTransport() const;
   void     RestartTimeline() noexcept;
   uint32_t NextGeneration() noexcept;
-  void     PostStateUnit(const float* plain, const ModeState& mode) noexcept;
+  void     PostStateUnit(const float* plain, const ModeState& mode, UnitKind kind, uint32_t tempoNs) noexcept;
   void     SetMacroMirrors(const ControlState& control) noexcept;
   void     NotifyHostOfMirrors();
   // Applies `e`'s effect on the leaves to `values` (a SetParam on a leaf, or the fan-out of a
@@ -215,7 +273,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // Audio thread.
   void     Track(const WrapperEvent& e, Values& values, std::bitset<kNumLeafParams>* touched) const noexcept;
   void     ApplyStateUnit() noexcept;
-  void     CheckTransportStart() noexcept;
+  // Whether this block is a transport start: playing after a block that did not play, or after
+  // prepareToPlay or a switch to offline (§4.9 c), restarting the engine when the option is on.
+  bool     CheckTransportStart(bool playing) noexcept;
   void     RestartAtTransportStart() noexcept;
   void     DrainEvents() noexcept;
   void     InsertPending(const WrapperEvent& e) noexcept;
@@ -243,6 +303,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::array<BrainscapeParam*, kMaxMacros>         macros_{};  // by macro id - 69
   BrainscapeParam*                                 expression_   = nullptr;
   BrainscapeParam*                                 effectVolume_ = nullptr;
+  BrainscapeParam*                                 subdiv_       = nullptr;  // row 83
+  BrainscapeParam*                                 timeMode_     = nullptr;  // row 84
 
   // The mode the wrapper's preset plays (message side): written under controlMutex_ and
   // modeMutex_, read under either. The audio thread plays its own copy, activeMode_, which
@@ -274,6 +336,8 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<uint32_t>                       stateGen_{0};
   std::array<std::atomic<float>, kNumLeafParams> stateSlot_{};
   std::array<std::atomic<uint32_t>, kModeWords>  modeSlot_{};  // the unit's ModeState, as words
+  std::atomic<uint32_t>                       stateKind_{0};     // the unit's UnitKind
+  std::atomic<uint32_t>                       stateTempoNs_{0};  // a session's tempo, or 0
   ModeState                                   activeMode_;   // audio thread: what plays
   uint64_t                                    activeModeHash_ = 0;
   ModeState                                   unitMode_;     // audio thread: a unit being read
@@ -302,6 +366,10 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::bitset<kNumLeafParams>                        touched_;  // by leaf ordinal
   float                                              sentEffectVolume_ = 0.f;
   bool                                               effectTouched_    = false;
+  float                                              sentSubdiv_       = 2.f;  // rows 83, 84
+  float                                              sentTimeMode_     = 0.f;
+  bool                                               subdivTouched_    = false;
+  bool                                               timeModeTouched_  = false;
   // A restore applied this block: the effect volume's mirror goes out after it, since an edit
   // posted before the restore lost to it, and no preset holds a device setting.
   bool                                               resendVolume_     = false;
@@ -314,6 +382,45 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<bool>           offline_{false};  // what setNonRealtime last said
   bool                        startArmed_ = true;  // audio thread
   std::atomic<TransportStart> lastStart_{TransportStart::None};
+
+  // The tempo core (docs/design/clock.md §4.4, §10). Settings, any thread: the Tempo source,
+  // Receive MIDI clock and global.tempo_recall (row 85).
+  std::atomic<uint32_t> tempoSource_{static_cast<uint32_t>(TempoSource::Host)};
+  std::atomic<bool>     receiveMidiClock_{true};
+  std::atomic<bool>     tempoRecallPreset_{false};
+  std::atomic<bool>     tempoGlide_{false};  // row 86
+  // Audio thread: the host's events of this block (§4.4), the MIDI translator of the Standalone's
+  // clock (§10.2), the re-asserts due at the next first frame (§10.1), a session restore's
+  // performance after its Spillover load, row 85 as the engine last got it (-1: re-send it), the
+  // committed tempo the wrapper carries across Exact loads, and the source after the last block.
+  HostFollower                                      follower_;
+  std::array<TempoEvent, HostFollower::kMaxEvents>  hostTempo_{};
+  size_t                                            hostTempoCount_ = 0;
+  MidiClockParser                                   midiClock_;
+  bool                                              midiClockOn_ = true;  // this block's setting
+  struct Reassert {
+    bool     pending      = false;
+    bool     presetChange = false;
+    uint32_t ns           = 500000000;
+  } reassert_;
+  struct AfterLoad {
+    bool     pending = false;
+    uint32_t ns      = 0;  // the session's tempo, or 0
+  } afterLoad_;
+  int      recallSent_ = -1;
+  int      glideSent_  = -1;  // row 86 as the engine last got it (-1: re-send it)
+  uint32_t carryNs_    = 500000000;
+  uint8_t  lastSource_ = 0;
+  uint32_t engineRateInt_ = 48000;  // R (clock.md §1.3), for HostAnchor
+  // For the BPM panel and the session (any thread): the committed tempo after the last block (or
+  // a session's, until its unit applies), and the rest of TempoDisplay.
+  std::atomic<uint32_t> liveNs_{500000000};
+  std::atomic<uint8_t>  dispSource_{0}, dispFlags_{0}, dispSubdiv_{0}, dispTimeMode_{0};
+  std::atomic<uint32_t> dispRate_{48000};
+  std::atomic<bool>     dispFollowing_{false};
+  std::atomic<int8_t>   dispHostOctaves_{0};
+  std::atomic<bool>     dispHostClamped_{false};
+  std::atomic<int64_t>  dispPosition_{-1};
 
   // The spare's worker. spareState_ says who may touch spare_: the worker while Empty,
   // Preparing or Retired, the audio thread while Swapping; Ready hands it to whichever

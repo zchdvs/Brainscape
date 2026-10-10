@@ -90,6 +90,9 @@ bool UnitShift(DisplayKind kind, const std::string& unit, long& shift) {
     case DisplayKind::Count:
     case DisplayKind::ReverbMode:
     case DisplayKind::Division:
+    case DisplayKind::SubdivPosition:
+    case DisplayKind::TimeMode:
+    case DisplayKind::TempoRecall:
       return unit.empty();
   }
   return false;
@@ -185,6 +188,27 @@ bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::stri
       {DisplayKind::FilterMorph, "lp", 0.0f}, {DisplayKind::FilterMorph, "bp", 1.0f},
       {DisplayKind::FilterMorph, "hp", 2.0f}, {DisplayKind::FilterMorph, "notch", 3.0f},
       {DisplayKind::MsOrOff, "off", 0.0f},    {DisplayKind::Division, "off", 0.0f},
+      // post.delay.sync's note values (docs/design/clock.md §5.2, §5.4), a Leaf row since sound
+      // revision 9: the names FormatPlain shows ("1/8D", "1/16T"), read in either case.
+      {DisplayKind::Division, "1/32", 1.0f},  {DisplayKind::Division, "1/16t", 2.0f},
+      {DisplayKind::Division, "1/16", 3.0f},  {DisplayKind::Division, "1/8t", 4.0f},
+      {DisplayKind::Division, "1/16d", 5.0f}, {DisplayKind::Division, "1/8", 6.0f},
+      {DisplayKind::Division, "1/4t", 7.0f},  {DisplayKind::Division, "1/8d", 8.0f},
+      {DisplayKind::Division, "1/4", 9.0f},   {DisplayKind::Division, "1/2t", 10.0f},
+      {DisplayKind::Division, "1/4d", 11.0f}, {DisplayKind::Division, "1/2", 12.0f},
+      {DisplayKind::Division, "1/1t", 13.0f}, {DisplayKind::Division, "1/2d", 14.0f},
+      {DisplayKind::Division, "1/1", 15.0f},  {DisplayKind::Division, "2/1", 16.0f},
+      // The Subdiv knob's positions as rates (docs/design/clock.md §5.1), in ASCII or with the
+      // multiplication sign the display writes; never as note values.
+      {DisplayKind::SubdivPosition, "x1/4", 0.0f}, {DisplayKind::SubdivPosition, "\xC3\x97" "1/4", 0.0f},
+      {DisplayKind::SubdivPosition, "x1/2", 1.0f}, {DisplayKind::SubdivPosition, "\xC3\x97" "1/2", 1.0f},
+      {DisplayKind::SubdivPosition, "tap", 2.0f},  {DisplayKind::SubdivPosition, "x1", 2.0f},
+      {DisplayKind::SubdivPosition, "x2", 3.0f},   {DisplayKind::SubdivPosition, "\xC3\x97" "2", 3.0f},
+      {DisplayKind::SubdivPosition, "x4", 4.0f},   {DisplayKind::SubdivPosition, "\xC3\x97" "4", 4.0f},
+      {DisplayKind::SubdivPosition, "x8", 5.0f},   {DisplayKind::SubdivPosition, "\xC3\x97" "8", 5.0f},
+      {DisplayKind::TimeMode, "free", 0.0f},       {DisplayKind::TimeMode, "subdiv", 1.0f},
+      {DisplayKind::TimeMode, "tempo", 2.0f},      {DisplayKind::TempoRecall, "keep", 0.0f},
+      {DisplayKind::TempoRecall, "preset", 1.0f},
   };
   // The cutoff's two named ends, as FormatPlain shows them: Off (the bypass, its maximum) and
   // Kill (the wet kill, its minimum; mode-compiler.md §4.3).
@@ -232,7 +256,7 @@ bool ParsePlainText(ParamId id, const juce::String& text, float& plainOut) {
 juce::String FormatPlainText(ParamId id, float plain) {
   char buf[48];
   FormatPlain(id, plain, buf, sizeof buf);
-  return juce::String(buf);
+  return juce::String::fromUTF8(buf);  // UTF-8: perf.subdiv's rates are written with U+00D7 (×)
 }
 
 WrapperEvent::Type BrainscapeParam::EventTypeFor(ParamId id) noexcept {

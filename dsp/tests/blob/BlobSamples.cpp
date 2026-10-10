@@ -203,7 +203,6 @@ void FullMode(ModeBlob* mode, PresetState* state) {
   m                     = ModeBlob{};
   m.schedule.sources    = kSourceAll;
   m.schedule.layerCount = 2;
-  m.schedule.subdiv     = Subdivision::Half;
   m.schedule.stepOrder  = StepOrder::Shuffle;
   ModeLayer& a          = m.layers[0];
   a.source              = PositionSource::Mark;

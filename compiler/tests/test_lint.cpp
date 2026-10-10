@@ -1,5 +1,6 @@
-// Lint L1-L9 and derive (docs/design/mode-compiler.md §2.7, §3.5): each finding raised and not
-// raised, --factory's errors, derived leaves and "solve position".
+// Lint L1-L9, L12-L14 and derive (docs/design/mode-compiler.md §2.7, §3.5; docs/design/clock.md
+// §11.1): each finding raised and not raised, --factory's errors, derived leaves and "solve
+// position".
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -370,6 +371,143 @@ TEST_CASE("lint: L6, L7, L8", "[lint]") {
       base));
   REQUIRE(Count(Lint(d), "L8") == 0u);
   REQUIRE(Count(Lint(d), "L7") == 1u);  // reverb.time is Space's Shift secondary
+}
+
+TEST_CASE("lint: L2 for a synced base delay at its shortest (clock.md §11.1)", "[lint]") {
+  // Layer 0 at +12 st with 100 ms grains needs base_ms >= 100. A synced 1/32 is 25 ms at 300 BPM
+  // and TAP, 3.13 ms under ×8: below it whatever base_ms says; a 1/1 is 100 ms at 300 BPM and
+  // ×8, not below, and a 1/2, 50 ms, is.
+  // The time macro on the post delay, so no macro moves base_ms (as the L2 case above).
+  const std::string t = With(
+      "macros",
+      Parse(R"([{"id": "time", "targets": [{"param": "post.delay.time_ms", "range": [100, 200]}]}])"),
+      With("layers[0].pitch.transpose_st", Num("12"),
+           With("layers[0].size_ms", Num("100"),
+                With("layers[0].position.base_ms", Num("500"), Clean()))));
+  REQUIRE(Count(Lint(Read(t)), "L2") == 0u);
+  const std::vector<Finding> f = Lint(Read(With("layers[0].position.base_sync", Str("1/32"), t)));
+  REQUIRE(Count(f, "L2") == 1u);
+  const auto l2 = std::find_if(f.begin(), f.end(), [](const Finding& x) { return x.code == "L2"; });
+  REQUIRE(l2->message.find("synced base delay at its shortest") != std::string::npos);
+  REQUIRE(l2->at.pointer == "/layers/0/position/base_sync");
+  REQUIRE(Count(Lint(Read(With("layers[0].position.base_sync", Str("1/1"), t))), "L2") == 0u);
+  REQUIRE(Count(Lint(Read(With("layers[0].position.base_sync", Str("1/2"), t))), "L2") == 1u);
+}
+
+TEST_CASE("lint: L12 grain feedback under a synced base delay (clock.md §6.2, D6)", "[lint]") {
+  // No macro on feedback.amount (the default table's Repeats has one).
+  const std::string base = With(
+      "macros", Parse(R"([{"id": "repeats", "targets": []}])"),
+      With("feedback.amount", Num("0"), With("layers[0].position.base_sync", Str("1/4"), Clean())));
+  REQUIRE(Count(Lint(Read(base)), "L12") == 0u);  // feedback.amount 0
+  const std::vector<Finding> f = Lint(Read(With("feedback.amount", Num("0.3"), base)));
+  REQUIRE(Count(f, "L12") == 1u);
+  const auto l12 =
+      std::find_if(f.begin(), f.end(), [](const Finding& x) { return x.code == "L12"; });
+  REQUIRE(l12->message.find("10.67 ms later per pass") != std::string::npos);
+  REQUIRE(l12->at.pointer == "/layers/0/position/base_sync");
+  REQUIRE_FALSE(l12->error);
+  // A macro corner or the expression pedal reaching above 0 counts as the stored value does.
+  const std::string macro = With(
+      "macros",
+      Parse(R"([{"id": "repeats", "targets": [{"param": "feedback.amount", "range": [0, 0.5]}]}])"),
+      base);
+  REQUIRE(Count(Lint(Read(macro)), "L12") == 1u);
+  REQUIRE(Count(Lint(Read(With("layers[0].position.base_sync", Str("1/4"), Clean()))), "L12") ==
+          1u);  // the default table's Repeats
+  const std::string expr = With(
+      "controls.expression", Parse(R"([{"target": "feedback.amount", "lo": 0, "hi": 0.4}])"), base);
+  REQUIRE(Count(Lint(Read(expr)), "L12") == 1u);
+  // Feedback on the post delay is the tempo-exact way: nothing to say. Unsynced: nothing.
+  REQUIRE(Count(Lint(Read(With("post.delay.fb", Num("0.6"), base))), "L12") == 0u);
+  REQUIRE(Count(Lint(Read(With("feedback.amount", Num("0.3"), Clean()))), "L12") == 0u);
+  // A warning, never an error, also for --factory.
+  LintOptions factory;
+  factory.factory = true;
+  REQUIRE(Count(Lint(Read(With("feedback.amount", Num("0.3"), base)), factory), "L12", true) == 0u);
+}
+
+TEST_CASE("lint: L13 a target a sync overrides at every position (clock.md §6.5)", "[lint]") {
+  const std::string timeMacro = With(
+      "macros",
+      Parse(R"([{"id": "time", "targets": [{"param": "post.delay.time_ms", "range": [100, 800]}]}])"),
+      Clean());
+  REQUIRE(Count(Lint(Read(timeMacro)), "L13") == 0u);  // sync 0: time_ms plays
+  // Row 63 nonzero at its stored value and nothing moving it: the time macro does nothing.
+  const std::vector<Finding> f = Lint(Read(With("post.delay.sync", Num("9"), timeMacro)));
+  REQUIRE(Count(f, "L13") == 1u);
+  const auto l13 =
+      std::find_if(f.begin(), f.end(), [](const Finding& x) { return x.code == "L13"; });
+  REQUIRE(l13->message.find("post.delay.time_ms") != std::string::npos);
+  REQUIRE(l13->at.pointer == "/macros/0/targets/0");
+  // A macro that can lift the sync to 0 lets time_ms play at one end: no finding.
+  const std::string lifted = With(
+      "macros",
+      Parse(R"([{"id": "time", "targets": [{"param": "post.delay.time_ms", "range": [100, 800]}]},
+                {"id": "aux1", "targets": [{"param": "post.delay.sync", "range": [0, 12]}]}])"),
+      With("post.delay.sync", Num("9"), Clean()));
+  REQUIRE(Count(Lint(Read(lifted)), "L13") == 0u);
+  // The expression pedal reaching 0.4 only rounds to 0, so it lifts the sync too; at 0.5 it
+  // reads 1/32, which does not.
+  const std::string pedal = With(
+      "controls.expression", Parse(R"([{"target": "post.delay.sync", "lo": 0.4, "hi": 9}])"),
+      With("post.delay.sync", Num("9"), timeMacro));
+  REQUIRE(Count(Lint(Read(pedal)), "L13") == 0u);
+  const std::string pedal5 = With(
+      "controls.expression", Parse(R"([{"target": "post.delay.sync", "lo": 0.5, "hi": 9}])"),
+      With("post.delay.sync", Num("9"), timeMacro));
+  REQUIRE(Count(Lint(Read(pedal5)), "L13") == 1u);
+  // A layer's base_ms under its base_sync: every macro target and expression assignment on it.
+  const std::string base = With(
+      "controls.expression",
+      Parse(R"([{"target": "layer0.position.base_ms", "lo": 100, "hi": 900}])"),
+      With("macros",
+           Parse(R"([{"id": "time", "targets": [{"param": "layer0.position.base_ms", "range": [50, 900]}]}])"),
+           With("layers[0].position.base_sync", Str("1/8"), Clean())));
+  REQUIRE(Count(Lint(Read(base)), "L13") == 2u);
+}
+
+TEST_CASE("lint: L14 reachable codes that fold at the stored tempo and Subdiv (clock.md §5.2)",
+          "[lint]") {
+  // At the stored 120 BPM and TAP nothing folds: 2/1 is 4 s, the line's end, inclusive.
+  REQUIRE(Count(Lint(Read(With("post.delay.sync", Num("16"), Clean()))), "L14") == 0u);
+  // At 119 BPM it does.
+  const std::string slow = With("performance.tempo_us_per_quarter", Num("504202"),
+                                With("post.delay.sync", Num("16"), Clean()));
+  const std::vector<Finding> f = Lint(Read(slow));
+  REQUIRE(Count(f, "L14") == 1u);
+  const auto l14 =
+      std::find_if(f.begin(), f.end(), [](const Finding& x) { return x.code == "L14"; });
+  REQUIRE(l14->message.find("119.0 BPM and TAP") != std::string::npos);
+  REQUIRE(l14->message.find("2/1 \xE2\x86\x92 1/1") != std::string::npos);
+  REQUIRE(l14->at.pointer == "/post/delay/sync");
+  // A macro sweeping the code reaches the codes between its ends: at 50 BPM 1/1 and 2/1 fold to a
+  // half note (§5.2's example), 1/2D does not.
+  const std::string sweep = With(
+      "macros",
+      Parse(R"([{"id": "time", "targets": [{"param": "post.delay.sync", "range": [9, 16]}]}])"),
+      With("performance.tempo_us_per_quarter", Num("1200000"),
+           With("post.delay.sync", Num("9"), Clean())));
+  const std::vector<Finding> g = Lint(Read(sweep));
+  REQUIRE(Count(g, "L14") == 1u);
+  const auto m = std::find_if(g.begin(), g.end(), [](const Finding& x) { return x.code == "L14"; });
+  REQUIRE(m->message.find("1/1 \xE2\x86\x92 1/2") != std::string::npos);
+  REQUIRE(m->message.find("2/1 \xE2\x86\x92 1/2") != std::string::npos);
+  REQUIRE(m->message.find("1/2D \xE2\x86\x92") == std::string::npos);
+  // The stored Subdiv scales it (×1/4 makes a 1/4 a whole note: 2 s at 120 BPM, no fold; 1/2 a
+  // 2/1, 4 s; 1/1 folds); Tempo time mode forces TAP.
+  const std::string sub = With("performance.subdiv", Str("x1/4"),
+                               With("post.delay.sync", Num("15"), Clean()));
+  REQUIRE(Count(Lint(Read(sub)), "L14") == 1u);
+  REQUIRE(Count(Lint(Read(With("performance.time_mode", Str("tempo"), sub))), "L14") == 0u);
+  // base_sync: its stored code. 2/1 at 60 BPM is 8 s, beyond base_ms's 5 s.
+  const std::string base = With("performance.tempo_us_per_quarter", Num("1000000"),
+                                With("layers[0].position.base_sync", Str("2/1"), Clean()));
+  const std::vector<Finding> b = Lint(Read(base));
+  REQUIRE(Count(b, "L14") == 1u);
+  REQUIRE(std::find_if(b.begin(), b.end(), [](const Finding& x) { return x.code == "L14"; })
+              ->at.pointer == "/layers/0/position/base_sync");
+  REQUIRE(Count(Lint(Read(With("layers[0].position.base_sync", Str("1/1"), Clean()))), "L14") == 0u);
 }
 
 TEST_CASE("lint: L9 other makers' marks in product strings", "[lint]") {

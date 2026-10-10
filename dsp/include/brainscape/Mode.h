@@ -47,10 +47,10 @@ inline constexpr uint32_t kModeFeatureOnset        = 1u << 0;   // 3a (r2): `ons
 inline constexpr uint32_t kModeFeatureMarkPosition = 1u << 1;   // 3a (r2): a layer on marks
 inline constexpr uint32_t kModeFeatureSources      = 1u << 2;   // W1: a default source left out
 inline constexpr uint32_t kModeFeaturePitchSet     = 1u << 3;   // W1: a set other than {0: 1}
-inline constexpr uint32_t kModeFeatureClock        = 1u << 4;   // W2: `clock`, a subdivision
+inline constexpr uint32_t kModeFeatureClock        = 1u << 4;   // W2 (r8): the `clock` source
 inline constexpr uint32_t kModeFeatureSteps        = 1u << 5;   // W2: a step table or order
 inline constexpr uint32_t kModeFeatureMarkWalk     = 1u << 6;   // W2: mark index, walk, jitter
-inline constexpr uint32_t kModeFeatureTempoSync    = 1u << 7;   // W2: a synced base delay
+inline constexpr uint32_t kModeFeatureTempoSync    = 1u << 7;   // W2 (r9): a synced base delay
 inline constexpr uint32_t kModeFeatureTwoLayers    = 1u << 8;   // W3: a second layer, slot share
 inline constexpr uint32_t kModeFeaturePinPosition  = 1u << 9;   // W3: `pin` and its re-arm
 inline constexpr uint32_t kModeFeatureGridPosition = 1u << 10;  // W3: `grid` positioning
@@ -66,16 +66,18 @@ inline constexpr uint32_t kModeFeatureDryDuck      = 1u << 19;  // W3: dry-duck 
 inline constexpr uint32_t kModeFeatureAll          = (1u << 20) - 1u;  // every defined bit
 
 // The features this build plays: sound revision 2's onset source and mark positioning (§7.6
-// item 4, the structure rows 27 and 28 retired into), and wave 1's source selection (sound
-// revision 4, §7.5 R9) and pitch sets (5, R10). Each wave-1 feature widens it in its own pull
-// request.
-inline constexpr uint32_t kSupportedModeFeatures =
-    kModeFeatureOnset | kModeFeatureMarkPosition | kModeFeatureSources | kModeFeaturePitchSet;
+// item 4, the structure rows 27 and 28 retired into), wave 1's source selection (sound
+// revision 4, §7.5 R9) and pitch sets (5, R10), the tempo core's CLOCK source (8,
+// docs/design/clock.md §6.3, §11.1) and synced times' base_sync (9, §6.2). Each feature widens
+// it in its own pull request.
+inline constexpr uint32_t kSupportedModeFeatures = kModeFeatureOnset | kModeFeatureMarkPosition |
+                                                   kModeFeatureSources | kModeFeaturePitchSet |
+                                                   kModeFeatureClock | kModeFeatureTempoSync;
 
 // ── SCHD: the scheduler ───────────────────────────────────────────────────────────────────
 // The trigger sources, a set of bits.
 inline constexpr uint8_t kSourcePeriodic   = 1u << 0;  // the free-running scheduler (left out: r4)
-inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2
+inline constexpr uint8_t kSourceClock      = 1u << 1;  // W2 (r8): births on the tempo grid
 inline constexpr uint8_t kSourceOnset      = 1u << 2;  // 3a (r2): a burst per detected onset (r4)
 inline constexpr uint8_t kSourceFootswitch = 1u << 3;  // footswitch triggers fire (left out: r4)
 inline constexpr uint8_t kSourceMidiNote   = 1u << 4;  // MIDI-note triggers fire (left out: r4)
@@ -83,16 +85,22 @@ inline constexpr uint8_t kSourceAll        = 0x1Fu;
 // Sound revision 1's sources: the scheduler runs, and footswitch and MIDI notes trigger.
 inline constexpr uint8_t kDefaultSources = kSourcePeriodic | kSourceFootswitch | kSourceMidiNote;
 
-enum class Subdivision : uint8_t { Quarter, Half, Tap, Double, Quadruple, Octuple };  // 1/4 .. 8x
+// The Subdiv control's six rate multipliers (docs/design/clock.md §5.1, D7): code 0 is TAP,
+// the neutral x1 and the default, so every stored byte written so far (all 0) keeps a neutral
+// meaning; then x1/4, x1/2, x2, x4 and x8 of the tapped quarter-note rate, never
+// note values. The Microcosm's knob and MIDI CC#5 order (x1/4, x1/2, TAP, x2, x4, x8) maps to
+// these codes. The performance state stores one (PresetState.h, D14).
+enum class Subdivision : uint8_t { Tap, QuarterRate, HalfRate, Double, Quadruple, Octuple };
 inline constexpr uint8_t kSubdivisionCount = 6;
 enum class StepOrder : uint8_t { Fixed, Shuffle, Random };
 inline constexpr uint8_t kStepOrderCount = 3;
 
 struct ModeSchedule {  // SCHD, 8 bytes
   uint8_t     sources    = kDefaultSources;
-  uint8_t     layerCount = 1;                     // 1, or 2 (W3)
-  Subdivision subdiv     = Subdivision::Quarter;  // W2
-  StepOrder   stepOrder  = StepOrder::Fixed;      // W2
+  uint8_t     layerCount = 1;                 // 1, or 2 (W3)
+  uint8_t     reserved   = 0;                 // 0: was `subdiv`, withdrawn for the performance
+                                              // state's one subdivision (clock.md §2.4, D14)
+  StepOrder   stepOrder  = StepOrder::Fixed;  // W2
   uint8_t     pad[4]     = {};
 };
 
@@ -115,12 +123,12 @@ enum class SvfBand : uint8_t { Lowpass, Bandpass, Highpass, Notch };
 inline constexpr uint8_t kSvfBandCount = 4;
 enum class CutoffSource : uint8_t { Fixed, Random, Lfo, Envelope };
 inline constexpr uint8_t kCutoffSourceCount = 4;
-inline constexpr uint8_t kMaxSyncDivision   = 16;  // base_sync: 0 off, then divisions (W2)
+inline constexpr uint8_t kMaxSyncDivision   = 16;  // base_sync: 0 off, then clock.md §5.2's codes
 inline constexpr uint16_t kScaleMaskAll     = 0x0FFFu;
 
 struct ModeLayer {  // LAYR entry, 36 bytes: 13 enumerations and a pad, a mask, five floats
   PositionSource source          = PositionSource::Live;
-  uint8_t        baseSync        = 0;  // W2: 0 off, 1-16 a tempo division
+  uint8_t        baseSync        = 0;  // W2 (r9): 0 off, 1-16 a note value (clock.md §5.2, §6.2)
   SprayLaw       sprayLaw        = SprayLaw::Uniform;
   uint8_t        markIndex       = 0;  // W2: 0-15
   MarkWalk       markWalk        = MarkWalk::None;

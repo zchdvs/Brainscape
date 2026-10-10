@@ -3,8 +3,8 @@
   "id": "factory.refrain",
   "name": "Refrain",
   "family": "recall",
-  "sound_rev": 7,
-  "sound_hash": "c8af188b50ac3262098dc9bb5ce6c6ff74a709defcf831354e0c1098c68ea8db",
+  "sound_rev": 9,
+  "sound_hash": "2f887b74badf6380332defdc3120255ac5a8e78e3af952f90fbdabbbe0934b73",
   "meta": {
     "author": "Brainscape",
     "description": "Free-running loops at pitch and an octave up; Activity sets how many play.",
@@ -69,7 +69,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,
