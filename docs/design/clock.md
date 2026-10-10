@@ -19,8 +19,8 @@
 > parity, the musician and the product, the firmware and hardware), with the answers to the 23
 > decisions of §11.5, which the owner confirmed as proposed;
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
-> finding's disposition. *(2026-10-09: the tempo core is built as a library, not yet wired into
-> the engine; §11.10 has its as-built notes.)*
+> finding's disposition. *(2026-10-09: the tempo core is built as a library, §11.10, and wired
+> into the engine as sound revision 8, §11.11, which have the as-built notes.)*
 
 ---
 
@@ -1839,6 +1839,87 @@ intent, as below:
     which §7.1 names for Start and Continue only. The core follows §3.4. The case needs a window
     emptied under ClockRunning, which only an outlier labelled 96 or more past every fitted tick
     can do.
+
+### 11.11 As built: the tempo core wired in, sound revision 8 (2026-10-09)
+
+Lane T1's second part, under D1 as amended. Two sound-neutral commits first: the schema half
+(§2.4, §5.1, §11.1, §11.2: `Subdivision` re-coded so code 0 is TAP; SCHD's byte 2 and STAT's
+performance byte 3 reserved, a nonzero one `ModePadding` and `Performance`, pinned by two new
+frozen fixtures; `scheduler.subdiv` and `performance.tempo_source` withdrawn as E2; the Subdiv
+labels in code order with the Microcosm's printed ones E5; the performance support bit split into
+the stored tempo, time mode and subdivision, which come with CLOCK, and global reverse; §5.2's
+names for divisions), and the producer functions (`UsesTempo` beside `EvalMacro`, reported by
+`bspc lint`; `tempo::TempoNsFromKnob`; row 63's note-value names), in `dsp/src/TempoProducer.cpp`
+out of ITCM. Then revision 8 as one commit: events 6–10 in `Engine::EventType` and `ApplyEvent`
+(the gap rule before every event, unknown types and invalid payloads counted), the stored
+performance state applied at load step 4 and played by `Restart`, Spillover's time mode,
+subdivision and recall, CLOCK births in `GranularCore` (§6.3, D13), `Engine::Tempo()` and
+`TempoCounts()`, rows 83–85, CLOCK supported, corpus version 13 (seven clock presets on
+`plucks_clock_30s` at 140 and 137.5 BPM over three packages, the five script verbs, the
+`ClockTicks` and `TapSeries` generators, twenty counters, the `clock`, `tempoEvents` and `subdiv`
+ablations) and the re-mint: all 45 presets of revision 7 reproduce their hashes, per-second hashes
+and counters bit for bit. `dsp/tests/test_clock.cpp` checks the wiring (hits at F(k) for four
+grids, block-split invariance with every event type, D13's steal, the jitter's bound, no stale
+hit on a switch to a clock mode, `Restart` against `Init` and an Exact load, Spillover recall).
+
+Where the text left a choice, or the code read differently, the build follows the design's
+intent, as below (continuing §11.10's numbering):
+
+15. **The Time knob's routing is the producers'.** §6.4 and Q7 keep the Time knob from
+    `macro.time` in Subdiv and Tempo modes while expression, MIDI and hosts still reach it, but
+    every one of them reaches it as the same MacroMove event, which carries no origin. So the
+    engine plays every MacroMove it is given, and the routing is the producers' (T3, T4): the
+    engine's side is the time mode itself (Subdivision field 1, reported in `Tempo().timeMode`),
+    the effective subdivision Tempo mode forces, and `TempoNsFromKnob` for the Tempo knob's
+    events. `Engine.h` states it beside the re-assert contract of §2.5.
+16. **No lateness cap yet.** The cost governor does not exist, so no hit waits for admission:
+    each is born at its (jittered) frame, `clockDeferred` and `clockDeferredFrames` read 0, and
+    `kClockLateFrames` lands with whichever of the governor's revision and this one comes second,
+    as §11.3 says, i.e. with the governor. Hits waiting for their jittered frame queue in
+    `GranularCore`, at most eight (two at most at jitter 1, since a hit waits at most half a grid
+    period); one past that is dropped and counted in `clockDropped`, which only placements at
+    nearly every frame could reach.
+17. **Row 85 has no domain.** A Global row rebuilds something everywhere else; `tempo_recall`
+    acts only where a Spillover load reads it, so the table's well-formedness rule admits it as
+    the one Global row without a domain. A load reads its latest stored value, so an unstamped
+    `SetParam` before a direct Spillover call counts as at the load's frame, which split delivery
+    needs. Rows 83 and 84 are Performance rows, automatable as §10.4 lists them, and act only
+    through Subdivision events: a `SetParam` on them does nothing, and the plugin does not
+    register them yet (T3).
+18. **Split delivery of events 6–10.** As §8.3 says, the harness hands each to the block that
+    starts at its frame, at offset 0. At a frame shared with an unstamped event the unstamped one
+    applies first (a direct Spillover load at once, a `SetParam` at the block's start), where the
+    engine's transport would apply them in sequence order; the corpus keeps such frames apart,
+    and no preset reorders.
+19. **A restart's tail sets the device settings.** RestartTail renders from Init's device
+    settings, while a restart keeps them, so `clock_loads` (a recall set to Preset before its
+    Exact load) could not be rebuilt. The tail now sets, at its frame 0, every Global row the
+    script set before the restart; no earlier preset sets one before a restart, so no earlier check changes.
+20. **`lastClockBirth`** is the grain core's last CLOCK birth, taken when the span's count of
+    them grew, so a `Restart` never reports the frame of an earlier timeline.
+21. **Every package re-stamped.** As at revision 5, the corpus's 29 packages, the compiler's 7
+    examples and the factory's 18 carry `sound_rev` 8: each package hash changes, every
+    `sound_hash` and `control_hash` stays, and the sound-revision gate's package rule passes
+    without the package-change label. The compiler's two digests (the stamp alone) and the blob
+    fuzzer's verdict digest (the samples' revision and CLOCK supported) are re-minted.
+22. **ITCM** (*measured*, the live image's map): `.itcm_text` grows from 62,256 to 64,680 bytes
+    (`Engine.cpp` 15,222 to 16,148, `Granular.cpp` 11,404 to 12,812), leaving 792 bytes of the
+    65,536 with its 64-byte offset; `ItcmCheck` and `BootCheck` pass on every image. The tempo
+    objects stay in QSPI: `Tempo.cpp` 14,008 bytes and `IntMath.cpp` 1,256 (`MidiClock.cpp` and
+    `TempoProducer.cpp` are not linked into the live image). §9.6 estimated 1.0–1.6 KiB of ITCM
+    for T1 and T2 together; T1 alone takes 2.4 KiB, mostly the CLOCK path and the draw ordinal in
+    `GranularCore`. §9.6's cold-code move (the main-thread API out of `Engine.cpp`'s ITCM object,
+    or placement by function) is not built: D1 as amended keeps code that fits in ITCM, and it
+    fits. T2's crossfade and slew in `PostChain`'s per-sample loop will not fit 792 bytes without
+    it.
+23. **Not built in T1:** the nightly ten-minute render of §8.3 (a CI schedule) and §8.2's post-
+    chain cases, `sync_post`, `sync_base`, `sync_fold` and the `sync`, `crossfade` and `slew`
+    ablations, which belong with synced times (T2, corpus version 14). `crossfades` and `folds`
+    read 0 until then.
+24. **The commit budgets, in the corpus.** `clock_midi_computer` (137.5 and 150 BPM, a computer's
+    jitter) commits 26 times in about 22 seconds of clock, 23 of them drifts, as item 12 measured;
+    its counters are minted as they are, and §7.4's budget remains the owner's decision on the
+    constants.
 
 ## 12. Evidence
 
