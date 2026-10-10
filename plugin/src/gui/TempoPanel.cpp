@@ -8,6 +8,7 @@
 #include "BrainscapeLookAndFeel.h"
 #include "Widgets.h"
 #include "brainscape/ModeEval.h"
+#include "brainscape/ParamDisplay.h"
 
 namespace brainscape::plugin {
 
@@ -24,6 +25,8 @@ juce::String BpmText(uint32_t nsPerQuarter) {
 }
 
 juce::String BpmTextUs(uint32_t usPerQuarter) { return BpmText(usPerQuarter * 1000u); }
+
+const juce::String kMiddot = juce::String::fromUTF8("\xc2\xb7");  // ·
 
 void StyleSegment(juce::TextButton& b, int group, juce::Colour on) {
   b.setClickingTogglesState(false);
@@ -62,6 +65,18 @@ class TempoPanel::TapButton final : public Scalable<juce::Button> {
  private:
   float flash_ = 0.f;
 };
+
+juce::String SyncedTimeText(const BrainscapeProcessor::TempoDisplay& d, tempo::SyncTarget target,
+                            uint8_t code) {
+  char buf[96];
+  FormatSyncedTime(target, code, d.nsPerQuarter, d.subdiv, d.timeMode, d.rate, buf, sizeof buf);
+  return juce::String::fromUTF8(buf);
+}
+
+uint8_t DelaySyncCode(float plain) noexcept {
+  const float v = plain > 0.f ? plain : 0.f;
+  return static_cast<uint8_t>(std::min(static_cast<int>(v + 0.5f), static_cast<int>(kMaxSyncDivision)));
+}
 
 TempoPanel::TempoPanel(BrainscapeProcessor& processor)
     : processor_(processor),
@@ -117,6 +132,14 @@ TempoPanel::TempoPanel(BrainscapeProcessor& processor)
 
   settings_.onClick = [this] { ShowSettings(); };
   addAndMakeVisible(settings_);
+
+  synced_.setFont(UiFont(12.0f));
+  synced_.setColour(juce::Label::textColourId, palette::kTextDim);
+  synced_.setJustificationType(juce::Justification::centredLeft);
+  synced_.setMinimumHorizontalScale(0.8f);
+  synced_.setTooltip("What the synced times play (post.delay.sync, a layer's base_sync): the note value at the "
+                     "committed tempo, scaled by the Subdiv and folded by octaves into the delay's range.");
+  addAndMakeVisible(synced_);
   Refresh();
 }
 
@@ -155,8 +178,13 @@ juce::PopupMenu TempoPanel::SettingsMenu() {
                set([](WrapperSettings& w) { w.tempoRecallPreset = false; }));
   menu.addItem("Play the preset's stored tempo", true, s.tempoRecallPreset,
                set([](WrapperSettings& w) { w.tempoRecallPreset = true; }));
-  // T2 (synced times) adds row 86, global.tempo_glide, here: "Tempo jumps glide" (Off by default,
-  // clock.md §7.1, D22), a device setting in the session like row 85.
+  // Row 86, global.tempo_glide (clock.md §7.1, D22): Off by default, so a tempo Jump crossfades a
+  // synced echo; On glides it, the tape swoop. A device setting in the session, as row 85 is.
+  menu.addSectionHeader("Tempo jumps on synced echoes (tempo glide)");
+  menu.addItem("Crossfade to the new time", true, !s.tempoGlide,
+               set([](WrapperSettings& w) { w.tempoGlide = false; }));
+  menu.addItem("Glide, bending the repeats (tape swoop)", true, s.tempoGlide,
+               set([](WrapperSettings& w) { w.tempoGlide = true; }));
   if (standalone_) {
     menu.addSectionHeader("MIDI input");
     menu.addItem("Receive MIDI clock", true, s.receiveMidiClock,
@@ -241,8 +269,19 @@ void TempoPanel::Refresh() {
                         : juce::String("Open a document to store its tempo (Save captures the live tempo)."));
   settings_.setButtonText(s.tempoSource == TempoSource::Host ? "Sync: Host" : "Sync: Internal");
   settings_.setTooltip("The tempo source (follow the host's tempo and transport, or the internal tempo), what a "
-                       "preset change does to the tempo (keep it, or play the preset's)" +
+                       "preset change does to the tempo (keep it, or play the preset's), whether a tempo jump "
+                       "crossfades or glides a synced echo" +
                        juce::String(standalone_ ? ", and whether MIDI clock is received." : "."));
+  // The synced times as they play: row 63's echo, and layer 0's base_sync when the mode sets it.
+  const BrainscapeParam* sync = processor_.FindHostParam(ParamId::DelaySync);
+  const uint8_t          echo = sync != nullptr ? DelaySyncCode(sync->Plain()) : 0u;
+  const uint8_t          base = processor_.CurrentMode().mode.layers[0].baseSync;
+  juce::String           line = "SYNCED   Echo " + SyncedTimeText(d, tempo::SyncTarget::PostDelay, echo);
+  if (base != 0u) {
+    line << "   " << kMiddot << "   Grain delay " << SyncedTimeText(d, tempo::SyncTarget::BaseDelay, base);
+  }
+  if (line != synced_.getText()) synced_.setText(line, juce::dontSendNotification);
+  synced_.setColour(juce::Label::textColourId, echo != 0u || base != 0u ? palette::kText : palette::kTextFaint);
   setTooltip(usesTempo_ ? juce::String()
                         : juce::String("This preset reads no tempo: no clock source, no synced time. Tap still "
                                        "sets the tempo, which the next preset that uses it plays."));
@@ -253,6 +292,7 @@ void TempoPanel::SetScale(float scale) {
   if (scale == scale_) return;
   scale_ = scale;
   bpm_.setFont(UiFont(24.0f * scale, true));
+  synced_.setFont(UiFont(12.0f * scale));
   tap_->SetScale(scale);
   resized();
   repaint();
@@ -348,6 +388,8 @@ void TempoPanel::resized() {
   const auto px   = [this](int v) { return Scaled(v, scale_); };
   auto       r    = getLocalBounds().reduced(px(12), px(6));
   const int  g    = px(8);
+  // The synced times' line under the controls, from the BPM's left edge.
+  auto       line = r.removeFromBottom(px(16));
   const int  rowH = std::min(r.getHeight(), px(30));
 
   // Widths at this scale, then what the strip leaves: the stored tempo and Store go first when it
@@ -377,6 +419,7 @@ void TempoPanel::resized() {
 
   const auto centred = [&](juce::Rectangle<int> a) { return a.withSizeKeepingCentre(a.getWidth(), rowH); };
   titleArea_ = r.removeFromLeft(titleW);
+  synced_.setBounds(line.withTrimmedLeft(titleW + g));
   r.removeFromLeft(g);
   bpmArea_       = r.removeFromLeft(bpmW);
   const int bpmL = bpmArea_.getWidth() - px(30);  // the number; "BPM" is painted beside it

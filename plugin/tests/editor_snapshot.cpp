@@ -350,6 +350,26 @@ int main(int argc, char* argv[]) {
     }
     ok &= WriteImage(canvas, dir, "editor-tempo-settings");
   }
+  // Synced times (clock.md §5.3, §5.4): the corpus's sync_post document (a post delay synced to
+  // 1/4, stored at 140 BPM) at x1/2 under the internal source: the strip's second line shows what
+  // the echo plays, and the Leaves view dims post.delay.time_ms, which waits.
+  const juce::File syncDoc = scratch.getChildFile("sync_post.json");
+  ok &= juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile("sync_post.json").copyFileTo(syncDoc);
+  if (!proc.Curation().Open(syncDoc, &error)) {
+    std::printf("cannot open %s: %s\n", syncDoc.getFullPathName().toRawUTF8(), error.toRawUTF8());
+    return 1;
+  }
+  settings.tempoSource = TempoSource::Internal;
+  proc.SetSettings(settings);
+  Play(proc, 48000.0, 0.3);
+  editor->Tempo().SubdivSegment(1).onClick();
+  Play(proc, 48000.0, 0.5);
+  ok &= Snapshot(*editor, dir, "editor-tempo-synced", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  editor->SetView(BrainscapeEditor::View::Leaves);
+  ok &= Snapshot(*editor, dir, "editor-leaves-synced", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  editor->SetView(BrainscapeEditor::View::Pedal);
   proc.Curation().Close();
   owned.reset();
   scratch.deleteRecursively();

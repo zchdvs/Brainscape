@@ -194,6 +194,10 @@ void BrainscapeEditor::RefreshMarks() {
   CurationSession&      s = processor_.Curation();
   std::set<std::string> pending;
   for (const std::string& line : s.PendingDerives()) pending.insert(line.substr(0, line.find(':')));
+  const BrainscapeProcessor::TempoDisplay tempoNow = processor_.GetTempoDisplay();
+  const BrainscapeParam*                  sync     = processor_.FindHostParam(ParamId::DelaySync);
+  const uint8_t echo = sync != nullptr ? DelaySyncCode(sync->Plain()) : 0u;
+  const uint8_t base = processor_.CurrentMode().mode.layers[0].baseSync;
   for (ParamKnob* k : knobs_) {
     const ParamId id = k->Attachment().Param().Id();
     std::vector<juce::Colour> marks;
@@ -207,6 +211,20 @@ void BrainscapeEditor::RefreshMarks() {
         tip << "\n";
       }
     }
+    // Synced times (clock.md §5.4): row 63 shows what it plays; post.delay.time_ms waits while row
+    // 63 is set, and base_ms while layer 0's base_sync is, each dimmed.
+    bool dim = false;
+    if (id == ParamId::DelaySync) {
+      const uint8_t code = DelaySyncCode(k->Attachment().Param().Plain());
+      if (code != 0u) tip << "Plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::PostDelay, code) << "\n";
+    } else if (id == ParamId::DelayTimeMs && echo != 0u) {
+      dim = true;
+      tip << "Waits: post.delay.sync plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::PostDelay, echo) << "\n";
+    } else if (id == ParamId::DelayMs && base != 0u) {
+      dim = true;
+      tip << "Waits: base_sync plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::BaseDelay, base) << "\n";
+    }
+    k->setAlpha(dim ? 0.45f : 1.0f);
     const bool detached = !marks.empty() && s.IsDetached(id);
     const bool due      = pending.count(FindParam(id)->name) != 0;
     if (!marks.empty()) {
@@ -374,7 +392,7 @@ void BrainscapeEditor::resized() {
   if (view_ == View::Pedal) {
     // The macro knobs, the tempo strip under them, then the document, the findings and the test
     // input.
-    const int stripH = px(48);
+    const int stripH = px(64);
     auto      row1   = r.removeFromTop(juce::jmax(px(196), (r.getHeight() - stripH - kGap) * 41 / 100));
     r.removeFromTop(kGap);
     macros_.setBounds(row1);

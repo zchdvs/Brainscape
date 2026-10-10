@@ -16,7 +16,7 @@ constexpr uint8_t kMagic[4] = {'B', 'S', 'W', 'S'};
 enum SettingKey : uint32_t {
   kInputMode = 1, kInputGainDb = 2, kOutputGainDb = 3, kRestartOnStart = 4, kEffectVolumeDb = 5,
   kTempoSource = 6, kReceiveMidiClock = 7, kTempoRecall = 8, kTempoNs = 9, kPerfSubdiv = 10,
-  kPerfTimeMode = 11
+  kPerfTimeMode = 11, kTempoGlide = 12
 };
 
 bool TempoInRange(uint32_t ns) {
@@ -140,6 +140,7 @@ void EncodeState(const WrapperState& state, std::vector<uint8_t>& out) {
   settings.push_back({kTempoSource, static_cast<uint32_t>(state.settings.tempoSource)});
   settings.push_back({kReceiveMidiClock, state.settings.receiveMidiClock ? 1u : 0u});
   settings.push_back({kTempoRecall, state.settings.tempoRecallPreset ? 1u : 0u});
+  settings.push_back({kTempoGlide, state.settings.tempoGlide ? 1u : 0u});
   if (TempoInRange(state.tempoNs)) settings.push_back({kTempoNs, state.tempoNs});
   if (state.hasPerformance) {
     settings.push_back({kPerfSubdiv, Bits(Canonicalize(ParamId::PerfSubdiv, state.subdivPosition))});
@@ -215,6 +216,8 @@ bool DecodeState(const void* data, size_t bytes, WrapperState& out) {
       s.settings.receiveMidiClock = bits != 0u;
     } else if (key == kTempoRecall) {
       s.settings.tempoRecallPreset = bits == 1u;
+    } else if (key == kTempoGlide) {
+      s.settings.tempoGlide = bits == 1u;
     } else if (key == kTempoNs) {
       s.tempoNs = TempoInRange(bits) ? bits : 0u;  // out of range: absent
     } else if (key == kPerfSubdiv) {

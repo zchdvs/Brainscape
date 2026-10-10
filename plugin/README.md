@@ -160,11 +160,13 @@ one closes the document.
 ## Tempo, tap and host sync
 
 The strip under the pedal's knobs is the tempo core's panel (docs/design/clock.md §10, sound
-revision 8): what drives CLOCK births now and, with the synced-times revision, synced delays.
+revisions 8 and 9): what drives CLOCK births and the synced delays.
 
 - **The tempo** to 0.1 BPM, with where it comes from: **HOST** (the plugin follows the host's
-  tempo and transport), **MIDI** (the Standalone follows a MIDI clock) or **INT**, a dot lit
-  while a MIDI clock is locked or the host's transport runs, and a beat LED from the grid's
+  tempo and transport; **HOST ÷2** or **HOST ×2** when a host tempo outside 20-300 BPM plays
+  folded by octaves, a quarter every two host beats or two a beat), **MIDI** (the Standalone
+  follows a MIDI clock) or **INT**, a dot lit while a MIDI clock is locked or the host's
+  transport runs on its beats, and a beat LED from the grid's
   position (the bar's first beat in the panel's yellow). Double-click the number to type a
   tempo (20-300 BPM). **TAP** taps it: two taps set it, up to four are averaged, a pause
   re-arms, and after a pause the first tap is the bar's first beat (clock.md §3.2).
@@ -182,16 +184,27 @@ revision 8): what drives CLOCK births now and, with the synced-times revision, s
   (**Host**, the default: follow the host's tempo and transport whenever the host reports a
   tempo, drop taps and typed tempos meanwhile, and behave as Internal when it reports none; or
   **Internal**), **tempo recall** (row 85, `global.tempo_recall`: **Keep** the running tempo
-  across preset changes, the default, or play the preset's stored one), and, in the Standalone,
-  **Receive MIDI clock** (on by default).
+  across preset changes, the default, or play the preset's stored one), **tempo glide** (row 86,
+  `global.tempo_glide`: a tempo jump **crossfades** a synced echo to its new time, the default,
+  or **glides** it, bending the repeats like tape), and, in the Standalone, **Receive MIDI
+  clock** (on by default).
+- **SYNCED**, the strip's second line, is what the synced times play (clock.md §5.3): row 63
+  `post.delay.sync`'s echo and, when the mode sets it, layer 0's `base_sync`, each at the
+  committed tempo, scaled by the Subdiv and folded by octaves into its range ("Echo 1/4 ·
+  Subdiv ×1/2 → 1/2 · 1.00 s"). In the Leaves view `post.delay.time_ms` is dimmed while row 63
+  is set, and the grain delay's Time while `base_sync` is (each waits), and the tooltips say what
+  plays.
 
 Following the host (clock.md §4.4): at each host block the plugin sends a Tempo event when the
 host's tempo moved by 1 µs per quarter or more, and at a transport start a Tempo event and a
 Start anchored on the first 24-ppqn tick at or after the block's first frame (`HostAnchor`, a
 frame offset inside the block), so CLOCK hits land on the host's beats with nothing before the
-anchor; a loop wrap or a jump of more than half a tick is a Locate anchored the same way, and
-a stop is a Stop. **Restart on play** stays off by default: the anchor aligns the grid either
-way, and a bounce is reproducible at every host block size with it on.
+anchor; a loop wrap, a jump, or the engine's grid drifting more than half a tick from the
+host's position (the engine plays each block at the tempo of its first frame, so a tempo ramp
+leaves it behind or ahead) is a Locate anchored the same way, and a stop is a Stop. A host tempo
+outside 20-300 BPM plays folded by octaves (up to four), so the grid stays on the host's beats.
+**Restart on play** stays off by default: the anchor aligns the grid either way, and a bounce is
+reproducible at every host block size with it on.
 
 Across restarts (prepareToPlay, a change of device or rate, Restart on play, a session
 restore) the plugin re-asserts the committed tempo (the host's when it is followed) and rows 83
@@ -353,9 +366,7 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
 - **Not yet built from §4:** the wrapper-owned bypass with crossfade (JUCE's default bypass
   stops the engine, so trails do not continue), the resampled 48 kHz mode, MIDI CC mapping, LV2
   and CLAP.
-- **Tempo, not yet:** the synced-times revision's row 86 (`global.tempo_glide`, which joins the
-  Sync menu) and the effective synced time of row 63 in the strip; the pedal view's Time knob
-  still moves `macro.time` in every time mode (the Microcosm's routing of it to the Subdiv zone
+- **Tempo, not yet:** the pedal view's Time knob still moves `macro.time` in every time mode (the Microcosm's routing of it to the Subdiv zone
   or the tempo, clock.md §6.4, is the control surface's); MIDI clock timestamps are the
   device's arrival scaled into the block (a DLL mapping is a later refinement, §10.2). Host
   bounces are reproducible only at a constant tempo with Restart on play (clock.md §4.4's list

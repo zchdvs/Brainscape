@@ -105,6 +105,7 @@ constexpr auto kEffectVolume = static_cast<uint32_t>(ParamId::EffectVolumeDb);
 constexpr auto kPerfSubdiv   = static_cast<uint32_t>(ParamId::PerfSubdiv);    // row 83
 constexpr auto kPerfTimeMode = static_cast<uint32_t>(ParamId::PerfTimeMode);  // row 84
 constexpr auto kTempoRecall  = static_cast<uint32_t>(ParamId::TempoRecall);   // row 85
+constexpr auto kTempoGlide   = static_cast<uint32_t>(ParamId::TempoGlide);    // row 86
 
 float FloatOf(uint32_t bits) noexcept {
   float v = 0.f;
@@ -327,7 +328,8 @@ void BrainscapeProcessor::InitEngine(double sampleRate) {
 void BrainscapeProcessor::LoadAfterRestart() noexcept {
   RestartTimeline();
   if (freeze_->get()) live_->engine.SetFreeze(true);
-  recallSent_ = -1;  // row 85 goes out again: an Init'd or swapped-in engine has its default
+  recallSent_ = -1;  // rows 85 and 86 go out again: an Init'd or swapped-in engine has its default
+  glideSent_  = -1;
 }
 
 void BrainscapeProcessor::ScheduleReasserts(bool presetChange, uint32_t ns) noexcept {
@@ -469,6 +471,9 @@ BrainscapeProcessor::TempoDisplay BrainscapeProcessor::GetTempoDisplay() const n
   d.source        = dispSource_.load(std::memory_order_relaxed);
   d.followingHost = dispFollowing_.load(std::memory_order_relaxed);
   d.hostOctaves   = dispHostOctaves_.load(std::memory_order_relaxed);
+  d.subdiv        = dispSubdiv_.load(std::memory_order_relaxed);
+  d.timeMode      = dispTimeMode_.load(std::memory_order_relaxed);
+  d.rate          = dispRate_.load(std::memory_order_relaxed);
   d.hostClamped   = dispHostClamped_.load(std::memory_order_relaxed);
   const uint8_t flags = dispFlags_.load(std::memory_order_relaxed);
   d.running  = (flags & kTempoFlagRunning) != 0u;
@@ -519,6 +524,7 @@ void BrainscapeProcessor::SetSettings(const WrapperSettings& s) noexcept {
   tempoSource_.store(static_cast<uint32_t>(s.tempoSource), std::memory_order_relaxed);
   receiveMidiClock_.store(s.receiveMidiClock, std::memory_order_relaxed);
   tempoRecallPreset_.store(s.tempoRecallPreset, std::memory_order_relaxed);
+  tempoGlide_.store(s.tempoGlide, std::memory_order_relaxed);
   if (s.restartOnStart) EnsureSpareWorker();
   spareWake_.notify_all();  // the worker prepares or releases the spare
 }
@@ -538,6 +544,7 @@ WrapperSettings BrainscapeProcessor::GetSettings() const noexcept {
                          : TempoSource::Host;
   s.receiveMidiClock  = receiveMidiClock_.load(std::memory_order_relaxed);
   s.tempoRecallPreset = tempoRecallPreset_.load(std::memory_order_relaxed);
+  s.tempoGlide        = tempoGlide_.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -1191,19 +1198,22 @@ void BrainscapeProcessor::EmitDue(uint64_t frame, uint64_t blockStart, uint64_t 
   while (runEnd < pendingCount_ && pending_[runEnd].frame <= frame) ++runEnd;
   if (first) {
     // The tempo core first (clock.md §10.1, §4.4): the re-asserts after an Exact load, then
-    // row 85 when it changed (before a load reads it), the state load and a restored session's
-    // performance after it, then the host's Tempo and Transport.
+    // rows 85 and 86 when they changed (before a load reads 85, and before the block's tempo
+    // changes are classed by 86), the state load and a restored session's performance after it,
+    // then the host's Tempo and Transport.
     EmitReasserts(offset);
-    const int recall = tempoRecallPreset_.load(std::memory_order_relaxed) ? 1 : 0;
-    if (recall != recallSent_) {
-      recallSent_ = recall;
+    const auto device = [this, offset](int value, int* sent, uint32_t id) {
+      if (value == *sent) return;
+      *sent = value;
       Engine::BlockEvent b;
       b.offset = offset;
       b.type   = Engine::EventType::SetParam;
-      b.id     = kTempoRecall;
-      b.value  = recall != 0 ? 1.0f : 0.0f;
+      b.id     = id;
+      b.value  = value != 0 ? 1.0f : 0.0f;
       Emit(b);
-    }
+    };
+    device(tempoRecallPreset_.load(std::memory_order_relaxed) ? 1 : 0, &recallSent_, kTempoRecall);
+    device(tempoGlide_.load(std::memory_order_relaxed) ? 1 : 0, &glideSent_, kTempoGlide);
   }
   if (first && loadPending_) {
     Engine::BlockEvent load;
@@ -1386,6 +1396,9 @@ void BrainscapeProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     liveNs_.store(info.nsPerQuarter, std::memory_order_relaxed);
   }
   dispSource_.store(info.source, std::memory_order_relaxed);
+  dispSubdiv_.store(info.subdiv, std::memory_order_relaxed);
+  dispTimeMode_.store(info.timeMode, std::memory_order_relaxed);
+  dispRate_.store(engineRateInt_, std::memory_order_relaxed);
   dispFlags_.store(info.flags, std::memory_order_relaxed);
   dispPosition_.store(info.position, std::memory_order_relaxed);
   dispFollowing_.store(follower_.Following(), std::memory_order_relaxed);

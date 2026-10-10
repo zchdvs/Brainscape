@@ -167,6 +167,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     uint8_t  source        = 0;          // tempo::ClockSource
     bool     followingHost = false;      // the wrapper sends the host's tempo and transport
     int8_t   hostOctaves   = 0;          // the host's tempo folded into range: 2^octaves beats a quarter
+    uint8_t  subdiv        = 0;          // the live Subdiv's code and time mode (TempoInfo's), and
+    uint8_t  timeMode      = 0;          // the engine's integer rate R: what a synced time needs
+    uint32_t rate          = 48000;
     bool     hostClamped   = false;      // the host's tempo is out of reach: the grid is off its beats
     bool     running       = false;      // the transport runs
     bool     locked        = false;      // the MIDI clock follower holds 24 ticks or more
@@ -385,6 +388,7 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   std::atomic<uint32_t> tempoSource_{static_cast<uint32_t>(TempoSource::Host)};
   std::atomic<bool>     receiveMidiClock_{true};
   std::atomic<bool>     tempoRecallPreset_{false};
+  std::atomic<bool>     tempoGlide_{false};  // row 86
   // Audio thread: the host's events of this block (§4.4), the MIDI translator of the Standalone's
   // clock (§10.2), the re-asserts due at the next first frame (§10.1), a session restore's
   // performance after its Spillover load, row 85 as the engine last got it (-1: re-send it), the
@@ -404,13 +408,15 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
     uint32_t ns      = 0;  // the session's tempo, or 0
   } afterLoad_;
   int      recallSent_ = -1;
+  int      glideSent_  = -1;  // row 86 as the engine last got it (-1: re-send it)
   uint32_t carryNs_    = 500000000;
   uint8_t  lastSource_ = 0;
   uint32_t engineRateInt_ = 48000;  // R (clock.md §1.3), for HostAnchor
   // For the BPM panel and the session (any thread): the committed tempo after the last block (or
   // a session's, until its unit applies), and the rest of TempoDisplay.
   std::atomic<uint32_t> liveNs_{500000000};
-  std::atomic<uint8_t>  dispSource_{0}, dispFlags_{0};
+  std::atomic<uint8_t>  dispSource_{0}, dispFlags_{0}, dispSubdiv_{0}, dispTimeMode_{0};
+  std::atomic<uint32_t> dispRate_{48000};
   std::atomic<bool>     dispFollowing_{false};
   std::atomic<int8_t>   dispHostOctaves_{0};
   std::atomic<bool>     dispHostClamped_{false};

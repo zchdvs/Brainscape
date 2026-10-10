@@ -27,7 +27,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   static constexpr int kDefaultWidth  = 1180;
   static constexpr int kDefaultHeight = 720;
   static constexpr int kMinWidth      = 940;
-  static constexpr int kMinHeight     = 660;  // the tempo strip's 58 px over the 600 before it
+  static constexpr int kMinHeight     = 676;  // the tempo strip's 74 px over the 600 before it
 
   enum class View : uint8_t { Pedal, Leaves };
 

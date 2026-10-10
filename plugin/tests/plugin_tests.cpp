@@ -3736,6 +3736,7 @@ TEST_CASE("the internal tempo, Subdiv and time mode persist in the session and a
   s.tempoSource     = TempoSource::Internal;
   s.tempoRecallPreset = true;
   s.receiveMidiClock  = false;
+  s.tempoGlide        = true;
   a->SetSettings(s);
   REQUIRE(a->SetTempoFromUi(93.75));
   a->SubdivParam().SetPlainNotifyingHost(4.0f);    // x4
@@ -3753,6 +3754,7 @@ TEST_CASE("the internal tempo, Subdiv and time mode persist in the session and a
   REQUIRE(st.settings.tempoSource == TempoSource::Internal);
   REQUIRE(st.settings.tempoRecallPreset);
   REQUIRE_FALSE(st.settings.receiveMidiClock);
+  REQUIRE(st.settings.tempoGlide);
   std::vector<uint8_t> again;
   EncodeState(st, again);
   REQUIRE(again.size() == blob.getSize());
@@ -3887,6 +3889,32 @@ TEST_CASE("saving a preset captures the live tempo, Subdiv and time mode") {
   }
 }
 
+TEST_CASE("row 86, global.tempo_glide, is a device setting: a tempo Jump glides a synced echo (§7.1, D22)") {
+  // sync_post's echo at 1/4. The wrapper sends row 86 at the first frame after every restart and
+  // whenever it changes, as it sends row 85; Off, a tempo Jump crossfades the echo, On it glides.
+  const auto sync = GoldenPackage("sync_post.bsp");
+  for (const bool glide : {false, true}) {
+    INFO("tempo glide " << (glide ? "On" : "Off"));
+    auto            proc = MakeProcessor({}, {});
+    WrapperSettings s    = proc->GetSettings();
+    s.tempoSource        = TempoSource::Internal;
+    s.tempoGlide         = glide;
+    proc->SetSettings(s);
+    REQUIRE(proc->LoadPresetState(*sync));
+    RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+    // A re-Init (a rate change) resets the engine's device settings: the wrapper sends 86 again.
+    proc->prepareToPlay(48000.0, 512);
+    RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+    const TempoStats before = proc->EngineTempoCounts();
+    REQUIRE(proc->SetTempoFromUi(90.0));  // from the stored 140 BPM: a Jump
+    RenderProcessor(*proc, MakeInput(4800), {}, {{480}});
+    const TempoStats after = proc->EngineTempoCounts();
+    CHECK(after.jumps == before.jumps + 1u);
+    CHECK(after.crossfades == before.crossfades + (glide ? 0u : 1u));
+    CHECK(proc->GetSettings().tempoGlide == glide);
+  }
+}
+
 TEST_CASE("the tempo strip shows the tempo, its source and the rows, and sends taps") {
   TestPlayHead head;
   head.hasBpm = true;
@@ -3934,15 +3962,31 @@ TEST_CASE("the tempo strip shows the tempo, its source and the rows, and sends t
   editor->RefreshNow();
   REQUIRE(proc->EngineTempo().nsPerQuarter == tempo::NsPerQuarterFromBpm(97.5));
   REQUIRE(t.Bpm().getText() == "97.5");
-  // The settings menu offers the source and the recall (and, in the Standalone, MIDI clock).
+  // The settings menu offers the source, the recall and the tempo glide (row 86), and, in the
+  // Standalone, MIDI clock.
   int                   items = 0;
   const juce::PopupMenu menu  = t.SettingsMenu();
   for (juce::PopupMenu::MenuItemIterator it(menu); it.next();) items += it.getItem().isSectionHeader ? 0 : 1;
-  REQUIRE(items == 4);
+  REQUIRE(items == 6);
+  // No synced field: the line says the echo is off.
+  REQUIRE(t.Synced().getText() == "SYNCED   Echo Off");
   // A clock mode uses tempo.
   REQUIRE(proc->LoadPresetState(*GoldenPackage("clock_hits.bsp")));
   editor->RefreshNow();
   REQUIRE(t.UsesTempo());
+  // A synced echo shows what it plays at the committed tempo, Subdiv and time mode (§5.3):
+  // sync_post's 1/4 at 120 BPM, in its stored Subdiv time mode at TAP, then at ×1/2.
+  REQUIRE(proc->SetTempoFromUi(120.0));
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});  // a load voids producer events before it
+  REQUIRE(proc->LoadPresetState(*GoldenPackage("sync_post.bsp")));
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  editor->RefreshNow();
+  REQUIRE(t.Synced().getText() == juce::String::fromUTF8("SYNCED   Echo 1/4 \xc2\xb7 500 ms"));
+  t.SubdivSegment(1).onClick();
+  RenderProcessor(*proc, MakeInput(480), {}, {{480}});
+  editor->RefreshNow();
+  REQUIRE(t.Synced().getText() ==
+          juce::String::fromUTF8("SYNCED   Echo 1/4 \xc2\xb7 Subdiv \xc3\x97" "1/2 \xe2\x86\x92 1/2 \xc2\xb7 1.00 s"));
   proc->setPlayHead(nullptr);
   owned.reset();
 }

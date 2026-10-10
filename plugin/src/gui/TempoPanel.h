@@ -15,12 +15,12 @@ namespace brainscape::plugin {
 // bar's first beat brighter), TAP (a Tap event; greyed while the host's tempo is followed, which
 // drops taps), rows 83 and 84 (the Subdiv knob's six positions and the time mode, §10.4), the
 // preset's stored tempo beside the live one with Store (Save, which captures the performance),
-// and the tempo core's device settings in a menu: the Tempo source, global.tempo_recall (row 85)
-// and, in the Standalone, Receive MIDI clock. A preset that does not use tempo (UsesTempo, §6.6)
-// dims rows 83 and 84 and says so. Message thread.
-//
-// T2's synced times (row 86, global.tempo_glide, in the settings menu; and the effective synced
-// time of row 63, "1/1 -> 1/2 · 1,000 ms", §5.3) join this panel: see the hooks in TempoPanel.cpp.
+// and the tempo core's device settings in a menu: the Tempo source, global.tempo_recall (row 85),
+// global.tempo_glide (row 86) and, in the Standalone, Receive MIDI clock. A second line shows what
+// the synced fields play (§5.3, §5.4): row 63's echo and layer 0's base_sync as their effective
+// values, "1/4 · Subdiv ×1/2 → 1/2 · 1.00 s", at the committed tempo, Subdiv and time mode. A
+// preset that does not use tempo (UsesTempo, §6.6) dims rows 83 and 84 and says so. Message
+// thread.
 class TempoPanel final : public juce::Component, public juce::SettableTooltipClient {
  public:
   explicit TempoPanel(BrainscapeProcessor& processor);
@@ -42,6 +42,7 @@ class TempoPanel final : public juce::Component, public juce::SettableTooltipCli
   juce::TextButton& TimeSegment(int mode) noexcept { return time_[static_cast<size_t>(mode)]; }
   juce::TextButton& Store() noexcept { return store_; }
   juce::TextButton& Settings() noexcept { return settings_; }
+  juce::Label&      Synced() noexcept { return synced_; }
   bool              UsesTempo() const noexcept { return usesTempo_; }
   // What the settings menu offers, as it would show it (its items' ticks follow the settings).
   juce::PopupMenu SettingsMenu();
@@ -59,6 +60,7 @@ class TempoPanel final : public juce::Component, public juce::SettableTooltipCli
   std::array<juce::TextButton, 6> subdiv_;
   std::array<juce::TextButton, 3> time_;
   juce::TextButton                store_{"Store"}, settings_;
+  juce::Label                     synced_;
   BrainscapeProcessor::TempoDisplay shown_{};
   uint32_t                        storedUs_   = 500000;
   bool                            usesTempo_  = false;
@@ -71,5 +73,13 @@ class TempoPanel final : public juce::Component, public juce::SettableTooltipCli
   juce::Rectangle<int> titleArea_, bpmArea_, badgeArea_, beatArea_, subdivCaption_, timeCaption_, storedArea_;
   float                scale_ = 1.f;
 };
+
+// What a synced field plays (ParamDisplay's FormatSyncedTime, clock.md §5.3): `code` (§5.2, 0 off)
+// at the panel's committed tempo, the live Subdiv and time mode, and the engine's integer rate.
+juce::String SyncedTimeText(const BrainscapeProcessor::TempoDisplay& d, tempo::SyncTarget target,
+                            uint8_t code);
+// Row 63's code from its plain value, as the engine reads a counting leaf (RoundHalfAwayI32 of
+// the canonical value; it is never negative).
+uint8_t DelaySyncCode(float plain) noexcept;
 
 }  // namespace brainscape::plugin

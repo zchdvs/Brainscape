@@ -25,11 +25,13 @@ struct WrapperSettings {
   bool        restartOnStart = false;  // "Restart on transport start" (§4.9), off by default
   // The tempo core's device settings (clock.md §10.1, §10.2, §10.4): the Tempo source; "Receive
   // MIDI clock" (on by default), which gates the MIDI clock bytes the Standalone's MIDI input
-  // brings to the translator; and global.tempo_recall (row 85: Keep, or Preset), which the engine
-  // reads at a Spillover load.
+  // brings to the translator; global.tempo_recall (row 85: Keep, or Preset), which the engine
+  // reads at a Spillover load; and global.tempo_glide (row 86: Off, the default, or On), which
+  // makes a tempo Jump glide the synced post delay instead of crossfading it (§7.1, D22).
   TempoSource tempoSource       = TempoSource::Host;
   bool        receiveMidiClock  = true;
   bool        tempoRecallPreset = false;
+  bool        tempoGlide        = false;
 };
 inline constexpr float kWrapperGainRangeDb = 24.f;
 
@@ -62,7 +64,8 @@ inline constexpr float kWrapperGainRangeDb = 24.f;
 // committed tempo in ns per quarter (the internal tempo the session keeps across relaunch, project
 // reload and device changes; written only in range), 10 and 11 rows 83 and 84, perf.subdiv's
 // position and perf.time_mode, as canonical binary32 (the live Subdiv and time mode the session's
-// restart re-asserts). A session without 9-11 restores the preset's stored ones.
+// restart re-asserts). A session without 9-11 restores the preset's stored ones. 12
+// global.tempo_glide (0 Off, 1 On; row 86, sound revision 9).
 struct WrapperFactoryMode {
   std::string id;                          // "factory.lull"
   uint8_t     packageHash[32] = {};        // the package the session played
