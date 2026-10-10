@@ -77,7 +77,7 @@ the choices this revision made for the switch. In short:
   - **Off clips** each channel at the same ceiling instead of scaling the gain. On the pedal that
     gives the codec, code for code, what the engine without a limiter gives it. The plugin now
     clips identically, where an Off that passed overs would split it from the pedal again
-    (§4.7).
+    (§4.7). What Off does is the owner's open question, §11.5 Q1, with the clip recommended.
   - **Turning Off while limiting drains** the gain to unity at 40 dB/s with no attack, then
     clips. Turning On starts from unity, or from the drain's gain if a drain is running
     (§4.7).
@@ -2170,9 +2170,10 @@ designs, each stays reversible before the first public release; reversing one is
 decision of its own and, where it changes the sound, a sound revision. Record §7 holds the
 answers as given.
 
-The Answer column holds only what the owner decided. What D5's switch adds to another decision
-is in that decision's Consequence column, marked "for D5", with Off as the design recommends, a
-clip at the ceiling (§11.5 Q1); what waits on D14 is marked "pending D14".
+The Answer column holds what the owner decided; D5's also gives this design's specification of
+the switch, marked "As specified here", and what stays open. What D5's switch adds to another
+decision is in that decision's Consequence column, marked "for D5", with Off as the design
+recommends, a clip at the ceiling (§11.5 Q1); what waits on D14 is marked "pending D14".
 
 | # | Decision | Answer (the owner, 2026-10-10) | Consequence | § |
 |---|---|---|---|---|
@@ -2253,7 +2254,7 @@ clip at the ceiling (§11.5 Q1); what waits on D14 is marked "pending D14".
    Mitigation: the CLIP caption from the load, the plugin's CLIP tags in its lists and the Rev7's
    double blink, all visible before anything clips; the control-surface requirement for the
    product (D6's consequence); L15's note in the Curation slice and `bspc lint`; the factory set
-   keeps it On (D14).
+   keeps it On, as D14 recommends.
 10. **Package churn.** Revision 10 changes every committed package's `sound_hash` without a
     render moving. If it shares a pull request with T2, two such re-stamps meet.
     Mitigation: the package rule's label with one `Package-change:` line per revision, as wave 1
@@ -2269,7 +2270,7 @@ clip at the ceiling (§11.5 Q1); what waits on D14 is marked "pending D14".
     the release then runs at 10 dB/s, so the recovery takes seconds (§4.5, §4.7). It is the one
     Spillover load that jumps the level.
     Mitigation: `limit_clip_trails` pins it; L2's A/B plays it against the entry ramp, which the
-    owner may choose instead (§11.5 Q9); factory presets do not clip (D14).
+    owner may choose instead (§11.5 Q9); factory presets do not clip, as D14 recommends.
 
 ### 11.5 Open questions
 

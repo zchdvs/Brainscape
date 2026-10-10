@@ -423,6 +423,9 @@ had it otherwise, and what the correction restated.
      plugin it hands a DAW floats above 1.0, which a floating-point bus plays unclipped, so an
      Off preset would clip on the pedal and not in the plugin. It would also give up Goal 1 and
      the audition's "no sample over full scale" for every Off preset.
+   - *Since the correction of draft 4 (§7.5):* the owner chose the switch but not what Off does,
+     so the clamp is the design's recommendation and the pass-through is not recommended; the
+     choice is the owner's, design §11.5 Q1.
 2. **Turning Off mid-limiting** (design §4.7). *Chosen:* a drain at k to exactly 1, with no
    attack and no hold, then the clamp. *Rejected:*
    - an instant switch, a step of up to 27.7 dB on the goldens, and up to 144.5 dB from the
@@ -541,10 +544,13 @@ non-goal, §1.4's switch term, §4.7's opening and "What Off means", §7.1's hea
 and MIDI CC and panel line, §7.4's product-panel line, §9.5's opening and D14 paragraph, §10's
 opening and table, §11.1's L2 row and total, §11.2's preamble, D5 row (Answer: "Changed by the
 owner") and D14 row, the "pending D5" labels of D6, D8, D9, D10 and D13 (now "for D5"), §11.3's
-decision 11, §11.4's risk 11, §11.5's Q1, Q2 and Q7, §11.6 and §12. In this record: the header,
-§5, §7.1, §8's opening and findings Q1, Q2 and Q5. Elsewhere: STATUS's limiter lines, the
-README's row and the dated notes in mode-compiler.md §11.3, companion-app.md §4.8 and
-determinism-profile.md §3.7. Row 87 is the switch's.
+decision 11, §11.4's risk 11, §11.5's Q1, Q2 and Q7, §11.6 and §12. A check of the correction
+also marked what Off does as open in "What changed in draft 3", said that D5's Answer cell gives
+the design's specification beside the owner's answer, and wrote D14's outcome in risks 9 and 12
+as recommended. In this record: the header, §5, §7.1, §7.2 item 1, §8's opening and findings Q1,
+Q2 and Q5. Elsewhere: STATUS's limiter lines, the README's row and the dated notes in
+mode-compiler.md §11.3, companion-app.md §4.8 and determinism-profile.md §3.7. Row 87 is the
+switch's.
 
 **What stays open.** The owner chose the form, not everything in it:
 
