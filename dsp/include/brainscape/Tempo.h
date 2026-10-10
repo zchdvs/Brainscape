@@ -114,12 +114,12 @@ uint32_t TempoNsFromKnob(float m) noexcept;
 // (×1/4, ×1/2, TAP, ×2, ×4, ×8) and §5.1's codes (0 TAP, 1 ×1/4, 2 ×1/2, 3 ×2, 4 ×4, 5 ×8), which
 // Subdivision events carry. A position above 5 reads as 5, a code above 5 as TAP.
 constexpr uint8_t SubdivCodeFromPosition(uint32_t position) noexcept {
-  return position == 2 ? kSubdivTap
-                       : (position < 2 ? static_cast<uint8_t>(position + 1)
-                                       : static_cast<uint8_t>(position > 5 ? 5 : position));
+  return position == 2u ? kSubdivTap
+                        : static_cast<uint8_t>(position < 2u ? position + 1u : (position > 5u ? 5u : position));
 }
 constexpr uint32_t SubdivPositionFromCode(uint8_t code) noexcept {
-  return code == kSubdivTap || code > 5 ? 2u : (code <= 2 ? code - 1u : static_cast<uint32_t>(code));
+  const uint32_t c = code;
+  return c == kSubdivTap || c > 5u ? 2u : (c <= 2u ? c - 1u : c);
 }
 
 // The plugin host's tempo and position as events (§4.4): producer functions, as TempoNsFromKnob

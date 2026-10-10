@@ -637,7 +637,7 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
     // internal source it plays the stored tempo too, which the display shows at once.
     subdiv_->StoreMirror(Canonicalize(ParamId::PerfSubdiv, static_cast<float>(tempo::SubdivPositionFromCode(
                                                                static_cast<uint8_t>(mode.performance.subdiv)))));
-    timeMode_->StoreMirror(Canonicalize(ParamId::PerfTimeMode, static_cast<float>(mode.performance.timeMode)));
+    timeMode_->StoreMirror(Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(mode.performance.timeMode))));
     if (tempoRecallPreset_.load(std::memory_order_relaxed) && !dispFollowing_.load(std::memory_order_relaxed) &&
         dispSource_.load(std::memory_order_relaxed) == static_cast<uint8_t>(tempo::ClockSource::Internal) &&
         mode.performance.usPerQuarter >= kMinUsPerQuarter && mode.performance.usPerQuarter <= kMaxUsPerQuarter) {
@@ -738,7 +738,7 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
                                                                      static_cast<uint8_t>(mode.performance.subdiv)))));
     timeMode_->StoreMirror(state.hasPerformance
                                ? state.timeMode
-                               : Canonicalize(ParamId::PerfTimeMode, static_cast<float>(mode.performance.timeMode)));
+                               : Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(mode.performance.timeMode))));
     if (state.tempoNs != 0u) liveNs_.store(state.tempoNs, std::memory_order_relaxed);
     PostStateUnit(state.plain, mode, UnitKind::SessionRestore, state.tempoNs);
     for (size_t i = 0; i < kNumLeafParams; ++i) params_[i]->StoreMirror(state.plain[i]);
