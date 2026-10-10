@@ -491,7 +491,9 @@ the 24-bit branch.
 > called it a proposal. Whether Off clips, as above, or passes overs to the host unclipped is
 > still the owner's question (its §11.5 Q1), recommended Clip so the plugin matches the pedal.
 > The plugin shows its states as Limit and Clip and tags Clip presets in the Library list and the
-> Modes menu.)*
+> Modes menu.)* *(2026-10-10, the owner's answers: Off clips, so the plugin clips exactly as the
+> pedal does, and a Limit preset loaded with Trails after a Clip one limits at once, without a
+> ramp (its §11.5 Q1 and Q9).)*
 
 ### 4.9 Restart, offline renders and reproducible bounces
 

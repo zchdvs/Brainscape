@@ -1728,6 +1728,10 @@ each change, its numbers and the owner's answers.
 > D14, recommended On. The leaf reads as any integer-valued leaf (§2.2, §3.7): a fraction is
 > accepted and plays by the threshold, so this document needs no amendment. Users see its states
 > as Limit and Clip.
+>
+> *2026-10-10, the owner's last answers:* Off clips at the same ceiling, and factory presets keep
+> the switch On (its D14), so L15 is an error under `--factory`; the `--clips` declaration that
+> would let a factory mode clip waits until one asks for it (output-limiter.md §9.5, §11.5).
 
 ### 11.4 What waits
 

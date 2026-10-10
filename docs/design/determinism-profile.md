@@ -401,6 +401,9 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 > or passes overs is still the owner's question (its §11.5 Q1), with the clamp recommended, which
 > keeps the output at the same ceiling on every target; `Reset` primes the limiter before its
 > own rebuild, so the switch always sees unity gain after a restart (its §6.1).
+>
+> *2026-10-10, the owner's answer:* Off clamps, as above, so the output stops at the same ceiling
+> on every target with the switch On or Off (its §11.5 Q1).
 
 ### 3.8 Conforming builds and supported targets
 

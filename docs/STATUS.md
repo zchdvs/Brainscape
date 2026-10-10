@@ -182,15 +182,15 @@ No engine change: the set plays at sound revision 7.
   changed by the owner to a per-preset switch**, chosen in the session from four options after a
   "Change" with no note on the decisions page: a stored Leaf row, **87, `output.limiter`,
   default On**, so a mode can turn the limiter off on purpose.*
-  - *Off clips at the same ceiling, as the design recommends: on the pedal that is code for code
-    the unlimited engine, and in the plugin it matches the pedal. What Off does is still the
-    owner's question (its §11.5 Q1): the alternative, letting overs pass, would split the plugin
-    from the pedal above full scale.*
+  - *Off clips at the same ceiling, the owner's answer to its §11.5 Q1 ("Hard-clip"), as the
+    design recommended: on the pedal that is code for code the unlimited engine, and in the
+    plugin it matches the pedal. Letting overs pass would have split the plugin from the pedal
+    above full scale.*
   - *Turning it Off mid-limiting drains the gain at 40 dB/s, then clips.*
   - *Macros, expression and host automation cannot reach it. Users see its states as Limit and
     Clip, and a Clip preset is shown from its load.*
-  - *Whether factory presets may set it Off is a new owner decision, D14, recommended On (a new
-    lint, L15).*
+  - *Factory presets keep it On: a new owner decision, D14, which the owner confirmed as
+    recommended ("Keep factory On"), enforced by a new lint, L15.*
   - *No render changes for it but a test preset's, but every committed package's `sound_hash`
     does, so revision 10's pull request carries the package-change label.*
 
@@ -198,9 +198,11 @@ No engine change: the set plays at sound revision 7.
   CLOCK's tempo core the live image has 792 bytes of ITCM spare, so the limiter lands after the
   cold-code move that synced times also need. The design is draft 4 on PR #13, after two reviews
   of draft 3, corrected the same day: draft 4 had called the switch a proposal, because its
-  reviewers saw only the decisions page. Still open with the owner: what Off does, D14, and, by
-  ear in L2's A/B, whether a Limit preset loading with trails after a Clip one drops at once or
-  gradually (Q9, recommended at once).)*
+  reviewers saw only the decisions page. The owner then answered its three open questions in the
+  session, each as recommended: Off hard-clips (Q1), factory presets keep it On (D14), and a Limit
+  preset loading with trails after a Clip one drops at once (Q9, "Instant"; the gradual entry
+  ramp is not built). No limiter question waits on the owner; L1b's DAC test, L2's A/B and bench
+  session 2 settle the rest.)*
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -1290,8 +1292,8 @@ Steps 1–4 need no hardware.
    knob-rating rows and the cost governor (11), so the ratings are given on the limited sound and
    none needs a re-listen; a Rev7 test of the DAC's inter-sample behaviour (its lane L1b) comes
    first, so the ceiling is fixed once. Its D5 is the owner's per-preset switch (row 87,
-   `output.limiter`, default On); it asks the owner what Off does (recommended: a clip at the
-   ceiling) and whether factory presets may clip (D14). App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   `output.limiter`, default On); by the owner's answers of 2026-10-10, Off clips at the ceiling
+   and factory presets keep it On (D14), so no limiter question waits on the owner. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done

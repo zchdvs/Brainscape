@@ -5,9 +5,10 @@
 > both 2026-10-10, draft 4 corrected the same day for D5's form): the inputs, what each
 > investigation found and where, the probes the revision ran, where the sources disagreed and how
 > the design resolves it, the alternatives it rejected, how the three reviews of draft 1 were
-> disposed of (§6), the owner's answers with what draft 3 decided for them and the owner's choice
-> of D5's form (§7), and how the two reviews of draft 3 were disposed of (§8). The design
-> document is normative; this record is not. "Design §N" is output-limiter.md, "record §N" this file,
+> disposed of (§6), the owner's answers with what draft 3 decided for them, the owner's choice
+> of D5's form and the owner's answers to draft 4's three open questions, all 2026-10-10 (§7),
+> and how the two reviews of draft 3 were disposed of (§8). The design document is normative;
+> this record is not. "Design §N" is output-limiter.md, "record §N" this file,
 > "profile §N" [determinism-profile.md](../determinism-profile.md), "budget §N"
 > [cpu-budget.md](../cpu-budget.md), "clock §N" [clock.md](../clock.md), "compiler §N"
 > [mode-compiler.md](../mode-compiler.md), "companion §N" [companion-app.md](../companion-app.md)
@@ -426,6 +427,7 @@ had it otherwise, and what the correction restated.
    - *Since the correction of draft 4 (§7.5):* the owner chose the switch but not what Off does,
      so the clamp is the design's recommendation and the pass-through is not recommended; the
      choice is the owner's, design §11.5 Q1.
+   - *Answered 2026-10-10 (§7.6):* the owner chose the clamp, "Hard-clip".
 2. **Turning Off mid-limiting** (design §4.7). *Chosen:* a drain at k to exactly 1, with no
    attack and no hold, then the clamp. *Rejected:*
    - an instant switch, a step of up to 27.7 dB on the goldens, and up to 144.5 dB from the
@@ -467,7 +469,8 @@ had it otherwise, and what the correction restated.
    by L15 under `--factory` and by the pre-screen. *Rejected for now:* Off allowed under a
    declared `clip` class. *Draft 4:* this is a product decision, so it became the owner's D14,
    recommended as draft 3 chose, with the declaration (now a `--clips` flag, not a class)
-   specified as the alternative (§8, findings Q2 and Q4).
+   specified as the alternative (§8, findings Q2 and Q4). *Answered 2026-10-10 (§7.6):* the
+   owner kept factory presets On, "Keep factory On".
 
 ### 7.3 Checks run for draft 3
 
@@ -565,6 +568,56 @@ switch's.
 The options the owner did not choose, and draft 4's other readings, are not carried as open
 questions.
 
+*Answered later on 2026-10-10 (§7.6):* all three, each as recommended.
+
+### 7.6 The owner's answers to draft 4's open questions (2026-10-10)
+
+**The questions and the answers.** Later on 2026-10-10 the owner was asked, in the chat session,
+the three questions the corrected draft 4 left open (§7.5), and gave each the answer the design
+recommended:
+
+| Design § | Question, as asked | The owner's answer |
+|---|---|---|
+| §11.5 Q1, what Off does | "When a preset's limiter switch is Off, what should happen to a sample that goes over full scale?" | **"Hard-clip"**: Off clamps each channel at the limiter's ceiling, max(1, \|a\|) (§7.2 item 1) |
+| §11.5 Q8, D14 | "May factory presets ship with the limiter Off (deliberate clipping)?" | **"Keep factory On"**: factory presets keep the switch On; L15 is an error under `--factory` (§7.2 item 8) |
+| §11.5 Q9 | "Loading a limited preset (with trails) right after a clipping one: if the trails are hot, how should the level drop?" | **"Instant"**: the instant attack as designed, not the entry ramp (§8.2 finding Q3) |
+
+As with D5's form (§7.5), the answers were given in the session, not on the decisions page. This
+record quotes the questions and answers as they were relayed to the revision that recorded them.
+
+**What follows.** Each answer is what the design already specified as its recommendation, so no
+technical content changes:
+
+- **Q1.** Design §4.7's Off path stands as specified. Goal 1 and the audition's "no sample over
+  full scale" hold for every preset, Off included, and the plugin clips exactly as the pedal
+  does.
+- **D14.** Design §11.2's D14 row reads "Confirmed by the owner". The `--clips` declaration stays
+  specified (design §9.5) but waits until a factory mode asks for it, so L3 does not build it and
+  its 0.5 day is not in the plan.
+- **Q9.** The instant attack stands, and the step on leaving a Clip preset with Trails is
+  accepted (risk 12). The entry ramp stays specified in design §4.7 for reference and is not
+  built. L2's A/B plays `limit_clip_trails` with the instant attack only, as a confirming listen
+  like those for D3 and D11, where draft 4 had it play both and decide.
+
+**What was restated.** In the design: the status block; dated additions to "What changed in
+draft 3" and "in draft 4", and a new paragraph after them on these answers; the Summary's control
+item; §1.3's last non-goal; §1.4's switch term; §4.5's row on turning On over a clipping texture;
+§4.7's "What Off means" and its entry-ramp paragraph; §7.1's text and L15; §9.3's
+`limit_clip_trails`; §9.5's opening, D14 paragraph, declaration and "When it is built"; §11.1's
+L2 and L3 rows and the total; §11.2's preamble and the D5, D8 and D14 rows; §11.3's decisions 11
+and 17; §11.4's risks 9 and 12; §11.5's lead, Q1, Q8 and Q9; §11.6; and §12. In this record:
+the header, §7.2 items 1 and 8, §7.5, this section, and §8.2's findings Q2, Q3 and Q4.
+Elsewhere: STATUS's limiter lines and plan item 4, the README's row, and a third dated sentence
+in each of the notes in mode-compiler.md §11.3, companion-app.md §4.8 and determinism-profile.md
+§3.7.
+
+**What stays open.** No owner question. What remains is settled by listening, measurement or
+other designs: L2's A/B confirms the answers by ear (design §11.5 Q2); L1b's DAC test fixes the
+ceiling (Q3, D10); bench session 2 replaces D9's placeholder (L6); the control-surface and bypass
+designs meet D6's and D13's requirements (Q4, Q6); and a later true-peak option is a question for
+later (Q5). Design §10's choice between rating first and waiting reaches the owner only if L1b
+cannot run first.
+
 ## 8. Review of draft 3 and its disposition
 
 Two reviews read draft 3 (`2895453`) on 2026-10-10: **[K]** package, determinism and tests
@@ -597,9 +650,9 @@ entry ramp offered, the instant attack kept as the recommendation).
 | # | Finding | Disposition (design §) |
 |---|---|---|
 | Q1 | D5's per-preset form is recorded as the owner's answer, but the owner never wrote it | applied: confirmed from the page's database (§7.1 above) and the owner's message. D5 is labelled "Change (no note); the form is proposed, awaiting the owner's confirmation" in the status block, the Summary, §7.1, §11.2, STATUS, the README row and the three dated notes; §12 and §7.1 above corrected; §11.5 Q1, first and "(owner, now)", sets out readings a–d and their consequences; row 87 is "held for the limiter's control" until the owner answers, and L2 does not start the switch's part before then (status, Summary, 4.7, 7.1, 10, 11.1, 11.2, 11.5, 12). *Reversed by the correction of 2026-10-10 (§7.5):* the owner had chosen the form in the session, which the review could not see; the labels are restated as the owner's decision, row 87 is the switch's, and §11.5 Q1 asks only what Off does |
-| Q2 | The factory policy blocks the stated purpose and is filed under owner-confirmed rows | applied: a new owner decision, D14, recommended On for now with §9.5's four reasons, the declaration as its alternative; Q8 is "(owner, now)"; §11.3 #17 points at D14; the switch's clauses leave the Answer column of D6 and D8 and sit, with D9's, D10's and D13's, in Consequence as "pending D5" ("for D5" since §7.5's correction) or "pending D14"; §11.2's preamble says the Answer column holds only what the owner confirmed (9.5, 11.2, 11.3, 11.5) |
-| Q3 | Loading an On preset with Trails after a clipping Off preset ducks the trails, and the dry on hot input | applied: confirmed from §4.3's attack and the whole-mix form; the review's example re-calculated (r = 0.180, the dry −2.87 dB). §4.5's Spillover row qualified and a new row added; §4.7's "Turning On" states the step; risk 12; a new golden, `limit_clip_trails` (an Off package settled and clipping on Saturation, then a Trails load of an On package with `limit_hot_mix25`'s settings, `LimiterDryFrames` > 0, all after the load); L2's A/B plays it. The mirrored "entry ramp" is specified and offered (Q9); draft 4 recommends the instant attack as designed, since it is D3's confirmed attack and the step only occurs on leaving a preset that clips by design, and the A/B decides (4.5, 4.7, 9.3, 11.1, 11.4, 11.5) |
-| Q4 | The `clip`-class escape cannot be built as written, and deliberate-Off user presets always "fail" | applied: confirmed (`bspc_roundtrip.py:150` lints documents only; `--declarations` reaches only `bspc render`; `declare --class` takes attack or pad). The declaration is a flag, `ratings.py declare --clips`, beside `--self-oscillating`; `bspc lint` gains `--declarations AUDITION.md`, which `bspc_roundtrip.py` passes; the replaced checks are listed (Peak (stored), Ceiling (moved), S11's Ceiling) with what replaces them; for non-factory ids the switch Off is the declaration, and the report gives the clip share instead of failing. Built now only if D14 chooses the alternative (about 0.5 day) (7.1, 7.3, 9.5, 11.1, 11.2 D14) |
+| Q2 | The factory policy blocks the stated purpose and is filed under owner-confirmed rows | applied: a new owner decision, D14, recommended On for now with §9.5's four reasons, the declaration as its alternative; Q8 is "(owner, now)"; §11.3 #17 points at D14; the switch's clauses leave the Answer column of D6 and D8 and sit, with D9's, D10's and D13's, in Consequence as "pending D5" ("for D5" since §7.5's correction) or "pending D14"; §11.2's preamble says the Answer column holds only what the owner confirmed (9.5, 11.2, 11.3, 11.5). *Answered by the owner on 2026-10-10 (§7.6):* factory presets keep it On, as recommended; D14 reads "Confirmed by the owner", and "pending D14" is now "for D14" |
+| Q3 | Loading an On preset with Trails after a clipping Off preset ducks the trails, and the dry on hot input | applied: confirmed from §4.3's attack and the whole-mix form; the review's example re-calculated (r = 0.180, the dry −2.87 dB). §4.5's Spillover row qualified and a new row added; §4.7's "Turning On" states the step; risk 12; a new golden, `limit_clip_trails` (an Off package settled and clipping on Saturation, then a Trails load of an On package with `limit_hot_mix25`'s settings, `LimiterDryFrames` > 0, all after the load); L2's A/B plays it. The mirrored "entry ramp" is specified and offered (Q9); draft 4 recommends the instant attack as designed, since it is D3's confirmed attack and the step only occurs on leaving a preset that clips by design, and the A/B decides (4.5, 4.7, 9.3, 11.1, 11.4, 11.5). *Answered by the owner on 2026-10-10 (§7.6):* the instant attack, before the A/B; the ramp is not built, and the A/B plays only the instant attack |
+| Q4 | The `clip`-class escape cannot be built as written, and deliberate-Off user presets always "fail" | applied: confirmed (`bspc_roundtrip.py:150` lints documents only; `--declarations` reaches only `bspc render`; `declare --class` takes attack or pad). The declaration is a flag, `ratings.py declare --clips`, beside `--self-oscillating`; `bspc lint` gains `--declarations AUDITION.md`, which `bspc_roundtrip.py` passes; the replaced checks are listed (Peak (stored), Ceiling (moved), S11's Ceiling) with what replaces them; for non-factory ids the switch Off is the declaration, and the report gives the clip share instead of failing. Built now only if D14 chooses the alternative (about 0.5 day) (7.1, 7.3, 9.5, 11.1, 11.2 D14). *The owner kept factory presets On on 2026-10-10 (§7.6), so it is not built now* |
 | Q5 | A stored Off cannot be seen on the pedal until it clips | applied: D6's consequence (for D5's switch; "pending D5" until §7.5's correction) hands the control-surface design two requirements, Clip shown from the load and clipping distinct from limiting; Q4 of §11.5 says "How", not "Whether"; the Rev7 LED double-blinks when the published switch goes to Clip, in both `led` modes; the plugin tags Clip presets in the Library list and the Modes menu; the lamp's CLIP caption shows from the load (7.3, 7.4, 11.2 D6, 11.4 #9, 11.5) |
 | Q6 | "Off" misleads plugin users: it hard-clips inside the engine | applied: the row's states are **Limit** and **Clip** through a new display kind, `LimitClip`, beside `LiveMark`'s "Mark"/"Live" precedent, with typed text limit, clip, on, off and numbers, boolean to hosts; the row is titled "Output ceiling"; the Leaves view, L15's message, the lamp, the console's `stats` (`limiterMode limit\|clip`) use the same words; the JSON key and the 0/1 encoding stay, and this document keeps On and Off for the two values (1.4, 7.1, 7.3, 7.4) |
 
