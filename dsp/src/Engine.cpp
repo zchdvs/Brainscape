@@ -285,10 +285,11 @@ BRAINSCAPE_COLD BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig&
   // + onset-detector analysis/FFT/whitening state.
   // Then the active mode (design §7.3), then the tempo core (docs/design/clock.md §2.6).
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
-      (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
+      (((static_cast<size_t>(kFeedbackDelayFrames) * 2u +
        detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
        detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
           sizeof(float) +
+      15u) & ~size_t{15}) +  // the objects after the floats start 16-aligned (Init)
       kActiveModeBytes + kTempoCoreBytes;
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
@@ -693,12 +694,19 @@ BRAINSCAPE_COLD bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& a
   warm += detail::PostChain::WarmFloats(cfg.sampleRate);
   detector_.Init(warm, cfg.sampleRate);
   warm += detail::OnsetDetector::WarmFloats();
+  // The float regions above leave `warm` only 4-byte aligned; the active mode and the tempo
+  // core (64-bit counters) start at the next 16-byte offset from the arena's 16-aligned base,
+  // as PlanMemory counts it.
+  auto* const warmBase = static_cast<unsigned char*>(arenas.base[static_cast<size_t>(Tier::Warm)]);
+  unsigned char* const objects =
+      warmBase + ((static_cast<size_t>(reinterpret_cast<unsigned char*>(warm) - warmBase) + 15u) &
+                  ~size_t{15});
   // The default mode (Mode.h), which plays as sound revision 1 did, until a load brings one.
-  mode_          = ::new (static_cast<void*>(warm)) ActiveMode();
+  mode_          = ::new (static_cast<void*>(objects)) ActiveMode();
   // The tempo core after it (clock.md §2.6): Init's 120 BPM, Free and TAP, boundary 0 at frame
   // 0, at the integer rate R (§1.3), 48,000 on every pedal-exact path. Constructed and Init-ed
   // out of line, so none of that code is in ITCM (§11.12).
-  tempo_ = TempoCore::Create(reinterpret_cast<unsigned char*>(warm) + kActiveModeBytes,
+  tempo_ = TempoCore::Create(objects + kActiveModeBytes,
                              static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
   postSync_     = SyncedInputs{};
   baseSync_     = SyncedInputs{};
