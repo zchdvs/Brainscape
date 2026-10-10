@@ -2154,7 +2154,7 @@ choice, the build follows the design's intent, as below (continuing the numberin
     non-finite ppq or one of 2⁴⁰ quarters or more either way (x stays inside
     `RoundHalfAwayI64`'s domain), an ns outside the tempo range or a rate outside 8–384 kHz.
     k is the integer nearest x, or the next one when x lies more than 10⁻⁹ above it (x − n is
-    exact, by Sterbenz), and the offset is `RoundHalfAwayI64(((k − x)·ns)·rate / 24·10⁹)` in
+    exact, by Sterbenz), and the offset is `RoundHalfAwayI64(((k − x)·ns)·rate / (24·10⁹))` in
     binary64 inside the guard, at most one tick rounded to a frame. The tests check it against
     exact integer readings of §4.4 on 100,000 positions (agreeing everywhere a quotient is not
     within 10⁻⁶ of a half) and in `TempoCore`: a host-style Start with the anchor fires its first
@@ -2239,7 +2239,7 @@ while following; a recall while following, under Preset and under Keep; the Stan
 clock (ticks, FA, FB, FC, F2 after a Program Change, SysEx, Active Sensing and note-ons) equal to
 the engine fed one translator's events at block patterns {441}, {37}, {4096} and {512, 1, 77};
 Receive MIDI clock off; the master's position re-asserted after a device change; the session's
-tempo, rows and settings restored before and while playing, before `prepareToPlay` and across 96
+tempo (typed, and a tapped one to the ns), rows and settings restored before and while playing, before `prepareToPlay` and across 96
 and 44.1 kHz, and an older session; Save capturing the performance; and the strip. The editor
 snapshot adds the strip's frames (`editor-tempo-*.png`).
 

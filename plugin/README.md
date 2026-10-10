@@ -298,8 +298,8 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   after the load), under Preset and under Keep; the Standalone's MIDI clock (ticks, Start, Stop,
   Continue, Song Position after a Program Change, SysEx and Active Sensing among note-ons) equal
   to the engine fed one translator's events at four block patterns, Receive MIDI clock off, and
-  the master's position re-asserted after a device change; the session's tempo, rows and
-  settings (restored before and while playing, before `prepareToPlay`, across rate changes, and
+  the master's position re-asserted after a device change; the session's tempo (typed, and a
+  tapped one to the ns), rows and settings (restored before and while playing, before `prepareToPlay`, across rate changes, and
   an older session without them); Save capturing the live tempo, Subdiv and time mode (and
   storing the stored one under recall Preset); and the tempo strip (its display, TAP, the
   segments, typing and the menu).

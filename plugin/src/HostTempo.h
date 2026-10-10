@@ -52,10 +52,10 @@ uint8_t  TimeModeOf(float plain) noexcept;
 //   4. Transport Stop at the first block that does not play.
 // Host-style transports: no AtNextTick (Tempo.h). Reset() forgets what was sent, so the next block
 // that follows sends its tempo and, playing, anchors with a Start: the re-asserts after every
-// Exact load (§10.1), and after a Spillover load, whose stored tempo the host's must replace.
+// Exact load (§10.1).
 class HostFollower {
  public:
-  static constexpr size_t   kMaxEvents     = 2;     // a Tempo, then a Transport
+  static constexpr size_t   kMaxEvents         = 2;  // a Tempo, then a Transport
   static constexpr uint32_t kTempoHysteresisNs = 1000;
 
   void Reset() noexcept;

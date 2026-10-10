@@ -3641,6 +3641,24 @@ TEST_CASE("the internal tempo, Subdiv and time mode persist in the session and a
     a->prepareToPlay(kRate, 512);
     check(*a, "re-prepared");
   }
+  SECTION("a tapped tempo, not a whole number of ns, survives to the ns (§8.4)") {
+    // Three taps 9,700 frames apart: 9,700 frames a quarter, 202,083,333.3 ns.
+    for (int k = 0; k < 3; ++k) {
+      a->TapFromUi();
+      RenderProcessor(*a, MakeInput(9700), {}, {{485}});
+    }
+    const uint32_t tapped = a->EngineTempo().nsPerQuarter;
+    REQUIRE(tapped == 202083333u);
+    juce::MemoryBlock taps;
+    a->getStateInformation(taps);
+    auto b = MakeProcessor({}, {});
+    b->setStateInformation(taps.getData(), static_cast<int>(taps.getSize()));
+    RenderProcessor(*b, MakeInput(480), {}, {{480}});
+    REQUIRE(b->EngineTempo().nsPerQuarter == tapped);
+    b->prepareToPlay(96000.0, 512);
+    RenderProcessor(*b, MakeInput(960), {}, {{480}});
+    REQUIRE(b->EngineTempo().nsPerQuarter == tapped);
+  }
 }
 
 TEST_CASE("saving a preset captures the live tempo, Subdiv and time mode") {
