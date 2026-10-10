@@ -188,6 +188,16 @@ bool NamedValue(const ParamDisplay& m, const ParamDescriptor& d, const std::stri
       {DisplayKind::FilterMorph, "lp", 0.0f}, {DisplayKind::FilterMorph, "bp", 1.0f},
       {DisplayKind::FilterMorph, "hp", 2.0f}, {DisplayKind::FilterMorph, "notch", 3.0f},
       {DisplayKind::MsOrOff, "off", 0.0f},    {DisplayKind::Division, "off", 0.0f},
+      // post.delay.sync's note values (docs/design/clock.md §5.2, §5.4), a Leaf row since sound
+      // revision 9: the names FormatPlain shows ("1/8D", "1/16T"), read in either case.
+      {DisplayKind::Division, "1/32", 1.0f},  {DisplayKind::Division, "1/16t", 2.0f},
+      {DisplayKind::Division, "1/16", 3.0f},  {DisplayKind::Division, "1/8t", 4.0f},
+      {DisplayKind::Division, "1/16d", 5.0f}, {DisplayKind::Division, "1/8", 6.0f},
+      {DisplayKind::Division, "1/4t", 7.0f},  {DisplayKind::Division, "1/8d", 8.0f},
+      {DisplayKind::Division, "1/4", 9.0f},   {DisplayKind::Division, "1/2t", 10.0f},
+      {DisplayKind::Division, "1/4d", 11.0f}, {DisplayKind::Division, "1/2", 12.0f},
+      {DisplayKind::Division, "1/1t", 13.0f}, {DisplayKind::Division, "1/2d", 14.0f},
+      {DisplayKind::Division, "1/1", 15.0f},  {DisplayKind::Division, "2/1", 16.0f},
   };
   // The cutoff's two named ends, as FormatPlain shows them: Off (the bypass, its maximum) and
   // Kill (the wet kill, its minimum; mode-compiler.md §4.3).

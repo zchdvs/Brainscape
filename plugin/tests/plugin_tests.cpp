@@ -711,6 +711,19 @@ TEST_CASE("the text shown at a parameter's ends and default can be typed back") 
   REQUIRE(Bits(v) == Bits(40.0f));
   REQUIRE(ParsePlainText(ParamId::FilterCutoffHz, "off", v));
   REQUIRE(Bits(v) == Bits(20000.0f));
+  // post.delay.sync (a Leaf row since sound revision 9): every note value's name, in either
+  // case, and its code as a number (docs/design/clock.md §5.4).
+  for (int code = 0; code <= 16; ++code) {
+    const juce::String shown = FormatPlainText(ParamId::DelaySync, static_cast<float>(code));
+    INFO(shown);
+    REQUIRE(ParsePlainText(ParamId::DelaySync, shown.toLowerCase(), v));
+    REQUIRE(Bits(v) == Bits(static_cast<float>(code)));
+    REQUIRE(ParsePlainText(ParamId::DelaySync, juce::String(code), v));
+    REQUIRE(Bits(v) == Bits(static_cast<float>(code)));
+  }
+  REQUIRE(ParsePlainText(ParamId::DelaySync, "1/8D", v));
+  REQUIRE(Bits(v) == Bits(8.0f));
+  REQUIRE_FALSE(ParsePlainText(ParamId::DelaySync, "1/3", v));
 }
 
 TEST_CASE("session state round-trips bit for bit") {
