@@ -1689,21 +1689,26 @@ pending the owner's knob ratings in the curation slice. `firmware/factory/AUDITI
 each change, its numbers and the owner's answers.
 
 > **Update (2026-10-09, the output limiter).** The owner asked for the limiter's design to start
-> now. It is [output-limiter.md](output-limiter.md), a draft for the owner's decisions, and
-> nothing in it is built. It proposes a zero-latency, linked peak limiter at the end of the
-> engine's output pass, for the pedal and the plugin alike:
+> now. It is [output-limiter.md](output-limiter.md), draft 2 for the owner's decisions after three
+> reviews, and nothing in it is built. It proposes a zero-latency, linked peak limiter at the end
+> of the engine's output pass, for the pedal and the plugin alike:
 > - it engages only on samples that would pass full scale (a hard knee at 1.0), so every render
 >   at or under 0 dBFS keeps its hash;
-> - it releases at 40 dB/s to exactly unity;
+> - the wet gives way first, down to −12 dB, and only then the whole mix, so the effect volume
+>   (row 82) and the Mix knob never duck the dry at the first set's stored positions;
+> - it releases at 40 dB/s after an isolated over and at 10 dB/s once overs return during a
+>   release, to exactly unity;
 > - it has no control.
 >
 > Its D8 keeps this table's Peak at stored positions (≤ −1 dBFS on the class inputs). It replaces
 > "≤ 0 dBFS during sweeps and S11" with zero limiter engagement on the class input, read from the
-> engine's count, since no render can then exceed 0 dBFS. Engagement elsewhere, such as the attack
-> modes' +2.5 dBFS SoftNotes corners and every S0 Saturation render, is reported and never
-> failed. It proposes sound revision 8, landing before the cost governor and CLOCK's tempo core,
-> and before the knob-rating rows are written. Every mode's S0 Saturation render changes, so a row
-> rated earlier would need a re-listen (its §9.6).
+> engine's count, since no render can then exceed 0 dBFS. Engagement elsewhere is reported per
+> render and never failed: the attack modes' +2.5 dBFS SoftNotes corners, every S0 Saturation
+> render, and two S0 renders over 0 dBFS today that the pre-screen's "S0 highest" line hid,
+> Echolalia's OnsetBursts render (+0.14 dBFS) and Déjà Vu's wet SoftNotes render (+0.52 dBFS). It
+> proposes sound revision 8, landing before the cost governor and CLOCK's tempo core, and before
+> the knob-rating rows are written. Every mode's S0 Saturation render changes, so a row rated
+> earlier would need a re-listen (its §9.6).
 
 ### 11.4 What waits
 

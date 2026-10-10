@@ -475,11 +475,14 @@ the 24-bit branch.
 > **Update (2026-10-09, the output limiter).** [output-limiter.md](output-limiter.md), a draft and
 > not built, puts a safety limiter at the end of the engine. The wrapper therefore receives what
 > the pedal's codec receives, never over full scale unless the dry itself is. Each channel's
-> ceiling is max(1, |dry term|), so the live path's headroom above stays: a dry over 0 dBFS
-> passes at Mix 0 bit for bit, and is never pulled under its own level. The wrapper's Output
-> level stays after the engine, outside parity, so a user who raises it can still exceed 0 dBFS.
-> The editor gains a limiter lamp and gain-reduction readout at the output meter (its §7.3).
-> There is no control and no latency.
+> ceiling is max(1, |dry term|), so the live path keeps its headroom above: no output exceeds
+> that ceiling, and the limiter scales the wet first, by up to 12 dB, before it touches the dry.
+> A dry over 0 dBFS therefore passes at Mix 0 bit for bit whenever the wet's gain is at −12 dB or
+> above. Past that, the gain, linked across channels, can pull a hot dry below its own level (its
+> §4.4 item 7). The wrapper's Output level stays after the engine, outside parity, so a user who
+> raises it can still exceed 0 dBFS. The editor gains a limiter lamp, a mark for when the dry dips
+> too, and the gain-reduction readout at the output meter (its §7.3). There is no control and no
+> latency.
 
 ### 4.9 Restart, offline renders and reproducible bounces
 

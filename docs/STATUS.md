@@ -167,12 +167,16 @@ No engine change: the set plays at sound revision 7.
   under Peak (other), never failed. No recipe or stored Mix changed; the re-run pre-screen gives
   the same 1,488 render hashes and all 18 pass, every other input's stored peak under −1 dBFS.
   *(2026-10-09: the owner asked for the limiter's design to start now. It is
-  [output-limiter.md](design/output-limiter.md), a draft for the owner's decisions, not built: a
-  zero-latency, linked peak limiter at the end of the engine for the pedal and the plugin. It
-  engages only on samples over full scale, so the stored positions and every class-input sweep
-  and S11 render keep their hashes, while the S0 Saturation renders and the attack modes'
-  SoftNotes corners become limited, not clipped. Peak (moved) becomes zero limiter engagement on
-  the class input. It proposes sound revision 8, before the knob-rating rows are written.)*
+  [output-limiter.md](design/output-limiter.md), draft 2 for the owner's decisions after three
+  reviews, not built: a zero-latency, linked peak limiter at the end of the engine for the pedal
+  and the plugin, in which the wet gives way first, down to −12 dB, before the dry. It engages
+  only on samples over full scale. So the engaged renders at the stored positions on the class
+  inputs, and every class-input sweep and S11 render, keep their hashes. Every S0 Saturation
+  render changes, and so do Echolalia's S0 OnsetBursts render (+0.14 dBFS today) and Déjà Vu's
+  S0 wet SoftNotes render (+0.52 dBFS), which the pre-screen's "S0 highest" line hid; the attack
+  modes' SoftNotes corners become limited, not clipped. Peak (moved) becomes zero limiter
+  engagement on the class input. It proposes sound revision 8, after a Rev7 DAC test and before
+  the knob-rating rows are written.)*
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -1091,9 +1095,12 @@ records live in [docs/design/reviews/](design/reviews/).
   hottest test vector three first-set recipes peak above 0 dBFS at their stored positions, and
   the engine saturates only near `FLT_MAX`, so the pedal's codec or a host would clip them
   *(2026-10-09: [output-limiter.md](design/output-limiter.md), a draft not yet built, designs the
-  engine's safety limiter. It holds every sample at or under full scale on both targets, and
-  while it acts at Mix 0.5 the dry dips with the wet. It never acts below full scale, so the law's
-  "dry at unity up to the middle" holds wherever nothing would clip)*. Lane
+  engine's safety limiter. It holds every sample at or under full scale on both targets. When the
+  mix would pass full scale the wet gives way first, by up to 12 dB, and the dry dips only past
+  that: on every factory preset at its stored positions, raising the effect volume to +12 dB or
+  the Mix to 0.5 leaves the dry untouched (measured on reconstructed renders). It never acts below
+  full scale, so the law's "dry at unity up to the middle" holds wherever nothing would clip, and
+  wherever the wet alone can absorb the over)*. Lane
   E's trims and input classes and the owner's listening decide whether such a mode wants a lower
   trim or Mix. The knob's taper stays linear, and the plugin's wrapper bypass with its crossfade
   is still to build (plugin gaps, below).
@@ -1250,9 +1257,12 @@ Steps 1–4 need no hardware.
    *Next:* the owner's knob ratings in the curation view (the factory set's **feel**, which only
    the owner's ears can judge) and the exit criteria; then the keepers join the golden corpus. The
    output safety limiter the owner asked for comes as a sound revision of its own: designed
-   2026-10-09 in [output-limiter.md](design/output-limiter.md), a draft for the owner's decisions.
-   It proposes revision 8, landing before the knob-rating rows, the cost governor and CLOCK's tempo
-   core, so the ratings are given on the limited sound and none needs a re-listen. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   2026-10-09 in [output-limiter.md](design/output-limiter.md), draft 2 for the owner's decisions
+   (its evidence and review dispositions in
+   [reviews/output-limiter-record.md](design/reviews/output-limiter-record.md)). It proposes
+   revision 8, landing before the knob-rating rows, the cost governor and CLOCK's tempo core, so
+   the ratings are given on the limited sound and none needs a re-listen; a Rev7 test of the DAC's
+   inter-sample behaviour (its lane L1b) comes first, so the ceiling is fixed once. App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done

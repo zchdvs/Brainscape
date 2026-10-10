@@ -379,15 +379,18 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 >
 > It works within this profile's rules:
 > - only +, −, ×, ÷, compares and bit operations, with no transcendental per sample;
-> - its release step is computed once at `Init` with `Exp2D`;
+> - its two release steps are computed once at `Init` with `Exp2D`;
 > - its gain never decays toward 0, so §4.3 gains no site;
 > - per-sample state only;
-> - one-sided compares, so NaN still reaches the Debug assertion;
-> - each channel's ceiling is max(1, |dry term|), so this section's sanitized live dry still
->   passes above 0 dBFS unclipped, and Mix 0 stays the input on hostile input.
+> - one-sided compares, so NaN still reaches the Debug assertion, and a final clamp that bounds
+>   every limited sample;
+> - each channel's ceiling is max(1, |dry term|), and the wet gives way first, by up to 12 dB, so
+>   this section's sanitized live dry still passes above 0 dBFS unclipped, and Mix 0 stays the
+>   input on hostile input whenever the wet's gain is at −12 dB or above.
 >
-> A prototype patched into revision 7 kept 37 of the 45 golden hashes, each identical under every
-> block pattern, delivery and the hostile environment. Its §5 gives the arithmetic.
+> A prototype built into revision 7's engine kept 37 of the 45 golden hashes, each identical under
+> every block pattern, delivery and the hostile environment, and passed the forced-flush control.
+> Its §5 gives the arithmetic.
 
 ### 3.8 Conforming builds and supported targets
 
