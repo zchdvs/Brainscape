@@ -33,6 +33,7 @@ the separate Python implementation of the generator that derives the known-answe
 | [`juce/`](juce/) | The float-normalisation round trip that rules out JUCE's normalised parameter path for exact preset values. |
 | [`preset/`](preset/) | Exhaustive binary32 number-formatting check for canonical JSON (`probe_float.cpp`), and the restart/load-order/Spillover probes (`probe_state.cpp`, which needs a scratch engine copy with probe hooks). |
 | [`review-numerics/`](review-numerics/) | Probes from the numerics review: Spillover as specified, DetMath domain edges, DAZ canonicalization, the write-ahead invariant counter. |
+| [`clock/`](clock/) | The CLOCK design's probes ([clock.md](../../docs/design/clock.md), evidence in its [record](../../docs/design/reviews/clock-record.md) §2.6-§2.7): the grid-firing rule's block-split invariance and the follower's incremental sums. See its [README](clock/README.md). |
 | [`modes/`](modes/) | The mode-compiler design's probes ([mode-compiler.md](../../docs/design/mode-compiler.md), evidence in its [record](../../docs/design/reviews/mode-compiler-record.md)): the parameter-routing bug, the factory-mode curation renders, the exact binary32 number code, the package sketch with its fuzzers, macro-curve cost, layout hazards, and the reviews' checks. See [Mode-compiler probes](#mode-compiler-probes-modes). |
 
 Probes for findings that depended on third-party source trees (libDaisy, TinyUSB, the Daisy bootloader,

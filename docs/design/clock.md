@@ -19,7 +19,8 @@
 > parity, the musician and the product, the firmware and hardware), with the answers to the 23
 > decisions of §11.5, which the owner confirmed as proposed;
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
-> finding's disposition. Nothing is built.
+> finding's disposition. *(2026-10-09: the tempo core is built as a library, not yet wired into
+> the engine; §11.10 has its as-built notes.)*
 
 ---
 
@@ -1754,6 +1755,80 @@ docs/STATUS.md, and in the record. The same day, once the CPU plan's steps 1–2
 and 3,208 with steps 1–2), and the CPU proposal's citations now point at cpu-budget.md. The
 implementing pull requests amend the code comments that cite the old meanings (`Mode.h:86-97`,
 `PresetState.h:42-56`, `Engine.h:206-210`).
+
+### 11.10 As built: the tempo core as a library (2026-10-09)
+
+Lane T1's first part, under D1 as amended: the tempo core as library code that nothing in the
+engine calls yet, so it changes no output (sound-neutral commits before revision 8). Built:
+`dsp/src/detail/IntMath.h` and `dsp/src/IntMath.cpp` (§2.1's helpers);
+`dsp/include/brainscape/Tempo.h` (events 6–10's numbers and payloads, `TempoInfo`, `TempoStats`);
+`dsp/include/brainscape/MidiClock.h` and `dsp/src/MidiClock.cpp` (§4.3); `dsp/src/detail/Tempo.h`
+and `dsp/src/Tempo.cpp` (`TempoCore`: §2.1–§2.5, §3, §4.2, §6.3's `GridFrames`, §7.1's commits and
+classes). The three objects join `_bs_not_itcm_members` (§9.6) and compile `-mgeneral-regs-only`
+on the M7. §8.2's unit tests are `dsp/tests/test_intmath.cpp`, `test_midiclock.cpp`,
+`test_tempo.cpp` (TempoCore against a reference model written from this document,
+`dsp/tests/TempoReference.h`: the phasor in closed form in exact 128-bit arithmetic, the grid
+frame by frame, the follower's sums computed directly, gaps applied at their deadlines; random and
+adversarial streams at block sizes 1, 48, 441, 512, {48, 1, 127, 32}, {300, 512, 5, 64} and random,
+each comparison failing on a perturbed reference) and `test_tempo_rules.cpp` (each rule against
+hand-worked numbers); `brainscape_tempo_tool --check` repeats the comparison on every CI leg and on
+the emulated M7 with a committed digest. Record §1.3's probes are in `tools/parity/clock/`.
+
+Where the text left a choice, or read differently in two places, the build follows the design's
+intent, as below:
+
+1. **FC carries AtNextTick.** §4.3's table gives FC as a plain Transport Stop, but §3.4 tells
+   MIDI's Stop (it cancels an armed transport, reverts a clock source to Internal, sets the
+   continue position and `masterStopped`) from the host's (it stops the transport) by that flag,
+   and §3.6 ignores a host-style Transport under clock. The translator sends FC as Stop with
+   AtNextTick, which still applies at its own frame.
+2. **`transportsIgnored`** joins `TempoStats`: §3.4 counts a host-style Transport ignored under
+   clock, and §2.6's list had no field for it. A bounce counts in `tapsIgnored`, beside taps under
+   ClockRunning.
+3. **Positions are read in integers.** A Transport's value is checked and converted from its
+   binary32 bits by integer arithmetic (`DecodePositionBits`), not in floating point inside the
+   guard as §4.1 and principle 2 say: the same positions and the same refusals (−0, fractions,
+   subnormals, infinities, NaNs, the range), and principle 2's two floating-point steps become
+   one, the CLOCK jitter. A value that must be +0 is checked by its bits, so −0 is invalid (§4.2).
+4. **Acquisition and commits need a valid fit.** §3.3 step 6 enters a clock state at N = 24 and
+   commits P_fit; with every fitted tick at one frame (A = 0) there is no P_fit, so the core
+   acquires, places and commits only on a valid fit (D > 0, A > 0), and until then the ticks feed
+   the window as under Internal.
+5. **The first label.** "The last label + 1" needs a first: a tick with no labelled tick before it
+   since `Init` or `Restart` takes the phasor's nearest tick (ties up), so ClockFree's labels
+   continue the phasor's (§3.1) from the start. Labels survive a gap, which clears the window, the
+   ring and the dropout reference only (§3.5).
+6. **MIDI's Stop in every source.** It reverts ClockFree to Internal as well as ClockRunning
+   (§3.1's table: ClockFree is "left by … Stop"), and sets the continue position to the last label
+   + 1 whenever a tick has been labelled.
+7. **Continue reads the continue position when it applies**, at the next tick, so a Song Position
+   that arrives between FB and that tick (while not ClockRunning) is honoured.
+8. **The phase tap's δ** lies in (−48, 48]: §3.2's formula, 96·FloorDiv(k_n + 48, 96) − k_n, sends
+   a position exactly 48 past a bar line up, where the text says −48 ≤ δ < 48. The formula is
+   built.
+9. **A Spillover load sets the stored performance state** that `Restart` plays (§2.5: the active
+   preset's, "the last loaded preset's STAT").
+10. **The grid runs whatever the mode.** `GridFrames` advances the grid and `lastFired` in every
+    span, so switching to a mode that lists `clock` never fires a stale catch-up; whether a hit
+    becomes a birth, and §6.3's one hit per frame, are the engine's (T1's second part). Noted for
+    the owner: a Subdivision event to a finer grid makes §6.3's catch-up fire the largest grid
+    position already passed, at the event's frame (×1/4 to ×8 mid-bar fires the 32nd just passed),
+    as the rule says for any jump; whether a Subdiv change should rather skip passed positions is
+    a listening question for T5.
+11. **The translator's `Reset()`** forgets the running state with the position: a UART restart may
+    have lost bytes, a Stop among them.
+12. **§7.4's commit budgets against §7.1's constants, measured** (ten minutes per case with §8.3's
+    clock models, the hidden `[experiment]` case of `test_tempo_rules.cpp`). A hardware clock
+    commits nothing after the acquisition at 60, 120 and 140 BPM, but once at 300 BPM (rule 3.2,
+    0.026 %), against a budget of none. A computer clock commits 1–2 times at 60 BPM, 19–117 times
+    at 120, 150–190 at 140 and 520–710 at 300, nearly all by rule 3.1, each 0.2–0.5 %, against "at
+    most one per minute, each ≤ 0.4 %". The fit itself is as §3.3 calculates (P_fit's σ 0.029 %,
+    0.059 %, 0.070 % and 0.105 % at those tempos), but rule 3.1's band, Pc >> 9 = 0.195 %, compares
+    two noisy fits (Pc is a committed P_fit), and the fit's σ grows with the tempo, so at 140 BPM
+    the band is about two σ of the difference; rule 3.2's run likewise outlasts 192 ticks after an
+    early acquisition at a fast tempo. Every such commit is a Drift, so the post delay slews and
+    never jumps, but `clock_midi_computer`'s counters will exceed §7.4's budget. The constants are
+    built as designed; tuning them (§11.7 risk 3, §11.8 item 1) is an owner decision.
 
 ## 12. Evidence
 
