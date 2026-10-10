@@ -69,6 +69,7 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
       macros_(owner),
       document_(owner),
       findings_(owner.Curation()),
+      tempo_(owner),
       testPanel_(owner) {
   setLookAndFeel(&laf_);
   for (size_t g = 0; g < kNumParamGroups; ++g) {
@@ -99,6 +100,11 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
   addChildComponent(macros_);
   addChildComponent(document_);
   addChildComponent(findings_);
+  addChildComponent(tempo_);
+  tempo_.onStore = [this] {
+    document_.Save();
+    RefreshNow();
+  };
   addAndMakeVisible(modes_);
   modes_.onChosen = [this](bool opened, const juce::String& message) {
     document_.Note(message, opened ? palette::kText : palette::kBad);
@@ -146,6 +152,7 @@ void BrainscapeEditor::SetView(View view) {
     s->setVisible(shown);
   }
   macros_.setVisible(pedal);
+  tempo_.setVisible(pedal);
   document_.setVisible(pedal);
   findings_.setVisible(pedal);
   resized();
@@ -251,6 +258,7 @@ void BrainscapeEditor::RefreshNow() {
   macros_.Refresh();
   document_.Refresh();
   findings_.Refresh();
+  tempo_.Refresh();
   modes_.Refresh();
   juce::String note;
   if (s.HasDocument()) {
@@ -323,6 +331,7 @@ void BrainscapeEditor::resized() {
   modes_.SetScale(scale_);
   document_.SetScale(scale_);
   findings_.SetScale(scale_);
+  tempo_.SetScale(scale_);
   tabNote_.setFont(UiFont(13.0f * scale_));
 
   auto r  = getLocalBounds();
@@ -363,9 +372,14 @@ void BrainscapeEditor::resized() {
   tabNote_.setBounds(tab);
 
   if (view_ == View::Pedal) {
-    auto row1 = r.removeFromTop(juce::jmax(px(196), r.getHeight() * 41 / 100));
+    // The macro knobs, the tempo strip under them, then the document, the findings and the test
+    // input.
+    const int stripH = px(48);
+    auto      row1   = r.removeFromTop(juce::jmax(px(196), (r.getHeight() - stripH - kGap) * 41 / 100));
     r.removeFromTop(kGap);
     macros_.setBounds(row1);
+    tempo_.setBounds(r.removeFromTop(stripH));
+    r.removeFromTop(kGap);
     LayoutRow(r, {{&document_, 9}, {&findings_, 7}, {&testPanel_, 10}});
     return;
   }

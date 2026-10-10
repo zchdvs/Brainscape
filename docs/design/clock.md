@@ -21,7 +21,9 @@
 > [the record](reviews/clock-record.md) ("record §N") keeps the evidence, the probes and every
 > finding's disposition. *(2026-10-09: the tempo core is built as a library, §11.10, and wired
 > into the engine as sound revision 8, §11.11, which have the as-built notes; 2026-10-10: amended
-> after its review, §11.12, and synced times built as sound revision 9, §11.14.)*
+> after its review, §11.12, its deadband constants as the owner adopted them, §11.13, synced
+> times built as sound revision 9, §11.14, the plugin's lane T3, §11.15, and both lanes'
+> review amendments and their merge, §11.16.)*
 
 ---
 
@@ -2265,6 +2267,114 @@ display, corpus version 14. Continuing the numbering:
     governor's constant raised from it, are T6's bench with the governor; T5's audition gives
     Engram and Callback a synced post delay by listening (§6.6). The plugin shows the effective
     value (note 43) from T3.
+
+### 11.15 As built: the plugin, lane T3 (2026-10-10)
+
+Lane T3 under D1 as amended, on `claude/tempo-plugin` from revision 8 with the owner's deadband
+constants (`45097f1`): §4.4 and §10, producer code only, so no sound revision, no golden hash and
+no package hash moves, and ITCM is unchanged (the live image's `.itcm_text` 61,472 bytes). Built:
+`NsPerQuarterFromBpm` and `HostAnchor` (`dsp/include/brainscape/Tempo.h`,
+`dsp/src/TempoProducer.cpp`, out of ITCM and not linked into the live image), with row 83's
+position-to-code mapping (`SubdivCodeFromPosition`, `SubdivPositionFromCode`) and their tests
+(`dsp/tests/test_host_tempo.cpp`); and in `plugin/`, the host follower (`src/HostTempo.h`), the
+wrapper's events 6–10 (`WrapperEvent::Type` gains Tap, Tempo, ClockTick, Transport and
+Subdivision), the re-asserts, the Standalone's MIDI clock, rows 83 and 84 registered after the
+effect volume, row 85 as a device setting, the session's tempo keys, saving the performance, and
+the BPM panel, a strip under the pedal view's knobs (`src/gui/TempoPanel.h`). Where the text left a
+choice, the build follows the design's intent, as below (continuing the numbering):
+
+49. **`HostAnchor`'s refusals and its arithmetic.** It returns false, writing nothing, for a
+    non-finite ppq or one of 2⁴⁰ quarters or more either way (x stays inside
+    `RoundHalfAwayI64`'s domain), an ns outside the tempo range or a rate outside 8–384 kHz.
+    k is the integer nearest x, or the next one when x lies more than 10⁻⁹ above it (x − n is
+    exact, by Sterbenz), and the offset is `RoundHalfAwayI64(((k − x)·ns)·rate / (24·10⁹))` in
+    binary64 inside the guard, at most one tick rounded to a frame. The tests check it against
+    exact integer readings of §4.4 on 100,000 positions (agreeing everywhere a quotient is not
+    within 10⁻⁶ of a half) and in `TempoCore`: a host-style Start with the anchor fires its first
+    grid position at the anchor and every hit within 1.5 frames of the host's beat.
+50. **Following begins at a start.** §4.4 anchors at "the edge `CheckTransportStart` already
+    detects": a playing block after one that did not play, `prepareToPlay` or a switch to offline.
+    The follower also starts (a Tempo event, then an anchored Start) at the first playing block
+    it follows: after the Tempo source changes to Host, when a host starts reporting a tempo, and
+    after every Exact load, whose re-asserts reset it, so a restart while the host plays (a
+    device change) anchors the restarted grid. Each block sends at most one Tempo event (always
+    at a start, as §4.4 step 2 wants it before the Start); the prediction of step 3 uses the
+    last block's reported BPM at the host's rate.
+51. **A Spillover load while following re-sends the host's tempo after it.** Under recall Preset a
+    preset change while the host plays applies the stored tempo, which the host's would replace
+    only when it next moved by 1 µs, possibly never; so after any Spillover load the next Tempo
+    event goes out unconditionally, after the load at its frame. The external source wins, as a
+    clock does (§3.6).
+52. **The order at frame 0.** After an Exact load: the re-asserted tempo (§10.1 item 1; none when
+    the host is followed, whose Tempo is the follower's, nor after a preset change under recall
+    Preset with the internal source), then the MIDI master's position, then rows 83 and 84
+    (item 2), then row 85 when it is to be sent, then, in any block, the state load, a restored
+    session's performance after it (note 54), and the host's Tempo and Transport (item 3, §4.4),
+    ahead of the block's host automation: the Host rank's front. Same-frame order changes no state
+    between these (a grid change at the restart's frame fires nothing, §6.3 note 25).
+53. **The MIDI master's position in the Standalone.** §10.1's list has no MIDI item, but the
+    Standalone follows a MIDI clock through the pedal's translator, and a device change runs an
+    Exact load while the master plays; the wrapper re-asserts §2.5 item 2 as the pedal does
+    (Locate with AtNextTick to the next tick's position, and Continue while the master runs) when
+    Receive MIDI clock is on and the translator knows the position.
+54. **A session restore is a restart of the same preset, Exact or not.** §10.1 lists it among the
+    restarts whose re-asserts carry the session's rows 83 and 84 and its tempo; before anything
+    plays (a project reload, a relaunch, a restore before `prepareToPlay`) it is an Exact load
+    with those re-asserts, and while audio runs a Spillover load, after which, at its frame, the
+    session's tempo (unless the host's is followed) and rows 83 and 84 go out, so the host's view
+    of the rows and the session's tempo hold either way. A preset change (a document, a factory
+    mode, A/B, Save's reload) instead sets rows 83 and 84 to the preset's stored values and tells
+    the host, and re-asserts no Subdivision.
+55. **The session.** BSWS v1 gains setting keys, which older readers skip: 6 the Tempo source, 7
+    Receive MIDI clock, 8 row 85, 9 the last committed tempo in ns (written in range only), 10
+    and 11 rows 83 and 84. §10.4 names the first three and the tempo; rows 83 and 84 are saved
+    too, since they are the live Subdiv and time mode a session restore re-asserts, and a host
+    restores a plugin's parameters from its state. A session without keys 9–11 plays the preset's
+    stored ones. Row 85 is a wrapper setting, not a registered parameter, sent to the engine as a
+    SetParam at the first frame after every restart (an Init'd or swapped-in engine holds its
+    default) and whenever it changes, before a state load in the same block.
+56. **Saving captures the performance, apart from edits.** The curation session lists what Save
+    will store (`PendingPerformance`, shown as `store` lines beside the leaves derive will change)
+    and counts it in `SaveChangesFile`, not in `Dirty`: it is what plays, not an edit. Under Keep
+    a document's stored tempo gives way to the running one when it is saved, as §10.3 says; under
+    recall Preset the document plays, and so saves, its own. `CurrentPreset()` carries the live
+    performance, so the audition render and A/B's return to B play it. The panel's **Store**
+    saves the document; the stored tempo beside the live one is the open document's, else the
+    playing preset's, and with no document open Store is disabled.
+57. **Momentary and dropped events.** Taps, clock ticks and transports always apply, as triggers
+    do; Tempo and Subdivision events from producers follow the restore generations, as parameter
+    events do. While the host's tempo is followed the wrapper drops every Tap and Tempo event
+    from other producers (the panel's TAP, a typed tempo, a scripted one) before stamping them.
+    A queue overflow loses them, counted, since no mirror holds them.
+58. **Receive MIDI clock gates the bytes in every format.** No plugin format delivers MIDI clock
+    (§3.1), so the setting is offered in the Standalone's menu only; JUCE's Standalone opens the
+    MIDI inputs chosen in Options > Audio/MIDI Settings, none by default.
+59. **The editor.** The BPM panel is a strip of the pedal view between the knobs and the document
+    (the Leaves view has none); the minimum window height grows from 600 to 660 pixels for it. Row
+    83's display, the first non-ASCII one a registered parameter shows (×1/4 … ×8), made
+    `FormatPlainText` read the display as UTF-8, and the text parser reads the rates (`x1/4`,
+    `×1/4`, `tap`), the time modes and the recall's two values.
+60. **Not built here.** T2's row 86 (`global.tempo_glide`) and the synced-time display (§5.3: "1/1
+    → 1/2 · 1,000 ms") join the panel with synced times: its settings menu and its strip carry
+    the hooks (`src/gui/TempoPanel.cpp`). The Time knob's routing (§6.4, note 15) is not in the
+    pedal view: its Time knob moves `macro.time` in every time mode, and rows 83 and 84 and the
+    panel's tempo are how the plugin sets the Subdiv, the time mode and the tempo. MIDI clock
+    keeps JUCE's arrival stamps (§10.2's DLL is a later refinement).
+
+**Tests** (§8.4): `plugin_wrapper` gains the bounce at 137.5 BPM from ppq 3.37 with Restart on
+play at host blocks of 37, 64, 441, 512, 1,024 and 4,096 frames, offline and with the spare, equal
+bit for bit to the engine fed the restart's re-asserts, the host's Tempo and the anchored Start
+(tick 81, 105 frames in), whose first CLOCK hit lands within a frame of the host's beat at ppq 4
+and none before; row 83 changed before play and re-asserted (E7); a second play at another ppq;
+the host's Start anchoring a running grid with the restart off; Stop, a loop's Locate, jumps either
+side of half a tick, the 1 µs hysteresis and a tempo change without a Locate; taps and typed tempos dropped
+while following; a recall while following, under Preset and under Keep; the Standalone's MIDI
+clock (ticks, FA, FB, FC, F2 after a Program Change, SysEx, Active Sensing and note-ons) equal to
+the engine fed one translator's events at block patterns {441}, {37}, {4096} and {512, 1, 77};
+Receive MIDI clock off; the master's position re-asserted after a device change; the session's
+tempo (typed, and a tapped one to the ns), rows and settings restored before and while playing, before `prepareToPlay` and across 96
+and 44.1 kHz, and an older session; Save capturing the performance; and the strip. The editor
+snapshot adds the strip's frames (`editor-tempo-*.png`).
 
 ## 12. Evidence
 

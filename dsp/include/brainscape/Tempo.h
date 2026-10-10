@@ -159,6 +159,55 @@ constexpr bool DecodePositionBits(uint32_t bits, uint32_t* position) noexcept {
 // position into the same Tempo event. Always within the tempo range.
 uint32_t TempoNsFromKnob(float m) noexcept;
 
+// The Subdiv knob (row 83, perf.subdiv, §10.4): its positions 0-5 in the Microcosm's CC#5 order
+// (×1/4, ×1/2, TAP, ×2, ×4, ×8) and §5.1's codes (0 TAP, 1 ×1/4, 2 ×1/2, 3 ×2, 4 ×4, 5 ×8), which
+// Subdivision events carry. A position above 5 reads as 5, a code above 5 as TAP.
+constexpr uint8_t SubdivCodeFromPosition(uint32_t position) noexcept {
+  return position == 2u ? kSubdivTap
+                        : static_cast<uint8_t>(position < 2u ? position + 1u : (position > 5u ? 5u : position));
+}
+constexpr uint32_t SubdivPositionFromCode(uint8_t code) noexcept {
+  const uint32_t c = code;
+  return c == kSubdivTap || c > 5u ? 2u : (c <= 2u ? c - 1u : c);
+}
+
+// The plugin host's tempo and position as events (§4.4): producer functions, as TempoNsFromKnob
+// is, and entry points that own the FP control word, so every build turns a host block's reading
+// into the same events and the same frames. Never called by Process.
+//
+// NsPerQuarterFromBpm: ns per quarter for a host tempo in BPM, round(6·10^10 / bpm) (ties away
+// from zero), clamped to the tempo range [kMinNsPerQuarter, kMaxNsPerQuarter]; 0, no event, for a
+// non-finite or non-positive bpm.
+uint32_t NsPerQuarterFromBpm(double bpm) noexcept;
+
+// HostAnchor: the anchor a host-style Start or Locate carries (§4.1, §4.4, D11) for a host block
+// whose first frame is at quarter-note position `ppq`. With x = 24·ppq, the position is k = ⌈x⌉,
+// the first tick at or after the block's first frame (an x within 10^-9 of an integer counts as
+// that integer), reduced modulo kPositionModulus (floor-mod, so pre-roll wraps to the same grid
+// phase); the offset is that tick's frame from the block's first frame at `ns` per quarter and the
+// engine's integer rate `rate`, round((k − x)·ns·rate / (24·10^9)), evaluated in binary64 in that
+// order, at most one tick rounded to a frame (48,000 frames at 20 BPM and 384 kHz, inside the
+// event's 16 bits). False, with nothing written, for a non-finite ppq or one of 2^40 quarters or
+// more either way, an ns outside the tempo range or a rate outside 8,000-384,000.
+bool HostAnchor(double ppq, uint32_t ns, uint32_t rate, uint32_t* position, uint32_t* offset) noexcept;
+
+// HostTempoFromBpm: what the plugin follows of a host's tempo (§4.4, clock.md §11.16): q =
+// 6·10^10 / bpm ns per quarter, doubled while below kMinNsPerQuarter and halved while above
+// kMaxNsPerQuarter, at most kMaxHostOctaves times, then rounded and clamped as NsPerQuarterFromBpm
+// rounds and clamps it. octaves > 0 doubled it (a host faster than 300 BPM: one engine quarter is
+// 2^octaves host beats), < 0 halved it (slower than 20 BPM: 2^-octaves engine quarters a beat), so
+// every engine quarter lands on a host beat, or every host beat on one; the follower anchors at
+// ppq·2^-octaves, exactly. `clamped` when the folds did not reach the range (a host below 1.25 or
+// above 4,800 BPM): the grid then runs off the host's beats. nsPerQuarter 0, no event, for a
+// non-finite or non-positive bpm.
+inline constexpr int32_t kMaxHostOctaves = 4;
+struct HostTempo {
+  uint32_t nsPerQuarter = 0;
+  int32_t  octaves      = 0;
+  bool     clamped      = false;
+};
+HostTempo HostTempoFromBpm(double bpm) noexcept;
+
 // The sources (§3.1). The plugin host is not one: its events play as Internal.
 enum class ClockSource : uint8_t { Internal = 0, ClockFree = 1, ClockRunning = 2 };
 
