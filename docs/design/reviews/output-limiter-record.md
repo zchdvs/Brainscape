@@ -1,10 +1,11 @@
 # Output limiter design pass — evidence record
 
 > The evidence behind [output-limiter.md](../output-limiter.md) (draft 2, for the owner's
-> decisions, 2026-10-09; draft 3, the owner's answers, 2026-10-10): the inputs, what each
-> investigation found and where, the probes the revision ran, where the sources disagreed and how
-> the design resolves it, the alternatives it rejected, how the three reviews of draft 1 were
-> disposed of (§6), and the owner's answers with what draft 3 decided for them (§7). The design
+> decisions, 2026-10-09; draft 3, the owner's answers, and draft 4, after two reviews of draft 3,
+> both 2026-10-10): the inputs, what each investigation found and where, the probes the revision
+> ran, where the sources disagreed and how the design resolves it, the alternatives it rejected,
+> how the three reviews of draft 1 were disposed of (§6), the owner's answers with what draft 3
+> decided for them (§7), and how the two reviews of draft 3 were disposed of (§8). The design
 > document is normative; this record is not. "Design §N" is output-limiter.md, "record §N" this file,
 > "profile §N" [determinism-profile.md](../determinism-profile.md), "budget §N"
 > [cpu-budget.md](../cpu-budget.md), "clock §N" [clock.md](../clock.md), "compiler §N"
@@ -338,9 +339,10 @@ wet SoftNotes render +0.52 dBFS (65 over), and the S0 Saturation renders +5.53 (
 Written 2026-10-09 on branch `claude/limiter-design` from `main` at `011b294`. Draft 1, commit
 `5f7357b`, was reviewed the same day by [E], [P] and [H]; draft 2, commit `2297cbd`, applies
 their findings (§6), and `13f9e14` moved its revision after CLOCK's T1 and T2. Draft 3
-(2026-10-10) records the owner's answers to design §11.2 and specifies D5's switch (§7). Its
-open questions (§11.5) are settled by L1b, by listening in L2's A/B, and by the control-surface
-and bypass designs.
+(2026-10-10) records the owner's answers to design §11.2 and specifies D5's switch (§7), commit
+`2895453`. Two reviews read it the same day; draft 4 applies their findings (§8). Its open
+questions (§11.5) are settled by the owner (D5's form, D14), by L1b, by listening in L2's A/B,
+and by the control-surface and bypass designs.
 
 ## 6. Review of draft 1 and its disposition
 
@@ -388,11 +390,19 @@ saved on 2026-10-10 between 07:25 and 07:27 UTC:
 | D1–D4, D6–D13 | Agree | none |
 | D5, control | **Change** | none |
 
-The page's D5 note field is empty. The form of the change came with the owner's request to revise
-the design for the answers: **a per-preset switch, a stored preset parameter (a Leaf), so that a
-mode can turn the limiter off on purpose, for example for deliberate clipping; default On.**
-Draft 3 builds on that form. If the owner meant another, design §7.1 and §4.7 are where it
-lands. D7's agreement is with its amended answer, the next free revision expected 10, which the
+The page's D5 note field is empty: its database holds `answers/limiter-D5` =
+`{"choice": "change", "note": "", "updated": "2026-10-10T07:26:03.625Z"}`, the only "change". The
+page's D5 offered draft 2's recommendation, "None: always on", and no alternatives.
+
+*Corrected in draft 4.* Draft 3 said the form of the change "came with the owner's request to
+revise the design". It did not. The owner's message says only that the limiter decisions are
+answered. The form came from the task text of the workflow that commissioned draft 3, which
+described the change as **a per-preset switch, a stored preset parameter (a Leaf), so that a
+mode can turn the limiter off on purpose, for example for deliberate clipping; default On.** That
+text may relay something the owner said elsewhere, but nothing the owner wrote that this record
+can cite contains it. So draft 3's form is a proposal: draft 4 labels it so and asks the owner
+in design §11.5 Q1, with three other readings (a device setting, a stage control, and Off passing
+overs). D7's agreement is with its amended answer, the next free revision expected 10, which the
 page showed.
 
 ### 7.2 What draft 3 decided for the switch, and what it rejected
@@ -443,10 +453,11 @@ page showed.
    `Package-change:` line, or one per revision if it shares T2's pull request. *Rejected:*
    folding it into T2's re-stamp. At revision 9 row 87 does not exist, and profile §5.12's
    per-commit rule keeps each revision's corpus whole.
-8. **Factory policy** (design §9.5). *Chosen:* factory presets keep it On, enforced by L15
-   under `--factory` and by the pre-screen. *Rejected for now:* Off allowed under a declared
-   `clip` class. No mode asks for it, and the class needs criteria of its own. It stays the path
-   if one ever does.
+8. **Factory policy** (design §9.5). *Chosen by draft 3:* factory presets keep it On, enforced
+   by L15 under `--factory` and by the pre-screen. *Rejected for now:* Off allowed under a
+   declared `clip` class. *Draft 4:* this is a product decision, so it became the owner's D14,
+   recommended as draft 3 chose, with the declaration (now a `--clips` flag, not a class)
+   specified as the alternative (§8, findings Q2 and Q4).
 
 ### 7.3 Checks run for draft 3
 
@@ -463,7 +474,7 @@ page showed.
   | −11.4 dB | `0x3E89CE7C` | 13,678 | 14,159 − 481 = 13,678 |
   | −27.7 dB | `0x3D28CB8F` | 33,234 | 33,715 − 481 = 33,234 |
   | F = 2⁻² | `0x3E800000` | 14,447 | — |
-  | 2⁻²⁴ | `0x33800000` | 173,362 (3.612 s; 14.46 s at k_s) | 173,842 − 481 = 173,361: §4.4's floor row was measured after a burst, one frame later |
+  | 2⁻²⁴ | `0x33800000` | 173,362 (3.612 s; 14.46 s at k_s) | 173,842 − 481 = 173,361. Draft 3 read this as "one frame later"; it is one frame *shorter*, because the prototype counted from the first frame after the burst. By the table's convention the row is 173,843 (§8.3) |
 
 - **Row 87.** `Params.h` was read on `main` `011b294` (rows 1–82) and on `claude/tempo-core`
   `b91b34d` (83–85). Every local and remote branch's `Params.h` and design row tables were
@@ -489,3 +500,71 @@ page showed.
 
 `limiter-d5/drain.py` in the session's scratch directory, not committed, beside the earlier
 probes of §1.3.
+
+## 8. Review of draft 3 and its disposition
+
+Two reviews read draft 3 (`2895453`) on 2026-10-10: **[K]** package, determinism and tests
+(3 major, 5 minor), and **[Q]** product (3 major, 3 minor). The revision checked each finding's
+evidence against the tree at `claude/tempo-core` `b91b34d` and `main` `011b294`, against the
+decisions page's database, and with a simulation of design §4.3 (§8.3). **Every finding survived
+the check and was applied; none was rejected.** Five were applied with a choice among the fixes
+the review offered, or with more than it asked, each explained in the table: K1 (read as any
+integer-valued leaf, not 0/1-only), K3 (the "gain below F at the Off" check made with two
+per-call counts, since the corpus has no windowed requirement), K6 (row 86 reserved, not L2
+after T2 only), K8 (four of the eight changed renders are package presets too), and Q3 (the
+entry ramp offered, the instant attack kept as the recommendation).
+
+### 8.1 [K] Package, determinism and tests
+
+| # | Finding | Disposition (design §) |
+|---|---|---|
+| K1 | Reading only the integers 0 and 1 contradicts compiler §2.2 and breaks the round trip, since STAT and `SetParam` accept any value in [0, 1] | applied, the review's first fix: read as any integer-valued leaf, any binary32 in [0, 1], E4 outside, E3 only for non-numbers; a fraction plays by `>= 0.5f`, which equals `RoundHalfAwayI32 != 0` on [0, 1]; the compiler writes the value the document holds; a decompiled 0.3 compiles back; the property test needs no exception. Checked: `Schema.cpp` `Leaf()` checks range only; `CheckStat` checks order and canonical bits only; `test_property.cpp:127` draws every leaf in range. Compiler §2.2 and §3.7 need no amendment (7.1, 9.4, 11.3 #15, 11.1) |
+| K2 | Unit test 15 contradicts §4.7's `Switch`, and no golden catches a per-event implementation | applied: test 15 is now "a call with the current setting changes no state"; an engine test applies `SetParam(87, 0)` and `(87, 1)` at one odd frame with G < 1, inside the hold and with `slow` set, at blocks {1, 7, 127}, against the render without them; §4.7 says the coalescing is the engine's; `limit_switch`'s pair is placed at G < 1 with the hold running, and it gains a `feedback.amount` edit there so `AmongEdits` adds its row-87 pair inside the hold. §9.2 corrected: `AmongEdits` adds no pair after a row-87 edit (`other(kDomainOutput, 87)` is null) (4.7, 9.2, 9.3, 9.4) |
+| K3 | `limit_switch` inherits `limit_sustain`'s level and cannot reach G < F | applied: confirmed from `BuildSoftNotes` (dry at most 0.5, so G < F needs a wet over 2.0, against a +2.5 dBFS sum's 1.83); `limit_switch` takes `wet_trim_db` +12. The corpus's requirements bound single whole-render counters, so "G < F at the first Off" is pinned by two per-call counts folded from the existing locals when the switch is Off, `drainDryFrames` (and so `LimiterDrainDryFrames` ≥ 1, which also proves an On attack below F, since a drain only rises) and `LimiterDrainWetFrames` ≥ 1 for the second Off at G ≥ F (4.2, 6.1, 7.2, 9.2, 9.3, 11.3 #19) |
+| K4 | `Reset` rebuilds before priming, so `Switch` sees the old gain and the drain counters count drains that never run | applied: confirmed at `Engine.cpp` `:737-743` (`b91b34d`) and `:681-690` (`main`); `limiter_.Prime()` runs before `Reset`'s `dirty_ = kAllParamDomains; RebuildDirty();`, and `Init`'s limiter call before its own rebuild; §4.7's lifecycle and §5.4's table corrected; `limit_switch`'s Exact load placed at G < 1 with `OffWhileLimiting` = 2 exactly, and an engine test, pin the order (4.7, 5.4, 6.1, 9.3, 9.4) |
+| K5 | The floor row is counted differently from the other rows, and §12's "482 frames" is wrong | applied: simulated (§8.3): a single over at the floor reaches 1.0f on frame 173,843 counted inclusively from the over, as the other rows count; a burst gives 173,843 from its last over frame and 173,842 from the first frame after it, which is how the prototype counted. §4.4's row is now 173,843 with the convention stated; §4.7's sentence, §12 and §7.3's table corrected (draft 3 said "one frame longer" and "482"; the difference is 480); starting bits added to §4.7's table; test 4 uses them (4.4, 4.7, 9.4, 12) |
+| K6 | Row 87 cannot exist without row 86, but §10 allows the limiter to land before T2 | applied, the review's second fix, since D7 is confirmed as "the next free revision": an L2 that lands before T2 adds 86 as a `Reserved` row, `global.tempo_glide`, with a display row like 85's, for T2 to make `Global`; the revision, `sinceRev` and `Package-change:` line then take the actual number. Checked: `TableIsContiguous` at `Engine.cpp:36`; Reserved rows are never stored (`Params.h:141-155`) (7.1, 10, 11.4 #11) |
+| K7 | Pre-revision-10 sessions load flagged inexact, which §7.1 omits | applied, the review's first fix: stated, with `StateCodec.cpp:179` and `PluginProcessor.cpp:518`, `:532`; T2's row 63 does the same; no exemption added (7.1) |
+| K8 | The `Package-change:` line's "no render changes for it" is false for `limit_off_hot` | applied, and extended: the line names `limit_off_hot`'s package set Off and its clamped render; §9.1 lists it in the predicted set with §9.3's float-dump check. Checking the gate further showed that with a bump the gate still attributes a package preset's changed render to its package (`golden_changes`, `sound_rev_gate.py:394-414`), and every package changes at revision 10, so four of §9.1's eight (`strum_marks`, `spillover_chain`, `lone_changes`, `midi_gate`, package presets in `golden.json`) are reported as their packages' too. Draft 3's "the renders that change are attributed to the engine" was wrong; §7.1's gate bullet and the line now say so (Summary, 7.1, 9.1, 10) |
+
+### 8.2 [Q] Product
+
+| # | Finding | Disposition (design §) |
+|---|---|---|
+| Q1 | D5's per-preset form is recorded as the owner's answer, but the owner never wrote it | applied: confirmed from the page's database (§7.1 above) and the owner's message. D5 is labelled "Change (no note); the form is proposed, awaiting the owner's confirmation" in the status block, the Summary, §7.1, §11.2, STATUS, the README row and the three dated notes; §12 and §7.1 above corrected; §11.5 Q1, first and "(owner, now)", sets out readings a–d and their consequences; row 87 is "held for the limiter's control" until the owner answers, and L2 does not start the switch's part before then (status, Summary, 4.7, 7.1, 10, 11.1, 11.2, 11.5, 12) |
+| Q2 | The factory policy blocks the stated purpose and is filed under owner-confirmed rows | applied: a new owner decision, D14, recommended On for now with §9.5's four reasons, the declaration as its alternative; Q8 is "(owner, now)"; §11.3 #17 points at D14; the switch's clauses leave the Answer column of D6 and D8 and sit, with D9's, D10's and D13's, in Consequence as "pending D5" or "pending D14"; §11.2's preamble says the Answer column holds only what the owner confirmed (9.5, 11.2, 11.3, 11.5) |
+| Q3 | Loading an On preset with Trails after a clipping Off preset ducks the trails, and the dry on hot input | applied: confirmed from §4.3's attack and the whole-mix form; the review's example re-calculated (r = 0.180, the dry −2.87 dB). §4.5's Spillover row qualified and a new row added; §4.7's "Turning On" states the step; risk 12; a new golden, `limit_clip_trails` (an Off package settled and clipping on Saturation, then a Trails load of an On package with `limit_hot_mix25`'s settings, `LimiterDryFrames` > 0, all after the load); L2's A/B plays it. The mirrored "entry ramp" is specified and offered (Q9); draft 4 recommends the instant attack as designed, since it is D3's confirmed attack and the step only occurs on leaving a preset that clips by design, and the A/B decides (4.5, 4.7, 9.3, 11.1, 11.4, 11.5) |
+| Q4 | The `clip`-class escape cannot be built as written, and deliberate-Off user presets always "fail" | applied: confirmed (`bspc_roundtrip.py:150` lints documents only; `--declarations` reaches only `bspc render`; `declare --class` takes attack or pad). The declaration is a flag, `ratings.py declare --clips`, beside `--self-oscillating`; `bspc lint` gains `--declarations AUDITION.md`, which `bspc_roundtrip.py` passes; the replaced checks are listed (Peak (stored), Ceiling (moved), S11's Ceiling) with what replaces them; for non-factory ids the switch Off is the declaration, and the report gives the clip share instead of failing. Built now only if D14 chooses the alternative (about 0.5 day) (7.1, 7.3, 9.5, 11.1, 11.2 D14) |
+| Q5 | A stored Off cannot be seen on the pedal until it clips | applied: D6's consequence (pending D5) hands the control-surface design two requirements, Clip shown from the load and clipping distinct from limiting; Q4 of §11.5 says "How", not "Whether"; the Rev7 LED double-blinks when the published switch goes to Clip, in both `led` modes; the plugin tags Clip presets in the Library list and the Modes menu; the lamp's CLIP caption shows from the load (7.3, 7.4, 11.2 D6, 11.4 #9, 11.5) |
+| Q6 | "Off" misleads plugin users: it hard-clips inside the engine | applied: the row's states are **Limit** and **Clip** through a new display kind, `LimitClip`, beside `LiveMark`'s "Mark"/"Live" precedent, with typed text limit, clip, on, off and numbers, boolean to hosts; the row is titled "Output ceiling"; the Leaves view, L15's message, the lamp, the console's `stats` (`limiterMode limit\|clip`) use the same words; the JSON key and the 0/1 encoding stay, and this document keeps On and Off for the two values (1.4, 7.1, 7.3, 7.4) |
+
+### 8.3 Checks run for draft 4
+
+- **The floor row.** `limiter-d5/author/onpath.py` simulates §4.3's On path (gain, hold and
+  flags) in binary32, each product rounded once from an exact binary64 product, with
+  k = `0x3F800325`, k_s = `0x3F8000C9` and the tolerance `0x3F83BCD8`. A single over at each of
+  §4.4's six gains reaches 1.0f on the frames §4.4 gives (601, 1,681, 3,481, 7,680, 14,159,
+  33,715), counted inclusively from the over's frame. A single over at 2⁻²⁴ gives 173,843; a
+  1,000-frame burst at 2⁻²⁴ gives 173,843 from its last over frame and 173,842 from the first
+  frame after it.
+- **The drain table** was re-run with `limiter-d5/drain.py` (§7.3): unchanged.
+- **The dry dip on leaving a clipping preset** (design §4.5): r = 0.25/(0.891 + 0.25·2.0) =
+  0.1797, G/F = 0.719, −2.87 dB (calculated).
+- **The decisions page.** `answers/limiter-D5` read from the page's database (§7.1).
+- **The tree,** at `claude/tempo-core` `b91b34d` unless noted: `compiler/src/Schema.cpp:551-574`
+  and `:1319-1364`; `dsp/src/blob/Validate.cpp:402-414`; `compiler/tests/test_property.cpp:127`;
+  `dsp/src/Engine.cpp:30-36`, `:700-743`, `:776-800`, `:1080-1092`, `:1190-1215`, and `main`'s
+  `:636-690`; `dsp/include/brainscape/Params.h:141-173`; `dsp/tests/golden/Corpus.cpp:980-1023`
+  and its `require` lists; `dsp/src/TestSignal.cpp:104-119`; `plugin/src/StateCodec.cpp:160-179`;
+  `plugin/src/PluginProcessor.cpp:518`, `:532`; `plugin/src/BrainscapeParam.cpp:176-200`,
+  `:310`; `dsp/src/ParamDisplay.cpp:30-32`, `:123-153`, `:429-433`;
+  `tools/ci/sound_rev_gate.py:336-414`, `:469-512`; `dsp/tests/golden/golden.json`'s package
+  presets; `tools/ci/bspc_roundtrip.py:140-155`; `tools/audition/ratings.py:15-45`, `:620-626`;
+  `firmware/factory/README.md`; clock.md §10.4 and §11.1–§11.3.
+- **Not run:** nothing new was built. The drain counts, the `LimitClip` kind, the entry ramp and
+  the declaration are specified, not prototyped.
+
+### 8.4 Where the probes live
+
+`limiter-d5/author/onpath.py` in the session's scratch directory, not committed, beside
+`limiter-d5/drain.py` (§7.4).

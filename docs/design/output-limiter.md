@@ -31,11 +31,14 @@
 > names `claude/tempo-core` `b91b34d` (CLOCK's tempo core, sound revision 8, not yet merged). "LD"
 > is the pinned libDaisy v9.0.0.
 >
-> Status: **draft 3, the owner's answers** (2026-10-10). Draft 2 (2026-10-09) was revised after
-> three reviews of draft 1. On 2026-10-10 the owner confirmed twelve of the thirteen decisions in
-> §11.2 as recommended and **changed D5**: instead of no control, the limiter gets a **per-preset
-> switch**, a stored Leaf row (87, `output.limiter`, default On), so a mode can turn it off on
-> purpose, for example for deliberate clipping. §7.1 specifies the switch. Nothing is built.
+> Status: **draft 4** (2026-10-10): draft 3, the owner's answers, revised after two reviews of
+> it. Draft 2 (2026-10-09) was revised after three reviews of draft 1. On 2026-10-10 the owner
+> confirmed twelve of the thirteen decisions in §11.2 as recommended and marked **D5 "Change"
+> with no note**. This draft reads that answer as a **per-preset switch**, a stored Leaf (row 87,
+> `output.limiter`, default On), so a mode can turn the limiter off on purpose, for example for
+> deliberate clipping. **That form is proposed, not the owner's: it awaits the owner's
+> confirmation** (§11.5 Q1). §7.1 specifies it, and D14 asks whether factory presets may use it.
+> Nothing is built.
 
 **Evidence labels.**
 
@@ -68,7 +71,8 @@ the choices this revision made for the switch. In short:
   next free sound revision after CLOCK's tempo core (8) and synced times (9), **expected 10**,
   and the governor follows (11). This document writes the limiter's revision as 10 and the one
   before it as 9 (§10).
-- **D5 is changed to a per-preset switch**, row 87, `output.limiter`, a Leaf, default On (§7.1).
+- **D5 is marked "Change" with no note.** Draft 3 proposes a per-preset switch, row 87,
+  `output.limiter`, a Leaf, default On (§7.1), which awaits the owner's confirmation.
   - **Off clips** each channel at the same ceiling instead of scaling the gain. On the pedal that
     gives the codec, code for code, what the engine without a limiter gives it. The plugin now
     clips identically, where an Off that passed overs would split it from the pedal again
@@ -76,12 +80,37 @@ the choices this revision made for the switch. In short:
   - **Turning Off while limiting drains** the gain to unity at 40 dB/s with no attack, then
     clips. Turning On starts from unity, or from the drain's gain if a drain is running
     (§4.7).
-  - **No render changes for the switch**, since every existing preset plays it at its default.
-    Every committed package's `sound_hash` changes, because the compiler writes the new leaf:
-    revision 10's pull request needs the package-change label (§10).
-  - **Factory presets keep it On**, enforced by a new lint, L15 (§9.5).
+  - **No render changes for the switch** but `limit_off_hot`'s, which L2 sets Off: every other
+    preset plays it at its default. Every committed package's `sound_hash` changes, because the
+    compiler writes the new leaf: revision 10's pull request needs the package-change label
+    (§10).
+  - **Factory presets keep it On**, enforced by a new lint, L15 (§9.5). Draft 4 makes this the
+    owner's D14.
 - **After T1, the live image has 792 bytes of ITCM spare** (clock §11.11 item 22 on
   `claude/tempo-core`), so L2 must first move cold code out of ITCM (§8.3).
+
+**What changed in draft 4 (two reviews of draft 3).** Record §8 holds the findings and their
+disposition. In short:
+
+- **D5's form is labelled as proposed.** The decisions page records "Change" with an empty note.
+  The per-preset form came with the request to revise the design, not from the page or the
+  owner's own words. §11.5 Q1 asks the owner to choose among four readings, and row 87 is held
+  for the limiter's control until then.
+- **The factory policy becomes an owner decision, D14**, recommended On for now. The switch's
+  clauses leave the confirmed answers of D6 and D8 and move into their consequences. The
+  declaration that would let a factory mode clip is specified so it can be built (§9.5).
+- **The row reads as any integer-valued leaf:** a fraction is accepted and plays by the
+  threshold, as compiler §2.2 requires (§7.1). The user-facing states are **Limit** and **Clip**.
+- **Reset primes the limiter before its rebuild,** so `Switch` sees G = 1 after a restart (§6.1).
+- **Tests and goldens.** The same-frame test is split into a limiter test and an engine test
+  (§9.4). `limit_switch` gets a wet hot enough to pass F, and two per-call counts pin the drain
+  below F. A new preset, `limit_clip_trails`, pins the duck on leaving a clipping preset with
+  Trails, which §4.5 and risk 12 now state (§9.3).
+- **Corrections:** the floor row of §4.4 counts as the other rows do (173,843); row 86 must exist
+  before row 87 (§7.1); pre-revision-10 sessions load marked inexact; the `Package-change:` line
+  names `limit_off_hot` and the gate's attribution of package presets' renders.
+- **Visibility:** the pedal's control surface must show a stored Clip from the moment it loads, the
+  Rev7 LED cues it, and the plugin marks Clip presets in its lists (D6's consequence, §7.4).
 
 ---
 
@@ -136,26 +165,29 @@ the choices this revision made for the switch. In short:
   - The live image grows by 1,280 bytes of ITCM (measured on revision 7's image, from 3,208
     bytes spare to 1,928). The switch adds an estimated 100–200 bytes. After CLOCK's T1 only
     792 bytes are spare, so the limiter lands after a cold-code move (§8.3).
-- **Control: a per-preset switch (D5, changed by the owner).**
+- **Control: a per-preset switch, proposed (D5: the owner marked "Change" with no note; this form
+  awaits confirmation, §11.5 Q1).**
   - Row 87, `output.limiter`, is a Leaf stored in every package. It is On by default and is
-    written `"output": { "limiter": 1 }`.
+    written `"output": { "limiter": 1 }`. Users see its two states as **Limit** (1) and **Clip**
+    (0).
   - **On** limits as above. **Off** clips each channel at the same ceiling. So no sample leaves
     the engine over full scale on the pedal either way, and the plugin plays what the pedal
     plays.
   - Turning it Off mid-limiting drains the gain to unity at 40 dB/s, then clips. Turning it On
-    starts from unity.
+    starts from unity, so the next over attacks at once.
   - Macros, expression and host automation cannot reach it. Factory presets keep it On (lint
-    L15).
+    L15), as D14 recommends.
   - The plugin shows a limiter lamp captioned LIM or CLIP, a dry indication and the gain
-    reduction. On the pedal, the console reports the switch and the counts, and the Rev7's user
-    LED shows limiting.
+    reduction, and marks Clip presets in its lists. On the pedal, the console reports the switch
+    and the counts, and the Rev7's user LED shows limiting and cues a Clip preset at load.
 - **Revision.** The next free sound revision after CLOCK's tempo core (8) and synced times (9):
   expected **10**, confirmed by the owner (D7). It lands before the governor (11) and before the
   owner's knob-rating rows are written, so no rating needs a re-listen. The DAC's inter-sample
   test runs first (L1b), so the ceiling is fixed once.
-  - The new leaf changes every committed package's `sound_hash` but no render. Revision 10's pull
-    request carries the package-change label and a `Package-change:` line (§10).
-- **Work.** About 10.5–14.5 engineer-days in seven lanes (§11.1).
+  - The new leaf changes every committed package's `sound_hash`, and no render but that of
+    `limit_off_hot`, which L2 sets Off. Revision 10's pull request carries the package-change
+    label and a `Package-change:` line (§7.1, §10).
+- **Work.** About 11–15 engineer-days in seven lanes (§11.1).
 
 ---
 
@@ -225,7 +257,7 @@ This pass designs:
 | The plugin's output trim and the pedal's analog output level | Both act after the engine, outside parity, at the user's choice (§6.3) |
 | The bypass topology | It belongs to the bypass design (engine §1 defers it). §6.5 hands it one requirement (D13) |
 | A limiter in the looper | The looper has its own design |
-| A switch that removes the ceiling | The per-preset switch (D5) chooses how an over is held, by limiting (On) or by clipping (Off), never whether. An Off that passed overs would split the plugin from the pedal above full scale again, and on the pedal it would sound the same as clipping (§4.7) |
+| A switch that removes the ceiling | The proposed per-preset switch (D5) chooses how an over is held, by limiting (Limit, 1) or by clipping (Clip, 0), never whether. An Off that passed overs would split the plugin from the pedal above full scale again, and on the pedal it would sound the same as clipping (§4.7). It stays one of the owner's readings of D5 (§11.5 Q1, reading d) |
 
 ### 1.4 Terms
 
@@ -244,7 +276,7 @@ This pass designs:
 | H | The hold, in frames: 480 at 48 kHz |
 | k, k_s | The per-frame release factors: 40 dB/s (about 1.0000960) and 10 dB/s (about 1.0000240) at 48 kHz |
 | Over | A sample of s with \|s\| > 1.0 |
-| The switch | Row 87, `output.limiter`, a per-preset Leaf: On (1, the default) limits; Off (0) clips at the ceiling (§4.7, §7.1) |
+| The switch | Row 87, `output.limiter`, a per-preset Leaf, proposed for D5: On (1, the default) limits; Off (0) clips at the ceiling (§4.7, §7.1). Users see On as **Limit** and Off as **Clip**; this document says On and Off |
 | Drain | After a switch to Off with G < 1: the gain rises at k per frame, with no attack and no hold, to exactly 1 (§4.7) |
 
 ### 1.5 Principles
@@ -555,13 +587,14 @@ computed values are `0x3F80036C`, `0x3F8000DB` and 441; at 96 kHz `0x3F800192`, 
 | `limitedFrames`, `dryFrames`, `engagements` | uint64 | counts, not sound | `Init` only |
 | `restartsWhileLimiting`, `loadsWhileLimiting` | uint64 | counts, not sound (§5.4) | `Init` only |
 | `offFrames`, `clippedFrames`, `offWhileLimiting`, `onWhileDraining` | uint64 | counts, not sound (§4.7) | `Init` only |
+| `drainFrames`, `drainDryFrames` | uint64 | counts, not sound: of `limitedFrames` and `dryFrames`, those rendered with the switch Off, so a drain's (§6.1) | `Init` only |
 | `lowestGain`, `peak` | float | statistics, not sound | `Init`; restarted by their `Consume` calls |
 
 The prototype's fields, all but the two lifecycle counts, add 56 bytes to `Engine::Impl`
 (measured: the next member moved from offset 104 to 160); the two counts add 16 more. So 7,944
 bytes become 8,016 of `kEngineImplBytes`' 8,192 on the M7 (compiler §7.1). The firmware's 9 KiB
 DTCM slot is unchanged, and the prototype's live image linked with the same DTCM use (measured).
-The switch adds the flag and four counts, about 36 bytes (*estimated*), and CLOCK's tempo core
+The switch adds the flag and six counts, about 52 bytes (*estimated*), and CLOCK's tempo core
 adds its own state (clock §2.6), so L2 re-measures `Engine::Impl` against 8,192 on top of
 revision 9 and raises `kEngineImplBytes` if it must (§8.4).
 
@@ -670,8 +703,10 @@ operation for operation: the one addition is the `on` test, which sits after the
      (3,199,999 of 3,199,999 sampled), and the clamp acts as a hard clip at that sample.
 3. **Return to unity.** After the last frame with demand, G is exactly 1.0f within H frames plus
    the release. From that frame on, the output is bit-identical to the unlimited engine's,
-   because the limiter never fed back. Measured times to exact unity at 48 kHz, from a single
-   over (the fast rate, since no over returns during the release):
+   because the limiter never fed back. Times to exact unity at 48 kHz, from a single over (the
+   fast rate, since no over returns during the release). Each count runs from the over's frame,
+   the attack, to the frame at which G reaches 1.0f, both included: 481 frames of attack and
+   hold, then the release.
 
    | Gain reduction | Frames to exact unity | Time | Of which hold | Of which release |
    |---|---|---|---|---|
@@ -681,7 +716,12 @@ operation for operation: the one addition is the `on` test, which sits after the
    | 6.0 dB | 7,680 | 160.0 ms | 10 ms | 150.0 ms |
    | 11.4 dB | 14,159 | 295.0 ms | 10 ms | 285.0 ms |
    | 27.7 dB | 33,715 | 702.4 ms | 10 ms | 692.5 ms |
-   | From the floor, after a ±`FLT_MAX` burst | 173,842 | 3.622 s | | |
+   | From the floor, 2⁻²⁴ (a ±`FLT_MAX` burst) | 173,843 | 3.622 s | 10 ms | 3.612 s |
+
+   The first six were measured. The floor row counts from the burst's last over frame, as the
+   others count from their over. The prototype measured 173,842 counting from the first frame
+   after the burst; §4.3's code, simulated, gives 173,843 by this table's convention, which is
+   481 plus §4.7's 173,362 (record §8.3).
 
    Once an over has returned during a release, the rest of that release runs at 10 dB/s: 1 dB
    takes 100 ms, and the floor about 14.5 s (calculated). The flag clears when G reaches 1.
@@ -742,7 +782,7 @@ operation for operation: the one addition is the `on` test, which sits after the
 | The input stops | Tails decay through the release. The gain is 1 again within §4.4's times, and the output is today's from then on |
 | The cutoff kill | b = 0: idle on the pedal; Mix 0's rule in the plugin |
 | Freeze, triggers, bursts | No interaction: the limiter sees only the two terms of the mix |
-| Spillover load (Trails, FastCut) | The gain, hold and both flags carry over, as the smoothers do (`Engine.cpp:754-770`), so a load mid-limiting does not jump the level |
+| Spillover load (Trails, FastCut) | The gain, hold and both flags carry over, as the smoothers do (`Engine.cpp:754-770`), so a load mid-limiting does not jump the level. The exception is a load of an On preset from a settled Off over a clipping texture: see "The switch turned On" below |
 | Exact load, `Restart`, `Reset` | G = 1, hold = 0, both flags cleared (§5.4) |
 | A plugin dry over 0 dBFS | The output never exceeds the dry's own level on that channel; a wet that would add is held to it. While G ≥ F the dry is untouched |
 | ±`FLT_MAX` input (plugin, hostile) | Output at most max(1, \|a\|) and finite. The gain can reach the floor; recovery takes 3.6 s, or about 14.5 s if an over returned during the release |
@@ -750,6 +790,7 @@ operation for operation: the one addition is the `on` test, which sits after the
 | A preset with the switch Off | Below full scale, nothing. An over is clipped at its channel's ceiling. On the pedal the codec receives the same codes as from an engine without a limiter (§4.7) |
 | The switch turned Off while the gain is below 1 (a `SetParam`, or a load of a preset with it Off) | No step: the gain drains to exactly 1 at 40 dB/s with no attack, and whatever then passes the ceiling is clipped. That takes 301 ms from F and 3.61 s from the floor (§4.7) |
 | The switch turned On | From a settled Off, G is 1: the next over attacks as any first over does. During a drain, the gain continues from where the drain left it |
+| The switch turned On over a clipping texture (a `SetParam`, or a Spillover load of an On preset with Trails from a clipping Off preset) | A step. While Off and settled, the clamp hides overs of any depth at G = 1. The first over after the switch attacks to its whole requirement in one frame, so the old preset's trails and the new grains drop by the depth of the clipped over, and when r < F the dry dips too. Overs keep returning, so the release then runs at 10 dB/s. Example: a dry at −1 dBFS (0.891) and a same-signed wet of 2.0 give r = 0.25/(0.891 + 0.5) ≈ 0.18, so the dry steps down by G/F ≈ 0.72 (−2.9 dB) at the load's frame (calculated). §4.7 gives an alternative, the entry ramp, for the owner (§11.5 Q9) |
 | `Restart` or an Exact load with the switch Off | G = 1 and the switch as stored: a settled Off, as a fresh engine with that preset |
 
 ### 4.6 What it sounds like
@@ -805,9 +846,10 @@ operation for operation: the one addition is the `on` test, which sits after the
 
 ### 4.7 The switch: Off, the drain and On (normative)
 
-The owner's D5 gives each preset a switch, row 87 (§7.1). The engine holds it as the flag `on`,
-set only through the row's rebuild. Off does not remove the ceiling: it holds an over by clipping
-it instead of by lowering the gain.
+D5, in the form draft 3 proposes and the owner has yet to confirm (§11.5 Q1), gives each preset
+a switch, row 87 (§7.1). The engine holds it as the flag `on`, set only through the row's
+rebuild. Off does not remove the ceiling: it holds an over by clipping it instead of by lowering
+the gain.
 
 **What Off means, and why it clips.** With the switch Off, an over is clamped at its channel's
 ceiling c = max(1, |a|). The alternative, an Off that passed s unchanged, was rejected:
@@ -817,7 +859,7 @@ ceiling c = max(1, |a|). The alternative, an Off that passed s unchanged, was re
   ±1.0 before it therefore changes no code: for any s, `f2s24(Clamp(s, 1))` = `f2s24(s)`
   (*calculated*: both sides clamp to ±`FBIPMAX` whenever |s| > 0.999985, and pass the same value
   otherwise). Off reproduces on the pedal, code for code, what revision 9's engine plays, which is
-  the "limiter off" the owner asked for. This holds with C = 1.0. If L1b lowers C (D10), Off
+  what "limiter off" means on the pedal. This holds with C = 1.0. If L1b lowers C (D10), Off
   clips at the lowered ceiling, which is the reason for lowering it.
 - **In the plugin only the clamp matches the pedal.** An Off that passed overs would hand the DAW
   floats above 1.0, which a floating-point mix bus plays unclipped. The preset's deliberate
@@ -870,8 +912,15 @@ renders (`Engine.cpp:1085-1092` at `claude/tempo-core` `b91b34d`). So the switch
 the frame of its event or load, and only the frame's final value acts: an Off and an On at the
 same frame change nothing.
 
+That coalescing is the engine's, not `Switch`'s. Called twice at G < 1, Off then On, `Switch`
+would clear the hold and both flags, set `releasing` and count twice, which changes the sound.
+So the limiter's own test checks only that a call with the current setting changes nothing, and
+an engine test checks the same-frame pair through `SetParam` (§9.4: test 15, and "The switch in
+the engine").
+
 ```cpp
-// value >= 0.5 is On: the threshold of ParamDisplay's OffOn kind.
+// value >= 0.5 is On: the threshold of ParamDisplay's two-state kinds (OffOn, LiveMark,
+// and this row's LimitClip, §7.1).
 inline void OutputLimiter::Switch(bool wantOn) noexcept {
   if (wantOn == on) return;                            // unchanged: no state is touched
   on = wantOn;
@@ -906,40 +955,68 @@ frame on the output is `Clamp(s, c)`. In detail:
   long enough to be smooth is a release in all but name, so the drain reuses the release instead,
   with no new state.
 
-Frames from the switch frame to exact unity (*calculated* exactly, by iterating the binary32
-product G·k from the starting gain; record §7.3). The six rows that §4.4 item 3 also gives from a
-single over are each its measured figure less 481 frames, the attack frame and the 480-frame
-hold. Its floor row, measured after a burst, is one frame longer than that.
+Frames from the switch frame to exact unity, both included (*calculated* exactly, by iterating
+the binary32 product G·k from the starting gain's bits; record §7.3). Each row that §4.4 item 3
+also gives is its figure less 481 frames, the attack frame and the 480-frame hold, the floor row
+included.
 
-| Gain at the switch | Frames to exact unity | Time |
-|---|---|---|
-| −0.1 dB | 120 | 2.5 ms |
-| −1.0 dB | 1,200 | 25.0 ms |
-| −2.5 dB | 3,000 | 62.5 ms |
-| −6.0 dB | 7,199 | 150.0 ms |
-| −11.4 dB | 13,678 | 285.0 ms |
-| F, −12.04 dB | 14,447 | 301.0 ms |
-| −27.7 dB | 33,234 | 692.4 ms |
-| The floor, 2⁻²⁴ | 173,362 | 3.612 s |
+| Gain at the switch | Starting bits | Frames to exact unity | Time |
+|---|---|---|---|
+| −0.1 dB | `0x3F7D11D1` | 120 | 2.5 ms |
+| −1.0 dB | `0x3F642905` | 1,200 | 25.0 ms |
+| −2.5 dB | `0x3F3FF911` | 3,000 | 62.5 ms |
+| −6.0 dB | `0x3F004DCE` | 7,199 | 150.0 ms |
+| −11.4 dB | `0x3E89CE7C` | 13,678 | 285.0 ms |
+| F, −12.04 dB | `0x3E800000` | 14,447 | 301.0 ms |
+| −27.7 dB | `0x3D28CB8F` | 33,234 | 692.4 ms |
+| The floor, 2⁻²⁴ | `0x33800000` | 173,362 | 3.612 s |
+
+The starting bits of the dB rows are the binary32 rounding of 10^(−dB/20).
 
 **Turning On.**
 
 - **From a settled Off,** G is already 1, with the hold at 0 and both flags clear, which is the
   reset state. The limiter starts at unity gain, and the next over attacks instantly as any
-  first over does (D3). On a sustained clipping texture that is a level drop at the attack
-  sample, the same bend as every engagement (§4.6).
+  first over does (D3).
+- **Over a clipping texture, that attack is a step.** While Off and settled, the clamp hides overs
+  of any depth at G = 1. The first over after the switch sets G to its whole requirement in one
+  frame. The trails a Trails load carries and the new preset's grains drop together by the depth
+  of the clipped over, and when that requirement is below F the dry dips by G/F too (§4.5's
+  example: −2.9 dB). On a clipping texture the overs keep returning during the release, which
+  slows it to 10 dB/s (§4.3), so the recovery takes seconds. A `SetParam` to On does the same. This breaks §4.5's promise that a Spillover load does not jump
+  the level, for this one case; `limit_clip_trails` pins it (§9.3) and risk 12 states it.
 - **During a drain,** G continues from where the drain left it. The drain was a release at k, so
   without demand the gain keeps the same trajectory, and an over that returns re-attacks and
   switches the rest of that release to k_s, as in any release. Setting G to 1 here would step the
   level up; setting it to the requirement would step it down.
 
+**An alternative for the owner: the entry ramp (§11.5 Q9).** It mirrors the drain. On a switch to
+On from G = 1, a flag `entering` is set. While it is set and the frame has demand, G falls by one
+step of k per frame toward the requirement, never below it: G ← max(r, fl(G·k⁻¹)), with k⁻¹
+computed at `Init` as k is. The hold restarts, and the clamp holds the ceiling for whatever the
+gain does not yet cover. The flag clears when G reaches r, from which limiting is ordinary, or at
+the first frame without demand. Clipping then fades into limiting within about 0.3 s (about
+14,400 frames from 1 to F at 40 dB/s), instead of stepping.
+
+- *For it:* a Trails load of an On preset from a clipping one stays continuous, as every other
+  Spillover load does, and the dry never steps.
+- *Against it:* the incoming On preset clips, its own grains included, for up to 0.3 s after the
+  switch, which an On preset is meant never to do. It adds a flag, a constant and a path to the
+  limiter, which are not prototyped.
+- *Recommended:* the instant attack as designed, since it is D3's confirmed attack unchanged and
+  the step occurs only on leaving a preset that clips by design. L2's A/B plays both on
+  `limit_clip_trails` (§11.1), and the owner chooses.
+
 **Lifecycle.**
 
-- `Init` sets `on` = true, the row's default, and marks every domain.
+- `Init` sets `on` = true, the row's default, before its own `dirty_ = kAllParamDomains;
+  RebuildDirty();` (`Engine.cpp:710-711` at `claude/tempo-core`), so that rebuild sets `on` from
+  the default with G = 1.
 - `Reset`, and so `Restart` and an Exact load, primes G, the hold and the flags as in §5.4 and
-  leaves `on` alone. The rebuild that `Reset` marks then sets `on` from the leaf before the first
-  frame, with G = 1, so no drain can start. A preset with the switch Off restarts as a settled Off,
-  the state of a fresh engine given that preset.
+  leaves `on` alone. `Reset` calls `RebuildDirty` itself (`:737-738` there), before the
+  smoothers' priming, so `limiter_.Prime()` runs **before** that rebuild (§6.1). The rebuild then
+  sets `on` from the leaf with G = 1, so `Switch` starts no drain and counts nothing. A preset
+  with the switch Off restarts as a settled Off, the state of a fresh engine given that preset.
 - A Spillover load carries G, the hold and the flags, and its rebuild applies the incoming
   preset's switch at the load's frame. On to Off mid-limiting starts a drain there; Off during a
   drain to On continues from G.
@@ -1025,7 +1102,7 @@ cancel, or when |s| is below 2⁻¹²⁶ divided by the gain.
 | Entry point | Limiter |
 |---|---|
 | `Init` | computes `release`, `releaseSlow` and `holdFrames`; G = 1, hold = 0, flags cleared; `on` = true; counts zeroed |
-| `Reset` (and so `Restart` and an Exact load) | G = 1, hold = 0, flags cleared (`Engine.cpp:686-690`'s priming); `on` kept, then set from row 87 by the rebuild `Reset` marks, before the first frame. Counts kept, as `Stats()` keeps them |
+| `Reset` (and so `Restart` and an Exact load) | G = 1, hold = 0, flags cleared, by a `Prime` placed before `Reset`'s own `dirty_ = kAllParamDomains; RebuildDirty();` (`Engine.cpp:681-682`; `:737-738` at `claude/tempo-core`), not beside the smoothers' priming after it; `on` kept, then set from row 87 by that rebuild, with G = 1. Counts kept, as `Stats()` keeps them |
 | Spillover load (event or direct) | carried over: gain, hold and both flags; the load's rebuild applies the incoming switch at its frame (§4.7) |
 | A change of row 87 (`SetParam`, or a load) | `Switch` at the rebuild before the frame renders (§4.7) |
 | `Process` | per frame, inside the guard |
@@ -1080,17 +1157,24 @@ The change to `Engine.cpp:1246-1260` (draft 2's prototype, measured):
 The rest of the engine change:
 
 - `Engine::Impl` gains `detail::OutputLimiter limiter_` next to the smoothers (`Engine.cpp:422`).
-- `Init` calls `limiter_.Init(cfg.sampleRate)` next to the `SetTau` calls (`:642-645`).
-- `Reset` calls `limiter_.Prime()` next to the smoothers' priming (`:686-690`). `Prime` counts a
-  priming that finds G < 1, and the Spillover path counts a load that finds G < 1 (§9.2).
+- `Init` calls `limiter_.Init(cfg.sampleRate)` next to the `SetTau` calls (`:642-645`), which
+  come before `Init`'s own rebuild.
+- `Reset` calls `limiter_.Prime()` **before** its `dirty_ = kAllParamDomains; RebuildDirty();`
+  (`:681-682`; `:737-738` at `claude/tempo-core`), not next to the smoothers' priming, which
+  follows that rebuild. So the rebuild's `Switch` always sees G = 1 after a restart, starts no
+  drain and counts nothing (§4.7). `Prime` counts a priming that finds G < 1, and the Spillover
+  path counts a load that finds G < 1 (§9.2).
 - `RenderFrames` adds the three locals into `limitedFrames`, `dryFrames` and `clippedFrames`
-  after its loop, and adds its frame count to `offFrames` when `on` is false. The switch is
-  constant within one call, since every event and load ends a span.
+  after its loop. When `on` is false it also adds its frame count to `offFrames`, and the first
+  two locals to `drainFrames` and `drainDryFrames`: a frame limited with the switch Off is a
+  drain frame. The switch is constant within one call, since every event and load ends a span,
+  so these counts cost nothing per frame.
 - The switch's row and domain (§7.1): `ParamDomain` gains `kDomainOutput = 1u << 6`, so
   `kAllParamDomains` becomes `0x7F` and the static assert (`Engine.cpp:127` at
   `claude/tempo-core`) follows. `RebuildDirty`'s loop runs to seven, and its switch gains
   `case kDomainOutput: limiter_.Switch(Active(ParamId::OutputLimiter) >= 0.5f); break;`
-  (`:1190-1215` there).
+  (`:1190-1215` there). `RebuildDirty` also runs inside `Init` and `Reset`, not only once per
+  span, which is why the two calls above sit before it.
 - `Engine.h:97-112`'s list of what `Restart` and `Reset` do gains "the output limiter's gain
   returns to 1".
 
@@ -1190,7 +1274,7 @@ never clipped for the preset's sake.
 
 ## 7. Control and display
 
-### 7.1 The per-preset switch (D5, changed by the owner)
+### 7.1 The per-preset switch (D5, proposed)
 
 Draft 2 recommended no control at all, for three reasons:
 
@@ -1199,26 +1283,33 @@ Draft 2 recommended no control at all, for three reasons:
 - a per-preset switch would change every package's `sound_hash` and let a preset opt out of
   safety.
 
-On 2026-10-10 the owner chose a per-preset switch instead, a stored preset parameter, so that a
-mode can turn the limiter off on purpose, for example for deliberate clipping. It is On by
-default. This design keeps the safety reasons by making Off a clip at the same ceiling (§4.7): a
+On 2026-10-10 the owner marked D5 "Change" on the decisions page, with no note. The request to
+revise the design for the answers described the change as a per-preset switch, a stored preset
+parameter, so that a mode can turn the limiter off on purpose, for example for deliberate
+clipping, On by default. Neither the page nor the owner's own message says so, so this form is
+**draft 3's proposal, awaiting the owner's confirmation**. §11.5 Q1 sets it beside the other
+readings of "Change": a device setting, a stage control, and an Off that passes overs.
+
+This design keeps draft 2's safety reasons by making Off a clip at the same ceiling (§4.7): a
 preset chooses how an over is held, never whether. The package cost is paid once, at revision 10
-(§10). The rest of this section specifies the switch.
+(§10). The rest of this section specifies the switch, and §7.1's row is held for the limiter's
+control whichever form the owner chooses.
 
 **The row.**
 
 | Field | Value |
 |---|---|
-| ID | **87**, appended after 86 as host indices require (compiler §4.5): rows 1–82 are `main`'s (`dsp/include/brainscape/Params.h`); 83–85 are the tempo core's (`Params.h` at `claude/tempo-core`, revision 8); 86 is `global.tempo_glide`, claimed by clock §10.4 for T2 (revision 9). No other branch or design claims a row above 86. Any lane that appends a row before L2 lands starts at 88 |
+| ID | **87**, appended after 86 as host indices require (compiler §4.5): rows 1–82 are `main`'s (`dsp/include/brainscape/Params.h`); 83–85 are the tempo core's (`Params.h` at `claude/tempo-core`, revision 8); 86 is `global.tempo_glide`, claimed by clock §10.4 for T2 (revision 9). No other branch or design claims a row above 86. Any lane that appends a row before L2 lands starts at 88. Until the owner confirms D5's form, 87 is **held for the limiter's control**: its name and kind follow the answer (§11.5 Q1) |
+| Row 86 first | The table must stay contiguous from 1 (`static_assert(TableIsContiguous())`, `Engine.cpp:36` at `claude/tempo-core`), so row 87 cannot exist without row 86. D7 expects T2 to land first, with 86 as a `Global` row. If L2 lands first, it adds 86 as a `Reserved` row under its final name, `global.tempo_glide` (0–1, default 0, no domain, `sinceRev` 0), with a display row like row 85's (group `Device`, "Tempo glide", `OffOn`), for T2 to turn into a `Global` row; a Reserved row is never stored and changes no hash (`Params.h:141-155` there). The limiter's revision is then 9, not 10, and its `sinceRev`, `Package-change:` line and every "10" here take the actual number (§10) |
 | Name | `output.limiter`: the leaf's path in the document (compiler §2.2), in a new top-level object `output` |
 | C++ | `ParamId::OutputLimiter = 87`, in a new section of the enum after the tempo core's rows |
 | Kind | `Leaf`: stored in every package, `SetParam` stores it, `LoadPreset` gives it its default and then the stored value (compiler §4.1) |
-| Range, default | 0 to 1, default **1 (On)**, unit `""`. Integer-valued: 0 is Off, 1 is On |
-| How the engine reads it | `value >= 0.5f` is On, the threshold of `ParamDisplay`'s `OffOn` kind (`dsp/src/ParamDisplay.cpp:429-430` at `claude/tempo-core`). A canonical value between 0 and 1, which no compiler writes, plays by that threshold |
+| Range, default | 0 to 1, default **1 (On, Limit)**, unit `""`. Integer-valued: 0 is Off (Clip), 1 is On (Limit). Read as any integer-valued leaf (compiler §2.2, §3.7): a fraction is accepted and plays by the threshold below |
+| How the engine reads it | `value >= 0.5f` is On, the threshold of `ParamDisplay`'s two-state kinds (`dsp/src/ParamDisplay.cpp:429-433` at `claude/tempo-core`). On [0, 1] it equals compiler §3.7's `RoundHalfAwayI32(value) != 0`, so a fraction plays as the integer the UI shows |
 | Domain | `kDomainOutput`, a new seventh bit, `1u << 6` (§6.1). The rebuild calls `Switch` (§4.7) |
 | `sinceRev` | 10, the limiter's revision (compiler §7.3's missing-leaf rule) |
-| Display row (`ParamDisplay.cpp`) | group `GrainDelay`, beside Mix and the wet trim, the mix stage's rows; title "Output limiter"; short title "Limiter"; `Linear` taper; `OffOn` kind, shown "On" or "Off"; 2 steps; flags `kLeafStep` (discrete, not automatable) |
-| Typed text in the plugin | "on", "off", "yes", "no", "true", "false" and the numbers, as every `OffOn` row (`plugin/src/BrainscapeParam.cpp:184-186` at `claude/tempo-core`); `isBoolean()` makes hosts show a toggle (`:310`) |
+| Display row (`ParamDisplay.cpp`) | group `GrainDelay`, beside Mix and the wet trim, the mix stage's rows; title **"Output ceiling"**; short title "Ceiling"; `Linear` taper; a new kind **`LimitClip`**, shown **"Limit"** (≥ 0.5) or **"Clip"**, beside `OffOn` and `LiveMark` ("Mark"/"Live"); 2 steps; flags `kLeafStep` (discrete, not automatable) |
+| Typed text in the plugin | "limit", "clip", "on", "off" and the numbers: `NamedValue`'s table (`plugin/src/BrainscapeParam.cpp:176-200` at `claude/tempo-core`) gains the four names for `LimitClip`, as `LiveMark` has "live" and "mark". `isBoolean()` (`:310`) returns true for `LimitClip` as for `OffOn`, so hosts show a two-state control that reads Limit or Clip |
 
 **In the package (STAT).** The leaf is one entry, `{u32 87, u32 bits}`, last in ascending order:
 bits `0x3F800000` for On, `0x00000000` for Off (compiler §6.2).
@@ -1240,16 +1331,24 @@ bits `0x3F800000` for On, `0x00000000` for Off (compiler §6.2).
 - **Canonical form.** `"output": { "limiter": 1 }`, written in every document, default included
   (compiler §6.4). L2's pull request re-formats every committed document with `bspc fmt`: the
   corpus's, the compiler's examples and the factory set.
-- **Reading.** The JSON integers `0` and `1` only. `0.5`, `1.0` and `1e0` are E3, a fraction or
-  exponent in an integer field: no macro can reach the row, so no fraction is ever legitimate
-  there. `true` and `false` are E3 too, a type mismatch, because leaves are numbers (compiler
-  §2.2). A value outside 0–1 is E4, as for any leaf.
+- **Reading.** As every integer-valued leaf (compiler §2.2, §3.7): any JSON number, read as
+  correctly rounded binary32, in [0, 1]. `0`, `1`, `1.0`, `1e0` and `0.3` are all accepted; a
+  fraction plays by the threshold (0.3 is Clip). A value outside 0–1 is E4, as for any leaf.
+  `true` and `false` are E3, a type mismatch, because leaves are numbers. The compiler writes
+  whatever value the document holds, so `fmt` and decompile round-trip any value a package or the
+  engine can hold: `DecodePreset` accepts any canonical STAT value and `SetParam` stores any value
+  in [0, 1] (below), so a decompiled `"limiter": 0.3` must compile back (compiler §10.1), and the
+  random-document property test, which writes every leaf with a random value in its range
+  (`compiler/tests/test_property.cpp:127` at `claude/tempo-core`), needs no exception. The app's
+  toggle writes 0 or 1; typed text and the console's `set` can store a fraction, which plays by
+  the threshold.
 - **References (E8).** A macro target on `output.limiter` is E8, as `global.mix`'s is
   (`Schema.cpp:1575`), and so is an expression assignment on it, which `global.mix` allows. The
   message: "output.limiter is no macro's or expression's target: the preset sets it".
 - **Lint L15** (the next free: L1–L9 are compiler §2.7's, L10–L11 cpu-budget §7.4's, L12–L14
-  clock's): "the output limiter is Off: an over is clipped at the ceiling, not limited". It is
-  a note for a user preset and an error under `--factory` (§9.5).
+  clock's): "the output ceiling clips (output.limiter below 0.5): an over is clipped at full
+  scale, not limited". It is a note for a user preset and, as D14 recommends, an error under
+  `--factory`; once the `--clips` declaration exists (§9.5), not for an id it marks.
 - **An older compiler** reads `output` as E2, an unknown key, as with any later key.
 
 **Validator (`dsp/src/blob/`).**
@@ -1290,12 +1389,14 @@ through `EvalMacro` (compiler §3.3–§3.4), and hosts follow the host model of
   chooses model (a), this row stays non-automatable for the same reason: (a) is about the leaves
   a macro fans out to, which this row never is.
 - **MIDI CC and the panel: none.** It is not among clock §6.5's CCs, not a Shift secondary and
-  not on the pedal's panel. It is a property of the preset, edited in the app.
+  not on the pedal's panel. It is a property of the preset, edited in the app. (A stage control is
+  D5's reading c, §11.5 Q1.)
 
 **Determinism and the packages.**
 
-- **No render changes for the switch.** Every existing preset plays it at its default, On, which
-  is the limiter. Parameter-list goldens lack the row and load the default; packages gain it at 1.
+- **No render changes for the switch but one.** Every preset plays it at its default, On, which
+  is the limiter, except `limit_off_hot`, which L1 mints before the row exists and L2 sets Off
+  (§9.3). Parameter-list goldens lack the row and load the default; packages gain it at 1.
 - **Every committed package's `sound_hash` changes,** because the compiler writes the new leaf
   into STAT, which `sound_hash` covers (compiler §6.3). That means the corpus's packages, the
   compiler's examples and the factory set, with `golden.json`'s `soundHash` entries and both
@@ -1307,13 +1408,25 @@ through `EvalMacro` (compiler §3.3–§3.4), and hosts follow the host model of
   carries the package-change label once, with one `Package-change:` line per revision, as wave
   1's did for revisions 4, 6 and 7 (compiler §7.6).
 - **The limiter's line:** `Package-change: sound revision 10 adds leaf 87, output.limiter, which
-  the compiler writes into every package at its default (On); no render changes for it`.
-- **The gate.** The pull request bumps, so the renders that change (§9.1) are attributed to the
-  engine, and the label covers the package hashes. Neither the bump nor "sound-neutral" waives
-  the label (compiler §8.3).
+  the compiler writes into every package at its default (On, Limit); limit_off_hot's package sets
+  it Off, so its render becomes revision 9's clamped at ±1.0 (output-limiter.md §9.3's check);
+  every other package preset's changed render is the limiter's own (§9.1's predicted set)`.
+- **The gate.** The pull request bumps, so a changed render of a parameter-list preset is the
+  engine's. A changed render of a preset whose package changed is the package's
+  (`golden_changes`, `tools/ci/sound_rev_gate.py:394-414`), and at revision 10 every package
+  changes. So the gate's report attributes to their packages the changed renders of the package
+  presets among §9.1's set (`strum_marks`, `spillover_chain`, `lone_changes` and `midi_gate` of
+  the eight; `golden.json` at `claude/tempo-core`), which are the limiter's, and
+  `limit_off_hot`'s, which is the switch's. The line above names both, and the label covers the
+  package hashes. Neither the bump nor "sound-neutral" waives the label (compiler §8.3).
 - **Frozen fixtures are never re-stamped.** `r2-onset-marks.bsp` (`sound_rev` 2) must still load
   exact with the switch On, which L2 checks.
 - **Sessions.** A `BSWS` v1 session saved before revision 10 has no `output.limiter` and plays On.
+  It loads **marked inexact**, as for every leaf added since v1: `DecodeState` counts the missing
+  leaf (`plugin/src/StateCodec.cpp:179` at `claude/tempo-core`), BSWS v1 carries no sound
+  revision for a `sinceRev` exemption, and `setStateInformation` reports any missing id as
+  inexact (`PluginProcessor.cpp:518`, `:532`). T2's row 63 does the same. The sound is unaffected,
+  since the absent value is the default.
 
 ### 7.2 The engine API (not sound)
 
@@ -1329,6 +1442,8 @@ struct OutputStats {
   uint64_t clippedFrames         = 0;  // of those, frames at which the clamp clipped a channel
   uint64_t offWhileLimiting      = 0;  // switches to Off that found G < 1: drains started
   uint64_t onWhileDraining       = 0;  // switches to On that found a drain running
+  uint64_t drainFrames           = 0;  // of limitedFrames, those with the switch Off: a drain's
+  uint64_t drainDryFrames        = 0;  // of those, frames with G < F: the drain's whole-mix form
   uint8_t  on                    = 1;  // the switch as the engine plays it now
 };
 // Audio thread only (plain 64-bit counts, as Stats). Counts since Init, which Reset,
@@ -1354,19 +1469,31 @@ its own, on frames with an over only. With the switch Off it is the peak the cla
     too;
   - the wet's gain reduction in dB, the lowest gain over the last UI interval, held for 1 s.
   - **The switch.** While `OutStats().on` is 0 the lamp's caption reads **CLIP** in the warning
-    colour. It is lit while `clippedFrames` has advanced in the last 250 ms, and also while a
-    drain still lowers the gain (`limitedFrames` advancing). So a player hearing a preset clip
-    sees that the preset does it on purpose.
+    colour from the moment the preset loads, unlit until something clips. It is lit while
+    `clippedFrames` has advanced in the last 250 ms, and also while a drain still lowers the gain
+    (`limitedFrames` advancing). So a player hearing a preset clip sees that the preset does it on
+    purpose.
 - **The audio side.** `RenderChunk` reads `OutStats()`, `ConsumeLimiterMinGain()` and
   `ConsumeLimiterPeak()` after `Process` and raises atomics, as `outPeak_` does
   (`PluginProcessor.cpp:1107`).
 - **Where the switch is edited.** It is a leaf, so the Curation slice's **Leaves** view lists it
-  with the other raw leaves, under "Grain delay" as "Output limiter", On or Off, a toggle. The
-  schema-generated editor form shows it as `output.limiter`. The **Pedal** view does not: it is
-  no knob and no Shift secondary. Before a save the slice's lint shows L15 for a preset with the
-  switch Off, as an error for a `factory.` id.
+  with the other raw leaves, under "Grain delay" as "Output ceiling", **Limit** or **Clip**, a
+  two-state control. The schema-generated editor form shows it as `output.limiter`. The **Pedal**
+  view does not: it is no knob and no Shift secondary. Before a save the slice's lint shows L15
+  for a Clip preset, as an error for a `factory.` id that no `--clips` declaration marks (D14).
+- **Clip presets are marked where presets are chosen.** The Library list and the Modes menu show
+  a CLIP tag on every preset whose stored switch is Off, read from its STAT or document, so a
+  preset that clips by design is known before it is loaded, including a user preset synced to the
+  pedal's slots from phase E (compiler §9.1's Library banks).
 - **The Curation view.** Its one-click render report shows each render's limited frames, dry
-  frames, clipped frames and would-be peak, and the preset's switch.
+  frames, clipped frames and would-be peak, and the preset's switch. For a Clip preset with a
+  non-factory id, the switch itself is the declaration: the report gives the clip share per
+  render where Peak (stored) and Ceiling (moved) would fail it (§9.5).
+- **The words.** Every user-facing place says **Limit** and **Clip**, never On and Off: the
+  Leaves view, the host's generic editor (the `LimitClip` kind, §7.1), L15's message, the lamp's
+  caption and the console. "Off" would read as "overs pass as floats", which a DAW user could
+  trim later; here Clip is a hard clip inside the engine, before the wrapper's output level and
+  the monitor trim (§6.3), so lowering those cannot undo it.
 - The meter is measured at the engine's output, which is the last digital stage of the pedal.
   This avoids the H90's fault, a clip LED placed before the last gain stage (§3.1).
 
@@ -1384,7 +1511,7 @@ its own, on frames with an over only. With the switch Off it is the peak the cla
     Positive floats order as unsigned integers, so a plain min or max works;
   - it clears all of them on `g_statReset`;
   - `stats` (`main.cpp:332-357`) reads them inside its existing interrupt-disabled snapshot and
-    prints `limiterOn`, `limitedFrames`, `limiterDryFrames`, `limiterEngages`,
+    prints `limiterMode limit|clip`, `limitedFrames`, `limiterDryFrames`, `limiterEngages`,
     `limiterOffFrames`, `limiterClippedFrames`, `limiterMinGainBits` and `limiterPeakBits`,
     which the host tools decode.
   - This code runs from QSPI in the interrupt, outside the governor's 85 % and inside the 15 %
@@ -1392,14 +1519,20 @@ its own, on frames with an over only. With the switch Off it is the peak the cla
 - **Setting the switch from the console.** `set` reaches every Leaf row by a name the firmware
   lists, and its build fails while a leaf has none (`EveryLeafSettable`,
   `firmware/live/main.cpp:187-232` at `claude/tempo-core`). L2 adds `{ParamId::OutputLimiter,
-  "OutputLimiter"}`, so `set OutputLimiter 0` turns it Off for a bench check, as a `SetParam`.
+  "OutputLimiter"}`, so `set OutputLimiter 0` sets Clip for a bench check, as a `SetParam`.
 - **The Rev7's LED.** The breadboard's one user LED pulses for onsets today
   (`main.cpp:116-120`). It shows limiting instead by default: lit while `limitedFrames` advanced
   in the last 250 ms, and blinking while `dryFrames` did. With the switch Off it flickers fast
   while `clippedFrames` advances. A console verb, `led onsets|limiter`, switches it back for
   onset work. This is firmware only, not a sound revision.
+- **A stored Clip shows at load, not only while clipping.** When the published `on` byte goes to
+  0, at a load, a `set` or boot, the LED gives a double blink, in both `led` modes, so a Clip
+  preset is seen before it clips. Without it, a Clip preset that is not clipping shows nothing,
+  and its clipping later reads as an input-level fault.
 - **The product's panel.** Its indication belongs to the control-surface design, which owns the
-  LEDs.
+  LEDs. Draft 4 hands it two requirements with D6's consequence, pending D5: the panel shows that
+  the loaded preset's switch is Clip from the moment it loads, not only while clipping, and it
+  shows clipping as distinct from limiting.
 
 ---
 
@@ -1567,10 +1700,10 @@ governor's lane).**
 ### 8.4 DTCM
 
 `Engine::Impl` grows by 72 bytes, 56 of them measured in the prototype (§4.2), plus the switch's
-flag and four counts, about 36 bytes (*estimated*). There is no new arena and no buffer, because
+flag and six counts, about 52 bytes (*estimated*). There is no new arena and no buffer, because
 there is no look-ahead. The prototype's live image's DTCM use is unchanged at 35,840 bytes
 (measured). On top of revision 9 the total may pass `kEngineImplBytes`' 8,192 on the M7: 7,944
-at revision 7, plus the tempo core's state and these 108 bytes. If it does, L2 raises the
+at revision 7, plus the tempo core's state and these 124 bytes. If it does, L2 raises the
 constant, which the firmware's 9 KiB DTCM slot allows (§4.2).
 
 ### 8.5 Bench session 2
@@ -1589,7 +1722,7 @@ The additions to budget §8:
   would leak into S, which the governor already charges, and its frames mix paths. `hot_out`
   stays a G3 conformance case only: the shadow ledger must be at or above DWT there.
 - **G1:** the image's renders equal the host's and qemu's for the changed presets and for
-  `limit_switch` and `limit_off_hot`.
+  `limit_switch`, `limit_off_hot` and `limit_clip_trails`.
 - **The analog measurements are not here.** They move to lane L1b, before revision 10 (§6.4).
 
 ---
@@ -1637,9 +1770,16 @@ figures on today's 45-preset corpus belong to its lane, which owns its prototype
 - **So the eight of the table above are expected to hold,** and L2 regenerates the predicted set
   from revision 9's minted corpus with the statistics-reading harness: any of T1's or T2's new
   presets that passes full scale joins the set. That regenerated set is revision 10's check.
-- **The switch adds nothing to it.** No existing preset turns the limiter Off. The package
-  re-stamp changes every package preset's `soundHash` and no render (§7.1). The new presets of
-  §9.3 are new, not changed.
+- **The switch adds one render to it: `limit_off_hot`'s.** L1 mints it at revision 9 without
+  row 87, so it plays unlimited; L2 sets its package's switch Off, so its render becomes revision
+  9's clamped at ±1.0, where a limiter-model prediction would wrongly predict a limited render.
+  §9.3's float-dump comparison is its check. No other existing preset turns the limiter Off, and
+  the package re-stamp changes every other package preset's `soundHash` and no render (§7.1).
+  `limit_switch` and `limit_clip_trails` are new at L2, not changed.
+- **The gate attributes some of the set to packages.** Every package changes at revision 10, so
+  the changed renders of package presets (four of the eight above, `limit_off_hot`, and any of
+  L1's or T1's package presets that limit) are reported as their packages' changes. §7.1's
+  `Package-change:` line names both causes.
 - **The governor, landing second, regenerates its own set** from revision 10's renders, as
   above.
 
@@ -1659,6 +1799,8 @@ figures on today's 45-preset corpus belong to its lane, which owns its prototype
 | `LimiterClippedFrames` | `OutStats().clippedFrames` over the render | L2 |
 | `OffWhileLimiting` | `OutStats().offWhileLimiting` over the render: drains started | L2 |
 | `OnWhileDraining` | `OutStats().onWhileDraining` over the render | L2 |
+| `LimiterDrainDryFrames` | `OutStats().drainDryFrames` over the render: drain frames below F, the whole-mix form. Since a drain only rises, one such frame also proves an On attack below F before it | L2 |
+| `LimiterDrainWetFrames` | `drainFrames − drainDryFrames` over the render: drain frames at or above F, the wet-only form. The corpus's requirements are bounds on single counters, so the harness forms the difference | L2 |
 
 From revision 10 the harness requires `OutOverFrames` = 0 on every preset of every vector, with
 the switch On or Off. Every
@@ -1667,10 +1809,17 @@ golden input's dry is at or under 1.0 in magnitude: the test signals are q·2⁻
 adds off-grid noise far below full scale (`Render.cpp:73-80`).
 
 A new ablation, `limiterSwitch`, forces every package's switch On and drops every `SetParam` on
-row 87. It must change `limit_switch` and `limit_off_hot`, so the switch is shown to be heard.
+row 87. It must change `limit_switch`, `limit_off_hot` and `limit_clip_trails`, so the switch is
+shown to be heard.
+
 `AmongEdits` (`Corpus.cpp:980` at `claude/tempo-core`) gains `kDomainOutput` in its list of
-domains, so every invariance render also sets row 87 to Off and back at each edited frame. That
-must change nothing, since only a frame's final value reaches `Switch` (§4.7).
+domains. After each `SetParam` of another row it then sets row 87 to Off and back at the same
+frame, which must change nothing, since only a frame's final value reaches `Switch` (§4.7). It
+adds no pair after a `SetParam` of row 87 itself, because row 87 is the Output domain's only
+leaf (`other(kDomainOutput, 87)` finds none), and at G = 1 a pair is a no-op whichever way the
+engine applies it. So the pair tests the engine's coalescing only where another row's edit
+falls while the gain is below 1: `limit_switch` places one there (§9.3), and an engine test
+pins it at blocks {1, 7, 127} (§9.4).
 
 `hot_out` gains `require LimitedFrames ≥ 200,000` (`Corpus.cpp:944-945`).
 
@@ -1683,7 +1832,8 @@ Each of the first seven presets is minted at the revision before the limiter's (
 first, else 8 or 7), where it clips and `OutOverFrames` shows it, and re-minted at revision 10.
 The parameters are starting points: L1 tunes them to the stated overs, and places each load and
 restart where the earlier render is over full scale. The "while limiting" requirements apply
-from L2's corpus version. `limit_switch` needs row 87, so L2 adds it.
+from L2's corpus version. `limit_switch` and `limit_clip_trails` need row 87, so L2 adds them,
+and L2 places each of their events from the limiter's own gain trace, which its harness reads.
 
 | Preset | Vector | Settings | What it pins |
 |---|---|---|---|
@@ -1694,13 +1844,14 @@ from L2's corpus version. `limit_switch` needs row 87, so L2 adds it.
 | `limit_hot_mix25` | Saturation, 6 s | Mix 0.25, `wet_trim_db` +12 | the wet past F with the dry at full scale: `LimiterDryFrames` > 0, the dry dips |
 | `limit_ev` | SoftNotes, 10 s | Mix 0.4, a loud wet, `global.effect_volume_db` +12 | the player's wet level raised: `LimitedFrames` > 0 and `LimiterDryFrames` = 0, the dry untouched |
 | `limit_off_hot` | Saturation, 6 s | Mix 0.5, `wet_trim_db` +6; a package that L2 gives `"output": { "limiter": 0 }` | the switch Off on a hot input from the first frame: `LimitedFrames` = 0, `LimiterOffFrames` = every frame, `LimiterClippedFrames` > 0, `OutOverFrames` = 0. **Review check at the re-mint:** its revision-10 render equals its earlier render (minted by L1 without the row, so unlimited) with every sample clamped to ±1.0, compared from the two renders' float dumps as §9.1's seconds are |
-| `limit_switch` | SoftNotes, 12 s | `limit_sustain`'s settings, held into limiting from about 2 s. `SetParam` on row 87 at odd frames: Off inside the held over with G < F, so the drain crosses F in both forms; On during that drain; Off again while limiting; a Spillover load (Trails) of an On package during that drain; an Exact load of an Off package (a settled Off from frame 0 of its timeline); On at a frame with an over while settled Off; an Off and an On at one frame | `OffWhileLimiting` ≥ 2, `OnWhileDraining` ≥ 2 (one by `SetParam`, one by the load), `LimiterDryFrames` > 0, `LimiterClippedFrames` > 0, `OutOverFrames` = 0; `Invariance::HostileFpEnv`, `RestartTail` and `AmongEdits`; block-split coverage at {1, 7, 127} and split delivery, with each toggle off the 48-frame grid |
+| `limit_switch` | SoftNotes, 12 s | `limit_sustain`'s settings with `wet_trim_db` +12, held into limiting from about 2 s. The +12 dB is needed: SoftNotes' dry is at most 0.5 (two overlapping notes at `kFs / 4`), so G < F needs a wet term over 4·(1 − \|a\|) ≥ 2.0, which `limit_sustain`'s +2.5 dBFS sum (wet at most 1.83) never reaches. Events at odd frames: (1) `SetParam` Off inside the held over with G < F and the hold running, so the drain starts below F and crosses it; (2) On during that drain; (3) Off again during a release with F ≤ G < 1, a drain in the wet-only form; (4) a Spillover load (Trails) of an On package during that drain; (5) an Exact load of an Off package at a frame with G < 1, a settled Off from frame 0 of its timeline; (6) On at a frame with an over while settled Off; (7) an Off and an On at one frame with G < 1 and the hold running; (8) one `SetParam` of `feedback.amount` at another frame with G < 1 and the hold running, beside which `AmongEdits` places its row-87 pair | `OffWhileLimiting` = 2 (events 1 and 3: the Exact load counts none, since `Reset` primes before its rebuild, §6.1, and event 7 counts none, since the engine applies only the frame's final value), `OnWhileDraining` = 2 (events 2 and 4), `RestartsWhileLimiting` = 1 (event 5), `LimiterDrainDryFrames` ≥ 1 (the drain's whole-mix form, and so an On attack below F before it), `LimiterDrainWetFrames` ≥ 1, `LimiterClippedFrames` > 0, `OutOverFrames` = 0; `Invariance::HostileFpEnv`, `RestartTail` and `AmongEdits`; block-split coverage at {1, 7, 127} and split delivery, with each event off the 48-frame grid |
+| `limit_clip_trails` | Saturation, 6 s | `limit_off_hot`'s Off package from frame 0, settled and clipping; at an odd frame near 3 s, a Spillover load (Trails) of an On package with `limit_hot_mix25`'s settings (Mix 0.25, `wet_trim_db` +12) | leaving a clipping preset with Trails (§4.7, "Turning On"): `LimiterOffFrames` = the load's frame exactly, `LimiterClippedFrames` > 0, `LoadsWhileLimiting` = 0 (G = 1 at the load), `LimiterEngages` ≥ 1 and `LimiterDryFrames` > 0, all of which follow the load, since a settled Off renders no frame below 1; `OutOverFrames` = 0; `Invariance::HostileFpEnv` and split delivery. It pins the instant duck at the load as designed; if the owner chooses the entry ramp (§11.5 Q9), L2 re-specifies it |
 
 `limit_hot_kill` replaces draft 1's `limit_hot_mix0`, which multiplied the wet by exactly 0 at
 Mix 0 and so repeated what `subnormal_dry` already pins. Each preset carries
 `Invariance::HostileFpEnv`, and `limit_sustain` and `limit_switch` also block-split coverage at
 odd sizes. Every leg's block patterns, random sizes, fresh engines and split delivery cover all
-eight, and so does the M7 under qemu, which the prototypes did not run (§12). `lone_changes`
+nine, and so does the M7 under qemu, which the prototypes did not run (§12). `lone_changes`
 keeps its explicit list of rows (`Corpus.cpp:316-334` at `claude/tempo-core`), so its hash does
 not move for row 87. `limit_switch` carries row 87's lone changes instead.
 
@@ -1717,8 +1868,10 @@ not move for row 87. `limit_switch` carries row 87's lone changes instead.
    give G = 2⁻²⁴ and an output of exactly ±c: the clamp as a hard clip.
 3. **Constants.** At 48 kHz, `release` is `0x3F800325`, `releaseSlow` `0x3F8000C9` and
    `holdFrames` 480; F and 1/F are exact powers of two.
-4. **Timing.** One over of 2.5 dB gives exactly 1.0f after 3,481 frames; the other rows of §4.4
-   item 3 are checked the same way. An over that returns during a release switches the rest of
+4. **Timing.** One over of 2.5 dB (starting bits `0x3F3FF911`) gives exactly 1.0f on the
+   3,481st frame, counted from the over's frame; the other rows of §4.4 item 3 are checked the
+   same way, from the bits of §4.7's table, the floor's 173,843 counted from a burst's last over
+   frame. An over that returns during a release switches the rest of
    that release to k_s, pinned frame by frame, and the flag clears at G = 1.
 5. **No stuck hold.** From every gain on a 0.05 dB grid down to −60 dB, with no input, G = 1
    within H + ⌈GR/(10 dB/s)⌉ + 2 frames, at either rate.
@@ -1739,17 +1892,19 @@ not move for row 87. `limit_switch` carries row 87's lone changes instead.
     bit on random frames with hot dry and wet terms up to ±`FLT_MAX`, and idle frames keep their
     bits. The return's bit 2 is set exactly when a channel's |s| passed its ceiling, and NaN
     passes unchanged without setting it.
-13. **The drain.** From each gain of §4.7's table, a switch to Off with demand continuing gives
-    G_n = min(1, fl(G_{n−1}·k)) frame by frame. There is no attack, the hold is 0 and both flags
-    are clear. The output is §4.3's form at G_n, clamped, and G is exactly 1.0f after the
-    table's frame count. From G = 1 a switch to Off changes no state.
+13. **The drain.** From each starting bit pattern of §4.7's table, a switch to Off with demand
+    continuing gives G_n = min(1, fl(G_{n−1}·k)) frame by frame. There is no attack, the hold is
+    0 and both flags are clear. The output is §4.3's form at G_n, clamped, and G is exactly 1.0f
+    after the table's frame count. From G = 1 a switch to Off changes no state.
 14. **On.** From a settled Off, a switch to On followed by an over attacks from G = 1 and counts
     an engagement. During a drain, a switch to On continues from G, with `releasing` set: without
     demand the trajectory is the drain's, frame for frame, and an over that returns attacks and
     sets `slow`.
-15. **A same-frame pair.** `Switch(false)` then `Switch(true)` before a frame renders leaves the
-    state bit for bit as it was, at G < 1 and at G = 1. That is the engine's rebuild rule (§4.7),
-    tested with the limiter alone.
+15. **An unchanged setting.** `Switch` called with the current setting changes no state, bit for
+    bit and counts included, at G = 1 and at G < 1 with the hold running, with `slow` set and
+    during a drain. (A same-frame Off and On is the engine's rule, not `Switch`'s: called twice
+    at G < 1, `Switch` would change the state, as §4.7 says. The engine test below pins the
+    pair.)
 16. **Continuity.** Across a switch to Off at G = F/2 under a constant over, the gain changes by
     at most the factor k per frame, the switch frame included, so the envelope has no step. The
     click test's local-outlier ratio over the switch frame stays within the bound that the A/B
@@ -1782,15 +1937,26 @@ not move for row 87. `limit_switch` carries row 87's lone changes instead.
   - its lone change equals the same change among edits of every other domain, as every Leaf
     row's does, and that test iterates the rows, so it covers row 87 without edits;
   - an Exact load of an Off package plays `Clamp(s, c)` from frame 0;
+  - an Exact load of an Off package at a frame with G < 1 counts one `restartsWhileLimiting`
+    and no `offWhileLimiting`, which pins §6.1's order (`Prime` before `Reset`'s rebuild);
   - a Spillover load of an Off package mid-limiting drains from the load's frame, and one of an
     On package during a drain continues from G;
+  - **the same-frame pair:** render into limiting so that G < 1, once inside the hold and once
+    with `slow` set; apply `SetParam(87, 0)` and `SetParam(87, 1)` at one odd frame; the output
+    and `OutStats()` must equal the same render without the two events, at blocks of
+    {1, 7, 127};
   - `Restart` during a drain gives a settled Off equal to a fresh engine with that preset;
   - a frozen revision-2 package loads exact with the switch On.
 - **The compiler** (`compiler/tests/`): `output.limiter` written in canonical form in every
-  document; `0` and `1` read, while `0.5`, `1.0`, `1e0`, `true` and `2` are refused as E3, E3,
-  E3, E3 and E4; a macro target and an expression assignment on it are E8; L15 is a note for a
-  user document and an error under `--factory`. The random-document and reader-fuzz digests are
-  re-minted for the new key.
+  document; `0`, `1`, `1.0`, `1e0` and `0.3` read (`1.0` and `1e0` as the bits of 1); `true`
+  refused as E3 and `2` as E4; a decompiled package holding 0.3 for row 87 compiles back to the
+  same bits; a macro target and an expression assignment on it are E8; L15 is a note for a user
+  document and an error under `--factory`, and, once the declaration is built, no error under
+  `--factory` for an id the declarations mark `--clips` (§9.5). The random-document and
+  reader-fuzz digests are re-minted for the new key; the property test needs no exception for
+  it.
+- **The plugin** (`plugin/tests/`): the `LimitClip` kind formats "Limit" and "Clip" at the
+  threshold, reads "limit", "clip", "on", "off" and numbers, and is boolean to hosts.
 - **The validator** (`dsp/tests/test_blob.cpp`, frozen fixtures): a MACR target on row 87 is
   `TargetLimiter`; a CTRL expression assignment on row 87 is `ExpressionTarget`.
 
@@ -1798,8 +1964,8 @@ not move for row 87. `limit_switch` carries row 87's lone changes instead.
 
 Once the limiter exists, no render on a pedal-faithful input can exceed 0 dBFS, with the switch
 On or Off. So the peak alone judges nothing, and the checks move to the engine's counts. D8 is
-confirmed as recommended. The switch adds only the clipped count beside the limited one, and a
-factory rule (below).
+confirmed as recommended. The proposed switch adds, pending D5, the clipped count beside the
+limited one, and, pending D14, a factory rule (below).
 
 | Check (`tools/audition/README.md`'s table) | Today | From revision 10 |
 |---|---|---|
@@ -1807,7 +1973,7 @@ factory rule (below).
 | Peak (moved), sweeps and S11 on the class input | ≤ 0 dBFS, unrounded (`Suite.cpp:29`, `:519`, `:677-680`) | **Ceiling (moved): zero limited frames and zero clipped frames** during sweeps and S11 on the class input. This is the same criterion, read from `OutStats()`: the mix never reached full scale, by either mechanism. A failure names the render, its limited, dry and clipped frames and its would-be peak |
 | Peak (other) | the other inputs' stored peaks, and the highest of S0's other vectors, S7–S10 and the Clicks renders: reported | Reported per render, not only the highest: each S0 vector and each wet render, with its limited, dry and clipped frames and its would-be peak. These include the attack modes' SoftNotes corners at up to +2.5 dBFS, all S0 Saturation renders, Echolalia's S0 OnsetBursts render (+0.14 dBFS), Déjà Vu's S0 wet SoftNotes render (+0.52 dBFS), Lull's S10 and Runaway's S8 |
 | Over full scale (new) | — | **No sample over full scale in any render** (`Metrics.overFull` = 0, `Metrics.cpp:251`), the switch Off included, since Off clips at the ceiling. This is a guard on the limiter itself |
-| Limiter switch (new) | — | **On, for every factory preset** (`id` under `factory.`). A factory package with the switch Off fails, even if it bypassed the lint. Other presets report the setting in the header of their report |
+| Limiter switch (new, D14) | — | **On (Limit), for every factory preset** (`id` under `factory.`) unless the declarations, once built, mark its id `--clips`. A factory package with the switch Off and no declaration fails, even if it bypassed the lint. Other presets report the setting in the header of their report |
 | Load | births per second | unchanged |
 
 **Reported readings (new, never failed).** They show the owner what the limiter does in normal
@@ -1824,10 +1990,13 @@ play:
 `Render.cpp` reads `OutStats()` deltas and the two `Consume` calls around each render, as it reads
 `Stats()` (`tools/audition/src/Render.cpp:87`, `:137`, `:142`).
 
-**Factory presets and the switch.** The owner asked for the switch so that a mode can turn the
-limiter off on purpose. The question here is whether factory modes may. The recommendation is
-that they may not for now: **factory presets keep the switch On, and lint L15 enforces it under
-`--factory`**, with the pre-screen's switch row (above) as a second guard. The reasons:
+**Factory presets and the switch (D14, the owner's).** The switch, as proposed, exists so that a
+mode can turn the limiter off on purpose, and a factory mode is a factory preset (compiler §1.3).
+So whether factory presets may set it Off is a product decision for the owner, D14, not a design
+decision taken here. The recommendation is that they may not for now: **factory presets keep the
+switch On, and lint L15 enforces it under `--factory`**, with the pre-screen's switch row (above)
+as a second guard. The alternative is to allow Off for a factory mode that declares it, through
+the declaration below, built now rather than later. The reasons for the recommendation:
 
 1. **The ceiling is the factory set's protection.** The owner asked for the limiter because the
    first set clipped the codec at extreme corners (`firmware/factory/AUDITION.md:43`). A factory
@@ -1844,16 +2013,37 @@ that they may not for now: **factory presets keep the switch On, and lint L15 en
 4. **No first-set mode asks for it.** The 14 modes and 4 reserves pass the pre-screen at
    stored positions without the ceiling (§1.1).
 
-**The path if a factory mode ever wants clipping.** The owner adds, in that mode's own change, a
-declared audition class `clip`, like the attack and pad classes (`ratings.py declare`):
+**The declaration that lets a factory mode clip.** D14's alternative, and the path later if the
+recommendation stands, is a declaration, built as follows.
 
-- L15 then admits the switch Off for a mode that declares it;
-- Peak (stored) and Ceiling (moved) are replaced for it by a reported clip share per render and
-  the listening pass;
-- "No sample over full scale" still applies, which Off satisfies.
+- **It is a flag of its own, not an input class.** The input class, `ratings.py declare --class
+  attack|pad` (`tools/audition/ratings.py:31`), decides which inputs judge a mode, and a mode that
+  clips still needs one. So the declaration is `ratings.py declare ID --clips | --no-clips`, beside
+  `--self-oscillating`, recorded in `AUDITION.md`'s declarations as the others are.
+- **`bspc lint` reads it.** L15 runs inside `bspc lint --factory DOC.json`, which reads only the
+  document today, while the declarations reach only `bspc render --declarations AUDITION.md`
+  (`firmware/factory/README.md`). So `bspc lint` gains the same `--declarations AUDITION.md`
+  input, parsed by the code `bspc render` uses (`kRatingsMarker`), and
+  `tools/ci/bspc_roundtrip.py:150` passes it for `firmware/factory/`. Under `--factory`, L15 is
+  then an error only for an id the declarations do not mark `--clips`.
+- **What it replaces, exactly.** For a declared mode: Peak (stored) on the class inputs, Ceiling
+  (moved) on the class input's sweeps, and the same Ceiling on its S11 Combinations renders, are
+  each replaced by the clip share per render (clipped frames over frames), reported, and by the
+  listening pass. "No sample over full scale" still applies, which Off satisfies, and so do the
+  Load check and every reported reading.
+- **User presets.** For an id not under `factory.`, the switch Off is itself the declaration.
+  The Curation slice's one-click render reports the clip share where Peak (stored) and Ceiling
+  (moved) would fail, and L15 stays a note, so a deliberate Clip preset is never reported as a
+  failure.
 
-Until then a user preset may set the switch Off freely. L15 then appears as a note in the
-Curation slice and in `bspc lint`.
+**When it is built.** Under D14's recommendation the declaration waits until a factory mode asks
+for it, and until then L15 under `--factory` is an error for every Off. Under D14's alternative,
+L3 builds the `ratings.py` flag and the report, and L2 the `bspc lint` input, now: about 0.5 day,
+not in §11.1's totals. The user-preset rule above needs no declaration and is built either way,
+in L3 and L4.
+
+A user preset may set the switch Off freely. L15 then appears as a note in the Curation slice and
+in `bspc lint`.
 
 At revision 10, L3 re-runs the pre-screen. These renders' hashes change:
 
@@ -1888,12 +2078,13 @@ frames and would-be peak, so the owner hears only the seconds that changed.
 ## 10. Sound revision and order
 
 The limiter is one commit that raises `kSoundRevision` by one and mints `golden.json` at it
-(profile §5.12, the per-commit rule). With D5 as the owner answered it, the same commit adds Leaf
-row 87 and re-stamps every committed package, whose `sound_hash` changes with the new leaf
-(§7.1). So its pull request needs the package-change label and the line
-`Package-change: sound revision 10 adds leaf 87, output.limiter, which the compiler writes into
-every package at its default (On); no render changes for it`. If it shares a pull request with
-T2, which also adds a leaf (clock §11.3), there is one label and one line per revision.
+(profile §5.12, the per-commit rule). With D5 in draft 3's proposed form, the same commit adds
+Leaf row 87 and re-stamps every committed package, whose `sound_hash` changes with the new leaf
+(§7.1). So its pull request needs the package-change label and §7.1's `Package-change:` line,
+which names the default written into every package and `limit_off_hot`'s package set Off. If it
+shares a pull request with T2, which also adds a leaf (clock §11.3), there is one label and one
+line per revision. (Under D5's reading b, a device setting, no package hash changes and the
+label is not needed; §11.5 Q1.)
 
 It is independent of the other planned revisions:
 
@@ -1903,14 +2094,16 @@ It is independent of the other planned revisions:
 | Touches the loop or the draws | yes | yes | no |
 | ITCM | about 2.3 KB; waits for cold code to leave | T1 took 2.4 KiB, leaving 792 bytes (measured); T2 waits for cold code to leave | 1.28 KB plus the switch's 0.1–0.2 KB; waits for cold code to leave (§8.3) |
 | Changes goldens | 5 presets of the 33-preset corpus of its time (budget §6) | new presets only (tempo off elsewhere); T1 reproduced all 45 | 8 of the 45, regenerated from revision 9 (§9.1) |
-| Package hashes | none | T2: every `sound_hash` (row 63 becomes a leaf) | every `sound_hash` (row 87) |
+| Package hashes | none | T2: every `sound_hash` (row 63 becomes a leaf) | every `sound_hash` (row 87, under D5's proposed form) |
 
 **The order (D7, confirmed by the owner on 2026-10-10).** The owner amended CLOCK's D1 on
 2026-10-09, so the tempo core (T1, revision 8) and synced times (T2, revision 9) are being built
 now, ahead of the knob ratings. The limiter is therefore **the next free revision, expected
 10**. It lands before the knob-rating rows are written and before the governor, which becomes
 11. The number is whichever is next free when it lands, 10 if T2 has landed as D7 expects;
-every "10" in this document means the limiter's revision, and every "9" the one before it.
+every "10" in this document means the limiter's revision, and every "9" the one before it. If
+L2 lands before T2, the limiter is 9, and L2 adds row 86 as a `Reserved` row so row 87 can
+exist (§7.1, "Row 86 first"); T2 then turns 86 into its `Global` row.
 
 The reasons, from draft 2, which recommended revision 8 first, before that amendment:
 
@@ -1947,26 +2140,34 @@ D7's confirmation makes some text in the other designs stale, listed in §11.6.
 | **L0** design | this document, its record and its notes | `docs/` | done | — |
 | **L1** counters and presets first | `OutOverFrames`; the next free corpus version with §9.3's first seven presets, `limit_off_hot` included, minted at the revision before the limiter's, loads and restarts placed where the renders clip; the click test split (§9.4) | `dsp/tests/` | now: tests only, no sound change | 1.25–1.75 |
 | **L1b** the analog check | the live image's `tone` verb (firmware only, not a sound revision); on the Rev7, the 0 dBFS output level and the fs/4 sine at 45° with sample peaks of 1.0; a record under `firmware/records/`; D10 decided from it | `firmware/live/`, `firmware/records/` | now, beside L1; before L2 | 1 |
-| **L2** the limiter and its switch, revision 10 | **First**, unless T2 has built it: the cold-code move out of ITCM (§8.3). **The limiter:** `detail/OutputLimiter.h` with the Off path and `Switch` (§4.7); `Engine` Impl, `Init`, `Reset`, Spillover count, Pass 3c; `OutStats` and the two `Consume` calls; L2's corpus version with its counters, requirements, `limit_switch`, the `limiterSwitch` ablation and the Output domain in `AmongEdits`; `test_limiter.cpp` and §9.4's engine tests; the `Corpus.h` and `MixLaw.h` comment notes; `SoundRevision.h`'s history line; the re-mint with §9.1's check regenerated from revision 9; parity on every host leg and the M7. **The switch (§7.1):** row 87 and `kDomainOutput` in `Params.h`; its `ParamDisplay` row; `RebuildDirty`; the compiler's schema key, E3 and E8 rules and L15; `TargetLimiter` in the validator, two frozen fixtures and the blob fuzzer's digest; the firmware's `set` name; every document re-formatted, every package re-stamped, `golden.json` and both `MANIFEST`s; the package-change label and its `Package-change:` line. **Before minting,** the owner's confirming A/B of the answers D11 and D3 rest on: whole mix against wet first, each with 40 dB/s, the dual release and 10 dB/s, on Echolalia's S11 corner a1r0s1t0 on SoftNotes, Lull's S0 on SoftNotes at effect volume +6 dB, one mode's S0 Saturation render, `limit_sustain` and `hot_out`; and, for D5, `limit_off_hot` and `limit_switch` with the switch Off, to hear the clip and the drain | `dsp/`, `compiler/`, `dsp/src/blob/`, `dsp/tests/`, `firmware/live/main.cpp` (the `set` name), `firmware/factory/`, `compiler/tests/data/` | after L1 and L1b, and after T2 (D7); before the knob-rating rows | 4–5.5, plus 1–2 if it builds the cold-code move |
-| **L3** audition | §9.5's checks and readings; the would-be peak, dry and clipped frames; per-vector S0 reporting; the switch row of the factory gate; README; the revision-10 pre-screen and its `ratings.py note`; re-listen annotation (§9.6) | `tools/audition/`, `firmware/factory/AUDITION.md` (through `ratings.py`) | after L2 | 1.75–2.5 |
-| **L4** plugin | the LIM lamp with its CLIP caption, the DRY mark and the gain-reduction readout; the Curation report's counts and switch; L15 in the pre-save lint (§7.3) | `plugin/` | after L2 | 1.25–1.5 |
-| **L5** firmware | the console's `stats` fields through `AudioCallback`'s atomics, the switch's included (§7.4); the user LED and `led` verb; `firmware/README.md`'s ITCM table | `firmware/` | after L2 | 0.75–1.25 |
+| **L2** the limiter and its switch, revision 10 | **First**, unless T2 has built it: the cold-code move out of ITCM (§8.3). **The limiter:** `detail/OutputLimiter.h` with the Off path and `Switch` (§4.7); `Engine` Impl, `Init`, `Reset`, Spillover count, Pass 3c; `OutStats` and the two `Consume` calls; L2's corpus version with its counters (the two drain counts included), requirements, `limit_switch`, `limit_clip_trails`, the `limiterSwitch` ablation and the Output domain in `AmongEdits`; `test_limiter.cpp` and §9.4's engine tests; the `Corpus.h` and `MixLaw.h` comment notes; `SoundRevision.h`'s history line; the re-mint with §9.1's check regenerated from revision 9; parity on every host leg and the M7. **The switch (§7.1), in the form the owner confirms (§11.5 Q1):** row 87 and `kDomainOutput` in `Params.h`, and row 86 as a `Reserved` row if L2 lands before T2; its `ParamDisplay` row with the `LimitClip` kind; `RebuildDirty`; the compiler's schema key, its E8 rules and L15; `TargetLimiter` in the validator, two frozen fixtures and the blob fuzzer's digest; the firmware's `set` name; every document re-formatted, every package re-stamped, `golden.json` and both `MANIFEST`s; the package-change label and its `Package-change:` line. **Before minting,** the owner's confirming A/B of the answers D11 and D3 rest on: whole mix against wet first, each with 40 dB/s, the dual release and 10 dB/s, on Echolalia's S11 corner a1r0s1t0 on SoftNotes, Lull's S0 on SoftNotes at effect volume +6 dB, one mode's S0 Saturation render, `limit_sustain` and `hot_out`; and, for D5, `limit_off_hot` and `limit_switch` with the switch Off, to hear the clip and the drain, and `limit_clip_trails` with the instant attack and with the entry ramp (Q9) | `dsp/`, `compiler/`, `dsp/src/blob/`, `dsp/tests/`, `firmware/live/main.cpp` (the `set` name), `firmware/factory/`, `compiler/tests/data/` | after L1 and L1b, and after T2 (D7); before the knob-rating rows | 4.25–5.75, plus 1–2 if it builds the cold-code move |
+| **L3** audition | §9.5's checks and readings; the would-be peak, dry and clipped frames; per-vector S0 reporting; the switch row of the factory gate; the clip share for Clip presets; the `--clips` declaration only if D14 chooses its alternative; README; the revision-10 pre-screen and its `ratings.py note`; re-listen annotation (§9.6) | `tools/audition/`, `firmware/factory/AUDITION.md` (through `ratings.py`) | after L2 | 1.75–2.5 |
+| **L4** plugin | the LIM lamp with its CLIP caption, the DRY mark and the gain-reduction readout; the `LimitClip` text and the Limit and Clip words; CLIP tags in the Library list and the Modes menu; the Curation report's counts, switch and clip share; L15 in the pre-save lint (§7.3) | `plugin/` | after L2 | 1.5–1.75 |
+| **L5** firmware | the console's `stats` fields through `AudioCallback`'s atomics, the switch's included (§7.4); the user LED, its double blink for a Clip preset and the `led` verb; `firmware/README.md`'s ITCM table | `firmware/` | after L2 | 0.75–1.25 |
 | **L6** bench | §8.5 within session 2: every path in `SuiteMicro`, the switch's included; S's line; `hot_out` as G3 conformance | `firmware/`, records | with session 2 | 0.5–1 |
 
 **Order:** L1 and L1b now. Then L2 after T2, before the owner writes knob ratings if possible.
 Then L3, L4 and L5 in parallel. L6 runs with bench session 2.
 
-**Total:** about 10.5–14.5 engineer-days beyond this design (*estimated*), plus 1–2 if L2 builds
-the cold-code move. Draft 2's 8.5–11.5 had no switch: the switch adds about 1–1.5 days to L2 and
-about 0.25–0.5 each to L1, L3, L4 and L5.
+**Total:** about 11–15 engineer-days beyond this design (*estimated*), plus 1–2 if L2 builds
+the cold-code move, and about 0.5 if D14 chooses the declaration. Draft 2's 8.5–11.5 had no
+switch: draft 3's switch added about 1–1.5 days to L2 and about 0.25–0.5 each to L1, L3, L4 and
+L5, and draft 4 adds about 0.25 each to L2 (the drain counts, `limit_clip_trails`, the
+`LimitClip` kind) and L4 (the Library and Modes tags). Under D5's other readings (§11.5 Q1) the
+switch's share changes.
 
 ### 11.2 Owner decisions
 
 The owner answered all thirteen on 2026-10-10. Twelve are confirmed as recommended. **D5 is
-changed:** instead of no control, a per-preset switch. None is provisional any more. As with every
-owner answer in these designs, each stays reversible before the first public release; reversing
-one is an owner decision of its own and, where it changes the sound, a sound revision. Record §7
-holds the answers as given.
+marked "Change" with no note**, so its new form is not yet the owner's: draft 3 proposes a
+per-preset switch, and §11.5 Q1 asks the owner to confirm it or choose another reading. **D14 is
+new** in draft 4: whether factory presets may set the switch Off, which draft 3 had decided
+itself. As with every owner answer in these designs, each stays reversible before the first
+public release; reversing one is an owner decision of its own and, where it changes the sound, a
+sound revision. Record §7 holds the answers as given.
+
+The Answer column holds only what the owner confirmed. What the proposed switch adds to a
+confirmed decision is in its Consequence column, marked "pending D5" or "pending D14".
 
 | # | Decision | Answer (the owner, 2026-10-10) | Consequence | § |
 |---|---|---|---|---|
@@ -1974,15 +2175,16 @@ holds the answers as given.
 | D2 | Threshold, ceiling and knee | Confirmed: **a hard knee at full scale (T = C = 1.0)**, unless L1b shows the DAC clips (D10). The soft knee from −1 dBFS stays an alternative, auditioned only if the owner asks | Only renders that clip today change (8 of 45 goldens); contract #2 stays as written. The soft knee bends sudden low overs less, but changes 10 goldens and every render between −1 and 0 dBFS, and restates contract #2 | 3.4, 4.6 |
 | D3 | Time behaviour | Confirmed: **zero latency, instant attack, a 10 ms hold restarted under demand within 0.25 dB, and a release of 40 dB/s after an isolated over that slows to 10 dB/s once an over returns during the release**, ending at exactly 1 | No dry delay. Isolated transients recover as fast as draft 1's (72.5 ms after a 2.5 dB over); sustained material holds still (flutter windows, measured on the whole sum: 26 → 3 on the owner's corner, 97 and 191 → 0 on S0 Saturation). The cost: one more state flag, and limiting lasts longer once overs keep returning (1.54 → 1.85 s on the owner's corner; about 14.5 s from the floor on hostile input). L2's A/B is the listening check this answer rests on | 4.1, 4.4, 4.6 |
 | D4 | Linking and the plugin's hot dry | Confirmed: **linked across channels, with each channel's ceiling at max(1, \|dry term\|)**. Not unlinked when a ceiling exceeds 1 | The stereo image never moves. No output exceeds max(1, \|a\|); the dry is untouched while the wet gives way; past F a hot dry on one channel can be pulled below its own level by the other channel's wet. Unlinking would keep that hot dry but move the image, for a plugin-only case | 4.4, 3.3 |
-| D5 | Control | **Changed by the owner** (draft 2 recommended none: always on, no row, no device setting, no per-preset switch). **A per-preset switch: a stored preset parameter, a Leaf, so a mode can turn the limiter off on purpose, for example for deliberate clipping; default On.** As specified here: row 87, `output.limiter`, 0 Off or 1 On, written `"output": { "limiter": 1 }`; Off clips each channel at the same ceiling; a switch to Off mid-limiting drains the gain at 40 dB/s, then clips; a switch to On starts from unity, or from a running drain's gain; macros, expression and host automation cannot reach it; factory presets keep it On (L15) | No render changes for the switch: every existing preset plays it at its default. Every committed package's `sound_hash` changes at revision 10, which needs the package-change label and a `Package-change:` line. No sample leaves the engine over full scale either way, and the plugin clips exactly as the pedal does when it is Off. The cost: an estimated 100–200 bytes of ITCM, about 2 cycles on the limiting paths, about 36 bytes of DTCM, and 2–3 engineer-days across the lanes. A user preset can set it Off; the CLIP lamp and L15's note show it | 7.1, 4.7, 9.5, 10 |
-| D6 | Indication | Confirmed: **Plugin: a LIM lamp with a DRY mark and the wet's gain reduction at the output meter. Rev7: the console counts, and the user LED shows limiting (lit; blinking when the dry dips), switchable back to onsets. Product: in the control-surface design.** With D5's switch the lamp reads CLIP while the switch is Off (§7.3) | Engagement is visible where it happens, at the last digital stage, on both targets; on the Rev7 the player can see why a sound dipped | 7.3, 7.4 |
+| D5 | Control | **Marked "Change" by the owner, with no note** (draft 2 recommended none: always on, no row, no device setting, no per-preset switch). **The form is not yet the owner's.** Draft 3 proposes, from the request to revise the design: **a per-preset switch, a stored preset parameter (a Leaf), so a mode can turn the limiter off on purpose, for example for deliberate clipping; default On.** As specified here: row 87, `output.limiter`, 0 (Clip) or 1 (Limit), written `"output": { "limiter": 1 }`; Off clips each channel at the same ceiling; a switch to Off mid-limiting drains the gain at 40 dB/s, then clips; a switch to On starts from unity, or from a running drain's gain; macros, expression and host automation cannot reach it. **Awaiting the owner's confirmation, §11.5 Q1**, which sets out the other readings | No render changes for the switch but `limit_off_hot`'s, which L2 sets Off. Every committed package's `sound_hash` changes at revision 10, which needs the package-change label and a `Package-change:` line. No sample leaves the engine over full scale either way, and the plugin clips exactly as the pedal does when it is Off. The cost: an estimated 100–200 bytes of ITCM, about 2 cycles on the limiting paths, about 52 bytes of DTCM, and about 2.5–4 engineer-days across the lanes. A user preset can set it Off; the CLIP lamp, the Rev7's double blink, the plugin's CLIP tags and L15's note show it. Row 87 is held for the limiter's control until the owner answers | 7.1, 4.7, 9.5, 10 |
+| D6 | Indication | Confirmed: **Plugin: a LIM lamp with a DRY mark and the wet's gain reduction at the output meter. Rev7: the console counts, and the user LED shows limiting (lit; blinking when the dry dips), switchable back to onsets. Product: in the control-surface design.** | Engagement is visible where it happens, at the last digital stage, on both targets; on the Rev7 the player can see why a sound dipped. *Drafts 3 and 4 add, pending D5:* the lamp's caption reads CLIP from the load of a Clip preset; the plugin tags Clip presets in the Library list and the Modes menu; the Rev7's LED double-blinks at the load of a Clip preset, in both `led` modes; and the **control-surface design is handed two requirements**, as D12 and D13 hand theirs: the panel shows that the loaded preset's switch is Clip from the moment it loads, not only while clipping, and shows clipping as distinct from limiting (§7.3, §7.4) | 7.3, 7.4 |
 | D7 | Revision and order | Confirmed: **the next free revision, expected 10**: after CLOCK's tempo core (8) and synced times (9), which the owner moved ahead on 2026-10-09 (clock D1, amended); before the knob-rating rows are written and before the governor (then 11); after L1b's DAC test. (Draft 2 recommended 8, first, before that amendment.) | Ratings and the factory gate run on the limited sound; no re-listen; the governor's S includes it before its constants freeze. If L1b cannot come first, the owner chooses between rating first (a lowered ceiling later re-marks rated rows) and waiting. After T1 the limiter no longer fits ITCM as it is, so it lands after the cold-code move (§8.3) | 10, 9.6 |
-| D8 | The audition | Confirmed: **keep Peak at stored positions (≤ −1 dBFS). Replace Peak (moved) with zero limiter engagement on the class input during sweeps and S11. Report engagement per render elsewhere, with dry frames and the would-be peak. Add "no sample over full scale" and the effect-volume, Mix 0.5 and +3 dB input readings.** With D5's switch, a clipped frame counts as an engagement, and factory presets must have the switch On (§9.5) | Factory presets never lean on the limiter where the class input is judged; the +2.5 dBFS corners become reported limiting, not clipping; the owner sees what raising the wet does | 9.5 |
-| D9 | CPU charge | Confirmed: **the worst limited path in the governor's static reserve S: a placeholder of 260 cycles per frame (12.5k per block, 2.6 %)**, replaced by session 2's slowest measured path plus 10 % | About 260 cycles per frame less for grains at binding corners: about 2 Hermite voices (the whole-mix alternative: about 1.2). The switch's paths are cheaper than the worst one, so the placeholder stands | 8.1, 8.2 |
-| D10 | The analog side | Confirmed: **measure the Rev7's 0 dBFS level and the PCM3060's inter-sample behaviour in L1b, before revision 10. Keep C = 1.0 unless the DAC clips the fs/4 test; if it does, choose a lower C or an oversampled detector then. Require the output stage to swing DAC full scale + 3 dB** | The ceiling is fixed once, before any rating; no contract changes without evidence. Inter-sample overs exist today at stored positions (up to +1.5 dBTP on OnsetBursts), so the test matters with or without the limiter. A lowered C would lower the Off setting's clip with it | 6.4 |
+| D8 | The audition | Confirmed: **keep Peak at stored positions (≤ −1 dBFS). Replace Peak (moved) with zero limiter engagement on the class input during sweeps and S11. Report engagement per render elsewhere, with dry frames and the would-be peak. Add "no sample over full scale" and the effect-volume, Mix 0.5 and +3 dB input readings.** | Factory presets never lean on the limiter where the class input is judged; the +2.5 dBFS corners become reported limiting, not clipping; the owner sees what raising the wet does. *Draft 3 adds, pending D5:* a clipped frame counts beside a limited one in Ceiling (moved), and a Clip preset reports its clip share. *Pending D14:* the factory gate's switch row (§9.5) | 9.5 |
+| D9 | CPU charge | Confirmed: **the worst limited path in the governor's static reserve S: a placeholder of 260 cycles per frame (12.5k per block, 2.6 %)**, replaced by session 2's slowest measured path plus 10 % | About 260 cycles per frame less for grains at binding corners: about 2 Hermite voices (the whole-mix alternative: about 1.2). *Draft 3 adds, pending D5:* the switch's paths are cheaper than the worst one, so the placeholder stands | 8.1, 8.2 |
+| D10 | The analog side | Confirmed: **measure the Rev7's 0 dBFS level and the PCM3060's inter-sample behaviour in L1b, before revision 10. Keep C = 1.0 unless the DAC clips the fs/4 test; if it does, choose a lower C or an oversampled detector then. Require the output stage to swing DAC full scale + 3 dB** | The ceiling is fixed once, before any rating; no contract changes without evidence. Inter-sample overs exist today at stored positions (up to +1.5 dBTP on OnsetBursts), so the test matters with or without the limiter. *Draft 3 adds, pending D5:* a lowered C would lower the Off setting's clip with it | 6.4 |
 | D11 | What gives way | Confirmed: **the wet first, down to F = −12 dB (2⁻²), then the whole mix** | The dry never dips when the player raises the effect volume (to +12 dB) or the Mix knob, on any factory preset at its stored positions; on hot input it dips about 1 dB where the whole mix would dip 3.5. The cost: about 100 cycles per frame more in S than the whole-mix rule (about 0.8 of a voice), 280 more bytes of ITCM, and a wet that pumps deeper. L2's A/B is the listening check this answer rests on | 3.3, 4.6, 8 |
 | D12 | Input staging | Confirmed: **hand the hardware design a target: the Instrument/Line pad puts the hottest supported source at or below about −7 dBFS peak at the codec** | Stored positions stay under the limiter on sustained material; hot sources dip the wet, not the dry. Without it, a boosted guitar engages the limiter on most presets at stored positions | 6.4 |
-| D13 | Bypass and trails | Confirmed: **hand the bypass design one requirement: the bypassed dry never passes through the limiter's gain; the limiter's state continues across bypass** | A bypass pressed mid-limiting never leaves the dry low; trails stay limited as wet. With the switch Off, the bypassed dry is never clipped for the preset's sake either | 6.5 |
+| D13 | Bypass and trails | Confirmed: **hand the bypass design one requirement: the bypassed dry never passes through the limiter's gain; the limiter's state continues across bypass** | A bypass pressed mid-limiting never leaves the dry low; trails stay limited as wet. *Draft 3 adds, pending D5:* with the switch Off, the bypassed dry is never clipped for the preset's sake either | 6.5 |
+| D14 | Factory presets and the switch (new in draft 4; open) | **Recommended: factory presets keep the switch On (Limit) for now**, enforced by L15 under `--factory` and by the pre-screen's switch row, for §9.5's four reasons: the ceiling is the factory set's protection; a clip at full scale depends on the player's level, not on a curve the mode chose; the pre-screen would need other criteria; no first-set mode asks for it. **Alternative:** allow Off for a factory mode that declares it, through `ratings.py declare --clips`, read by `bspc lint --declarations` and the pre-screen, which replace Peak (stored), Ceiling (moved) and S11's Ceiling for it with a reported clip share and the listening pass (§9.5) | Recommended: the factory set never clips by design, and a mode that wants distortion waits for a designed drive stage. Alternative: a factory mode can clip on purpose now, which is the switch's stated use, judged by ear and by its clip share; about 0.5 more engineer-day in L2 and L3. Either way user presets may set it Off freely, and a user Clip preset is never reported as a failure. Moot if D5's answer is not a per-preset form | 9.5, 7.1 |
 
 ### 11.3 Design decisions taken
 
@@ -2002,9 +2204,11 @@ holds the answers as given.
 | 12. Off mid-limiting | A drain at the fast rate k to exactly 1, with no attack and no hold, then the clamp; not a fixed crossfade (a swell at 4.5 dB/ms) and not the slow rate (14.5 s from the floor) | 4.7 |
 | 13. On | From a settled Off, the reset state, so the next over attacks from unity; during a drain, G continues with `releasing` set | 4.7 |
 | 14. How the engine hears the row | A seventh parameter domain whose rebuild calls `Switch`, once per span, so only a frame's final value acts and a load applies the incoming switch at its frame; the row is read with `value >= 0.5f` | 4.7, 6.1 |
-| 15. The row | 87, `output.limiter`, a Leaf in a new `output` object, `sinceRev` 10, numeric 0 or 1 in the document (E3 otherwise), `OffOn` display, discrete and not automatable | 7.1 |
+| 15. The row | 87, `output.limiter`, a Leaf in a new `output` object, `sinceRev` 10, read as any integer-valued leaf (0 or 1 written; a fraction accepted and played by the threshold; E4 outside 0–1), a `LimitClip` display reading Limit or Clip, discrete and not automatable; row 86 added as `Reserved` if L2 precedes T2 | 7.1 |
 | 16. Reach | No macro or expression target (E8; `TargetLimiter`, `ExpressionTarget`); registered for hosts without automation under Q12's model (b); no panel control | 7.1 |
-| 17. Factory policy | Factory presets keep it On, enforced by L15 under `--factory` and by the pre-screen; a declared `clip` class is the path if a mode ever wants it | 9.5 |
+| 17. Factory policy | Not a design decision: it is the owner's D14 (§11.2), recommended On for now, with the `--clips` declaration specified as its alternative | 9.5 |
+| 18. Visibility of a stored Clip | Shown from the load, not only while clipping: the lamp's caption, the plugin's list tags, the Rev7's double blink, and a requirement handed to the control-surface design | 7.3, 7.4 |
+| 19. Drain coverage | Two per-call counts, `drainFrames` and `drainDryFrames`, folded from the existing locals when the switch is Off, so a golden can require the drain's whole-mix form without a windowed check | 6.1, 9.2 |
 
 ### 11.4 Risks
 
@@ -2041,32 +2245,66 @@ holds the answers as given.
 9. **A preset with the switch Off clips, by design.** A user may leave it Off by accident, or
    load such a preset mid-limiting, and hear the drain hand over to a hard clip within 0.3 s from
    F (3.6 s from the floor).
-   Mitigation: the CLIP lamp and the Rev7's LED; L15's note in the Curation slice and `bspc
-   lint`; the factory set keeps it On.
+   Mitigation: the CLIP caption from the load, the plugin's CLIP tags in its lists and the Rev7's
+   double blink, all visible before anything clips; the control-surface requirement for the
+   product (D6's consequence); L15's note in the Curation slice and `bspc lint`; the factory set
+   keeps it On (D14).
 10. **Package churn.** Revision 10 changes every committed package's `sound_hash` without a
     render moving. If it shares a pull request with T2, two such re-stamps meet.
     Mitigation: the package rule's label with one `Package-change:` line per revision, as wave 1
     did; each revision in its own commit (§7.1, §10).
-11. **Row 87 is claimed only on paper** until L2 lands, and other lanes append rows.
-    Mitigation: this design, clock §10.4's table (86 the last claimed there) and STATUS name 87
-    for the switch; a lane that appends earlier starts at 88.
+11. **Row 87 is claimed only on paper** until L2 lands, and other lanes append rows. It also
+    cannot exist before row 86, and D5's form is unconfirmed.
+    Mitigation: this design, clock §10.4's table (86 the last claimed there) and STATUS hold 87
+    for the limiter's control; a lane that appends earlier starts at 88; an L2 that lands before
+    T2 adds 86 as a `Reserved` row (§7.1).
+12. **Leaving a clipping preset steps the level.** A switch to On over a clipping texture, by a
+    `SetParam` or a Trails load of an On preset from a clipping Off one, ducks the old trails and
+    the new grains at once by the whole depth of the clipped over, and the dry too when r < F;
+    the release then runs at 10 dB/s, so the recovery takes seconds (§4.5, §4.7). It is the one
+    Spillover load that jumps the level.
+    Mitigation: `limit_clip_trails` pins it; L2's A/B plays it against the entry ramp, which the
+    owner may choose instead (§11.5 Q9); factory presets do not clip (D14).
 
 ### 11.5 Open questions
 
-1. By ear, confirming the answers: what gives way and the value of F (D11), the release (D3) and
+1. **(owner, now) What D5's "Change" means.** The page records "Change" with an empty note, and
+   the owner's message says only that the decisions are answered. Draft 3 built the per-preset
+   switch from the request to revise the design; the owner confirms it or chooses another
+   reading:
+   - **(a) A per-preset switch, as designed** (§7.1, §4.7): a Leaf, row 87, default On. Every
+     package's `sound_hash` changes at revision 10 (one re-stamp and a `Package-change:` line);
+     it needs D14's factory policy; it cannot be flipped on stage; a preset can clip by design.
+   - **(b) A device setting**, draft 2's own fallback: a `Global` row, kept across loads and
+     `Restart` and set in the app, recorded in render recipes and PARITY requests (compiler
+     §3.8). No `sound_hash` changes and no factory policy is needed, but the same preset sounds
+     different on two rigs, and the audition must render with it On.
+   - **(c) A stage control**: a panel or footswitch gesture, or a MIDI CC, acting as (b) or as a
+     performance row, so the player can switch while playing. It needs the control-surface
+     design, and the switch to On mid-texture is risk 12's step.
+   - **(d) Off passing overs** in either form above, instead of clipping at the ceiling (§4.7,
+     decision 11; Q7): on the pedal the same sound, in the plugin unclipped floats.
+
+   Until the owner answers, row 87 is held for the limiter's control, and L2 does not start the
+   switch's part.
+2. By ear, confirming the answers: what gives way and the value of F (D11), the release (D3) and
    the knee if asked (D2), in L2's A/B, with the switch Off on `limit_off_hot` and `limit_switch`
-   for D5.
-2. L1b's results: the Rev7's 0 dBFS level and the PCM3060's inter-sample behaviour (D10).
-3. Whether the product's panel shows engagement and the switch, and how: the control-surface
-   design.
-4. Whether a later true-peak option is wanted for the plugin's bounces. It would be a sound
+   for D5, and `limit_clip_trails` for Q9.
+3. L1b's results: the Rev7's 0 dBFS level and the PCM3060's inter-sample behaviour (D10).
+4. How the product's panel shows engagement and a stored Clip, to D6's two requirements: the
+   control-surface design.
+5. Whether a later true-peak option is wanted for the plugin's bounces. It would be a sound
    change for both targets, never for the plugin alone.
-5. The bypass topology that meets D13: the bypass design.
-6. **(owner, on reading)** Off clips at the ceiling rather than passing overs (§4.7, decision
+6. The bypass topology that meets D13: the bypass design.
+7. **(owner, on reading)** Off clips at the ceiling rather than passing overs (§4.7, decision
    11). On the pedal the two are the same sound; in the plugin, passing overs would let a DAW play
    an Off preset unclipped, unlike the pedal. Recommended as designed.
-7. **(owner, later)** A declared `clip` audition class, if a factory mode is ever to clip on
-   purpose (§9.5).
+8. **(owner, now)** D14: whether a factory mode may set the switch Off under the `--clips`
+   declaration now, or factory presets keep it On for now (§9.5, §11.2).
+9. **(owner, by ear)** Turning On over a clipping texture: the instant attack as designed, or the
+   entry ramp, which fades clipping into limiting over about 0.3 s at the cost of the incoming
+   preset clipping that long (§4.7). Recommended as designed; L2's A/B on `limit_clip_trails`
+   decides.
 
 ### 11.6 Amendments made with this design
 
@@ -2083,6 +2321,11 @@ With the owner's answers (2026-10-10), draft 3 adds a dated line to the notes in
 §11.3, companion-app.md §4.8 and determinism-profile.md §3.7. Those notes said there is no
 control, or proposed revision 8; the new line names the switch and the revision. It also updates
 docs/STATUS.md's limiter lines and CPU-budget lines and docs/README.md's index row.
+
+Draft 4 (2026-10-10) adds a second dated sentence to each of those three notes, and corrects
+STATUS's limiter lines and the README's row, saying that D5's form is proposed and awaits the
+owner, and that the factory policy is the owner's D14. The mode-compiler note also records that
+the row reads as any integer-valued leaf, as its §2.2 says, so §2.2 and §3.7 need no amendment.
 
 D7 is now confirmed, so these are due. They wait for the lanes that own the files:
 
@@ -2105,10 +2348,32 @@ and `Engine.cpp:1252-1254`'s finite-output comment. `Params.h`'s `ParamDomain` c
 
 Record §1–§2 gives each source in full, with its scratch location.
 
+**Draft 4's checks (two reviews of draft 3; record §8).** Each finding's evidence was re-read in
+the tree at `claude/tempo-core` `b91b34d` and `main` `011b294`:
+
+- compiler §2.2 and §3.7, `Schema.cpp`'s `Leaf()` (`:551-574`, range check only),
+  `Validate.cpp`'s `CheckStat` (`:402-414`) and `test_property.cpp:127`;
+- `Engine.cpp`'s `Reset` and `Init`, each calling `RebuildDirty` before the smoothers' priming
+  (`:737-743`, `:710-713`; `main` `:681-690`), its `TableIsContiguous` assert (`:36`) and the
+  span loop (`:1085-1092`);
+- `Corpus.cpp`'s `AmongEdits` (`:980-1023`) and its whole-render `require` bounds;
+- `TestSignal.cpp`'s `BuildSoftNotes` (two overlapping notes at `kFs / 4`);
+- `StateCodec.cpp:179` and `PluginProcessor.cpp:518`, `:532`;
+- `sound_rev_gate.py`'s `golden_changes` and `golden.json`'s package presets;
+- `ParamDisplay.cpp`'s two-state kinds and `BrainscapeParam.cpp`'s `NamedValue` and
+  `isBoolean`;
+- `ratings.py`'s `declare` options, `bspc_roundtrip.py:150` and `firmware/factory/README.md`.
+
+The floor row was re-derived by simulating §4.3's On path in binary32, and the dry dip of §4.5's
+new row calculated. Nothing new was built.
+
 **Draft 3's checks (the owner's answers; record §7).** The switch is not prototyped, so its cost
 figures are estimates.
 
-- **The answers.** Read from the owner's decisions page on 2026-10-10.
+- **The answers.** Read from the decisions page's database on 2026-10-10: twelve "agree", and
+  D5 `{"choice": "change", "note": ""}`. The per-preset form is not on the page and not in the
+  owner's message, which says only that the decisions are answered; it came with the request to
+  revise the design (record §7.1, §8).
 - **Row 87 is free.** Checked by reading `Params.h` on `main` `011b294` (rows 1–82) and on
   `claude/tempo-core` `b91b34d` (83–85), and clock §10.4's table (86). Every local and remote
   branch's `Params.h` and design row tables were also searched for a row above 85. Only clock's
@@ -2126,7 +2391,8 @@ figures are estimates.
   each starting gain, in a scratch script in which each binary64 product of two binary32 values
   is exact and is rounded once to binary32. The six rows §4.4 item 3 measured from a single over
   are each that figure less 481 frames, the attack frame and the hold, which cross-checks them.
-  §4.4's floor row, measured after a ±`FLT_MAX` burst, is 482 frames longer.
+  §4.4's floor row is 173,843 by the same count, 481 more than the drain's 173,362; the
+  prototype's 173,842 counted from the first frame after the burst (record §8.3).
 - **The codec equivalence of Off** (§4.7) is calculated from LD's `f2s24` (§2.2).
 
 **Draft 2's prototype (measured).** It is not committed.

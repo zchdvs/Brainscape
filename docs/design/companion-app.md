@@ -486,7 +486,10 @@ the 24-bit branch.
 > `output.limiter`, default On. With it Off the engine clips at the same ceiling instead of
 > limiting, so the wrapper still never receives an over that the dry does not carry. The plugin
 > registers it without automation, shows it in the Leaves view and captions the lamp CLIP while it
-> is Off (its §7.1, §7.3). There is still no latency.)*
+> is Off (its §7.1, §7.3). There is still no latency.)* *(Draft 4, 2026-10-10: the owner marked
+> D5 "Change" with no note, so the switch is the design's proposal, awaiting the owner's
+> confirmation (its §11.5 Q1). As proposed, the plugin shows its states as Limit and Clip and tags
+> Clip presets in the Library list and the Modes menu.)*
 
 ### 4.9 Restart, offline renders and reproducible bounces
 
