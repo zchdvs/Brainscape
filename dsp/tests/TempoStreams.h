@@ -292,8 +292,16 @@ inline Stream MakeStream(Family fam, uint64_t seed, int seconds, uint32_t rate =
           s.Transport(f + r.Range(0, 400), tempo::TransportKind::Stop, true);
           f += 400;
           break;
-        case 0: s.Transport(f, tempo::TransportKind::Start, true, 0); break;
-        case 1: s.Transport(f, tempo::TransportKind::Continue, true); break;
+        // FA or FB some time before the first tick, so the grid is held over grid points (§3.4,
+        // as-built note 26).
+        case 0:
+          s.Transport(f, tempo::TransportKind::Start, true, 0);
+          f += r.Range(0, rate / 2);
+          break;
+        case 1:
+          s.Transport(f, tempo::TransportKind::Continue, true);
+          f += r.Range(0, rate / 2);
+          break;
         case 2: s.Transport(f, tempo::TransportKind::Locate, true, static_cast<uint32_t>(6 * r.Range(0, 16383))); break;
         case 3: {
           const auto pos = static_cast<uint32_t>(r.Range(0, 1000));

@@ -194,8 +194,13 @@ function(brainscape_firmware_image name)
     # rest of the code: the package decoder, encoder and their SHA-256 (a producer decodes a
     # package before it stages the state, mode-compiler.md §5; the golden harness hashes its
     # output with it) and the test-signal generator (the harness's input). With them the
-    # archive no longer fits the 64 KiB at sound revision 2. The tempo core's integer code runs
-    # at control rate and stays out too (docs/design/clock.md §9.6, D1 as amended 2026-10-09).
+    # archive no longer fits the 64 KiB at sound revision 2. The tempo core stays out too
+    # (docs/design/clock.md §9.6, D1 as amended 2026-10-09, §11.12): the engine reaches it on
+    # every render span and every event, but through inline fast paths compiled into Engine.cpp,
+    # so its code in QSPI runs only where a grid position may fire, at events 6-10, at loads and
+    # on the main thread. Inside the ITCM objects, the functions marked BRAINSCAPE_COLD
+    # (main-thread-only, dsp/src/detail/Placement.h) go to .text_cold, which the ITCM patterns
+    # below do not match and the QSPI .text section's *(.text*) does.
     set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj
                              IntMath.cpp.obj MidiClock.cpp.obj Tempo.cpp.obj
                              TempoProducer.cpp.obj)
@@ -253,10 +258,21 @@ function(brainscape_firmware_image name)
     VERBATIM)
   if(ARG_ENGINE_CODE STREQUAL "ITCM")
     list(JOIN _bs_not_itcm_members "," _bs_not_itcm_arg)
+    # The calls out of ITCM an image may make (cmake/ItcmCheck.cmake): the tempo core's
+    # control-rate entry points, which the engine's inline fast paths reach only when a grid
+    # position may fire (GridFramesFull) or a gap is due (BeforeEventFull), at an event 6-10 or
+    # of an unknown type, and at a Spillover load (docs/design/clock.md §9.6, §11.12).
+    set(_bs_itcm_veneers
+      _ZN10brainscape9TempoCore14GridFramesFullExPNS_7GridHitEm
+      _ZN10brainscape9TempoCore15BeforeEventFullEx
+      _ZN10brainscape9TempoCore10ApplyEventExhmm
+      _ZN10brainscape9TempoCore17CountUnknownEventEx
+      _ZN10brainscape9TempoCore13SpilloverLoadExRKNS_16PerformanceStateEb)
+    list(JOIN _bs_itcm_veneers "," _bs_itcm_veneers_arg)
     add_custom_command(TARGET ${name} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -DELF=$<TARGET_FILE:${name}> -DREADELF=${BRAINSCAPE_ARM_READELF}
               -DARCHIVE=$<TARGET_FILE:brainscape_dsp> -DHOOKS_ARCHIVE=$<TARGET_FILE:brainscape_dsp_fpenv_hooks>
-              -DNOT_ITCM=${_bs_not_itcm_arg}
+              -DNOT_ITCM=${_bs_not_itcm_arg} -DITCM_VENEERS=${_bs_itcm_veneers_arg}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ItcmCheck.cmake
       VERBATIM)
   endif()

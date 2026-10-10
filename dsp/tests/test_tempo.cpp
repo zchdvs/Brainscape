@@ -574,8 +574,7 @@ TEST_CASE("Tempo streams: frame-by-frame reference on short streams", "[tempo][r
   }
 }
 
-TEST_CASE("Tempo streams: other rates, stored states and the 2^32-frame boundary",
-          "[tempo][reference]") {
+TEST_CASE("Tempo streams: other rates and stored states", "[tempo][reference]") {
   struct Case {
     uint32_t rate, us;
     uint8_t  tm, sd;
@@ -595,28 +594,77 @@ TEST_CASE("Tempo streams: other rates, stored states and the 2^32-frame boundary
   }
 }
 
+TEST_CASE("Tempo streams: the reference across 2^31, 2^32 and 2^33 frames", "[tempo][reference]") {
+  // The window keeps the low 32 bits of labels and frames and differences them in 32 bits
+  // (§3.3); the hours-long cases of test_tempo_rules.cpp check its sums across the wraps, and this
+  // compares the whole core with the reference there: the clock and mixed families (dropouts,
+  // re-acquisitions, relabels, gaps, loads) shifted to start just before 2^31 and 2^32 frames at
+  // 48 kHz and 2^33 at 384 kHz.
+  struct Shift {
+    uint32_t rate;
+    int64_t  at;
+  };
+  const Shift shifts[] = {{48000, (int64_t{1} << 31) - 48000 * 9},
+                          {48000, (int64_t{1} << 32) - 48000 * 17},
+                          {384000, (int64_t{1} << 33) - 384000 * 5}};
+  const int seconds = kScale == 10 ? 30 : 12;
+  for (const Shift& sh : shifts) {
+    for (Family fam : {Family::Clock, Family::Mixed}) {
+      for (uint64_t seed = 1; seed <= 2; ++seed) {
+        Stream s = MakeStream(fam, seed * 131 + static_cast<uint64_t>(fam), seconds, sh.rate);
+        for (StreamEvent& e : s.ev) e.frame += sh.at;
+        const int64_t end = sh.at + int64_t{sh.rate} * seconds;
+        RunConfig cfg;
+        cfg.rate = sh.rate;
+        const RunResult ref = RunRef(cfg, s.ev, end);
+        for (Blocks b : {Blocks::Pattern({512, 511, 7}), Blocks::Random(4)}) {
+          const RunResult got = RunCore(cfg, s.ev, end, b);
+          INFO("rate " << sh.rate << " from " << sh.at << " family " << static_cast<int>(fam)
+                       << " seed " << seed);
+          CHECK(SameHits(got.hits, ref.hits));
+          CHECK(got.states == ref.states);
+          CHECK(StatsDigest(got.stats) == StatsDigest(ref.stats));
+          REQUIRE(got.probes.size() == ref.probes.size());
+          for (size_t k = 0; k < got.probes.size(); ++k) CHECK(SameInfo(got.probes[k], ref.probes[k]));
+        }
+        CHECK_FALSE(I128::Overflow());
+      }
+    }
+  }
+}
+
 TEST_CASE("Tempo streams: the perturbed references are caught", "[tempo][reference][control]") {
+  // Each perturbation on the family whose events reach it. Draft v1's grid without the catch-up
+  // runs against the frame-by-frame reference, where every boundary inside the frame before a
+  // span's start needs it; between events a Subdiv change no longer makes one (note 25).
   struct Ctl {
-    Perturb p;
-    Family  fam;
+    Perturb     p;
+    Family      fam;
+    bool        literal;
     const char* name;
   };
   const Ctl ctls[] = {
-      {Perturb::NoCatchUp, Family::Tempo, "no catch-up (E1)"},
-      {Perturb::RescaleTruncates, Family::Tempo, "rescale truncates"},
-      {Perturb::TapMeanFloors, Family::Taps, "tap mean floors"},
-      {Perturb::NoDownbeat, Family::Taps, "no downbeat (D16)"},
-      {Perturb::StopKeepsArmed, Family::Clock, "Stop keeps an armed Start (E10)"},
-      {Perturb::DropoutFloors, Family::Clock, "dropout count floors"},
-      {Perturb::GapOnlyBeforeTempo, Family::Clock, "gap only before tempo events (E2)"},
-      {Perturb::OutlierBound, Family::Clock, "outlier bound 11 ms"},
+      {Perturb::NoCatchUp, Family::Tempo, true, "no catch-up (E1)"},
+      {Perturb::RescaleTruncates, Family::Tempo, false, "rescale truncates"},
+      {Perturb::TapMeanFloors, Family::Taps, false, "tap mean floors"},
+      {Perturb::NoDownbeat, Family::Taps, false, "no downbeat (D16)"},
+      {Perturb::StopKeepsArmed, Family::Clock, false, "Stop keeps an armed Start (E10)"},
+      {Perturb::DropoutFloors, Family::Clock, false, "dropout count floors"},
+      {Perturb::GapOnlyBeforeTempo, Family::Clock, false, "gap only before tempo events (E2)"},
+      {Perturb::OutlierBound, Family::Clock, false, "outlier bound 11 ms"},
+      {Perturb::SubdivCatchesUp, Family::Tempo, false, "a finer grid fires its passed position"},
+      {Perturb::NoHold, Family::Clock, false, "the grid fires while a transport is armed"},
+      {Perturb::LocateArmedOnly, Family::Clock, false,
+       "Locate under ClockRunning keeps the continue position"},
   };
   for (const Ctl& c : ctls) {
-    bool caught = false;
-    for (uint64_t seed = 1; seed <= 6 && !caught; ++seed) {
-      const Stream s = MakeStream(c.fam, seed * 31 + static_cast<uint64_t>(c.p), 40);
+    bool      caught  = false;
+    const int seconds = c.literal ? 4 : 40;
+    for (uint64_t seed = 1; seed <= 20 && !caught; ++seed) {
+      const Stream s = MakeStream(c.fam, seed * 31 + static_cast<uint64_t>(c.p), seconds);
       std::string why;
-      if (!CoreMatchesReference(RunConfig(), s.ev, 48000 * 40, c.p, false, &why, false))
+      if (!CoreMatchesReference(RunConfig(), s.ev, int64_t{48000} * seconds, c.p, c.literal, &why,
+                                false))
         caught = true;
     }
     INFO(c.name);

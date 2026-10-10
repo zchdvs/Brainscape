@@ -40,6 +40,10 @@ enum class Perturb : uint8_t {
   DropoutFloors,      // m = floor(gap·K / P_fit) − 1 instead of rounding half up
   GapOnlyBeforeTempo, // draft v1's gap: only before tempo events (E2)
   OutlierBound,       // the outlier test's 10 ms bound at 11 ms
+  SubdivCatchesUp,    // the build before note 25: a finer grid fires its last passed position
+  NoHold,             // the build before note 26: the old grid fires while a transport is armed
+  LocateArmedOnly,    // the build before note 27: Locate under ClockRunning keeps the continue
+                      // position
 };
 
 // One event of a stream: an engine event of types 6-10 or above (an unknown), a non-tempo event
@@ -145,6 +149,19 @@ class TempoRef {
   // otherwise between events in closed form.
   void Fire(int64_t t0, int64_t t1, std::vector<GridHit>* hits, bool literal) {
     const int64_t G = Grid();
+    if (armed_ && perturb_ != Perturb::NoHold) {
+      // §3.4 as amended (clock.md §11.12, note 26): while a MIDI transport waits for its tick the
+      // grid is held. Nothing fires; every grid position whose first frame ⌈T(k)⌉ lies before t1
+      // counts as fired.
+      if (t1 <= t0) return;
+      int64_t tick, acc;
+      TickAcc(t1, &tick, &acc);
+      int64_t last = tick;  // the greatest k with T(k) < t1; its first frame may be t1 itself
+      if (FirstFrame(last) >= t1) --last;
+      const int64_t g = I128::FloorDiv(W(last), W(G)).ToI64() * G;
+      if (g > lastFired_) lastFired_ = g;
+      return;
+    }
     if (literal) {
       for (int64_t t = t0; t < t1; ++t) {
         int64_t tick, acc;
@@ -214,6 +231,18 @@ class TempoRef {
     }
   }
 
+  // §6.3 as amended (clock.md §11.12, note 25): a change of the grid G starts the new grid at its
+  // next position. The new grid's positions whose first frames lie before this frame count as
+  // fired; one whose first frame is this frame still fires by the catch-up.
+  void GridChanged(int64_t oldG) {
+    const int64_t G = Grid();
+    if (G == oldG || perturb_ == Perturb::SubdivCatchesUp) return;
+    int64_t tick, acc;
+    TickAcc(frame_, &tick, &acc);
+    const int64_t g = I128::FloorDiv(W(tick), W(G)).ToI64() * G;
+    if (g > lastFired_ && FirstFrame(g) < frame_) lastFired_ = g;
+  }
+
   void Event(const StreamEvent& e) {
     frame_ = e.frame;
     switch (e.kind) {
@@ -223,12 +252,15 @@ class TempoRef {
       case StreamEvent::Kind::Unknown:
         ++stats_.unknownEvents;
         return;
-      case StreamEvent::Kind::Spillover:
+      case StreamEvent::Kind::Spillover: {
+        const int64_t oldG = Grid();
         SetStored(e.us, e.timeMode, e.subdiv);
         timeMode_ = storedTm_;
         subdiv_   = storedSd_;
         if (e.recall && source_ == 0) InternalTempo(PFromNs(storedUs_ * 1000u));
+        GridChanged(oldG);  // after the recalled tempo, as a Tempo event and then the grid
         return;
+      }
       case StreamEvent::Kind::Tempo:
         break;
     }
@@ -249,11 +281,14 @@ class TempoRef {
         break;
       case 8: Tick(); break;
       case 9: Transport(e.id, position); break;
-      case 10:
+      case 10: {
         ++stats_.subdivEvents;
+        const int64_t oldG = Grid();
         if (((e.id >> 8) & 0xFF) == 1) timeMode_ = static_cast<uint8_t>(e.id & 0xFF);
         else subdiv_ = static_cast<uint8_t>(e.id & 0xFF);
+        GridChanged(oldG);
         break;
+      }
       default: break;
     }
   }
@@ -429,6 +464,8 @@ class TempoRef {
       } else if (kind == 3 && source_ != 2) {
         continuePosition_ = position;
       } else {
+        // A Locate under ClockRunning is armed, and sets the continue position too (note 27).
+        if (kind == 3 && perturb_ != Perturb::LocateArmedOnly) continuePosition_ = position;
         armed_ = true;
         armedKind_ = static_cast<uint8_t>(kind);
         armedPosition_ = position;

@@ -16,6 +16,12 @@
 // boundary where it applies (BeforeEvent for every event, ApplyEvent for events 6-10). An entry
 // point given a later frame first advances the phasor to it (firing nothing on the way); a frame
 // before Frame() is a caller error and applies at Frame().
+//
+// The two calls the engine makes on every render span and every event, GridFrames and
+// BeforeEvent, have inline fast paths below, which compile into the engine's own object (in the
+// pedal's ITCM): a span that fires nothing only advances the phasor, and an event with no gap due
+// at the core's frame needs nothing. Everything else is out of line in Tempo.cpp, out of ITCM,
+// and runs only where a grid position may fire, at events and at loads (clock.md §9.6, §11.12).
 namespace brainscape {
 
 // One grid position fired in a render span (§6.3): `position` at `frame`.
@@ -64,6 +70,9 @@ class TempoCore {
   // Init: the integer rate R (§1.3; clamped to 8,000-384,000, which Engine::Init enforces), Init's
   // stored performance state (500,000 µs, Free, TAP), then Restart's state; counters zeroed.
   void Init(uint32_t rate) noexcept;
+  // Constructs a core in `mem` (suitably aligned, sizeof(TempoCore) bytes) and Inits it: the
+  // engine's one call at Init, out of line so its code stays out of ITCM.
+  static TempoCore* Create(void* mem, uint32_t rate) noexcept;
   // The active preset's stored performance state (§2.5), what Restart plays: an Exact load sets
   // it at load step 4 and then restarts (step 5); SpilloverLoad sets it too. Out-of-range fields,
   // which the decoder refuses, fall back to Init's defaults. reverse and byte 3 are not read.
@@ -77,7 +86,10 @@ class TempoCore {
   // Before every event of any type at `frame`, and before a direct Spillover load (§3.5):
   // advances to the frame and applies the gap rule. ApplyEvent, CountUnknownEvent and
   // SpilloverLoad call it themselves; calling it again at the same frame changes nothing.
-  void BeforeEvent(int64_t frame) noexcept;
+  void BeforeEvent(int64_t frame) noexcept {
+    if (frame == frame_ && !GapAt(frame)) return;  // the engine's case: nothing to do
+    BeforeEventFull(frame);
+  }
   // An event 6-10 at `frame`, its payload as §4.1 lays it out: an invalid payload is ignored and
   // counted (§4.2) and returns false. A type outside 6-10 is the caller's (CountUnknownEvent).
   bool ApplyEvent(int64_t frame, uint8_t type, uint32_t id, uint32_t valueBits) noexcept;
@@ -99,16 +111,57 @@ class TempoCore {
   // position that finds no room is not fired, and a later span's catch-up may fire it). An empty
   // span fires nothing. The grid runs whatever the mode: whether a hit becomes a birth is the
   // engine's (a mode listing `clock`), and two hits at one frame are its to separate (§6.3's
-  // one hit per frame).
-  uint32_t GridFrames(int64_t end, GridHit* hits, uint32_t capacity) noexcept;
+  // one hit per frame). While a MIDI transport is armed (§3.4: Start, Continue or Locate waiting
+  // for its tick) the grid is held: nothing fires, and the positions passed count as fired, so
+  // the transport's tick places the downbeat with no hit of the old grid just before it
+  // (as-built note 26, clock.md §11.12).
+  //
+  // The fast path: a span that ends at or before quietUntil_, the first frame at which anything
+  // can fire (computed by the full path, cleared by every change), fires nothing and only
+  // advances the phasor (§2.2's Euclidean advance; at most eight ticks in a span of kMaxSpanFrames
+  // at 8 kHz and 300 BPM, so the loop is short).
+  uint32_t GridFrames(int64_t end, GridHit* hits, uint32_t capacity) noexcept {
+    const int64_t n = end - frame_;
+    if (end <= quietUntil_ && static_cast<uint64_t>(n - 1) < kMaxSpanFrames) {
+      // 1 ≤ n ≤ kMaxSpanFrames, so n·K = (24·n)·2^32 is below 2^46 and moves the high word only.
+      const int64_t p = static_cast<int64_t>(p_);
+      acc_ += static_cast<int64_t>(static_cast<uint64_t>(24u * static_cast<uint32_t>(n)) << 32);
+      while (acc_ > p) {
+        acc_ -= p;
+        ++tick_;
+      }
+      frame_ = end;
+      return 0;
+    }
+    return GridFramesFull(end, hits, capacity);
+  }
 
   // The engine reports the frame a CLOCK hit was born at (after jitter and any deferral, §6.3).
   void NoteClockBirth(int64_t frame) noexcept { lastClockBirth_ = frame; }
 
-  // The snapshot (§2.6): at Frame(), §3.5's gap predicate applied without mutating the state.
-  TempoInfo         Info() const noexcept;
+  // The snapshot (§2.6): at Frame(), §3.5's gap predicate applied without mutating the state. Pc
+  // in ns is kept from Pc's last change, so a read divides nothing; inline, so the audio
+  // callback's read after every block (§9.3, §9.5) runs no code out of ITCM.
+  TempoInfo Info() const noexcept {
+    const bool gap = GapAt(frame_);
+    TempoInfo  i;
+    i.position     = tick_;
+    i.nsPerQuarter = nsPerQuarter_;
+    i.source       = static_cast<uint8_t>(gap ? tempo::ClockSource::Internal : source_);
+    i.timeMode     = timeMode_;
+    i.subdiv       = subdiv_;
+    const bool running = running_ && !(gap && source_ == tempo::ClockSource::ClockRunning);
+    const bool locked  = !gap && winN_ >= kLockTicks;
+    i.flags = static_cast<uint8_t>((running ? kTempoFlagRunning : 0) |
+                                   (locked ? kTempoFlagLocked : 0));
+    i.lastGridFrame  = lastGridFrame_;
+    i.lastClockBirth = lastClockBirth_;
+    return i;
+  }
   const TempoStats& Stats() const noexcept { return stats_; }
   TempoStats&       MutableStats() noexcept { return stats_; }  // the engine's own counters
+  // The counters with the engine's CLOCK birth and drop counts in place (Engine::TempoCounts).
+  TempoStats Counts(uint64_t clockBirths, uint64_t clockDropped) const noexcept;
 
   uint32_t           Rate() const noexcept { return rate_; }
   int64_t            Frame() const noexcept { return frame_; }
@@ -124,8 +177,9 @@ class TempoCore {
   uint8_t  EffectiveSubdiv() const noexcept;
   uint32_t GridTicks() const noexcept { return tempo::SubdivTicks(EffectiveSubdiv()); }
   // The grid's period in frames at P, MulDivRoundU64(P, G, K) (§6.3): an integer below 2^24
-  // (96 ticks at 20 BPM and 384 kHz is 4,608,000), the CLOCK jitter's scale.
-  uint32_t GridPeriodFrames() const noexcept;
+  // (96 ticks at 20 BPM and 384 kHz is 4,608,000), the CLOCK jitter's scale. Kept from the last
+  // change of P or G, which only events and loads make.
+  uint32_t GridPeriodFrames() const noexcept { return gridPeriod_; }
   // Every change of Pc raises the serial and records its class (§7.1); Init and Restart reset
   // both, the engine rebuilding everything then.
   uint32_t        PcSerial() const noexcept { return pcSerial_; }
@@ -194,9 +248,23 @@ class TempoCore {
     int64_t frame = 0;
   };
 
+  // A frame before any: the fast path of GridFrames is off until the full path sets it.
+  static constexpr int64_t kNoQuiet = INT64_MIN;
+  // The fast path's bound is kept only for a next grid position within this many ticks of the
+  // phasor's, so (k − tick)·P stays below 2^63 at every rate and tempo.
+  static constexpr int64_t kQuietTicks = 1024;
+
+  void     BeforeEventFull(int64_t frame) noexcept;
+  uint32_t GridFramesFull(int64_t end, GridHit* hits, uint32_t capacity) noexcept;
+  void     UpdateQuiet() noexcept;
+  void     Settle() noexcept;  // after every change: the caches of P, G and the grid
+  void     OnGridChange(int64_t oldG) noexcept;
+
   void    AdvanceTo(int64_t frame) noexcept;
   void    ApplyGap(int64_t frame) noexcept;
-  bool    GapAt(int64_t frame) const noexcept;
+  bool    GapAt(int64_t frame) const noexcept {
+    return haveTickRef_ && frame - lastTickFrame_ >= static_cast<int64_t>(rate_);
+  }
   void    ClearFollower() noexcept;
   void    SetPc(uint64_t pc, bool drift) noexcept;
   void    ApplyInternalTempo(uint64_t p) noexcept;
@@ -238,6 +306,13 @@ class TempoCore {
   int64_t  lastClockBirth_ = -1;
   uint32_t        pcSerial_ = 0;
   tempo::PcChange pcChange_ = tempo::PcChange::None;
+
+  // Caches, functions of the state above: no part of Capture().
+  int64_t  quietUntil_   = kNoQuiet;  // spans ending at or before it fire nothing
+  uint32_t gridPeriod_   = 0;         // GridPeriodFrames() at gridP_ and gridG_
+  uint64_t gridP_        = 0;
+  uint32_t gridG_        = 0;
+  uint32_t nsPerQuarter_ = 0;         // NsFromP(pc_, rate_)
 
   // The performance state (§2.4).
   uint8_t timeMode_ = 0;

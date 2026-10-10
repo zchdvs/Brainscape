@@ -433,3 +433,81 @@ TEST_CASE("Init's tempo state, and events before Init applying nothing", "[clock
   CHECK(t.position == -1);  // boundary 0 at frame 0: nothing rendered yet
   CHECK(rig.engine.TempoCounts().taps == 0u);
 }
+
+TEST_CASE("CLOCK: one hit per frame, a catch-up and a boundary at one frame (§6.3)", "[clock]") {
+  // ×8 (G = 3) at 120 BPM (1,000 frames a tick). A MIDI Start, then ten ticks bunched on frame
+  // 1,000, as a computer master's held tick releases them (§4.5): with no slope yet each tick's own
+  // frame is its boundary (§3.3 step 4), so the phasor ends at tick 8 with boundary 9 exactly at
+  // 1,000. The catch-up fires 6 there and step 2 fires 9 there too; the second is born at 1,001.
+  // The grid then runs on at P: 12 at 4,000. Frame 0's hit is Restart's boundary 0.
+  auto preset = Preset(kPlain, kClockOnly, 500000, 5);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+  std::vector<Ev> ev = {Transport(100, TransportKind::Start, 0, true, 0)};
+  for (uint32_t k = 0; k < 10; ++k) ev.push_back(Tick(1000, 1 + k));
+  std::vector<int64_t> clock;
+  Render(rig.engine, Plucks(4500), ev, {1}, nullptr, &clock);
+  CHECK(clock == std::vector<int64_t>{0, 1000, 1001, 4000});
+  CHECK(rig.engine.Tempo().source == static_cast<uint8_t>(tempo::ClockSource::ClockRunning));
+}
+
+TEST_CASE("CLOCK: a jittered hit still waiting is dropped by a load to a mode without clock "
+          "(§6.3)",
+          "[clock]") {
+  // ×8 at 120 BPM (3,000 frames a grid point) with jitter 1: a hit waits up to 1,500 frames.
+  // Grid point 30 (frame 30,000) is born after 30,001 when nothing intervenes; a Spillover load to
+  // a mode without `clock` at 30,001 drops it, as a trigger whose source the mode leaves out.
+  const Params jit   = With(kPlain, {{ParamId::Jitter, 1.0f}});
+  auto         clock = Preset(jit, kClockOnly, 500000, 5);
+  auto         none  = Preset(jit, kSourceFootswitch | kSourceMidiNote, 500000, 5);
+  const Stereo in    = Plucks(40000);
+  std::vector<int64_t> control;
+  {
+    Rig rig;
+    REQUIRE(rig.engine.LoadPreset(*clock, LoadMode::Exact));
+    Render(rig.engine, in, {}, {1}, nullptr, &control);
+  }
+  const bool waiting = std::any_of(control.begin(), control.end(),
+                                   [](int64_t f) { return f > 30001 && f <= 31500; });
+  REQUIRE(waiting);
+  std::vector<int64_t> born;
+  Rig                  rig;
+  REQUIRE(rig.engine.LoadPreset(*clock, LoadMode::Exact));
+  Render(rig.engine, in, {Load(30001, none.get())}, {1}, nullptr, &born);
+  REQUIRE_FALSE(born.empty());
+  CHECK(born.back() < 30001);
+}
+
+TEST_CASE("CLOCK: the gap rule runs before an event of any type (§3.5)", "[clock]") {
+  // Thirty ticks (ClockFree after 24), 1.5 s of silence, and then only a SetParam: the gap and the
+  // loss apply at the SetParam's frame.
+  auto preset = Preset(kPlain, kClockOnly, 500000, 0);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+  std::vector<Ev> ev;
+  for (uint32_t k = 0; k < 30; ++k) ev.push_back(Tick(1000 + 1000 * k, k));
+  ev.push_back(Set(30000 + 72000, ParamId::Mix, 0.9f, 30));
+  Render(rig.engine, Plucks(110000), ev);
+  CHECK(rig.engine.TempoCounts().gaps == 1u);
+  CHECK(rig.engine.TempoCounts().losses == 1u);
+}
+
+TEST_CASE("CLOCK: after an Exact load under a running master nothing fires before its tick "
+          "(§2.5, note 26)",
+          "[clock]") {
+  // The producer's re-asserts at frame 0 of the new timeline (§2.5): the committed tempo (128
+  // BPM), Locate to the next tick's position (408, a beat) and Continue. The first CLOCK birth is
+  // the master's beat at its tick, 1,700; Restart's boundary 0 at frame 0, off that beat, fires
+  // nothing.
+  auto preset = Preset(kPlain, kClockOnly, 500000, 0);
+  Rig  rig;
+  REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+  std::vector<Ev> ev = {TempoNs(0, 468750000u, 0), Transport(0, TransportKind::Locate, 408, true, 1),
+                        Transport(0, TransportKind::Continue, 0, true, 2)};
+  for (uint32_t k = 0; k < 30; ++k) ev.push_back(Tick(1700 + (k * 1875) / 2, 3 + k));
+  std::vector<int64_t> clock;
+  Render(rig.engine, Plucks(30000), ev, {1}, nullptr, &clock);
+  REQUIRE_FALSE(clock.empty());
+  CHECK(clock.front() == 1700);
+  CHECK(rig.engine.Tempo().source == static_cast<uint8_t>(tempo::ClockSource::ClockRunning));
+}

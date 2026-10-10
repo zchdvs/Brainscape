@@ -19,6 +19,7 @@
 #include "detail/MixLaw.h"
 #include "detail/ModeEvalBody.h"
 #include "detail/OnsetDetector.h"
+#include "detail/Placement.h"
 #include "detail/PostChain.h"
 #include "detail/Smoother.h"
 #include "detail/Tempo.h"
@@ -270,7 +271,7 @@ using detail::CanonicalValue;  // detail/Canonical.h: the one canonicalization r
 
 // Bodies of the free-function entry points; the public functions below only add the
 // guard (detail/FpEnvGuard.h explains the split).
-BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
+BRAINSCAPE_COLD BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   MemoryPlan plan{};
   if (!SampleRateSupported(cfg.sampleRate)) return plan;  // Init refuses the config too
   // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
@@ -488,7 +489,7 @@ struct Engine::Impl {
   float                 active_[kNumStored]{};
 };
 
-Engine::Engine() noexcept {
+BRAINSCAPE_COLD Engine::Engine() noexcept {
   static_assert(sizeof(Impl) <= kEngineImplBytes, "raise kEngineImplBytes in Engine.h");
   static_assert(alignof(Impl) <= kEngineImplAlign, "raise kEngineImplAlign in Engine.h");
   // Engine's implicit destructor never runs ~Impl.
@@ -504,7 +505,7 @@ const Engine::Impl& Engine::impl() const noexcept {
 
 // Entry points that run floating-point code: the guard writes the profile's control
 // word and restores the caller's on return (determinism profile §4.1).
-bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+BRAINSCAPE_COLD bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   const detail::FpEnvGuard guard;
   return impl().Init(cfg, arenas);
 }
@@ -512,11 +513,11 @@ void Engine::Reset() noexcept {
   const detail::FpEnvGuard guard;
   impl().Reset();
 }
-void Engine::Restart() noexcept {
+BRAINSCAPE_COLD void Engine::Restart() noexcept {
   const detail::FpEnvGuard guard;
   impl().Restart();
 }
-void Engine::ClearHistory() noexcept {
+BRAINSCAPE_COLD void Engine::ClearHistory() noexcept {
   const detail::FpEnvGuard guard;
   impl().ClearHistory();
 }
@@ -524,16 +525,17 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   const detail::FpEnvGuard guard;
   impl().Process(ctx);
 }
-void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+BRAINSCAPE_COLD void Engine::SetParam(ParamId id, float value,
+                                      uint32_t /*sampleOffset*/) noexcept {
   const detail::FpEnvGuard guard;
   impl().SetParam(id, value);
 }
-bool Engine::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
-                        SwitchStyle style) noexcept {
+BRAINSCAPE_COLD bool Engine::LoadPreset(const PresetState& preset, LoadMode mode,
+                                        LoadReport* report, SwitchStyle style) noexcept {
   const detail::FpEnvGuard guard;
   return impl().LoadPreset(preset, mode, report, style);
 }
-float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
+BRAINSCAPE_COLD float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
 
 void Engine::SetFreeze(bool on) noexcept {
   impl().freezePending_.store(on, std::memory_order_relaxed);
@@ -555,14 +557,12 @@ TempoInfo Engine::Tempo() const noexcept {
   return d.tempo_->Info();
 }
 
-TempoStats Engine::TempoCounts() const noexcept {
+BRAINSCAPE_COLD TempoStats Engine::TempoCounts() const noexcept {
   const Impl& d = impl();
   if (d.tempo_ == nullptr) return TempoStats{};
-  TempoStats s = d.tempo_->Stats();
-  // The CLOCK births are the grain core's (clock.md §6.3); deferrals wait for the governor.
-  s.clockBirths  = d.granular_.Stats().clockBirths;
-  s.clockDropped = d.granular_.Stats().clockDropped;
-  return s;
+  // The CLOCK births are the grain core's (clock.md §6.3); deferrals wait for the governor. The
+  // copy is the tempo core's, out of ITCM (§11.12).
+  return d.tempo_->Counts(d.granular_.Stats().clockBirths, d.granular_.Stats().clockDropped);
 }
 
 Engine::GrainStats Engine::Stats() const noexcept {
@@ -589,7 +589,7 @@ const ParamDescriptor* Descriptors(size_t* count) noexcept {
   return kParamTable;
 }
 
-const ParamDescriptor* Engine::Descriptors(size_t* count) noexcept {
+BRAINSCAPE_COLD const ParamDescriptor* Engine::Descriptors(size_t* count) noexcept {
   return brainscape::Descriptors(count);
 }
 
@@ -604,7 +604,7 @@ float Canonicalize(ParamId id, float plainValue) noexcept {
   return CanonicalizeBody(id, plainValue);
 }
 
-MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
+BRAINSCAPE_COLD MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   const detail::FpEnvGuard guard;
   return PlanMemoryBody(cfg);
 }
@@ -615,7 +615,7 @@ bool CheckPreset(const PresetState& preset, LoadReport* report) noexcept {
   return CheckPresetBody(preset, report != nullptr ? report : &local);
 }
 
-bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+BRAINSCAPE_COLD bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
   if (!SampleRateSupported(cfg.sampleRate)) return false;
   if (cfg.maxBlockSize == 0) return false;
@@ -661,10 +661,10 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   // The default mode (Mode.h), which plays as sound revision 1 did, until a load brings one.
   mode_          = ::new (static_cast<void*>(warm)) ActiveMode();
   // The tempo core after it (clock.md §2.6): Init's 120 BPM, Free and TAP, boundary 0 at frame
-  // 0, at the integer rate R (§1.3), 48,000 on every pedal-exact path.
-  tempo_ = ::new (static_cast<void*>(reinterpret_cast<unsigned char*>(warm) + kActiveModeBytes))
-      TempoCore();
-  tempo_->Init(static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
+  // 0, at the integer rate R (§1.3), 48,000 on every pedal-exact path. Constructed and Init-ed
+  // out of line, so none of that code is in ITCM (§11.12).
+  tempo_ = TempoCore::Create(reinterpret_cast<unsigned char*>(warm) + kActiveModeBytes,
+                             static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
   modeSwitches_  = 0;
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
@@ -746,7 +746,7 @@ void Engine::Impl::Reset() noexcept {
   norm_.Prime(norm_.target);
 }
 
-void Engine::Impl::Restart() noexcept {
+BRAINSCAPE_COLD void Engine::Impl::Restart() noexcept {
   if (!ready_) return;
   // What Init clears and Reset keeps; Reset below does the rest. Freeze goes off first,
   // because the normalization rebuilt in Reset depends on it.
@@ -764,15 +764,15 @@ void Engine::Impl::Restart() noexcept {
   Reset();
 }
 
-void Engine::Impl::ClearHistory() noexcept {
+BRAINSCAPE_COLD void Engine::Impl::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
   post_.ClearBuffers();  // the post delay/reverb tails are history too
   historyClear_ = true;
 }
 
-bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
-                              SwitchStyle style) noexcept {
+BRAINSCAPE_COLD bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
+                                              LoadReport* report, SwitchStyle style) noexcept {
   LoadReport r;
   float      values[kNumLeafParams];
   ResolvePreset(preset, values, &r);  // steps 0-2, and step 4's count
@@ -1021,7 +1021,7 @@ void Engine::Impl::RebuildGranularParams() noexcept {
 
 // Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro
 // moves through MacroMove, a Performance row through its own events.
-void Engine::Impl::SetParam(ParamId id, float value) noexcept {
+BRAINSCAPE_COLD void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   const size_t slot = SlotOf(id);
   if (slot == kNumStored) return;
   // NaN must never reach the smoothers, where it is an absorbing state recoverable
@@ -1029,7 +1029,7 @@ void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   pending_[slot].store(CanonicalValue(RowOfSlot(slot), value), std::memory_order_relaxed);
 }
 
-float Engine::Impl::GetParam(ParamId id) const noexcept {
+BRAINSCAPE_COLD float Engine::Impl::GetParam(ParamId id) const noexcept {
   const size_t slot = SlotOf(id);
   if (slot == kNumStored) return 0.f;
   return pending_[slot].load(std::memory_order_relaxed);

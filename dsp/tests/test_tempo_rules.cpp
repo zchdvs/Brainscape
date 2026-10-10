@@ -601,9 +601,10 @@ TEST_CASE("Transport: Song Position while stopped and while running", "[tempo][t
   REQUIRE(c.Capture().lastLabel == 192);
   REQUIRE(c.LastFired() == 191);
   int64_t f = Ticks(c, 2000, 1000, 30);
-  // While running: armed, applied at the next tick as Start.
+  // While running: armed, applied at the next tick as Start; the continue position too (note 27).
   Transport(c, f, TransportKind::Locate, true, 6 * 64);
   REQUIRE(c.Capture().armed);
+  REQUIRE(c.Capture().continuePosition == 384);
   Tick(c, f + 1000);
   REQUIRE(c.Capture().lastLabel == 384);
   REQUIRE(c.LastFired() == 383);
@@ -1009,4 +1010,317 @@ TEST_CASE("The Tempo knob: 20 to 300 BPM, exponential, guarded (§6.4, D15)", "[
     REQUIRE(std::fabs(ratio - std::pow(15.0, 1.0 / 4095.0)) < 1e-6);
     last = ns;
   }
+}
+
+// =================================================================================================
+// The integer thresholds at their exact edges (§3.3, §7.1): each pair is a value exactly at the
+// threshold and one just past it, so a `>` read as `>=` (or the reverse) fails here on every leg.
+// The random streams and the reference share these readings and never land on equality.
+// =================================================================================================
+
+namespace {
+
+// n exact ticks of `period` frames from `start`; returns the last tick's frame.
+int64_t TicksTo(TempoCore& c, int64_t start, int64_t period, int n) {
+  return Ticks(c, start, period, n) - period;
+}
+
+}  // namespace
+
+TEST_CASE("Edges: §3.3 dropouts at exactly R/10 and exactly four ticks", "[tempo][follower][edges]") {
+  // 120 BPM (1,000 frames a tick): four ticks, 4,000 frames, are below R/10 = 4,800, so R/10
+  // decides; round(4.8) − 1 = 4 ticks inferred at the edge.
+  for (int64_t gap : {4799, 4800}) {
+    TempoCore     c    = Core();
+    const int64_t last = TicksTo(c, 1000, 1000, 20);
+    Tick(c, last + gap);
+    INFO("gap " << gap);
+    CHECK(c.Stats().dropoutTicks == (gap >= 4800 ? 4u : 0u));
+  }
+  // 80 BPM (1,500 frames a tick): R/10 is below four ticks, 6,000, which decide; round(4) − 1 = 3.
+  for (int64_t gap : {5999, 6000}) {
+    TempoCore     c    = Core();
+    const int64_t last = TicksTo(c, 1000, 1500, 20);
+    Tick(c, last + gap);
+    INFO("gap " << gap);
+    CHECK(c.Stats().dropoutTicks == (gap >= 6000 ? 3u : 0u));
+  }
+}
+
+TEST_CASE("Edges: §3.3 outliers at exactly a quarter tick and exactly 10 ms",
+          "[tempo][follower][edges]") {
+  // 20 BPM (6,000 frames a tick): a quarter tick, 1,500 frames, is above 10 ms (480) and decides.
+  for (int64_t off : {1500, 1501}) {
+    TempoCore     c    = Core();
+    const int64_t last = TicksTo(c, 1000, 6000, 10);
+    Tick(c, last + 6000 + off);
+    INFO("off " << off);
+    CHECK(c.Stats().tickOutliers == (off > 1500 ? 1u : 0u));
+  }
+  // 120 BPM (1,000 frames a tick): 10 ms, 480 frames, is above a quarter tick (250) and decides.
+  for (int64_t off : {480, 481}) {
+    TempoCore     c    = Core();
+    const int64_t last = TicksTo(c, 1000, 1000, 20);
+    Tick(c, last + 1000 + off);
+    INFO("off " << off);
+    CHECK(c.Stats().tickOutliers == (off > 480 ? 1u : 0u));
+  }
+}
+
+TEST_CASE("Edges: §7.1's early commit, rule 3.1 and the Jump class exactly at their bands",
+          "[tempo][classes][edges]") {
+  // The early commit: Pc at 125 BPM (23,040·2^32) and P_fit at 1,020 frames a tick
+  // (24,480·2^32): |P_fit − Pc| = 1,440·2^32 = Pc >> 4 exactly, not above it.
+  for (int64_t period : {1020, 1021}) {
+    TempoCore c = Core(48000, 480000);
+    REQUIRE(c.Pc() == (uint64_t{23040} << 32));
+    Transport(c, 500, TransportKind::Start, true);
+    TicksTo(c, 1000, period, 12);
+    INFO("period " << period);
+    CHECK(c.Stats().earlyCommits == (period == 1021 ? 1u : 0u));
+  }
+  // The Jump class: Pc from 24,000·2^32 (120 BPM) to 24,750·2^32 (515,625,000 ns), a change of
+  // exactly Pc >> 5, is not above it: a Step.
+  {
+    TempoCore c = Core();
+    TempoEv(c, 10, 515625000u);
+    REQUIRE(c.Pc() == (uint64_t{24750} << 32));
+    CHECK(c.LastPcChange() == PcChange::Step);
+    CHECK(c.Stats().jumps == 0u);
+  }
+  // Rule 3.1: Pc at 24,576·2^32 (1,024 frames a tick), then 96 ticks at 1,026 frames: the fit
+  // rises to 24,624·2^32, exactly Pc >> 9 above Pc only once the window holds the new ticks alone,
+  // with no outlier and rule 3.2's run short of 192. At 1,027 the band is crossed.
+  for (int64_t period : {1026, 1027}) {
+    TempoCore c = Core(48000, 512000);
+    REQUIRE(c.Pc() == (uint64_t{24576} << 32));
+    Transport(c, 500, TransportKind::Start, true);
+    const int64_t f = TicksTo(c, 1000, 1024, 24);  // the acquisition: Pc = P_fit
+    REQUIRE(c.Pc() == (uint64_t{24576} << 32));
+    const uint64_t commits = c.Stats().commits;
+    for (int i = 1; i <= 96; ++i) Tick(c, f + i * period);
+    INFO("period " << period << " pFit " << (c.Capture().pFit >> 32) << " pc " << (c.Pc() >> 32));
+    REQUIRE(c.Stats().tickOutliers == 0u);
+    if (period == 1026) {
+      REQUIRE(c.Capture().pFit == (uint64_t{24624} << 32));
+      CHECK(c.Stats().commits == commits);
+    } else {
+      CHECK(c.Stats().commits > commits);
+    }
+  }
+}
+
+TEST_CASE("Edges: §7.1 rule 3.2 exactly at Pc >> 12", "[tempo][classes][edges]") {
+  // Pc at 98,304·2^32 (4,096 frames a tick): Pc >> 12 = 24·2^32, one frame a tick. A clock at 4,097
+  // frames a tick sits exactly on the band once the window turns over, so rule 3.2's run never
+  // starts; at 4,098 it commits once, a Drift, after 192 fitted ticks.
+  for (int64_t period : {4097, 4098}) {
+    TempoCore c = Core(48000, 2048000);
+    REQUIRE(c.Pc() == (uint64_t{98304} << 32));
+    Transport(c, 500, TransportKind::Start, true);
+    const int64_t f = TicksTo(c, 1000, 4096, 24);
+    REQUIRE(c.Pc() == (uint64_t{98304} << 32));
+    const uint64_t commits = c.Stats().commits;
+    for (int i = 1; i <= 96 + 200; ++i) Tick(c, f + i * period);
+    INFO("period " << period << " pFit " << (c.Capture().pFit >> 32));
+    REQUIRE(c.Stats().tickOutliers == 0u);
+    if (period == 4097) {
+      REQUIRE(c.Capture().pFit == (uint64_t{98328} << 32));
+      CHECK(c.Stats().commits == commits);
+    } else {
+      CHECK(c.Stats().commits == commits + 1u);
+      CHECK(c.LastPcChange() == PcChange::Drift);
+    }
+  }
+}
+
+// =================================================================================================
+// The review's amendments (clock.md §11.12): the grid on a change of G, the grid held while a MIDI
+// transport is armed, Song Position under ClockRunning and under ClockFree
+// =================================================================================================
+
+namespace {
+
+// Renders to `f`, adding the hits to `out`, then applies a Subdivision event there.
+void SubdivAt(TempoCore& c, int64_t f, SubdivField field, uint8_t code, std::vector<GridHit>* out) {
+  const std::vector<GridHit> h = RenderTo(c, f);
+  out->insert(out->end(), h.begin(), h.end());
+  REQUIRE(c.ApplyEvent(f, tempo::kEventSubdivision, tempo::SubdivisionId(field, code), 0));
+}
+
+}  // namespace
+
+TEST_CASE("Grid: a change of the grid starts the new grid at its next position (note 25)",
+          "[tempo][grid]") {
+  // The Subdiv knob turned TAP → ×2 → ×4 → ×8 at 66,000, 66,300 and 66,600 frames, 18 ticks past
+  // beat 48 at 120 BPM (1,000 frames a tick): ×2's 60 and ×4's 66 had passed, and count as fired;
+  // the next hit is ×8's 69 at its own frame. (The build before fired 60 at 66,000, 6,000 frames
+  // late, and 66 at 66,300.)
+  {
+    TempoCore            c = Core(48000, 500000, 1, 0);
+    std::vector<GridHit> h;
+    SubdivAt(c, 66000, SubdivField::Subdivision, 3, &h);
+    SubdivAt(c, 66300, SubdivField::Subdivision, 4, &h);
+    SubdivAt(c, 66600, SubdivField::Subdivision, 5, &h);
+    const std::vector<GridHit> tail = RenderTo(c, 72001);
+    h.insert(h.end(), tail.begin(), tail.end());
+    REQUIRE(h.size() >= 3u);
+    CHECK(h[h.size() - 3].position == 48);
+    CHECK(h[h.size() - 3].frame == 48000);
+    CHECK(h[h.size() - 2].position == 69);
+    CHECK(h[h.size() - 2].frame == 69000);
+    CHECK(h.back().position == 72);
+    CHECK(h.back().frame == 72000);
+  }
+  // A Spillover load whose stored Subdiv is finer, at 61,000 (position 60 passed at 60,000).
+  {
+    TempoCore c = Core();
+    RenderTo(c, 61000);
+    c.SpilloverLoad(61000, 500000, 0, 5, false);
+    const std::vector<GridHit> h = RenderTo(c, 63001);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 63);
+    CHECK(h[0].frame == 63000);
+  }
+  // D18's gesture, Tempo (TAP forced) back to Subdiv at a stored ×8, at 61,000.
+  {
+    TempoCore            c = Core(48000, 500000, 1, 5);
+    std::vector<GridHit> h;
+    SubdivAt(c, 50000, SubdivField::TimeMode, 2, &h);
+    RenderTo(c, 61000);
+    REQUIRE(c.ApplyEvent(61000, tempo::kEventSubdivision,
+                         tempo::SubdivisionId(SubdivField::TimeMode, 1), 0));
+    h = RenderTo(c, 63001);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 63);
+    CHECK(h[0].frame == 63000);
+  }
+  // A position due exactly at the change's frame still fires there: at 140 BPM (857.14 frames a
+  // tick) boundary 27 lies inside the frame before 23,143, so F(27) = 23,143. TAP to ×8 at that
+  // frame fires 27 at it; one frame later 27 has passed, and the next hit is 30 at F(30).
+  for (int64_t late : {0, 1}) {
+    TempoCore c = Core(48000, 428571);
+    RenderTo(c, 23000);
+    const int64_t f27 = c.FrameOfBoundary(27);
+    REQUIRE(f27 == 23143);
+    std::vector<GridHit> h;
+    SubdivAt(c, f27 + late, SubdivField::Subdivision, 5, &h);
+    const int64_t f30 = c.FrameOfBoundary(30);
+    h = RenderTo(c, f30 + 1);
+    INFO("late " << late);
+    REQUIRE(h.size() == (late == 0 ? 2u : 1u));
+    if (late == 0) {
+      CHECK(h[0].position == 27);
+      CHECK(h[0].frame == f27);
+    }
+    CHECK(h.back().position == 30);
+    CHECK(h.back().frame == f30);
+  }
+  // A coarser grid never catches up (the grids nest).
+  {
+    TempoCore            c = Core(48000, 500000, 0, 5);
+    std::vector<GridHit> h;
+    SubdivAt(c, 61500, SubdivField::Subdivision, 1, &h);
+    h = RenderTo(c, 96001);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 96);
+    CHECK(h[0].frame == 96000);
+  }
+}
+
+TEST_CASE("Transport: the grid is held while a MIDI transport waits for its tick (note 26)",
+          "[tempo][transport][grid]") {
+  // An Exact load under a running master: Restart, then the producer's re-asserts at frame 0
+  // (§2.5): the tempo, Locate to the next tick's position (beat 17, position 408) and Continue.
+  // Nothing fires before that tick, where position 408 fires: the restarted grid's position 0 at
+  // frame 0, off the master's beat, does not.
+  {
+    TempoCore c = Core();
+    TempoEv(c, 0, 468750000u);  // 128 BPM
+    Transport(c, 0, TransportKind::Locate, true, 408);
+    Transport(c, 0, TransportKind::Continue, true);
+    std::vector<GridHit> h = RenderTo(c, 1700);
+    CHECK(h.empty());
+    REQUIRE(c.ApplyEvent(1700, tempo::kEventClockTick, 0, 0));
+    REQUIRE(c.Source() == ClockSource::ClockRunning);
+    h = RenderTo(c, 1701);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 408);
+    CHECK(h[0].frame == 1700);
+  }
+  // FA under ClockFree at ×8: no hit of the old grid between FA and the downbeat tick (the build
+  // before fired one, a flam 6-20 frames before the downbeat, at 21 of these 48 phases); then
+  // exactly one hit, the downbeat's, at that tick or within the fit's stamp jitter after it.
+  for (int phase = 0; phase < 48; ++phase) {
+    TempoCore  c      = Core(48000, 500000, 0, 5);
+    const auto tickAt = [phase](int64_t i) -> int64_t {
+      return (3000 + 7 * phase + i * 6000 / 7 + 47) / 48 * 48;  // 140 BPM on the 48-frame grid
+    };
+    for (int64_t i = 0; i < 60; ++i) Tick(c, tickAt(i));
+    REQUIRE(c.Source() == ClockSource::ClockFree);
+    Transport(c, tickAt(60) - 400, TransportKind::Start, true, 0);
+    std::vector<GridHit> h = RenderTo(c, tickAt(60));
+    INFO("phase " << phase);
+    CHECK(h.empty());
+    REQUIRE(c.ApplyEvent(tickAt(60), tempo::kEventClockTick, 0, 0));
+    h = RenderTo(c, tickAt(60) + 600);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 0);
+    CHECK(h[0].frame >= tickAt(60));
+    CHECK(h[0].frame <= tickAt(60) + 48);
+  }
+  // A Stop cancels the hold: the old grid runs on from the Stop's frame, with the positions passed
+  // while it was held counted as fired.
+  {
+    TempoCore c = Core();
+    Transport(c, 30000, TransportKind::Start, true, 0);
+    std::vector<GridHit> h = RenderTo(c, 60000);
+    CHECK(h.empty());
+    Transport(c, 60000, TransportKind::Stop, true);
+    h = RenderTo(c, 72001);
+    REQUIRE(h.size() == 1u);
+    CHECK(h[0].position == 72);
+    CHECK(h[0].frame == 72000);
+  }
+}
+
+TEST_CASE("Transport: Song Position then Continue while running resumes from the Song Position "
+          "(note 27)",
+          "[tempo][transport]") {
+  // A master that relocates while running with F2 then FB, without FC: the Continue replaces the
+  // armed Locate before its tick and resumes from the Song Position, not from the last Stop's
+  // continue position (0 here).
+  TempoCore c = Core();
+  Transport(c, 500, TransportKind::Start, true, 0);
+  const int64_t f = Ticks(c, 1000, 1000, 100);  // labels 0-99
+  REQUIRE(c.Source() == ClockSource::ClockRunning);
+  Transport(c, f - 500, TransportKind::Locate, true, 6 * 128);
+  REQUIRE(c.Capture().armed);
+  REQUIRE(c.Capture().continuePosition == 768);
+  Transport(c, f - 400, TransportKind::Continue, true);
+  Tick(c, f);
+  CHECK(c.Capture().lastLabel == 768);
+  CHECK(c.LastFired() == 767);
+  CHECK(c.Source() == ClockSource::ClockRunning);
+}
+
+TEST_CASE("Transport: Song Position under ClockFree sets the continue position only (§3.1, "
+          "note 28)",
+          "[tempo][transport]") {
+  // Clock without transport: the labels are the pedal's own, and a Song Position changes only the
+  // continue position, which a later Continue applies at its tick.
+  TempoCore c = Core();
+  int64_t   f = Ticks(c, 1300, 1000, 40);
+  REQUIRE(c.Source() == ClockSource::ClockFree);
+  const int64_t label = c.Capture().lastLabel;
+  Transport(c, f - 300, TransportKind::Locate, true, 192);
+  CHECK(c.Capture().continuePosition == 192);
+  CHECK_FALSE(c.Capture().armed);
+  f = Ticks(c, f, 1000, 4);
+  CHECK(c.Source() == ClockSource::ClockFree);
+  CHECK(c.Capture().lastLabel == label + 4);
+  Transport(c, f - 300, TransportKind::Continue, true);
+  Tick(c, f);
+  CHECK(c.Source() == ClockSource::ClockRunning);
+  CHECK(c.Capture().lastLabel == 192);
 }

@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <new>
 
 #include "detail/IntMath.h"
 
@@ -111,6 +112,12 @@ void TempoCore::Init(uint32_t rate) noexcept {
   Restart();
 }
 
+TempoCore* TempoCore::Create(void* mem, uint32_t rate) noexcept {
+  TempoCore* core = ::new (mem) TempoCore();
+  core->Init(rate);
+  return core;
+}
+
 void TempoCore::SetStoredPerformance(const PerformanceState& stored) noexcept {
   SetStoredPerformance(stored.usPerQuarter, static_cast<uint8_t>(stored.timeMode),
                        static_cast<uint8_t>(stored.subdiv));
@@ -130,6 +137,7 @@ void TempoCore::SetStoredPerformance(uint32_t usPerQuarter, uint8_t timeMode,
 
 void TempoCore::Restart() noexcept {
   p_ = pc_ = tempo::PFromNs(storedUs_ * 1000u, rate_);  // µs ≤ 3,000,000: ns fits uint32_t
+  nsPerQuarter_ = tempo::NsFromP(pc_, rate_);
   timeMode_ = storedTimeMode_;
   subdiv_   = storedSubdiv_;
   frame_    = 0;
@@ -159,16 +167,25 @@ void TempoCore::Restart() noexcept {
   labelShift_ = 0;
   haveLabel_  = false;
   lastRaw_    = 0;
+  Settle();
 }
 
 uint8_t TempoCore::EffectiveSubdiv() const noexcept {
   return timeMode_ == tempo::kTimeModeTempo ? tempo::kSubdivTap : subdiv_;
 }
 
-uint32_t TempoCore::GridPeriodFrames() const noexcept {
-  // P ≤ the tempo range's largest at R, so the result is at most 96 · 1,152,000 / 24 frames.
-  const uint64_t f = MulDivRoundU64(p_, GridTicks(), static_cast<uint64_t>(kK));
-  return f > 0xFFFFFFu ? 0xFFFFFFu : static_cast<uint32_t>(f);
+void TempoCore::Settle() noexcept {
+  // Every change ends here (an event, a load, Restart): the fast path of GridFrames waits for
+  // the full path to bound it again, and the grid's period follows P and G.
+  quietUntil_ = kNoQuiet;
+  const uint32_t G = GridTicks();
+  if (p_ != gridP_ || G != gridG_) {
+    gridP_ = p_;
+    gridG_ = G;
+    // P ≤ the tempo range's largest at R, so the period is at most 96 · 1,152,000 / 24 frames.
+    const uint64_t f = MulDivRoundU64(p_, G, static_cast<uint64_t>(kK));
+    gridPeriod_ = f > 0xFFFFFFu ? 0xFFFFFFu : static_cast<uint32_t>(f);
+  }
 }
 
 // --- §2.2 the phasor -----------------------------------------------------------------------------
@@ -232,8 +249,9 @@ void TempoCore::SetPc(uint64_t pc, bool drift) noexcept {
   } else {
     c = PcChange::Step;
   }
-  pc_       = pc;
-  pcChange_ = c;
+  pc_           = pc;
+  pcChange_     = c;
+  nsPerQuarter_ = tempo::NsFromP(pc_, rate_);  // Info() is read every block (§9.3, §9.5)
   ++pcSerial_;
 }
 
@@ -249,13 +267,24 @@ void TempoCore::ApplyInternalTempo(uint64_t p) noexcept {
 
 // --- §6.3 the grid -------------------------------------------------------------------------------
 
-uint32_t TempoCore::GridFrames(int64_t end, GridHit* hits, uint32_t capacity) noexcept {
+uint32_t TempoCore::GridFramesFull(int64_t end, GridHit* hits, uint32_t capacity) noexcept {
   uint32_t n = 0;
   while (frame_ < end) {
     const int64_t s = frame_;
     const int64_t e = end - s > kMaxGridSpan ? s + kMaxGridSpan : end;
     const int64_t G = static_cast<int64_t>(GridTicks());
     const int64_t p = static_cast<int64_t>(p_);
+    if (armed_) {
+      // The grid is held while a MIDI transport waits for its tick (§3.4, as-built note 26):
+      // nothing fires, and every grid position whose first frame lies before e counts as
+      // fired. The last position with F(k) < e is tick, unless its boundary lies inside the
+      // frame before e (acc < K), which makes F(tick) = e.
+      AdvanceTo(e);
+      const int64_t last = acc_ >= kK ? tick_ : tick_ - 1;
+      const int64_t g    = FloorDivI64(last, G) * G;
+      if (g > lastFired_) lastFired_ = g;
+      continue;
+    }
     // 1. The catch-up: the largest grid position at or below tick, when it has not fired.
     const int64_t g = FloorDivI64(tick_, G) * G;
     if (g > lastFired_ && n < capacity) {
@@ -281,14 +310,38 @@ uint32_t TempoCore::GridFrames(int64_t end, GridHit* hits, uint32_t capacity) no
     }
     AdvanceTo(e);
   }
+  UpdateQuiet();
   return n;
 }
 
-// --- §3.5 gaps -----------------------------------------------------------------------------------
-
-bool TempoCore::GapAt(int64_t frame) const noexcept {
-  return haveTickRef_ && frame - lastTickFrame_ >= static_cast<int64_t>(rate_);
+void TempoCore::UpdateQuiet() noexcept {
+  // The first frame at which a grid position can fire, for GridFrames' fast path: with no
+  // catch-up due at frame_ (no grid position at or below tick above lastFired) and the grid not
+  // held, the next position to fire is the first grid position above max(tick, lastFired), and
+  // nothing fires before its first frame F(k). Otherwise the full path runs next time.
+  quietUntil_ = kNoQuiet;
+  if (armed_) return;
+  const int64_t G = static_cast<int64_t>(GridTicks());
+  if (FloorDivI64(tick_, G) * G > lastFired_) return;
+  const int64_t k = (FloorDivI64(tick_ > lastFired_ ? tick_ : lastFired_, G) + 1) * G;
+  if (k - tick_ > kQuietTicks) return;
+  quietUntil_ = FrameOfBoundary(k);
 }
+
+void TempoCore::OnGridChange(int64_t oldG) noexcept {
+  // A change of the effective grid G (a Subdivision event, a load's stored Subdiv or time mode)
+  // starts the new grid at its next position: the new grid's positions whose first frames lie
+  // before this frame count as fired, and only one due exactly here (F(g) = frame_: g = tick
+  // with acc < K, §2.2) still fires, by the catch-up. §6.3's catch-up is for a jump of the
+  // phasor; a grid that changes under a still phasor would otherwise fire the finer grid's last
+  // passed position here, up to a whole new-grid period late (as-built note 25).
+  const int64_t G = static_cast<int64_t>(GridTicks());
+  if (G == oldG) return;
+  const int64_t g = FloorDivI64(tick_, G) * G;
+  if (g > lastFired_ && (g < tick_ || acc_ >= kK)) lastFired_ = g;
+}
+
+// --- §3.5 gaps -----------------------------------------------------------------------------------
 
 void TempoCore::ClearFollower() noexcept {
   winHead_ = winN_ = 0;
@@ -320,7 +373,7 @@ void TempoCore::ApplyGap(int64_t frame) noexcept {
   }
 }
 
-void TempoCore::BeforeEvent(int64_t frame) noexcept {
+void TempoCore::BeforeEventFull(int64_t frame) noexcept {
   assert(frame >= frame_ && "TempoCore: frames never fall");
   AdvanceTo(frame);
   ApplyGap(frame_);
@@ -355,6 +408,7 @@ bool TempoCore::ApplyEvent(int64_t frame, uint8_t type, uint32_t id, uint32_t va
     default:
       break;
   }
+  Settle();
   return true;
 }
 
@@ -372,12 +426,17 @@ void TempoCore::SpilloverLoad(int64_t frame, const PerformanceState& stored,
 void TempoCore::SpilloverLoad(int64_t frame, uint32_t usPerQuarter, uint8_t timeMode,
                               uint8_t subdiv, bool recallPreset) noexcept {
   BeforeEvent(frame);
+  const int64_t oldG = static_cast<int64_t>(GridTicks());
   SetStoredPerformance(usPerQuarter, timeMode, subdiv);
   timeMode_ = storedTimeMode_;
   subdiv_   = storedSubdiv_;
   // Under clock the clock wins (§3.6); the source is read after the gap rule.
   if (recallPreset && source_ == ClockSource::Internal)
     ApplyInternalTempo(tempo::PFromNs(storedUs_ * 1000u, rate_));
+  // The new grid from its next position, after the recalled tempo has rescaled the phasor (a
+  // position the rescale makes due here still fires, as after a Tempo event).
+  OnGridChange(oldG);
+  Settle();
 }
 
 void TempoCore::OnTempo(uint32_t ns) noexcept {
@@ -391,11 +450,13 @@ void TempoCore::OnTempo(uint32_t ns) noexcept {
 
 void TempoCore::OnSubdivision(uint32_t id) noexcept {
   ++stats_.subdivEvents;
-  const auto code = static_cast<uint8_t>(id & 0xFFu);
+  const int64_t oldG = static_cast<int64_t>(GridTicks());
+  const auto    code = static_cast<uint8_t>(id & 0xFFu);
   if (((id >> 8) & 0xFFu) == static_cast<uint32_t>(tempo::SubdivField::TimeMode))
     timeMode_ = code;
   else
     subdiv_ = code;
+  OnGridChange(oldG);
 }
 
 // --- §3.2 tap ------------------------------------------------------------------------------------
@@ -500,12 +561,14 @@ void TempoCore::OnTransport(uint32_t id, uint32_t position) noexcept {
         armedPosition_ = position;
         break;
       case TransportKind::Locate:
+        // The continue position either way, so a Continue that replaces an armed Locate before
+        // its tick resumes from the Song Position (§3.4: Continue resumes "from the last stop
+        // point or Song Position"; as-built note 27).
+        continuePosition_ = position;
         if (source_ == ClockSource::ClockRunning) {
           armed_         = true;
           armedKind_     = kind;
           armedPosition_ = position;
-        } else {
-          continuePosition_ = position;
         }
         break;
     }
@@ -550,36 +613,57 @@ void TempoCore::WindowAdd(int64_t raw, int64_t frame) noexcept {
     sxx_ += x * x;
     sxy_ += x * y;
   }
-  WindowEntry& e = window_[(winHead_ + winN_) % kWindowLabels];
+  const uint32_t at = winHead_ + winN_;  // below 2·96
+  WindowEntry&   e  = window_[at >= kWindowLabels ? at - kWindowLabels : at];
   e.label = static_cast<uint32_t>(static_cast<uint64_t>(raw));
   e.frame = static_cast<uint32_t>(static_cast<uint64_t>(frame));
   ++winN_;
 }
 
 void TempoCore::WindowEvict(int64_t newestRaw) noexcept {
-  // The fitted ticks whose labels are among the last 96 stay: label > newest − 96. The oldest is
-  // its own base (x = y = 0), so removing it changes N alone; then the sums re-base onto the new
-  // oldest, δ labels and η frames later, from the old sums (§3.3).
-  while (winN_ > 0 && raw0_ <= newestRaw - static_cast<int64_t>(kWindowLabels)) {
-    const WindowEntry old = window_[winHead_];
-    winHead_ = (winHead_ + 1) % kWindowLabels;
-    --winN_;
-    if (winN_ == 0) {
-      sx_ = sy_ = sxx_ = sxy_ = 0;
-      break;
-    }
-    const WindowEntry& next = window_[winHead_];
-    const int64_t dl = static_cast<int32_t>(next.label - old.label);  // exact: below 2^31
-    const int64_t df = static_cast<int32_t>(next.frame - old.frame);
-    const int64_t N  = winN_;
-    const int64_t sx = sx_, sy = sy_;
-    sx_  = sx - N * dl;
-    sy_  = sy - N * df;
-    sxx_ = sxx_ - 2 * dl * sx + N * dl * dl;
-    sxy_ = sxy_ - df * sx - dl * sy + N * dl * df;
-    raw0_ += dl;
-    frame0_ += df;
+  // The fitted ticks whose labels are among the last 96 stay: label > newest − 96 (§3.3).
+  const int64_t cut = newestRaw - static_cast<int64_t>(kWindowLabels);  // labels ≤ cut leave
+  if (winN_ == 0 || raw0_ > cut) return;
+  const WindowEntry& base = window_[winHead_];
+  uint32_t           last = winHead_ + winN_ - 1u;
+  if (last >= kWindowLabels) last -= kWindowLabels;
+  if (raw0_ + static_cast<int32_t>(window_[last].label - base.label) <= cut) {
+    winN_ = 0;  // every one of them leaves (a dropout, or a relabel past the window)
+    sx_ = sy_ = sxx_ = sxy_ = 0;
+    return;
   }
+  // The leaving ticks' own terms come out of the sums relative to the current base, the oldest,
+  // whose own terms are 0; then the sums re-base once onto the oldest that stays, δ labels and η
+  // frames later, from the survivors' sums (§3.3's formulas). The sums are the same exact
+  // integers as one re-base per leaving tick gave, at two products per tick instead of six, so a
+  // dropout tick that evicts most of the window stays cheap (as-built note 30).
+  const uint32_t baseLabel = base.label, baseFrame = base.frame;
+  const int64_t  last0     = cut - raw0_;  // an entry δ labels past the base leaves when δ ≤ it
+  int64_t        sx = sx_, sy = sy_, sxx = sxx_, sxy = sxy_;
+  uint32_t       i    = winHead_;
+  uint32_t       gone = 0;
+  int64_t        dl   = 0;
+  int64_t        df   = 0;
+  for (;;) {
+    ++gone;
+    if (++i == kWindowLabels) i = 0;
+    dl = static_cast<int32_t>(window_[i].label - baseLabel);  // exact: below 2^31
+    df = static_cast<int32_t>(window_[i].frame - baseFrame);
+    if (dl > last0) break;  // the new oldest
+    sx -= dl;
+    sy -= df;
+    sxx -= dl * dl;
+    sxy -= dl * df;
+  }
+  winHead_ = i;
+  winN_ -= gone;
+  const int64_t N = winN_;
+  sx_  = sx - N * dl;
+  sy_  = sy - N * df;
+  sxx_ = sxx - 2 * dl * sx + N * dl * dl;
+  sxy_ = sxy - df * sx - dl * sy + N * dl * df;
+  raw0_ += dl;
+  frame0_ += df;
 }
 
 void TempoCore::Refit() noexcept {
@@ -773,22 +857,11 @@ void TempoCore::Commit(bool entered, uint32_t prevN, bool fitted) noexcept {
 
 // --- snapshots -----------------------------------------------------------------------------------
 
-TempoInfo TempoCore::Info() const noexcept {
-  const bool gap = GapAt(frame_);
-  TempoInfo  i;
-  i.position     = tick_;
-  i.nsPerQuarter = tempo::NsFromP(pc_, rate_);
-  const ClockSource src = gap ? ClockSource::Internal : source_;
-  i.source   = static_cast<uint8_t>(src);
-  i.timeMode = timeMode_;
-  i.subdiv   = subdiv_;
-  const bool running = running_ && !(gap && source_ == ClockSource::ClockRunning);
-  const bool locked  = !gap && winN_ >= kLockTicks;
-  i.flags = static_cast<uint8_t>((running ? kTempoFlagRunning : 0) |
-                                 (locked ? kTempoFlagLocked : 0));
-  i.lastGridFrame  = lastGridFrame_;
-  i.lastClockBirth = lastClockBirth_;
-  return i;
+TempoStats TempoCore::Counts(uint64_t clockBirths, uint64_t clockDropped) const noexcept {
+  TempoStats s   = stats_;
+  s.clockBirths  = clockBirths;
+  s.clockDropped = clockDropped;
+  return s;
 }
 
 TempoCore::State TempoCore::Capture() const noexcept {

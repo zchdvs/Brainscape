@@ -663,7 +663,11 @@ PresetCase ClockLoads() {
 }
 
 // Tempo jumps (§7.1): taps from 120 to 90 BPM, a host-style Start anchored past the block's
-// first frame (E9), a recall under Preset, host tempo jumps, and invalid and unknown events.
+// first frame (E9), a recall under Preset, host tempo jumps, and invalid and unknown events. Then
+// a MIDI Start whose first ticks arrive bunched on one frame, as a computer master's held tick
+// releases them (§4.5): 49 ticks with no slope place boundary 48 exactly there (§3.3 step 4), so
+// the catch-up's position 0 and the ×1/2 grid's 48 fall due at one frame, and §6.3's one hit per
+// frame births the second a frame later (the grid held from the Start to its tick, note 26).
 PresetCase TempoJump() {
   PresetCase p = PackagePreset("tempo_jump", "clock_hits");
   Script&    s = p.script;
@@ -678,8 +682,11 @@ PresetCase TempoJump() {
   s.Raw(S(26) + 5, EventType::Tempo, tempo::kMinNsPerQuarter - 1, 0.f);  // out of range
   s.Raw(S(26) + 6, EventType::Transport, tempo::TransportId(TransportKind::Stop, true) | 4u, 0.f);
   s.Raw(S(26) + 7, static_cast<EventType>(12), 0, 0.f);           // unknown: ignored
-  p.require   = {{C::Jumps, 5},           {C::Taps, 9, 9},  {C::TransportEvents, 1, 1},
-                 {C::InvalidEvents, 2, 2}, {C::Loads, 1, 1}, {C::OffGridEvents, 10}};
+  s.Transport(S(27) + 401, TransportKind::Start, 0, true);
+  for (int k = 0; k < 49; ++k) s.Tick(S(27) + 1009);              // bunched: 0 and 48 at once
+  p.require   = {{C::Jumps, 5},           {C::Taps, 9, 9},  {C::TransportEvents, 2, 2},
+                 {C::InvalidEvents, 2, 2}, {C::Loads, 1, 1}, {C::OffGridEvents, 10},
+                 {C::ClockTicks, 49, 49}};
   p.ablate    = {Feature::TempoEvents, Feature::Spillover};
   p.invariant = {Invariance::HostileFpEnv};
   return p;

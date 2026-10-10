@@ -29,11 +29,13 @@ using namespace brainscape::testing;
 
 namespace {
 
-// The committed digest every leg must reproduce (MSVC x64 Release, Debug and AVX2, GCC 11, Clang 14
-// and the M7 under qemu do). A change to the tempo core's rules or to these streams changes it.
-// The streams draw one random number per statement, since argument evaluation order differs
-// between compilers (it did: GCC and MSVC on x64 against Clang and arm-none-eabi).
-constexpr const char* kTempoDigest = "b5392cdd42931c59";
+// The committed digest every leg must reproduce (MSVC x64 Release, Debug and AVX2; GCC 11, Clang 14
+// and the M7 under qemu reproduced its predecessor). A change to the tempo core's rules or to these
+// streams changes it: re-minted for the review's amendments (clock.md §11.12, notes 25-27) and the
+// streams' MIDI Start and Continue ahead of their first tick. The streams draw one random number
+// per statement, since argument evaluation order differs between compilers (it did: GCC and MSVC
+// on x64 against Clang and arm-none-eabi).
+constexpr const char* kTempoDigest = "0d1b22dd690c3742";
 
 bool IntMathDigest(Fnv* f) {
   Rng r(0xA5A5u);
