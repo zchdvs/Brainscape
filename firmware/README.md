@@ -495,7 +495,13 @@ libgcc's helpers and `mem*`. The live image links more of `Engine`'s API (`GetPa
 with the CPU plan's steps 1–2 (7.4 KiB at revision 3). A wave that grows the engine past that
 places the engine by function rather than by object, so the main-thread-only API leaves ITCM
 first; `Validate` (it runs inside `Process` at every Spillover load) moves out only after bench
-session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3).
+session 2 has measured that block ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3). Sound
+revision 8 (the tempo core, [clock.md](../docs/design/clock.md) §11.11–§11.12) does so: functions
+marked `BRAINSCAPE_COLD` (`dsp/src/detail/Placement.h`; the engine's construction, `Init`, Exact
+loads, `Restart` and the console's accessors) go to `.text_cold`, which the ITCM patterns do not
+match, and `ItcmCheck` refuses any call out of ITCM other than the tempo core's control-rate entry
+points. At revision 8 the live image's ITCM holds 61,472 bytes, 4,000 spare, and the parity, bench
+and bench_hooks images 59,336, 59,192 and 59,448.
 
 ### Memory map
 
