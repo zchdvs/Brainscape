@@ -2,10 +2,11 @@
 
 > The evidence behind [output-limiter.md](../output-limiter.md) (draft 2, for the owner's
 > decisions, 2026-10-09; draft 3, the owner's answers, and draft 4, after two reviews of draft 3,
-> both 2026-10-10): the inputs, what each investigation found and where, the probes the revision
-> ran, where the sources disagreed and how the design resolves it, the alternatives it rejected,
-> how the three reviews of draft 1 were disposed of (§6), the owner's answers with what draft 3
-> decided for them (§7), and how the two reviews of draft 3 were disposed of (§8). The design
+> both 2026-10-10, draft 4 corrected the same day for D5's form): the inputs, what each
+> investigation found and where, the probes the revision ran, where the sources disagreed and how
+> the design resolves it, the alternatives it rejected, how the three reviews of draft 1 were
+> disposed of (§6), the owner's answers with what draft 3 decided for them and the owner's choice
+> of D5's form (§7), and how the two reviews of draft 3 were disposed of (§8). The design
 > document is normative; this record is not. "Design §N" is output-limiter.md, "record §N" this file,
 > "profile §N" [determinism-profile.md](../determinism-profile.md), "budget §N"
 > [cpu-budget.md](../cpu-budget.md), "clock §N" [clock.md](../clock.md), "compiler §N"
@@ -340,9 +341,10 @@ Written 2026-10-09 on branch `claude/limiter-design` from `main` at `011b294`. D
 `5f7357b`, was reviewed the same day by [E], [P] and [H]; draft 2, commit `2297cbd`, applies
 their findings (§6), and `13f9e14` moved its revision after CLOCK's T1 and T2. Draft 3
 (2026-10-10) records the owner's answers to design §11.2 and specifies D5's switch (§7), commit
-`2895453`. Two reviews read it the same day; draft 4 applies their findings (§8). Its open
-questions (§11.5) are settled by the owner (D5's form, D14), by L1b, by listening in L2's A/B,
-and by the control-surface and bypass designs.
+`2895453`. Two reviews read it the same day; draft 4 applies their findings (§8), commit
+`7fca660`, and its correction the same day records D5's form as the owner's choice (§7.5). Its
+open questions (§11.5) are settled by the owner (what D5's Off does, D14), by L1b, by listening
+in L2's A/B (Q9 among them), and by the control-surface and bypass designs.
 
 ## 6. Review of draft 1 and its disposition
 
@@ -404,6 +406,11 @@ can cite contains it. So draft 3's form is a proposal: draft 4 labels it so and 
 in design §11.5 Q1, with three other readings (a device setting, a stage control, and Off passing
 overs). D7's agreement is with its amended answer, the next free revision expected 10, which the
 page showed.
+
+*Corrected after draft 4 (2026-10-10).* The owner did choose the form, in the session, from four
+options; the task text's description of the change follows the chosen option's own wording.
+Draft 4's "proposal" label is withdrawn: §7.5 gives the owner's question and answer, why draft 4
+had it otherwise, and what the correction restated.
 
 ### 7.2 What draft 3 decided for the switch, and what it rejected
 
@@ -501,13 +508,65 @@ page showed.
 `limiter-d5/drain.py` in the session's scratch directory, not committed, beside the earlier
 probes of §1.3.
 
+### 7.5 The owner's choice of D5's form (2026-10-10), and draft 4's correction
+
+**The question and the answer.** After marking D5 "Change" on the decisions page with no note,
+the owner was asked in the chat session, on 2026-10-10, "For limiter decision D5 (user control),
+what change do you want?", with four options:
+
+1. a device setting, on or off;
+2. off in the plugin only;
+3. a per-preset switch: "A stored preset parameter, so a mode can turn the limiter off on
+   purpose (e.g. for deliberate clipping). Adds a new leaf, so every package hash changes
+   (package-change label)";
+4. an adjustable ceiling.
+
+The owner answered **"Per-preset switch"**. D5's form is therefore the owner's decision, and
+design §11.2 records it as "Changed by the owner: a per-preset switch (row 87, `output.limiter`,
+default On)", with draft 2's recommendation, none, kept for reference.
+
+**Why draft 4 had it as proposed.** Review [Q] and the revision that applied its findings read
+the decisions page's database and the owner's message that the decisions were answered. Neither
+holds the form: the page's note is empty, and the message names no form. The chat session in
+which the owner chose it was not visible to them. So finding Q1 (§8.2) concluded that the owner
+never wrote the form, and draft 4 labelled the switch "proposed, awaiting the owner's
+confirmation", held row 87 "for the limiter's control", and asked the owner, in design §11.5 Q1,
+to choose among four readings of its own (a per-preset switch, a device setting, a stage control,
+and an Off that passes overs). The evidence it read was accurate but incomplete; the conclusion
+was wrong.
+
+**What the correction restated.** No technical content changed. In the design: the status
+block, "What changed in draft 3" and "in draft 4", the Summary's control item, §1.3's last
+non-goal, §1.4's switch term, §4.7's opening and "What Off means", §7.1's heading, text, ID row
+and MIDI CC and panel line, §7.4's product-panel line, §9.5's opening and D14 paragraph, §10's
+opening and table, §11.1's L2 row and total, §11.2's preamble, D5 row (Answer: "Changed by the
+owner") and D14 row, the "pending D5" labels of D6, D8, D9, D10 and D13 (now "for D5"), §11.3's
+decision 11, §11.4's risk 11, §11.5's Q1, Q2 and Q7, §11.6 and §12. In this record: the header,
+§5, §7.1, §8's opening and findings Q1, Q2 and Q5. Elsewhere: STATUS's limiter lines, the
+README's row and the dated notes in mode-compiler.md §11.3, companion-app.md §4.8 and
+determinism-profile.md §3.7. Row 87 is the switch's.
+
+**What stays open.** The owner chose the form, not everything in it:
+
+- **What Off does** (design §11.5 Q1, which now asks only this, and absorbs draft 4's Q7): Clip,
+  as designed and recommended, since on the pedal it plays code for code what the unlimited
+  engine plays and in the plugin it matches the pedal (§7.2 item 1); or letting overs pass
+  unclipped, which would split the plugin from the pedal above full scale.
+- **D14,** whether factory presets may use the switch, recommended On for now.
+- **Q9,** the instant attack or the entry ramp when a Limit preset loads with Trails after a Clip
+  one, recommended instant; L2's A/B decides.
+
+The options the owner did not choose, and draft 4's other readings, are not carried as open
+questions.
+
 ## 8. Review of draft 3 and its disposition
 
 Two reviews read draft 3 (`2895453`) on 2026-10-10: **[K]** package, determinism and tests
 (3 major, 5 minor), and **[Q]** product (3 major, 3 minor). The revision checked each finding's
 evidence against the tree at `claude/tempo-core` `b91b34d` and `main` `011b294`, against the
 decisions page's database, and with a simulation of design §4.3 (§8.3). **Every finding survived
-the check and was applied; none was rejected.** Five were applied with a choice among the fixes
+the check and was applied; none was rejected.** Q1's premise was later found wrong, and its
+labels were reversed by the correction of §7.5. Five were applied with a choice among the fixes
 the review offered, or with more than it asked, each explained in the table: K1 (read as any
 integer-valued leaf, not 0/1-only), K3 (the "gain below F at the Off" check made with two
 per-call counts, since the corpus has no windowed requirement), K6 (row 86 reserved, not L2
@@ -531,11 +590,11 @@ entry ramp offered, the instant attack kept as the recommendation).
 
 | # | Finding | Disposition (design §) |
 |---|---|---|
-| Q1 | D5's per-preset form is recorded as the owner's answer, but the owner never wrote it | applied: confirmed from the page's database (§7.1 above) and the owner's message. D5 is labelled "Change (no note); the form is proposed, awaiting the owner's confirmation" in the status block, the Summary, §7.1, §11.2, STATUS, the README row and the three dated notes; §12 and §7.1 above corrected; §11.5 Q1, first and "(owner, now)", sets out readings a–d and their consequences; row 87 is "held for the limiter's control" until the owner answers, and L2 does not start the switch's part before then (status, Summary, 4.7, 7.1, 10, 11.1, 11.2, 11.5, 12) |
-| Q2 | The factory policy blocks the stated purpose and is filed under owner-confirmed rows | applied: a new owner decision, D14, recommended On for now with §9.5's four reasons, the declaration as its alternative; Q8 is "(owner, now)"; §11.3 #17 points at D14; the switch's clauses leave the Answer column of D6 and D8 and sit, with D9's, D10's and D13's, in Consequence as "pending D5" or "pending D14"; §11.2's preamble says the Answer column holds only what the owner confirmed (9.5, 11.2, 11.3, 11.5) |
+| Q1 | D5's per-preset form is recorded as the owner's answer, but the owner never wrote it | applied: confirmed from the page's database (§7.1 above) and the owner's message. D5 is labelled "Change (no note); the form is proposed, awaiting the owner's confirmation" in the status block, the Summary, §7.1, §11.2, STATUS, the README row and the three dated notes; §12 and §7.1 above corrected; §11.5 Q1, first and "(owner, now)", sets out readings a–d and their consequences; row 87 is "held for the limiter's control" until the owner answers, and L2 does not start the switch's part before then (status, Summary, 4.7, 7.1, 10, 11.1, 11.2, 11.5, 12). *Reversed by the correction of 2026-10-10 (§7.5):* the owner had chosen the form in the session, which the review could not see; the labels are restated as the owner's decision, row 87 is the switch's, and §11.5 Q1 asks only what Off does |
+| Q2 | The factory policy blocks the stated purpose and is filed under owner-confirmed rows | applied: a new owner decision, D14, recommended On for now with §9.5's four reasons, the declaration as its alternative; Q8 is "(owner, now)"; §11.3 #17 points at D14; the switch's clauses leave the Answer column of D6 and D8 and sit, with D9's, D10's and D13's, in Consequence as "pending D5" ("for D5" since §7.5's correction) or "pending D14"; §11.2's preamble says the Answer column holds only what the owner confirmed (9.5, 11.2, 11.3, 11.5) |
 | Q3 | Loading an On preset with Trails after a clipping Off preset ducks the trails, and the dry on hot input | applied: confirmed from §4.3's attack and the whole-mix form; the review's example re-calculated (r = 0.180, the dry −2.87 dB). §4.5's Spillover row qualified and a new row added; §4.7's "Turning On" states the step; risk 12; a new golden, `limit_clip_trails` (an Off package settled and clipping on Saturation, then a Trails load of an On package with `limit_hot_mix25`'s settings, `LimiterDryFrames` > 0, all after the load); L2's A/B plays it. The mirrored "entry ramp" is specified and offered (Q9); draft 4 recommends the instant attack as designed, since it is D3's confirmed attack and the step only occurs on leaving a preset that clips by design, and the A/B decides (4.5, 4.7, 9.3, 11.1, 11.4, 11.5) |
 | Q4 | The `clip`-class escape cannot be built as written, and deliberate-Off user presets always "fail" | applied: confirmed (`bspc_roundtrip.py:150` lints documents only; `--declarations` reaches only `bspc render`; `declare --class` takes attack or pad). The declaration is a flag, `ratings.py declare --clips`, beside `--self-oscillating`; `bspc lint` gains `--declarations AUDITION.md`, which `bspc_roundtrip.py` passes; the replaced checks are listed (Peak (stored), Ceiling (moved), S11's Ceiling) with what replaces them; for non-factory ids the switch Off is the declaration, and the report gives the clip share instead of failing. Built now only if D14 chooses the alternative (about 0.5 day) (7.1, 7.3, 9.5, 11.1, 11.2 D14) |
-| Q5 | A stored Off cannot be seen on the pedal until it clips | applied: D6's consequence (pending D5) hands the control-surface design two requirements, Clip shown from the load and clipping distinct from limiting; Q4 of §11.5 says "How", not "Whether"; the Rev7 LED double-blinks when the published switch goes to Clip, in both `led` modes; the plugin tags Clip presets in the Library list and the Modes menu; the lamp's CLIP caption shows from the load (7.3, 7.4, 11.2 D6, 11.4 #9, 11.5) |
+| Q5 | A stored Off cannot be seen on the pedal until it clips | applied: D6's consequence (for D5's switch; "pending D5" until §7.5's correction) hands the control-surface design two requirements, Clip shown from the load and clipping distinct from limiting; Q4 of §11.5 says "How", not "Whether"; the Rev7 LED double-blinks when the published switch goes to Clip, in both `led` modes; the plugin tags Clip presets in the Library list and the Modes menu; the lamp's CLIP caption shows from the load (7.3, 7.4, 11.2 D6, 11.4 #9, 11.5) |
 | Q6 | "Off" misleads plugin users: it hard-clips inside the engine | applied: the row's states are **Limit** and **Clip** through a new display kind, `LimitClip`, beside `LiveMark`'s "Mark"/"Live" precedent, with typed text limit, clip, on, off and numbers, boolean to hosts; the row is titled "Output ceiling"; the Leaves view, L15's message, the lamp, the console's `stats` (`limiterMode limit\|clip`) use the same words; the JSON key and the 0/1 encoding stay, and this document keeps On and Off for the two values (1.4, 7.1, 7.3, 7.4) |
 
 ### 8.3 Checks run for draft 4

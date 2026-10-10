@@ -179,11 +179,13 @@ No engine change: the set plays at sound revision 7.
   the knob-rating rows are written.)* *(2026-10-10: the owner answered the limiter's thirteen
   decisions. Twelve are confirmed as recommended, among them the next free sound revision after
   CLOCK's 8 and 9, expected **10**, before the knob-rating rows and the governor (11). **D5 is
-  marked "Change" with no note.** The design proposes a per-preset switch, a stored Leaf row,
-  **87, `output.limiter`, default On**, so a mode can turn the limiter off on purpose; **that
-  form awaits the owner's confirmation** (its §11.5 Q1, with three other readings).*
-  - *Off clips at the same ceiling, which on the pedal is code for code the unlimited engine, and
-    in the plugin now matches the pedal.*
+  changed by the owner to a per-preset switch**, chosen in the session from four options after a
+  "Change" with no note on the decisions page: a stored Leaf row, **87, `output.limiter`,
+  default On**, so a mode can turn the limiter off on purpose.*
+  - *Off clips at the same ceiling, as the design recommends: on the pedal that is code for code
+    the unlimited engine, and in the plugin it matches the pedal. What Off does is still the
+    owner's question (its §11.5 Q1): the alternative, letting overs pass, would split the plugin
+    from the pedal above full scale.*
   - *Turning it Off mid-limiting drains the gain at 40 dB/s, then clips.*
   - *Macros, expression and host automation cannot reach it. Users see its states as Limit and
     Clip, and a Clip preset is shown from its load.*
@@ -192,10 +194,13 @@ No engine change: the set plays at sound revision 7.
   - *No render changes for it but a test preset's, but every committed package's `sound_hash`
     does, so revision 10's pull request carries the package-change label.*
 
-  *Row 87 is held for the limiter's control until D5 is confirmed: a lane that appends a parameter
-  row first starts at 88. After CLOCK's tempo core the live image has 792 bytes of ITCM spare, so
-  the limiter lands after the cold-code move that synced times also need. The design is draft 4
-  on PR #13, after two reviews of draft 3.)*
+  *Row 87 is the limiter's switch: a lane that appends a parameter row first starts at 88. After
+  CLOCK's tempo core the live image has 792 bytes of ITCM spare, so the limiter lands after the
+  cold-code move that synced times also need. The design is draft 4 on PR #13, after two reviews
+  of draft 3, corrected the same day: draft 4 had called the switch a proposal, because its
+  reviewers saw only the decisions page. Still open with the owner: what Off does, D14, and, by
+  ear in L2's A/B, whether a Limit preset loading with trails after a Clip one drops at once or
+  gradually (Q9, recommended at once).)*
 - **The owner's audition set**, rendered outside the repository with lane E's render: per mode the
   stored positions on Plucks and SoftNotes (3 s of input, 4 s of tail) and one macro sweep on its
   class input (Repeats over 4 s of input, then 3 s of silence at its maximum), plus a bypass
@@ -1284,9 +1289,9 @@ Steps 1–4 need no hardware.
    next free revision after CLOCK's tempo core (8) and synced times (9), expected 10, before the
    knob-rating rows and the cost governor (11), so the ratings are given on the limited sound and
    none needs a re-listen; a Rev7 test of the DAC's inter-sample behaviour (its lane L1b) comes
-   first, so the ceiling is fixed once. It proposes a per-preset switch (row 87,
-   `output.limiter`, default On), which awaits the owner's confirmation of D5's form, and asks
-   the owner whether factory presets may clip (D14). App integration continues in parallel: the resampled 48 kHz plugin mode for other host
+   first, so the ceiling is fixed once. Its D5 is the owner's per-preset switch (row 87,
+   `output.limiter`, default On); it asks the owner what Off does (recommended: a clip at the
+   ceiling) and whether factory presets may clip (D14). App integration continues in parallel: the resampled 48 kHz plugin mode for other host
    rates, session state v2 and the library, the rest of lane D, and the plugin gaps above.
 5. **Hardware bring-up and the hardware-gated decisions, then the device link.** On the
    Daisy Seed Rev7 prototype: the silicon parity check and the DWT measurement pass are done

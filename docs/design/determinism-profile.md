@@ -396,8 +396,10 @@ the output with ISA-dependent bits; and through DetMath domain edges (§3.9).
 > Off the over is clamped at the same ceiling, and a switch to Off mid-limiting releases the gain
 > to exactly 1 at the fast rate. It is applied through a seventh parameter domain at its event's
 > frame, so the output still stops at 1.0 on every target and every rule above still holds (its
-> §4.7). *Draft 4:* the owner marked that decision "Change" with no note, so the switch is the
-> design's proposal, awaiting confirmation (its §11.5 Q1); `Reset` primes the limiter before its
+> §4.7). *Draft 4, corrected:* the switch is the owner's choice for that decision, made in the
+> session from four options (draft 4 first called it a proposal). Whether Off clamps, as above,
+> or passes overs is still the owner's question (its §11.5 Q1), recommended the clamp, which
+> keeps the output at the same ceiling on every target; `Reset` primes the limiter before its
 > own rebuild, so the switch always sees unity gain after a restart (its §6.1).
 
 ### 3.8 Conforming builds and supported targets

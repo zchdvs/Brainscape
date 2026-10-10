@@ -1720,12 +1720,14 @@ each change, its numbers and the owner's answers.
 >   `wet_trim_db`. So every committed package's `sound_hash` changes at revision 10, with the
 >   package-change label, and no render changes for it (output-limiter.md §7.1, §9.5).
 >
-> *2026-10-10, draft 4:* the owner marked its D5 "Change" with no note, so the per-preset switch
-> above is the design's proposal and awaits the owner's confirmation (its §11.5 Q1); row 87 is
-> held for the limiter's control until then. Whether factory presets may set it Off, and so
-> whether L15 is an error under `--factory`, is now the owner's D14, recommended On. The leaf
-> reads as any integer-valued leaf (§2.2, §3.7): a fraction is accepted and plays by the
-> threshold, so this document needs no amendment. Users see its states as Limit and Clip.
+> *2026-10-10, draft 4, corrected:* the per-preset switch above is the owner's own choice for its
+> D5, made in the session from four options after a "Change" with no note on the decisions page
+> (draft 4 first called it a proposal). Row 87 is the switch's. What Off does stays the owner's
+> question (its §11.5 Q1), recommended as above, a clip at the same ceiling. Whether factory
+> presets may set it Off, and so whether L15 is an error under `--factory`, is now the owner's
+> D14, recommended On. The leaf reads as any integer-valued leaf (§2.2, §3.7): a fraction is
+> accepted and plays by the threshold, so this document needs no amendment. Users see its states
+> as Limit and Clip.
 
 ### 11.4 What waits
 
