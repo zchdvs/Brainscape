@@ -208,6 +208,10 @@ TEST_CASE("PlanMemory sizes all three tiers") {
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Bulk)] ==
           (size_t{1} << 22) * 2u * sizeof(int16_t) +
               detail::PostChain::BulkFloats(cfg.sampleRate) * sizeof(float));
+  // The post delay's stereo line since sound revision 9 (docs/design/clock.md §5.3, D23): 4 s and
+  // the cubic read's two neighbours, 768,016 bytes more than the 2 s line's 768,000 at 48 kHz.
+  REQUIRE(detail::PostChain::BulkFloats(48000.0) == 2u * (192000u + 2u));
+  REQUIRE(plan.bytes[static_cast<size_t>(Tier::Bulk)] == 18313232u);
   REQUIRE(plan.bytes[static_cast<size_t>(Tier::Hot)] ==
           (detail::kWindowLutSize + 2u * 512u) * sizeof(float));
   // The Warm tier ends with the active mode and its CTRL (mode-compiler.md §7.3), then the tempo
