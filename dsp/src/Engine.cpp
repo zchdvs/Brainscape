@@ -385,7 +385,8 @@ void ResolvePreset(const PresetState& preset, float* values, LoadReport* report)
                   report->unsupported == 0;
 }
 
-BRAINSCAPE_FP_BODY bool CheckPresetBody(const PresetState& preset, LoadReport* report) noexcept {
+BRAINSCAPE_COLD BRAINSCAPE_FP_BODY bool CheckPresetBody(const PresetState& preset,
+                                                        LoadReport* report) noexcept {
   float values[kNumLeafParams];
   ResolvePreset(preset, values, report);
   return report->exact;
@@ -645,7 +646,7 @@ BRAINSCAPE_COLD MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   return PlanMemoryBody(cfg);
 }
 
-bool CheckPreset(const PresetState& preset, LoadReport* report) noexcept {
+BRAINSCAPE_COLD bool CheckPreset(const PresetState& preset, LoadReport* report) noexcept {
   const detail::FpEnvGuard guard;
   LoadReport               local;
   return CheckPresetBody(preset, report != nullptr ? report : &local);

@@ -1,6 +1,7 @@
 #include "detail/FpProfilePrivate.h"
 
 #include "detail/DetMath.h"
+#include "detail/Placement.h"
 
 #include <cassert>
 #include <cfloat>
@@ -217,7 +218,9 @@ double SinD(double x) noexcept {
   return s;
 }
 
-void SinCosPi(double x, double* s, double* c) noexcept {
+// The half-turn forms build tables at Init only (the window LUT, the onset FFT's window and
+// twiddles), never in the audio path: out of ITCM on the pedal (detail/Placement.h).
+BRAINSCAPE_COLD void SinCosPi(double x, double* s, double* c) noexcept {
   assert(x > -0x1p29 && x < 0x1p29);
   const double  t = x + x;                      // exact
   const int32_t n = RoundHalfAwayI32(t);
@@ -226,7 +229,7 @@ void SinCosPi(double x, double* s, double* c) noexcept {
   const double  r = f * 0x1.921fb54442d18p+1;   // pi
   SinCosQuadrant(n, SinKernel(r), CosKernel(r), s, c);
 }
-double CosPi(double x) noexcept {
+BRAINSCAPE_COLD double CosPi(double x) noexcept {
   double s, c;
   SinCosPi(x, &s, &c);
   return c;

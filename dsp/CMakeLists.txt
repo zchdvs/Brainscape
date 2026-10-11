@@ -47,6 +47,15 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU
                               src/IntMath.cpp src/MidiClock.cpp src/Tempo.cpp
                               PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 endif()
+# Bare-metal Arm only (the firmware and the M7 oracle, whose archives stay byte-identical): one
+# section per function, so the firmware images place the engine by function (cpu-budget.md
+# §7.3, firmware/README.md "Sizes") and --gc-sections drops the out-of-line copies of functions
+# every caller inlined, which by object would sit in ITCM unreached. It changes where code
+# goes, never what it computes.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND CMAKE_SYSTEM_NAME STREQUAL "Generic")
+  target_compile_options(brainscape_dsp PRIVATE -ffunction-sections)
+endif()
 target_include_directories(brainscape_dsp
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)  # floating-point bodies stay private (§3.5)

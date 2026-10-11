@@ -5,6 +5,7 @@
 #include <cassert>
 
 #include "detail/DetMath.h"
+#include "detail/Placement.h"
 
 namespace brainscape::detail {
 
@@ -32,7 +33,7 @@ constexpr Rev7Table kRev7 = MakeRev7();
 
 }  // namespace
 
-void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
+BRAINSCAPE_COLD void OnsetDetector::Init(float* warm, double sampleRate) noexcept {
   float* p = warm;
   hann_    = p;
   p += kOnsetFftSize;

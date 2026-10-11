@@ -200,10 +200,13 @@ function(brainscape_firmware_image name)
     # so its code in QSPI runs only where a grid position may fire, at events 6-10, at loads and
     # on the main thread. Inside the ITCM objects, the functions marked BRAINSCAPE_COLD
     # (main-thread-only, dsp/src/detail/Placement.h) go to .text_cold, which the ITCM patterns
-    # below do not match and the QSPI .text section's *(.text*) does.
+    # below do not match and the QSPI .text section's *(.text*) does; the archive is built with
+    # one section per function on bare-metal Arm (dsp/CMakeLists.txt), so --gc-sections drops
+    # the out-of-line copies that every caller inlined. The build's identity (SoundRevision.cpp:
+    # the toolchain and flags the console reports) stays out as well (cpu-budget.md §7.3).
     set(_bs_not_itcm_members Decode.cpp.obj Encode.cpp.obj Sha256.cpp.obj TestSignal.cpp.obj
                              IntMath.cpp.obj MidiClock.cpp.obj Tempo.cpp.obj
-                             TempoProducer.cpp.obj)
+                             TempoProducer.cpp.obj SoundRevision.cpp.obj)
     set(_bs_not_itcm "")
     foreach(a libbrainscape_dsp.a libbrainscape_dsp_fpenv_hooks.a)
       foreach(m IN LISTS _bs_not_itcm_members)
@@ -222,7 +225,25 @@ function(brainscape_firmware_image name)
       .rodata._ZN10brainscape13params_detail12kLeafOrdinalE
       .rodata._ZN10brainscape16kDefaultModeHashE)
     list(JOIN _bs_engine_comdat " " _bs_engine_comdat)
-    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(.text .text.* .rodata .rodata.*) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(.text .text.* .rodata .rodata.*) *(${_bs_engine_comdat}) *libgcc.a:*(.text .text.*) *MemFunctions.c.o*(.text .text.*)")
+    # Of libgcc, only the members that serve the run-time helpers the engine archive imports
+    # (tools/ci/audit_symbols.py's list; __aeabi_ldivmod and __aeabi_uldivmod with
+    # __udivmoddi4 and __aeabi_ldiv0, __aeabi_d2lz with __aeabi_d2ulz, and __aeabi_l2d, which
+    # shares the double-precision adder's object): the rest (the firmware's own 64-bit to float
+    # conversions, for one) runs on the main loop from QSPI. An engine call to any other member
+    # would need a veneer out of ITCM, which cmake/ItcmCheck.cmake refuses.
+    set(_bs_itcm_libgcc _aeabi_ldivmod.o _aeabi_uldivmod.o _udivmoddi4.o _dvmd_tls.o
+                        _fixdfdi.o _fixunsdfdi.o _arm_addsubdf3.o)
+    set(_bs_itcm_libgcc_inputs "")
+    foreach(m IN LISTS _bs_itcm_libgcc)
+      string(APPEND _bs_itcm_libgcc_inputs " *libgcc.a:${m}(.text .text.*)")
+    endforeach()
+    # The archive's string literals (.rodata.str*: the parameter table's names and units) stay
+    # in QSPI too: only the console and the constant-expression checks of Engine.cpp read them,
+    # never the audio path, whose code holds no address of one (cpu-budget.md §7.3). The
+    # pattern .rodata.[!s]* is every other .rodata section, the tables' COMDAT copies
+    # (.rodata._Z...) and merged constants (.rodata.cst*) among them.
+    set(_bs_engine_sections ".text .text.* .rodata .rodata.[!s]*")
+    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(${_bs_engine_sections}) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(${_bs_engine_sections}) *(${_bs_engine_comdat})${_bs_itcm_libgcc_inputs} *MemFunctions.c.o*(.text .text.*)")
     set(BRAINSCAPE_LD_ITCM_DISCARD "*libgcc.a:*(.ARM.exidx .ARM.exidx.*)")
   elseif(ARG_ENGINE_CODE STREQUAL "XIP")
     set(BRAINSCAPE_LD_ENGINE_CODE "with the rest of the code, ${BRAINSCAPE_LD_TEXT}")

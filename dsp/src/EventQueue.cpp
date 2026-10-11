@@ -2,14 +2,17 @@
 
 #include "brainscape/EventQueue.h"
 
+#include "detail/Placement.h"
+
 // No floating-point arithmetic here: events are copied, never computed, so the queue
-// needs no FP environment guard.
+// needs no FP environment guard. The producer's side (Push, Clear) runs on the pedal's main
+// loop, never in the audio callback, so it stays out of ITCM (detail/Placement.h).
 namespace brainscape {
 
 static_assert((EventQueue::kCapacity & (EventQueue::kCapacity - 1u)) == 0,
               "the free-running indices wrap at 2^32, so the capacity must divide it");
 
-bool EventQueue::Push(const Engine::Event& event, uint32_t* index) noexcept {
+BRAINSCAPE_COLD bool EventQueue::Push(const Engine::Event& event, uint32_t* index) noexcept {
   const uint32_t tail    = tail_.load(std::memory_order_relaxed);
   const bool     inOrder = !stamped_ || event.frame > lastFrame_ ||
                        (event.frame == lastFrame_ && event.seq > lastSeq_);
@@ -53,7 +56,7 @@ bool EventQueue::Retired(uint32_t index) const noexcept {
   return static_cast<int32_t>(head_.load(std::memory_order_acquire) - index) > 0;
 }
 
-uint32_t EventQueue::Clear() noexcept {
+BRAINSCAPE_COLD uint32_t EventQueue::Clear() noexcept {
   const uint32_t tail    = tail_.load(std::memory_order_relaxed);
   const uint32_t dropped = tail - taken_;
   taken_                 = tail;

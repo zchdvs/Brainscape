@@ -805,6 +805,26 @@ What can leave, by what it costs:
 This is a prerequisite of step 4, to be sized in the build that lands it, and checked against G6 on
 the merged tree.
 
+**As built** (2026-10-11, on sound revision 9 with the tempo core, bit-exact). The engine archive is
+built with `-ffunction-sections` on bare-metal Arm, so the images place it by function and
+`--gc-sections` drops the out-of-line copies that every caller inlined; `BRAINSCAPE_COLD` takes the
+post chain's and onset detector's `Init` and sizing helpers, DetMath's half-turn forms (Init's tables),
+the queue's producer side and `CheckPreset` out; `SoundRevision.cpp` and the archive's string literals
+(the parameter names, which the audio path never reads: no code holds the address of one) go to QSPI
+by linker rule, and of libgcc only the members the engine's imports need stay. Bytes of
+`.itcm_text` (spare in brackets):
+
+| Image | Before | After |
+|---|---|---|
+| `live` | 63,424 (2,048) | 50,824 (14,648) |
+| `parity` | 61,272 (4,200) | 50,880 (14,592) |
+| `bench` | 61,128 (4,344) | 50,672 (14,800) |
+| `bench_hooks` | 61,384 (4,088) | 50,784 (14,688) |
+
+Every function of both engine archives has the same instructions and constants as before, only
+laid out differently (compared function by function from their disassembly); the validator, the
+RT-safe `Reset` and what the audio callback reaches (45,494 bytes by a static call graph) stay.
+
 ### 7.4 The factory set
 
 - **One function.** The same V_eff/`CostModel` function serves the engine, `bspc` and the plugin,

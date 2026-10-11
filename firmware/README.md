@@ -503,6 +503,27 @@ match, and `ItcmCheck` refuses any call out of ITCM other than the tempo core's 
 points. At revision 8 the live image's ITCM holds 61,472 bytes, 4,000 spare, and the parity, bench
 and bench_hooks images 59,336, 59,192 and 59,448.
 
+At revision 9 the live image's `.itcm_text` held 63,424 bytes (2,048 spare), too little for the CPU
+plan's speed pack ([cpu-budget.md](../docs/design/cpu-budget.md) §7.3), so the engine is now placed
+by function throughout, with no change to what it computes (every function's instructions and
+constants are the same, only their layout differs):
+
+- the engine archive is built with one section per function on bare-metal Arm (the firmware's and
+  the M7 oracle's archives stay byte-identical), so `--gc-sections` drops the out-of-line copies
+  that every caller inlined (−3,752 bytes in the live image);
+- `BRAINSCAPE_COLD` also marks the post chain's and the onset detector's `Init` and their sizing
+  and clearing helpers, DetMath's half-turn sine and cosine (Init's tables), the queue's producer
+  side (`Push`, `Clear`) and `CheckPreset`;
+- `SoundRevision.cpp` and the archive's string literals (the parameter table's names and units,
+  which only the console reads) stay in QSPI, and of libgcc only the members serving the helpers
+  the engine imports (64-bit division, `__aeabi_d2lz`, `__aeabi_l2d`) go to ITCM.
+
+`.itcm_text` is then 50,824 bytes in the live image (14,648 spare), 50,880 in parity (14,592),
+50,672 in bench (14,800) and 50,784 in bench_hooks (14,688). What stays is what the audio callback
+reaches (a static call graph from it finds 45,494 bytes of reached code), the RT-safe `Reset`, the
+validator (cpu-budget.md §7.3 keeps it until bench session 2 has measured a Spillover load's
+block), the tables and a few small accessors.
+
 ### Memory map
 
 | Region | Holds | Use (parity image) |

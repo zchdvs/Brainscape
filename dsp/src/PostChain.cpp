@@ -6,6 +6,7 @@
 
 #include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
+#include "detail/Placement.h"
 #include "detail/Tempo.h"
 
 namespace brainscape::detail {
@@ -79,13 +80,13 @@ constexpr double kModMaxSeconds    = 0.004;
 
 // ── FeedbackTamer ───────────────────────────────────────────────────────────────
 
-uint32_t FeedbackTamer::WarmFloats(double sr) noexcept {
+BRAINSCAPE_COLD uint32_t FeedbackTamer::WarmFloats(double sr) noexcept {
   uint32_t total = 0;
   for (uint32_t b : kTamerAp32k) total += ScaleLen(b, sr);
   return total;
 }
 
-void FeedbackTamer::Init(float* warm, double sr) noexcept {
+BRAINSCAPE_COLD void FeedbackTamer::Init(float* warm, double sr) noexcept {
   float* p = warm;
   for (int i = 0; i < 2; ++i) {
     const uint32_t n = ScaleLen(kTamerAp32k[i], sr);
@@ -110,7 +111,7 @@ void FeedbackTamer::Reset() noexcept {
   dcL_ = dcR_ = hpL_ = hpR_ = lpL_ = lpR_ = 0.f;
 }
 
-void FeedbackTamer::ClearDiffusers() noexcept {
+BRAINSCAPE_COLD void FeedbackTamer::ClearDiffusers() noexcept {
   for (auto& a : apL_) a.Clear();
   for (auto& a : apR_) a.Clear();
 }
@@ -150,7 +151,7 @@ void FeedbackTamer::ProcessSample(float& l, float& r) noexcept {
 
 // ── PostChain ───────────────────────────────────────────────────────────────────
 
-uint32_t PostChain::WarmFloats(double sr) noexcept {
+BRAINSCAPE_COLD uint32_t PostChain::WarmFloats(double sr) noexcept {
   uint32_t total = 0;
   total += 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));  // mod L+R
   for (uint32_t b : kRvAp) total += ScaleLen(b, sr);
@@ -161,9 +162,9 @@ uint32_t PostChain::WarmFloats(double sr) noexcept {
   return total;
 }
 
-uint32_t PostChain::BulkFloats(double sr) noexcept { return 2u * PostLineFrames(sr); }
+BRAINSCAPE_COLD uint32_t PostChain::BulkFloats(double sr) noexcept { return 2u * PostLineFrames(sr); }
 
-void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
+BRAINSCAPE_COLD void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
   sr_      = sr;
   float* p = warm;
   auto modLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kModLineSeconds * sr));
@@ -227,7 +228,7 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
   Reset(PostParams{});
 }
 
-void PostChain::ClearBuffers() noexcept {
+BRAINSCAPE_COLD void PostChain::ClearBuffers() noexcept {
   modL_.Clear();
   modR_.Clear();
   pd_.Clear();
