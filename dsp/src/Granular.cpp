@@ -127,13 +127,12 @@ void FillEnvelope(const grainmath::EnvSpec& e, float sm, const float* lut, uint3
   }
 }
 
-// Unroll the next loop by two where the compiler takes a request (GCC and Clang; MSVC decides
-// alone). It changes only the schedule: each frame's operations stay in order.
+// Unroll the next loop by two on GCC, the pedal's compiler (cpu-budget.md §4.3, step 4); other
+// compilers decide alone (Clang would warn, an error under -Werror, wherever it declined a
+// request). It changes only the schedule: each frame's operations stay in order.
+#if defined(__GNUC__) && !defined(__clang__)
 #define BS_PRAGMA(x) _Pragma(#x)
-#if defined(__clang__)
-#define BS_UNROLL2 BS_PRAGMA(clang loop unroll_count(2))
-#elif defined(__GNUC__)
-#define BS_UNROLL2 BS_PRAGMA(GCC unroll 2)
+#define BS_UNROLL2   BS_PRAGMA(GCC unroll 2)
 #else
 #define BS_UNROLL2
 #endif
