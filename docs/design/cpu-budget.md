@@ -515,7 +515,8 @@ x86-64).
   and the frames each post stage ran (a span's frames whenever the stage was not settled off at
   its start). `RenderRun` adds its frames once per run, the post chain once per stage and span.
   The voice-frame and fade counts are the same under every block pattern. +296 bytes of live ITCM
-  (53,288; 12,184 spare); `Engine::Impl` 15,392 bytes on the M7, 15,528 on x86-64.
+  (53,288; 53,192 and 12,280 spare once step 7's envelope key is compared as integer bits,
+  §7.3); `Engine::Impl` 15,392 bytes on the M7, 15,528 on x86-64.
 - **The ledger** (`firmware/bench/ShadowLedger.h`): from the counts' differences over a block it
   charges §5.3's S pro rata, each voice-frame its weight, each birth c_b, each pass begun c_pass,
   each fade frame a provisional 4 cycles, and each post stage's frames its K_s, with §5.3's
@@ -904,19 +905,22 @@ Every function of both engine archives has the same instructions and constants a
 laid out differently (compared function by function from their disassembly); the validator, the
 RT-safe `Reset` and what the audio callback reaches (45,494 bytes by a static call graph) stay.
 
-Steps 4 to 8 then use 2,464 of the room in the live image: step 4 +1,472, step 6 +560, step 7
-−600, step 5 +736, step 8's counts +296. `.itcm_text` at the end of step 8:
+Steps 4 to 8 then use 2,368 of the room in the live image: step 4 +1,472, step 6 +560, step 7
+−696, step 5 +736, step 8's counts +296. Of step 7's, 96 bytes came after review: its envelope
+cache compared sustain and skew with `memcmp`, which a build without optimization calls and the
+symbol audit does not allow, and now compares their bits as integers. `.itcm_text` at the end of
+step 8:
 
 | Image | Bytes (spare) |
 |---|---|
-| `live` | 53,288 (12,184) |
-| `parity` | 53,288 (12,184) |
-| `bench` | 53,264 (12,208) |
-| `bench_hooks` | 53,368 (12,104) |
-| `bench_hop` (image 6, §8.1) | 58,224 (7,248) |
+| `live` | 53,192 (12,280) |
+| `parity` | 53,192 (12,280) |
+| `bench` | 53,168 (12,304) |
+| `bench_hooks` | 53,272 (12,200) |
+| `bench_hop` (image 6, §8.1) | 58,128 (7,344) |
 
 G6's 8 KB holds in every image but the hop-forms one, which carries P1's v2 only to time it. The
-governor (about 2.3 KB in its prototype) leaves the live image about 9.9 KB.
+governor (about 2.3 KB in its prototype) leaves the live image about 10.0 KB.
 
 ### 7.4 The factory set
 

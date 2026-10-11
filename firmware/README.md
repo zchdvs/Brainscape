@@ -502,7 +502,7 @@ elsewhere (it flags the four tables when they are not named, as a negative contr
 The configure step downloads the pinned libDaisy (below) into the build tree;
 `-DFETCHCONTENT_SOURCE_DIR_LIBDAISY=<checkout>` builds offline from a libDaisy checkout at that
 commit with its submodules. `BRAINSCAPE_FIRMWARE_APP_TYPE=BOOT_NONE` targets the internal flash
-for images that fit it (none of these do). CI builds all five images on every relevant pull request
+for images that fit it (none of these do). CI builds all six images on every relevant pull request
 (`.github/workflows/firmware.yml`, compile only), checks their engine archives against the M7
 oracle build's byte for byte, and runs the static audits on the firmware build.
 
@@ -566,16 +566,19 @@ image's `.itcm_text` is 52,256 bytes (13,216 spare), and parity, bench and bench
 52,312, 52,104 and 52,216. Step 5 (the batched render) adds 736 bytes to the live image's: 52,992
 (12,480 spare), and 53,040, 52,840 and 52,944. Step 8's ledger counts bring the live and parity
 images to 53,288 (12,184 spare) and bench and bench_hooks to 53,264 and 53,368; the hop-forms image
-(`brainscape_bench_hop`) holds 58,224 with the textbook form and P1's v2. The bench images' DTCM
-also holds the `speed` suite's grain core, window table and buffers: 78 KiB, 50 KiB left for the
-stack.
+(`brainscape_bench_hop`) holds 58,224 with the textbook form and P1's v2. Step 7's envelope cache
+then compares sustain and skew as integer bits instead of with `memcmp` (which a build without
+optimization calls, and the symbol audit does not allow), 96 bytes fewer in each: 53,192 (12,280
+spare) in live and parity, 53,168 in bench, 53,272 in bench_hooks, 58,128 in the hop-forms image.
+The bench images' DTCM also holds the `speed` suite's grain core, window table and buffers:
+78 KiB, 50 KiB left for the stack.
 
 ### Memory map
 
 | Region | Holds | Use (parity image) |
 | --- | --- | --- |
-| QSPI flash `0x90040000` | the image: vector table, code, constants (the 29 corpus packages among them, 128 KiB), initial data, ITCM's load image | 391 KiB |
-| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 58.8 KiB of 64 |
+| QSPI flash `0x90040000` | the image: vector table, code, constants (the 29 corpus packages among them, 128 KiB), initial data, ITCM's load image | 382 KiB |
+| ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256, test-signal generator or tempo core, nor the functions marked `BRAINSCAPE_COLD`), libgcc's 64-bit division and the firmware's `mem*` functions, copied at boot | 51.9 KiB of 64 (53,192 B) |
 | DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (a 9 KiB slot from sound revision 6, 16 KiB since the CPU plan's step 5; `sizeof(Engine)` is `kEngineImplBytes`, 7,168 bytes at sound revision 2, 8,192 since 6, when wave 1's repeat voices grew the grain pool, 8,448 with the CPU plan's voice heap and 15,872 with step 5's spare grain records), the main stack (32 KiB reserved at the top, linker-checked) | 42 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
@@ -647,11 +650,13 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
 
 ## 9. Verified without hardware
 
-- All five images build with `-Werror` and fit their regions, and pass the boot-path check
-  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control); the four
-  ITCM images pass `ItcmCheck.cmake` (6 of 6 COMDAT sections in ITCM), and no word in their
-  `.itcm_text` literal pools points into QSPI (it found `kParamTable`, `kLeafOrdinal` and
-  `kDefaultModeHash` read from QSPI before the tables were named). The engine
+- All six images build with `-Werror` and fit their regions, and pass the boot-path check
+  (`BootCheck.cmake`; it fails when `main` is added to its list, as a negative control); the five
+  ITCM images (the hop image places `bench/HopForms.cpp` in ITCM too) pass `ItcmCheck.cmake` (4 of
+  4 COMDAT sections in ITCM; 6 of 6 while `RenderRun` was a template, before the CPU plan's step
+  4), and no word in their `.itcm_text` literal pools points into QSPI but the six allowed tempo
+  veneers' (it found `kParamTable`, `kLeafOrdinal` and `kDefaultModeHash` read from QSPI before
+  the tables were named). The engine
   archives in the firmware build are byte-identical to the `BRAINSCAPE_BUILD_M7_ORACLE` build's
   (sound revision 7 with the CPU plan's steps 1 and 2: `c165e8ac5ff54cc2…`, hooks
   `d3911b2b54958503…`; before them `987179706f090560…`, hooks `2c086121ddc937d6…`, and at its own commit

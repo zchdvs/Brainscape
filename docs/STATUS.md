@@ -830,7 +830,7 @@ records live in [docs/design/reviews/](design/reviews/).
   contract on the live image's producer, and the bench images for session 2 (the ledger next to
   DWT for every block, §8.2's configurations and per-function micros, and the hop-forms image of
   §8.1) with a host tool whose hashes every bench line must equal. The live image's `.itcm_text`
-  is 53,288 bytes, 12,184 spare, against 63,424 and 2,048 before; the engine's DTCM slot grew from
+  is 53,192 bytes, 12,280 spare, against 63,424 and 2,048 before; the engine's DTCM slot grew from
   9 to 16 KiB for step 5's spare records (40 of the 80 KiB the DTCM leaves for the arenas).
   Still to run on the board: the live image's checks, the bench at revision 3 and every image at
   revisions 4 to 7. The images use libDaisy's

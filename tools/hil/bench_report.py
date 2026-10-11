@@ -104,7 +104,7 @@ def read_lines(source, run, save=None, command=None, timeout=900.0):
             if out:
                 out.write(json.dumps(run.hello) + "\n")
             source.write_line(command)
-            print("measuring on the device; a full run takes about 10-15 minutes...", flush=True)
+            print("measuring on the device; a full run takes about 20-25 minutes...", flush=True)
         last = time.monotonic()
         while True:
             line = source.read_line(timeout=1.0)

@@ -533,7 +533,8 @@ void SuiteTail() {
   }
 }
 
-// §8.2's configurations, warm (a cold pass of the corners is `stress` run twice by the report).
+// §8.2's configurations, warm only (cpu-budget.md §8.2 as built; the blocks suite has the cold
+// passes).
 void SuiteStress(bool quick) {
   for (const Spec& s : g_bench->Stress(quick)) Emit(ResultJson("stress", s, Run(s)));
 }
