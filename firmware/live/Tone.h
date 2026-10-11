@@ -13,9 +13,13 @@
 // (1.0 is 2^23) reaches it as ±8,388,482, the code the engine's own 1.0 gives
 // (output-limiter.md §2.2). The arithmetic is integer: a quarter-wave table of the 1 kHz sine
 // in Q30, one 32x32->64 product and a rounding shift per sample. The one transcendental, a
-// level in dB, is converted once per step on the main thread with the engine's deterministic
-// exp2 (detail/DetMath.h), so the host test (firmware/tests/tone.cpp) computes the same codes
-// as the Seed, bit for bit.
+// level in dB, is converted once per step on the main thread from two tables of binary64
+// powers of ten with one IEEE product and exact steps after it (LevelCode), so the host test
+// (firmware/tests/tone.cpp) computes the same codes as the Seed, bit for bit. None of it calls
+// the engine's code: an engine function referenced from here would pull its object out of the
+// engine's archive earlier in the link and reorder the live image's ITCM. As it is, every ITCM
+// function sits at the address it has without the tone; only the veneers through which ITCM
+// calls the tempo core's QSPI code point to where that code moved.
 //
 // The signals, all identical on both channels, phase-locked to one 48-frame period (1 kHz at
 // 48 kHz) that runs on from the start of the command:

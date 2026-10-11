@@ -1,8 +1,9 @@
 // ctest firmware_tone: the live image's test signals (firmware/live/Tone.h), the `tone`
 // command's arithmetic, on the host from the same source the Seed runs. The quarter-wave table
 // against binary64 sin; every code of every wave against its definition; the exact float
-// hand-off and libDaisy's f2s24 clamp; every level in [-120, 0] dB against binary64 pow; the
-// level parser and printer; the DAC test program's steps; the player against a frame-by-frame
+// hand-off and libDaisy's f2s24 clamp; every level in [-120, 0] dB against binary64 pow and
+// against the engine's exp2 (the generator itself calls no engine code); the level parser and
+// printer; the DAC test program's steps; the player against a frame-by-frame
 // reference model under many block splits, its loop and its silence after the end; and a digest
 // of the whole program's codes, pinned with kProgramVersion, so a change to any sample of the
 // program fails here until both are updated (with tools/hil/dac_test.py's PROGRAM).
@@ -18,6 +19,7 @@
 #include <memory>
 #include <vector>
 
+#include "detail/DetMath.h"
 #include "live/Tone.h"
 
 namespace {
@@ -110,25 +112,37 @@ void TestLevels() {
             LevelCode(-1200) == 2107123 && LevelCode(-301) == 5931846 && LevelCode(-4000) == 83886 &&
             LevelCode(kMinCentiDb) == 8,
         "the program's levels");
+  // The engine's deterministic exp2 (DetMath), which the generator does not call (Tone.h): the
+  // same codes by another road, identical on every target.
+  constexpr double kLog2TenOver2000 = 0x1.b369690dedc9dp-10;  // log2(10) / 2000, rounded once
   int32_t  previous   = 0;
   uint32_t nearTies   = 0;
   uint32_t mismatches = 0;
+  uint32_t notExp2    = 0;
   for (int32_t c = kMinCentiDb; c <= 0; ++c) {
     const int32_t q     = LevelCode(c);
     const double  exact = std::ldexp(std::pow(10.0, c / 2000.0), 23);
     const double  frac  = exact - std::floor(exact);
-    if (std::fabs(frac - 0.5) < 1e-6) {
+    // Within 1e-5 of a tie, binary64 pow (or the generator's tables) could round either way;
+    // none of the 12,001 levels is (the nearest is 1.45e-5 from one, in 80-digit decimal).
+    if (std::fabs(frac - 0.5) < 1e-5) {
       ++nearTies;
-      Check(std::fabs(q - exact) <= 0.5 + 1e-6, "level code at a near-tie is one of the two neighbours");
     } else if (q != static_cast<int32_t>(std::llround(exact))) {
       ++mismatches;
     }
+    const double viaExp2 = brainscape::detmath::Exp2D(static_cast<double>(c) * kLog2TenOver2000);
+    if (q != brainscape::detmath::RoundHalfAwayI32(brainscape::detmath::ScaleB(viaExp2, 23))) ++notExp2;
     Check(q >= previous, "level codes never decrease");
     previous = q;
   }
-  std::printf("levels: 12,001 codes from -120.00 to 0.00 dB, %u near-ties, %u not rounded to nearest\n",
-              static_cast<unsigned>(nearTies), static_cast<unsigned>(mismatches));
+  std::printf("levels: 12,001 codes from -120.00 to 0.00 dB, %u within 1e-5 of a tie, %u not rounded to nearest, "
+              "%u not the engine exp2's\n",
+              static_cast<unsigned>(nearTies), static_cast<unsigned>(mismatches), static_cast<unsigned>(notExp2));
+  Check(nearTies == 0, "no level is within 1e-5 of a rounding tie");
   Check(mismatches == 0, "every level code is 2^23 * 10^(dB/20) rounded to nearest");
+  Check(notExp2 == 0, "every level code is the one the engine's exp2 gives");
+  Check(LevelCode(kMinCentiDb - 1) == LevelCode(kMinCentiDb) && LevelCode(1) == kFullScale,
+        "levels outside [-120, 0] dB are clamped");
 }
 
 void TestParse() {
