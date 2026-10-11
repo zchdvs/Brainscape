@@ -5,6 +5,7 @@
 #include <cassert>
 
 #include "detail/DetMath.h"
+#include "detail/Placement.h"
 
 // Every float-to-int conversion below has a proven range, asserted in Debug builds:
 // out-of-range conversions differ by ISA (determinism profile §3.10).
@@ -18,45 +19,103 @@ namespace {
 constexpr float  kInvScale = 1.0f / 32767.0f;
 constexpr double kFix      = 4294967296.0;  // 2^32
 
-inline float ReadLinear(const int16_t* ring, uint32_t mask, uint64_t pos, uint32_t chan) noexcept {
-  const auto f0   = static_cast<uint32_t>(pos >> 32) & mask;
-  const auto f1   = (f0 + 1u) & mask;
-  const float fr  = static_cast<float>(static_cast<uint32_t>(pos)) * (1.0f / 4294967296.0f);
-  const float s0  = static_cast<float>(ring[2u * f0 + chan]);
-  const float s1  = static_cast<float>(ring[2u * f1 + chan]);
-  return (s0 + (s1 - s0) * fr) * kInvScale;
-}
-
-inline float ReadHermite(const int16_t* ring, uint32_t mask, uint64_t pos, uint32_t chan) noexcept {
-  const auto f1  = static_cast<uint32_t>(pos >> 32);  // masked per tap below
-  const float fr = static_cast<float>(static_cast<uint32_t>(pos)) * (1.0f / 4294967296.0f);
-  const float xm1 = static_cast<float>(ring[2u * ((f1 - 1u) & mask) + chan]);
-  const float x0  = static_cast<float>(ring[2u * (f1 & mask) + chan]);
-  const float x1  = static_cast<float>(ring[2u * ((f1 + 1u) & mask) + chan]);
-  const float x2  = static_cast<float>(ring[2u * ((f1 + 2u) & mask) + chan]);
-  const float c    = (x1 - xm1) * 0.5f;
-  const float v    = x0 - x1;
-  const float w    = c + v;
-  const float a    = w + v + (x2 - x0) * 0.5f;
-  const float bNeg = w + a;
-  return ((((a * fr) - bNeg) * fr + c) * fr + x0) * kInvScale;
-}
-
-// Envelope value with the always-applied LUT morph: at smoothness 0 the morph is
-// an exact no-op (env + 0*(lut-env) == env), so no per-sample branch is needed
-// and the rectangular/unity null stays bit-exact.
-inline float EnvMorphed(const grainmath::EnvSpec& e, float i, float smoothness,
-                        const float* lut) noexcept {
-  float env = grainmath::EnvValue(e, i);
-  const float x   = env * static_cast<float>(kWindowLutSize - 1);
+// The always-applied LUT morph of a unit-peak envelope value (grainmath::EnvValue), times the
+// window's gain: at smoothness 0 the morph is an exact no-op (env + 0*(lut-env) == env), so no
+// per-sample branch is needed and the rectangular/unity null stays bit-exact.
+inline float MorphEnv(float env, float smoothness, float gain, const float* lut) noexcept {
+  const float x  = env * static_cast<float>(kWindowLutSize - 1);
   assert(x >= 0.f && x <= static_cast<float>(kWindowLutSize - 1));  // finite env in [0, 1]
-  const auto  i0  = static_cast<uint32_t>(x);
-  const auto  i1  = i0 + 1u < kWindowLutSize ? i0 + 1u : i0;
-  const float fr  = x - static_cast<float>(i0);
-  const float lv  = lut[i0] + (lut[i1] - lut[i0]) * fr;
+  const auto  i0 = static_cast<uint32_t>(x);
+  const auto  i1 = i0 + 1u < kWindowLutSize ? i0 + 1u : i0;
+  const float fr = x - static_cast<float>(i0);
+  const float lv = lut[i0] + (lut[i1] - lut[i0]) * fr;
   env += smoothness * (lv - env);
-  return env * e.gain;
+  return env * gain;
 }
+
+// A run's envelope is computed in chunks of this many frames into a stack buffer (DTCM on the
+// pedal), ahead of the reads (cpu-budget.md §4.3, step 4).
+constexpr uint32_t kEnvChunk = 64;
+
+// env[k] = MorphEnv(EnvValue(e, i0 + k), sm, e.gain, lut) for k in [0, count): the same
+// operations on the same operands as frame by frame, with the legs bounded once. For an integer
+// index i (exact in binary32: below 2^24), EnvValue's `i < attackEnd` holds exactly for
+// i < A = ceil(attackEnd), and its `i > decayStart` for i >= floor(decayStart) + 1; attack is
+// tested first, so the decay leg starts at max(A, that). Each leg runs four independent frames
+// at a time.
+void FillEnvelope(const grainmath::EnvSpec& e, float sm, const float* lut, uint32_t i0,
+                  uint32_t count, float* __restrict env) noexcept {
+  assert(e.attackEnd >= 0.f && e.attackEnd <= e.total && e.total < 16777216.f);
+  assert(e.decayStart >= 0.f && e.decayStart <= e.total);
+  auto A = static_cast<uint32_t>(e.attackEnd);
+  if (static_cast<float>(A) < e.attackEnd) ++A;
+  auto D = static_cast<uint32_t>(e.decayStart) + 1u;
+  if (D < A) D = A;
+  const float    aInv = e.attackInv, dInv = e.decayInv, tot = e.total, gain = e.gain;
+  const uint32_t iEnd = i0 + count;
+  uint32_t       k    = 0;
+  float          fi   = static_cast<float>(i0);  // i0 + k, exact
+  // Attack: i * attackInv.
+  uint32_t stop = A < iEnd ? (A > i0 ? A - i0 : 0u) : count;
+  for (; k + 4u <= stop; k += 4u) {
+    const float f1 = fi + 1.0f, f2 = fi + 2.0f, f3 = fi + 3.0f;
+    const float e0 = MorphEnv(fi * aInv, sm, gain, lut);
+    const float e1 = MorphEnv(f1 * aInv, sm, gain, lut);
+    const float e2 = MorphEnv(f2 * aInv, sm, gain, lut);
+    const float e3 = MorphEnv(f3 * aInv, sm, gain, lut);
+    env[k]      = e0;
+    env[k + 1u] = e1;
+    env[k + 2u] = e2;
+    env[k + 3u] = e3;
+    fi += 4.0f;
+  }
+  for (; k < stop; ++k) {
+    env[k] = MorphEnv(fi * aInv, sm, gain, lut);
+    fi += 1.0f;
+  }
+  // Flat top: EnvValue is exactly 1, so every frame morphs to one value.
+  stop = D < iEnd ? (D > i0 ? D - i0 : 0u) : count;
+  if (k < stop) {
+    const float flat = MorphEnv(1.0f, sm, gain, lut);
+    for (; k < stop; ++k) env[k] = flat;
+    fi = static_cast<float>(i0 + k);
+  }
+  // Decay: (total - i) * decayInv clamped to [0, 1]. The index stays below the pass's length,
+  // e.total, so total - i >= 1 exactly, and a decay frame exists only with a decay leg, whose
+  // decayInv is positive and finite: the value is positive, and the clamp is its upper half.
+  for (; k + 4u <= count; k += 4u) {
+    const float f1 = fi + 1.0f, f2 = fi + 2.0f, f3 = fi + 3.0f;
+    const float v0 = (tot - fi) * dInv, v1 = (tot - f1) * dInv;
+    const float v2 = (tot - f2) * dInv, v3 = (tot - f3) * dInv;
+    assert(v0 > 0.f && v1 > 0.f && v2 > 0.f && v3 > 0.f);
+    const float e0 = MorphEnv(v0 < 1.f ? v0 : 1.f, sm, gain, lut);
+    const float e1 = MorphEnv(v1 < 1.f ? v1 : 1.f, sm, gain, lut);
+    const float e2 = MorphEnv(v2 < 1.f ? v2 : 1.f, sm, gain, lut);
+    const float e3 = MorphEnv(v3 < 1.f ? v3 : 1.f, sm, gain, lut);
+    env[k]      = e0;
+    env[k + 1u] = e1;
+    env[k + 2u] = e2;
+    env[k + 3u] = e3;
+    fi += 4.0f;
+  }
+  for (; k < count; ++k) {
+    const float v = (tot - fi) * dInv;
+    assert(v > 0.f);
+    env[k] = MorphEnv(v < 1.f ? v : 1.f, sm, gain, lut);
+    fi += 1.0f;
+  }
+}
+
+// Unroll the next loop by two where the compiler takes a request (GCC and Clang; MSVC decides
+// alone). It changes only the schedule: each frame's operations stay in order.
+#define BS_PRAGMA(x) _Pragma(#x)
+#if defined(__clang__)
+#define BS_UNROLL2 BS_PRAGMA(clang loop unroll_count(2))
+#elif defined(__GNUC__)
+#define BS_UNROLL2 BS_PRAGMA(GCC unroll 2)
+#else
+#define BS_UNROLL2
+#endif
 
 #ifndef NDEBUG
 // Contract #1's ring invariant (determinism-profile.md §5.7): Pass 1 writes the
@@ -250,61 +309,117 @@ uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey,
   return grainmath::NextCycleEntry(&pitchCycle_, p.pitchWeight, p.pitchCount);
 }
 
-template <bool kFade>
-void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept {
-  uint64_t pos = g.pos;
-  // The envelope runs over one pass: its index restarts with each.
-  float env_i = static_cast<float>(g.rendered - static_cast<uint32_t>(g.pass) * g.passLen);
+// Out of line and not cloned: RenderSpan calls it for a run without and a run with a fade, and
+// one copy of its three frame loops is enough (ITCM, cpu-budget.md §7.3); the call is per run,
+// not per frame.
+#if defined(__GNUC__) && !defined(__clang__)
+#define BS_ONE_COPY BRAINSCAPE_NOINLINE __attribute__((noclone))
+#else
+#define BS_ONE_COPY BRAINSCAPE_NOINLINE
+#endif
+BS_ONE_COPY void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, bool fade, float* wetL,
+                                         float* wetR) noexcept {
+  // Everything the frame loops read, in locals: the wet buffers are float stores that could
+  // otherwise alias the Grain and force its fields to be reloaded every frame.
+  uint64_t             pos  = g.pos;
+  const int64_t        inc  = g.inc;
+  const int16_t* const ring = ring_;
+  const uint32_t       mask = mask_;
   // The pass's decay gain on the pan gains: exactly them when it is 1, as without decay.
-  const float gl = g.gainL * g.decayGain, gr = g.gainR * g.decayGain, sm = g.smoothness;
-  // A FastCut's fade (mode-compiler.md §7.3): 1 at fadeStart, then down by 1/128 a frame;
-  // the grain ends where it would reach 0. Exact multiples of 2^-7, so no rounding.
-  uint32_t       idx     = g.rendered;
-  const uint32_t fadeEnd = kFade ? g.fadeStart + kGranularFastCutFrames : 0u;
+  const float gl = g.gainL * g.decayGain, gr = g.gainR * g.decayGain;
+  // The envelope runs over one pass: its index restarts with each. The life frame counts on
+  // over the passes, for a FastCut's fade (mode-compiler.md §7.3): 1 at fadeStart, then down by
+  // 1/128 a frame; the grain ends where it would reach 0. Exact multiples of 2^-7.
+  uint32_t        envIdx    = g.rendered - static_cast<uint32_t>(g.pass) * g.passLen;
+  uint32_t        idx       = g.rendered;
+  const uint32_t  fadeEnd   = fade ? g.fadeStart + kGranularFastCutFrames : 0u;
   constexpr float kFadeStep = 1.0f / static_cast<float>(kGranularFastCutFrames);
+  constexpr float kFrac     = 1.0f / 4294967296.0f;
+  // Tier / unity resolved per grain (design §3): three frame loops.
+  const int kind = inc == kUnityInc ? 0 : (g.tier == 0 ? 1 : 2);
 #ifndef NDEBUG
   const bool fits = GrainFitsRing(g, mask_ + 1u);
 #endif
+  // The two Hot-arena accumulators never overlap each other or the envelope buffer.
+  float* __restrict const outL = wetL;
+  float* __restrict const outR = wetR;
+  float                   env[kEnvChunk];
 
-  // Tier / unity / envelope morph resolved per grain, hoisted out of the
-  // per-sample loop as three inner-loop variants (design §3). Without a fade each
-  // computes exactly what it did before FastCut existed.
-  if (g.inc == kUnityInc) {
-    for (uint32_t n = s; n < e; ++n) {
-      const auto  f   = static_cast<uint32_t>(pos >> 32) & mask_;
-      assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n, mask_));
-      float env = EnvMorphed(g.env, env_i, sm, lut_);
-      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
-      wetL[n] += static_cast<float>(ring_[2u * f]) * kInvScale * env * gl;
-      wetR[n] += static_cast<float>(ring_[2u * f + 1u]) * kInvScale * env * gr;
-      pos += static_cast<uint64_t>(g.inc);
-      env_i += 1.0f;
-      ++idx;
+  for (uint32_t n0 = s; n0 < e; n0 += kEnvChunk) {
+    const uint32_t cnt = e - n0 < kEnvChunk ? e - n0 : kEnvChunk;
+    FillEnvelope(g.env, g.smoothness, lut_, envIdx, cnt, env);
+    if (fade) {
+      for (uint32_t k = 0; k < cnt; ++k) {
+        env[k] = env[k] * (static_cast<float>(fadeEnd - (idx + k)) * kFadeStep);
+      }
     }
-  } else if (g.tier == 0) {
-    for (uint32_t n = s; n < e; ++n) {
-      assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32) - 1u, 4u,
-                                            blockRingStart_ + n, mask_));
-      float env = EnvMorphed(g.env, env_i, sm, lut_);
-      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
-      wetL[n] += ReadHermite(ring_, mask_, pos, 0) * env * gl;
-      wetR[n] += ReadHermite(ring_, mask_, pos, 1) * env * gr;
-      pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
-      env_i += 1.0f;
-      ++idx;
+    float* __restrict const l = outL + n0;
+    float* __restrict const r = outR + n0;
+    if (kind == 0) {
+      BS_UNROLL2
+      for (uint32_t k = 0; k < cnt; ++k) {
+        const auto f = static_cast<uint32_t>(pos >> 32) & mask;
+        assert(!fits || TapsClearOfWriteAhead(f, 1u, blockRingStart_ + n0 + k, mask_));
+        const float ev = env[k];
+        l[k] += static_cast<float>(ring[2u * f]) * kInvScale * ev * gl;
+        r[k] += static_cast<float>(ring[2u * f + 1u]) * kInvScale * ev * gr;
+        pos += static_cast<uint64_t>(inc);
+      }
+    } else if (kind == 1) {
+      BS_UNROLL2
+      for (uint32_t k = 0; k < cnt; ++k) {
+        const auto f1 = static_cast<uint32_t>(pos >> 32);  // masked per tap
+        assert(!fits || TapsClearOfWriteAhead(f1 - 1u, 4u, blockRingStart_ + n0 + k, mask_));
+        const float    fr = static_cast<float>(static_cast<uint32_t>(pos)) * kFrac;
+        const uint32_t am = 2u * ((f1 - 1u) & mask), a0 = 2u * (f1 & mask);
+        const uint32_t a1 = 2u * ((f1 + 1u) & mask), a2 = 2u * ((f1 + 2u) & mask);
+        const float    ev = env[k];
+        {  // ReadHermite's left channel
+          const float xm1  = static_cast<float>(ring[am]);
+          const float x0   = static_cast<float>(ring[a0]);
+          const float x1   = static_cast<float>(ring[a1]);
+          const float x2   = static_cast<float>(ring[a2]);
+          const float c    = (x1 - xm1) * 0.5f;
+          const float v    = x0 - x1;
+          const float w    = c + v;
+          const float a    = w + v + (x2 - x0) * 0.5f;
+          const float bNeg = w + a;
+          l[k] += ((((a * fr) - bNeg) * fr + c) * fr + x0) * kInvScale * ev * gl;
+        }
+        {  // and its right
+          const float xm1  = static_cast<float>(ring[am + 1u]);
+          const float x0   = static_cast<float>(ring[a0 + 1u]);
+          const float x1   = static_cast<float>(ring[a1 + 1u]);
+          const float x2   = static_cast<float>(ring[a2 + 1u]);
+          const float c    = (x1 - xm1) * 0.5f;
+          const float v    = x0 - x1;
+          const float w    = c + v;
+          const float a    = w + v + (x2 - x0) * 0.5f;
+          const float bNeg = w + a;
+          r[k] += ((((a * fr) - bNeg) * fr + c) * fr + x0) * kInvScale * ev * gr;
+        }
+        pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + inc);
+      }
+    } else {
+      BS_UNROLL2
+      for (uint32_t k = 0; k < cnt; ++k) {
+        const auto f0 = static_cast<uint32_t>(pos >> 32) & mask;
+        assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32), 2u,
+                                              blockRingStart_ + n0 + k, mask_));
+        const auto  f1 = (f0 + 1u) & mask;
+        const float fr = static_cast<float>(static_cast<uint32_t>(pos)) * kFrac;
+        const float ev = env[k];
+        const float l0 = static_cast<float>(ring[2u * f0]);
+        const float l1 = static_cast<float>(ring[2u * f1]);
+        const float r0 = static_cast<float>(ring[2u * f0 + 1u]);
+        const float r1 = static_cast<float>(ring[2u * f1 + 1u]);
+        l[k] += (l0 + (l1 - l0) * fr) * kInvScale * ev * gl;
+        r[k] += (r0 + (r1 - r0) * fr) * kInvScale * ev * gr;
+        pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + inc);
+      }
     }
-  } else {
-    for (uint32_t n = s; n < e; ++n) {
-      assert(!fits || TapsClearOfWriteAhead(static_cast<uint32_t>(pos >> 32), 2u,
-                                            blockRingStart_ + n, mask_));
-      float env = EnvMorphed(g.env, env_i, sm, lut_);
-      if (kFade) env = env * (static_cast<float>(fadeEnd - idx) * kFadeStep);
-      wetL[n] += ReadLinear(ring_, mask_, pos, 0) * env * gl;
-      wetR[n] += ReadLinear(ring_, mask_, pos, 1) * env * gr;
-      pos = static_cast<uint64_t>(static_cast<int64_t>(pos) + g.inc);
-      env_i += 1.0f;
-      ++idx;
-    }
+    envIdx += cnt;
+    idx += cnt;
   }
   g.pos = pos;
   g.rendered += e - s;
@@ -345,8 +460,8 @@ void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, flo
                     ? n
                     : (at < static_cast<int64_t>(segEnd) ? static_cast<uint32_t>(at) : segEnd);
       }
-      if (n < fadeN) RenderRun<false>(g, n, fadeN, wetL, wetR);
-      if (fadeN < segEnd) RenderRun<true>(g, fadeN, segEnd, wetL, wetR);
+      if (n < fadeN) RenderRun(g, n, fadeN, false, wetL, wetR);
+      if (fadeN < segEnd) RenderRun(g, fadeN, segEnd, true, wetL, wetR);
       n = segEnd;
       if (g.rendered == passEnd && g.rendered < g.total) NextPass(g);
     }

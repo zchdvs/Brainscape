@@ -264,10 +264,10 @@ class GranularCore {
   // per-sample summation order — see Process), retiring finished grains.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
                   float* wetR) noexcept;
-  // One grain over block frames [s, e), from its current read position and frame count;
-  // kFade multiplies its envelope by a FastCut's linear fade (only frames past fadeStart).
-  template <bool kFade>
-  void RenderRun(Grain& g, uint32_t s, uint32_t e, float* wetL, float* wetR) noexcept;
+  // One grain over block frames [s, e), from its current read position and frame count, all
+  // within one pass of its life; `fade` multiplies its envelope by a FastCut's linear fade
+  // (only frames past fadeStart). The envelope is computed in chunks ahead of the reads.
+  void RenderRun(Grain& g, uint32_t s, uint32_t e, bool fade, float* wetL, float* wetR) noexcept;
   // A repeat voice's next pass: back to its start frame, with the decay gain of its age then.
   void NextPass(Grain& g) noexcept;
 

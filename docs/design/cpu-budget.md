@@ -396,6 +396,15 @@ It is verified together with step 5: golden 33/33 on host and M7 with 48-frame, 
 of ITCM (`Granular.o` grows from 8,444 to 12,196 bytes). It must be rebased onto wave 1's pass
 splits and decay gain (W1 `dsp/src/Granular.cpp:216`, `:323-357`).
 
+*As built* (2026-10-11, sound revision 9, bit-exact): the envelope is filled 64 frames at a time
+(`FillEnvelope`) from the pass's index, the fade multiplied in after from the life frame, and the
+three read loops run on locals with the pass's decay gain folded into the pan gains as before.
+`RenderRun` takes the fade as a flag instead of a template parameter and stays one out-of-line,
+uncloned copy, so it adds 1,472 bytes of ITCM to the live image, not 3,752. Checked by the golden
+check at every block pattern (Release and Debug), the host replica of the bench configurations
+and 53 billion frames of `FillEnvelope` against the per-frame form over random envelopes, indices
+and chunk splits, leg boundaries and integer leg ends included: no difference.
+
 **5. Batched schedule and render (prototype B).** The hot-path lane's prototype B, on top of A:
 
 - A birth no longer flushes. A newborn whose slot still holds unrendered frames goes into one of 64
