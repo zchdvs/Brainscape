@@ -162,6 +162,9 @@ class GranularCore {
   void Reset() noexcept {
     for (auto& g : grains_) g.active = false;
     orderCount_   = 0;
+    heapCount_    = 0;
+    live_[0]      = 0;
+    live_[1]      = 0;
     clockPending_ = 0;
     markCount_  = 0;
     markHead_   = 0;
@@ -270,6 +273,18 @@ class GranularCore {
   void RenderRun(Grain& g, uint32_t s, uint32_t e, bool fade, float* wetL, float* wetR) noexcept;
   // A repeat voice's next pass: back to its start frame, with the decay gain of its age then.
   void NextPass(Grain& g) noexcept;
+  // The sounding voices (cpu-budget.md §4.3, step 6). HeapPlace(slot) after slot's endAbs was
+  // set (a birth, a stolen slot's new voice) or moved earlier (a FastCut); Expire(abs) retires
+  // every voice whose life ended by abs; then LowestFreeSlot() is the lowest slot without a
+  // sounding voice (kGranularMaxGrains when all 64 sound) and heapCount_ how many sound.
+  void     HeapPlace(uint32_t slot) noexcept;
+  void     Expire(int64_t abs) noexcept;
+  uint32_t LowestFreeSlot() const noexcept;
+  void     HeapSiftUp(uint32_t i) noexcept;
+  void     HeapSiftDown(uint32_t i) noexcept;
+#ifndef NDEBUG
+  bool SweepAgrees(int64_t abs) const noexcept;
+#endif
 
   const int16_t* ring_ = nullptr;
   const float*   lut_  = nullptr;
@@ -281,6 +296,13 @@ class GranularCore {
   Grain          grains_[kGranularMaxGrains]{};
   uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order
   uint32_t       orderCount_ = 0;
+  // The sounding voices: a min-heap of slots by endAbs, each slot's index in it, and the same
+  // slots as a mask (bit s & 31 of word s >> 5). A voice joins at birth and leaves when a query
+  // finds its life ended; between queries the heap may still hold voices that have ended.
+  uint8_t        heap_[kGranularMaxGrains]{};
+  uint8_t        heapPos_[kGranularMaxGrains]{};
+  uint32_t       live_[2]{};
+  uint32_t       heapCount_ = 0;
   Mark           marks_[kMaxMarks]{};  // recent onset marks (ring of kMaxMarks)
   uint32_t       markHead_  = 0;
   uint32_t       markCount_ = 0;

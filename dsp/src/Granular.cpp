@@ -3,6 +3,9 @@
 #include "detail/Granular.h"
 
 #include <cassert>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>  // _BitScanForward
+#endif
 
 #include "detail/DetMath.h"
 #include "detail/Placement.h"
@@ -294,6 +297,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
     g.gainR = 1.0f;
   }
   g.active = true;
+  HeapPlace(slot);
 }
 
 uint32_t GranularCore::PickPitch(const GranularParams& p, int64_t drawKey,
@@ -425,6 +429,107 @@ BS_ONE_COPY void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, bool 
   g.rendered += e - s;
 }
 
+// ── The sounding voices (cpu-budget.md §4.3, step 6) ─────────────────────────────────────
+// A binary min-heap of the slots whose voices sound, keyed by endAbs, with each slot's place in
+// it, and the same slots as a 64-bit mask. The order among equal ends is immaterial: every query
+// first retires all the voices that ended by its frame.
+
+namespace {
+// The index of the lowest set bit of x != 0.
+inline uint32_t LowestSetBit(uint32_t x) noexcept {
+  assert(x != 0u);
+#if defined(_MSC_VER) && !defined(__clang__)
+  unsigned long i;
+  _BitScanForward(&i, x);
+  return static_cast<uint32_t>(i);
+#else
+  return static_cast<uint32_t>(__builtin_ctz(x));
+#endif
+}
+}  // namespace
+
+uint32_t GranularCore::LowestFreeSlot() const noexcept {
+  if (live_[0] != 0xFFFFFFFFu) return LowestSetBit(~live_[0]);
+  if (live_[1] != 0xFFFFFFFFu) return 32u + LowestSetBit(~live_[1]);
+  return kGranularMaxGrains;
+}
+
+void GranularCore::HeapSiftUp(uint32_t i) noexcept {
+  const uint8_t slot = heap_[i];
+  const int64_t end  = grains_[slot].endAbs;
+  while (i > 0u) {
+    const uint32_t up = (i - 1u) >> 1;
+    const uint8_t  s  = heap_[up];
+    if (!(end < grains_[s].endAbs)) break;
+    heap_[i]    = s;
+    heapPos_[s] = static_cast<uint8_t>(i);
+    i           = up;
+  }
+  heap_[i]       = slot;
+  heapPos_[slot] = static_cast<uint8_t>(i);
+}
+
+BRAINSCAPE_NOINLINE void GranularCore::HeapSiftDown(uint32_t i) noexcept {
+  const uint8_t slot = heap_[i];
+  const int64_t end  = grains_[slot].endAbs;
+  for (;;) {
+    uint32_t c = 2u * i + 1u;
+    if (c >= heapCount_) break;
+    if (c + 1u < heapCount_ && grains_[heap_[c + 1u]].endAbs < grains_[heap_[c]].endAbs) ++c;
+    const uint8_t s = heap_[c];
+    if (!(grains_[s].endAbs < end)) break;
+    heap_[i]    = s;
+    heapPos_[s] = static_cast<uint8_t>(i);
+    i           = c;
+  }
+  heap_[i]       = slot;
+  heapPos_[slot] = static_cast<uint8_t>(i);
+}
+
+void GranularCore::HeapPlace(uint32_t slot) noexcept {
+  assert(slot < kGranularMaxGrains);
+  uint32_t&      word = live_[slot >> 5];
+  const uint32_t bit  = 1u << (slot & 31u);
+  if ((word & bit) == 0u) {  // a voice in a free slot joins at the bottom
+    word |= bit;
+    heap_[heapCount_]  = static_cast<uint8_t>(slot);
+    heapPos_[slot]     = static_cast<uint8_t>(heapCount_);
+    ++heapCount_;
+  }
+  // Up, or down for a stolen slot's later end (a no-op at the bottom).
+  HeapSiftUp(heapPos_[slot]);
+  HeapSiftDown(heapPos_[slot]);
+}
+
+#ifndef NDEBUG
+// The 64-slot sweep the heap replaced: the lowest slot without a sounding voice at abs, and how
+// many sound. Debug builds check every query against it.
+bool GranularCore::SweepAgrees(int64_t abs) const noexcept {
+  uint32_t slot = kGranularMaxGrains, sounding = 0;
+  for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
+    const Grain& g = grains_[i];
+    if (!g.active || g.endAbs <= abs) {
+      if (slot == kGranularMaxGrains) slot = i;
+    } else {
+      ++sounding;
+    }
+  }
+  return slot == LowestFreeSlot() && sounding == heapCount_;
+}
+#endif
+
+// Out of line: the scheduler and the triggers query it, and one copy suffices (ITCM).
+BRAINSCAPE_NOINLINE void GranularCore::Expire(int64_t abs) noexcept {
+  while (heapCount_ != 0u && grains_[heap_[0]].endAbs <= abs) {
+    const uint8_t slot = heap_[0];
+    live_[slot >> 5] &= ~(1u << (slot & 31u));
+    if (--heapCount_ != 0u) {
+      heap_[0] = heap_[heapCount_];
+      HeapSiftDown(0u);
+    }
+  }
+}
+
 void GranularCore::RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
                               float* wetR) noexcept {
   if (from >= to) return;
@@ -492,6 +597,7 @@ void GranularCore::FastCut(int64_t abs) noexcept {
     if (g.total - at > kGranularFastCutFrames) {
       g.total  = at + kGranularFastCutFrames;  // the grain ends with its fade, freeing its voice
       g.endAbs = birthAbs + g.total;
+      HeapPlace(order_[oi]);  // an earlier end: up the heap
     }
   }
 }
@@ -509,12 +615,9 @@ void GranularCore::FireExternal(const GranularParams& p, int64_t birthAbs,
   // the oldest, as it does when all 64 are, so at 64 this is revision 6's allocation.
   uint32_t slot = kGranularMaxGrains;
   if (orderCount_ < p.voiceCount) {
-    for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
-      if (!grains_[i].active || grains_[i].endAbs <= birthAbs) {
-        slot = i;
-        break;
-      }
-    }
+    Expire(birthAbs);
+    assert(SweepAgrees(birthAbs));
+    slot = LowestFreeSlot();  // the lowest slot whose voice is not sounding at birthAbs
   }
   if (slot == kGranularMaxGrains) {
     ++stats_.steals;
@@ -715,18 +818,14 @@ void GranularCore::Process(const GranularParams& p, const TriggerEvents& ev, int
     intervalRemaining_ -= 1.0f;
     if (intervalRemaining_ > 0.0f) continue;
 
-    // Time-aware sweep: a slot is reusable when its grain has fully sounded
-    // (endAbs <= abs); the flush below guarantees it is also fully rendered.
-    uint32_t slot     = kGranularMaxGrains;
-    uint32_t sounding = 0;
-    for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
-      const Grain& g = grains_[i];
-      if (!g.active || g.endAbs <= abs) {
-        if (slot == kGranularMaxGrains) slot = i;
-      } else {
-        ++sounding;
-      }
-    }
+    // Time-aware: a slot is reusable when its grain has fully sounded (endAbs <= abs); the
+    // flush below guarantees it is also fully rendered. The heap retires the voices that ended
+    // by abs, so the mask holds exactly the sounding ones: the lowest clear bit is the slot the
+    // 64-slot sweep chose, and the heap's size its count (cpu-budget.md §4.3, step 6).
+    Expire(abs);
+    assert(SweepAgrees(abs));
+    const uint32_t slot     = LowestFreeSlot();
+    const uint32_t sounding = heapCount_;
 
     // Fractional targets are dithered, not truncated: a fixed integer ceiling
     // against a fractional normalization target produced a 6 dB grain-rate

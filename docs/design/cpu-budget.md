@@ -440,6 +440,17 @@ every refused retry (`:462-467`), is replaced with:
 The births lane's simpler sweep cache is already golden-verified. STATUS already lists this item
 (Known gaps, the M7 budget pass). The governor reuses the heap to keep its load sum exact.
 
+*As built* (2026-10-11, sound revision 9, bit-exact): an indexed binary min-heap of the sounding
+voices' slots by `endAbs` (at most 64 entries, with each slot's place in it, so a stolen slot's
+new voice and a FastCut's earlier end move in O(log n)) and the same slots as two 32-bit words.
+The scheduler's attempt and a trigger's slot search first retire the voices that ended by the
+frame, then take the lowest clear bit (count-trailing-zeros, no libgcc helper) and the heap's
+size as the sounding count. Debug builds check every query against the old sweep. +560 bytes of
+live ITCM (52,856; 12,616 spare); `Engine::Impl` 8,320 bytes on the M7 and 8,456 on x86-64, so
+`kEngineImplBytes` rises to 8,448 and 8,704, inside the 9 KiB slot. Checked by the golden check
+at every block pattern (Release, and Debug with the sweep check) and the bench configurations'
+hashes, the Debug run of their stressors (trigger floods with steals, FastCut loads) included.
+
 **7. Birth trims.**
 
 - Build `inc` from the float's mantissa and exponent: ratio·2³² is an exact integer, and this removes
