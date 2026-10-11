@@ -14,8 +14,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "live/Tone.h"
@@ -127,7 +127,7 @@ void TestLevels() {
     previous = q;
   }
   std::printf("levels: 12,001 codes from -120.00 to 0.00 dB, %u near-ties, %u not rounded to nearest\n",
-              nearTies, mismatches);
+              static_cast<unsigned>(nearTies), static_cast<unsigned>(mismatches));
   Check(mismatches == 0, "every level code is 2^23 * 10^(dB/20) rounded to nearest");
 }
 
@@ -149,7 +149,7 @@ void TestParse() {
     int32_t    v  = 7;
     const bool ok = ParseCentiDb(c.text, &v);
     if (ok != c.ok || (ok && v != c.value)) {
-      std::printf("FAIL: ParseCentiDb(\"%s\") gave %d, %d\n", c.text, ok, v);
+      std::printf("FAIL: ParseCentiDb(\"%s\") gave %d, %d\n", c.text, static_cast<int>(ok), static_cast<int>(v));
       ++g_failures;
     }
   }
@@ -162,7 +162,7 @@ void TestParse() {
     char buf[12];
     CentiDbText(t.value, buf);
     if (std::strcmp(buf, t.text) != 0) {
-      std::printf("FAIL: CentiDbText(%d) gave %s\n", t.value, buf);
+      std::printf("FAIL: CentiDbText(%d) gave %s\n", static_cast<int>(t.value), buf);
       ++g_failures;
     }
   }
@@ -215,7 +215,7 @@ uint64_t Play(const Program& p, uint64_t total, const std::vector<uint32_t>& blo
       const int32_t want = ReferenceCode(p, n);
       if (l[i] != CodeToFloat(want) || r[i] != l[i]) {
         if (*ok) std::printf("FAIL: frame %llu: %.9g / %.9g, expected code %d\n", static_cast<unsigned long long>(n),
-                             static_cast<double>(l[i]), static_cast<double>(r[i]), want);
+                             static_cast<double>(l[i]), static_cast<double>(r[i]), static_cast<int>(want));
         *ok = false;
       }
       const auto u = static_cast<uint32_t>(want);
@@ -248,7 +248,7 @@ void TestPlayer() {
     if (first == 0) first = digest;
     Check(digest == first, "the same digest under every block split");
   }
-  std::printf("test program v%u: %llu frames, digest 0x%016llx\n", kProgramVersion,
+  std::printf("test program v%u: %llu frames, digest 0x%016llx\n", static_cast<unsigned>(kProgramVersion),
               static_cast<unsigned long long>(p->Frames()), static_cast<unsigned long long>(first));
   Check(first == kProgramDigest, "the test program's digest is the pinned one");
 
@@ -280,12 +280,17 @@ void PrintProgramJson() {
   auto p = std::make_unique<Program>();
   BuildTest(p.get());
   std::printf("{\"version\":%u,\"sampleRate\":%u,\"period\":%u,\"codecMax\":%d,\"frames\":%llu,\"steps\":[",
-              kProgramVersion, kSampleRate, kPeriod, kCodecMax, static_cast<unsigned long long>(p->Frames()));
+              static_cast<unsigned>(kProgramVersion), static_cast<unsigned>(kSampleRate),
+              static_cast<unsigned>(kPeriod), static_cast<int>(kCodecMax),
+              static_cast<unsigned long long>(p->Frames()));
   for (uint32_t i = 0; i < p->count; ++i) {
     const Step& s = p->steps[i];
     std::printf("%s{\"wave\":\"%s\",\"centiDb\":%d,\"q\":%d,\"frames\":%u,\"codes\":[", i ? "," : "",
-                WaveName(s.wave), s.centiDb, s.q, s.frames);
-    for (uint32_t k = 0; k < kPeriod; ++k) std::printf("%s%d", k ? "," : "", Code(s.wave, s.q, k));
+                WaveName(s.wave), static_cast<int>(s.centiDb), static_cast<int>(s.q),
+                static_cast<unsigned>(s.frames));
+    for (uint32_t k = 0; k < kPeriod; ++k) {
+      std::printf("%s%d", k ? "," : "", static_cast<int>(Code(s.wave, s.q, k)));
+    }
     std::printf("]}");
   }
   std::printf("]}\n");
