@@ -180,13 +180,17 @@ void GranularCore::ScheduleGrain(uint32_t slot, uint32_t rec, const GranularPara
   uint32_t       total   = p.totalFrames >= 1u ? p.totalFrames : 1u;
   const uint32_t passes  = p.repeat >= 1u ? p.repeat : 1u;
   // The envelope of a grain of the block's length, cached while the length, sustain and skew stay
-  // (cpu-budget.md §4.3, step 7): MakeEnv is a function of them.
-  if (envTotal_ != total || std::memcmp(&envSustain_, &p.sustain, sizeof(float)) != 0 ||
-      std::memcmp(&envSkew_, &p.skew, sizeof(float)) != 0) {
-    envTotal_   = total;
-    envSustain_ = p.sustain;
-    envSkew_    = p.skew;
-    env_        = EnvOf(total, p.sustain, p.skew);
+  // (cpu-budget.md §4.3, step 7): MakeEnv is a function of them. Sustain and skew are compared by
+  // their bits, copied out with memcpy: memcmp is not on the symbol audit's allowlist, and a build
+  // without optimization calls it.
+  uint32_t sustainBits, skewBits;
+  std::memcpy(&sustainBits, &p.sustain, sizeof sustainBits);
+  std::memcpy(&skewBits, &p.skew, sizeof skewBits);
+  if (envTotal_ != total || envSustainBits_ != sustainBits || envSkewBits_ != skewBits) {
+    envTotal_       = total;
+    envSustainBits_ = sustainBits;
+    envSkewBits_    = skewBits;
+    env_            = EnvOf(total, p.sustain, p.skew);
   }
   const int64_t  drawKey = birthAbs - drawEpoch_;
 
