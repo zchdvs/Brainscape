@@ -269,6 +269,10 @@ void BrainscapeEditor::ShowLeafMenu(ParamId leaf) {
 void BrainscapeEditor::RefreshNow() {
   CurationSession& s = processor_.Curation();
   s.Refresh();
+  if (s.NoticeSerial() != noticeSerial_) {  // a host's program change, even one made while the editor was closed
+    noticeSerial_ = s.NoticeSerial();
+    document_.Note(s.Notice(), s.NoticeWarns() ? palette::kWarn : palette::kText);
+  }
   const bool a = s.HasDocument() && s.GetSide() == CurationSession::Side::Stored;
   for (ParamKnob* k : knobs_) k->Refresh();
   for (auto& section : sections_) section->setEnabled(!a);

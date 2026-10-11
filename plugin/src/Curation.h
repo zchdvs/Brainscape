@@ -55,6 +55,26 @@ class CurationSession {
   bool OpenFactory(size_t index, juce::String* error);
   // Re-opens the source from disk (or the built-in package), dropping unsaved changes.
   bool Revert(juce::String* error);
+  // A host's program change (BrainscapeProcessor::setCurrentProgram, on the message thread):
+  // factory package `index` opens as the Modes menu opens it (OpenFactory), or, with -1, the
+  // default mode plays (every leaf at its default, as a fresh instance) and the document closes.
+  // The menu asks before unsaved edits go (AskDiscard); a host cannot be asked, so they are kept
+  // instead: while the open document is Dirty, what Save would write for it goes to a new file in
+  // RecoveryDir() first (canonical JSON when it compiles, its JSON as it stands otherwise), which
+  // Open... plays back exactly. When that file cannot be written nothing loads and the edits stay
+  // (false, *error). `program` is the program's name, for the Notice.
+  bool OpenForHost(int index, const juce::String& program, juce::String* error);
+  // A line for the editor's note about what happened without a command of the editor's (a host's
+  // program change), whether it warns, and a count that moves with each.
+  juce::String Notice() const { return notice_; }
+  bool         NoticeWarns() const { return noticeWarns_; }
+  uint32_t     NoticeSerial() const { return noticeSerial_; }
+  // Where OpenForHost keeps unsaved edits: Documents/Brainscape/Recovered, or a directory set here
+  // (tests). LastRecovery() is the file it last wrote.
+  static juce::File DefaultRecoveryDir();
+  void              SetRecoveryDir(const juce::File& dir) { recoveryDir_ = dir; }
+  juce::File        RecoveryDir() const { return recoveryDir_ == juce::File() ? DefaultRecoveryDir() : recoveryDir_; }
+  juce::File        LastRecovery() const { return lastRecovery_; }
   // Closes the document; what plays keeps playing. A document closed here is not reopened
   // until something loads again (Refresh).
   void Close();
@@ -216,6 +236,9 @@ class CurationSession {
                 const std::vector<uint8_t>* package, juce::String* error, bool play = true);
   bool AdoptPlaying();
   void CloseDocument();
+  // OpenForHost's keeping: what Save would write, to a new file in RecoveryDir().
+  bool KeepEdits(juce::File* file, juce::String* error);
+  void Notify(const juce::String& text, bool warns);
   PresetSource Source() const;  // what the open document is, for the processor's loads
   void RebuildWorking();
   void Relint();
@@ -246,6 +269,10 @@ class CurationSession {
   std::vector<bsc::Finding>          findings_, saveFindings_, refused_;
   juce::String                       refusedFile_;
   juce::String                       message_;
+  juce::String                       notice_;
+  bool                               noticeWarns_  = false;
+  uint32_t                           noticeSerial_ = 0;
+  juce::File                         recoveryDir_, lastRecovery_;
   // What the last Refresh saw, to rebuild only on change.
   std::vector<uint32_t>              seenBits_;
   std::array<uint32_t, 2>            seenPerformance_{};

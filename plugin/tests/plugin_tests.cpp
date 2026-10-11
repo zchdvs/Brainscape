@@ -17,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -2959,6 +2960,485 @@ TEST_CASE("a session saved with a factory mode reloads it") {
     const ModeState now = b->CurrentMode();
     REQUIRE(std::memcmp(&now.mode, &played->mode, sizeof(ModeBlob)) == 0);
   }
+}
+
+// ── Host programs: the factory set in the host's preset list ────────────────────────────
+
+#if JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+namespace juce::detail {
+// JUCE's own: one message off the native queue (juce_Messaging_windows.cpp, _linux.cpp), as its
+// plugin client's Linux message thread runs it; false when none was waiting.
+bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
+}  // namespace juce::detail
+#endif
+
+namespace {
+
+// What a host's wrapper hears: updateHostDisplay calls with programChanged.
+struct ProgramListener final : juce::AudioProcessorListener {
+  int  programChanges = 0;
+  void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+  void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override {
+    programChanges += details.programChanged ? 1 : 0;
+  }
+};
+
+// The wrapper state two processors play: leaves, mode, CTRL, performance, the mirrors of the
+// macros and rows 83 and 84, the load's report and count, and the source.
+void RequireSameWrapperState(BrainscapeProcessor& a, BrainscapeProcessor& b) {
+  const auto pa = a.CurrentPreset();
+  const auto pb = b.CurrentPreset();
+  REQUIRE(pa->leafCount == pb->leafCount);
+  for (uint32_t k = 0; k < pa->leafCount; ++k) REQUIRE(Bits(pa->leaves[k].value) == Bits(pb->leaves[k].value));
+  REQUIRE(std::memcmp(&pa->mode, &pb->mode, sizeof(ModeBlob)) == 0);
+  REQUIRE(std::memcmp(&pa->control, &pb->control, sizeof(ControlState)) == 0);
+  REQUIRE(std::memcmp(&pa->performance, &pb->performance, sizeof(PerformanceState)) == 0);
+  REQUIRE(pa->soundRev == pb->soundRev);
+  const ModeState ma = a.CurrentMode(), mb = b.CurrentMode();
+  REQUIRE(std::memcmp(&ma, &mb, sizeof(ModeState)) == 0);
+  for (uint32_t id = static_cast<uint32_t>(ParamId::MacroActivity); id <= static_cast<uint32_t>(ParamId::MacroAux2); ++id) {
+    REQUIRE(Bits(a.Macro(static_cast<ParamId>(id)).Plain()) == Bits(b.Macro(static_cast<ParamId>(id)).Plain()));
+  }
+  REQUIRE(Bits(a.SubdivParam().Plain()) == Bits(b.SubdivParam().Plain()));
+  REQUIRE(Bits(a.TimeModeParam().Plain()) == Bits(b.TimeModeParam().Plain()));
+  REQUIRE(a.GetStatus().lastLoadInexact == b.GetStatus().lastLoadInexact);
+  REQUIRE(a.LoadSerial() == b.LoadSerial());
+  REQUIRE(a.CurrentSource().factory == b.CurrentSource().factory);
+  REQUIRE(a.CurrentSource().name == b.CurrentSource().name);
+  REQUIRE(a.getCurrentProgram() == b.getCurrentProgram());
+}
+
+int Engram() {
+  const int engram = FindFactory("factory.engram");
+  REQUIRE(engram >= 0);
+  return engram;
+}
+
+}  // namespace
+
+// The programs hosts list: the default mode, the set in the Modes menu's order (the same items in
+// the same order as the menu shows them, reserves last), then Custom, with names hosts show well.
+TEST_CASE("the programs are the default mode, the factory set in the Modes menu's order, and Custom") {
+  auto proc = MakeProcessor({}, {});
+  REQUIRE(proc->getNumPrograms() == static_cast<int>(FactoryCount()) + 2);
+  REQUIRE(ProgramCount() == proc->getNumPrograms());
+  REQUIRE(CustomProgram() == proc->getNumPrograms() - 1);
+  REQUIRE(proc->getCurrentProgram() == kDefaultProgram);  // a fresh instance plays the default mode
+  REQUIRE(proc->getProgramName(kDefaultProgram) == "Default mode");
+  REQUIRE(proc->getProgramName(CustomProgram()) == "Custom");
+  REQUIRE(proc->getProgramName(-1).isEmpty());
+  REQUIRE(proc->getProgramName(proc->getNumPrograms()).isEmpty());
+
+  // The menu's items, in the order it shows them: the families' modes, then the reserves.
+  ModeMenu         menu(*proc);
+  std::vector<int> shown;
+  const juce::PopupMenu m = menu.BuildMenu();
+  for (juce::PopupMenu::MenuItemIterator it(m, true); it.next();) {
+    const int id = it.getItem().itemID - ModeMenu::kFactoryItem;
+    if (it.getItem().subMenu == nullptr && id >= 0 && static_cast<size_t>(id) < FactoryCount()) shown.push_back(id);
+  }
+  REQUIRE(shown.size() == FactoryCount());
+  std::set<juce::String> names;
+  for (int program = 1; program < CustomProgram(); ++program) {
+    const int factory = FactoryOfProgram(program);
+    INFO("program " << program);
+    REQUIRE(factory == shown[static_cast<size_t>(program) - 1]);
+    REQUIRE(ProgramOfFactory(factory) == program);
+    const FactoryPackage& f    = Factory(static_cast<size_t>(factory));
+    const juce::String    name = juce::String::fromUTF8(f.name);
+    juce::String          family(FamilyName(f.family));
+    family = family.substring(0, 1).toUpperCase() + family.substring(1);
+    REQUIRE(proc->getProgramName(program) == (f.reserve ? "Reserve: " + name : family + ": " + name));
+    names.insert(proc->getProgramName(program));
+  }
+  REQUIRE(names.size() == FactoryCount());
+  REQUIRE(names.count("Default mode") == 0);
+  REQUIRE(names.count("Custom") == 0);
+  REQUIRE(proc->getProgramName(ProgramOfFactory(Engram())) == "Echoic: Engram");
+  REQUIRE(proc->getProgramName(ProgramOfFactory(FindFactory("factory.afterimage"))) == "Reserve: Afterimage");
+  REQUIRE(proc->getProgramName(ProgramOfFactory(FindFactory("factory.deja-vu"))) ==
+          juce::String::fromUTF8("Reverie: D\xc3\xa9j\xc3\xa0 Vu"));
+  REQUIRE(FactoryOfProgram(kDefaultProgram) == -1);
+  REQUIRE(FactoryOfProgram(CustomProgram()) == -1);
+  REQUIRE(FactoryOfProgram(-1) == -1);
+  REQUIRE(ProgramOfFactory(-1) == -1);
+  REQUIRE(ProgramOfFactory(static_cast<int>(FactoryCount())) == -1);
+}
+
+// A host's program change takes the Modes menu's path (CurationSession::OpenForHost, OpenFactory):
+// on a processor that has been playing, every factory program is the same state unit as the menu's
+// choice of its mode (a Spillover load with Trails at the next block's first frame), the same
+// output bit for bit, the same mirrors and the same document; the menu's choice reads as that
+// program too.
+TEST_CASE("every host program loads what choosing its mode from the Modes menu loads") {
+  const Stereo in     = MakeInput(9600);
+  const int    change = 4800;
+  for (int program = 1; program < CustomProgram(); ++program) {
+    const int factory = FactoryOfProgram(program);
+    INFO(ProgramName(program));
+    auto       viaMenu = MakeProcessor(Busy(), {});
+    auto       viaHost = MakeProcessor(Busy(), {});
+    ModeMenu   menu(*viaMenu);
+    HostRender a, b;
+    a.pattern = b.pattern = {480};
+    a.beforeBlock = [&](int pos) {
+      if (pos == change) REQUIRE(menu.Choose(ModeMenu::kFactoryItem + factory));
+    };
+    b.beforeBlock = [&](int pos) {
+      if (pos == change) viaHost->setCurrentProgram(program);  // the test's thread is the message thread
+    };
+    const Stereo gotMenu = RenderProcessor(*viaMenu, in, {}, a);
+    const Stereo gotHost = RenderProcessor(*viaHost, in, {}, b);
+    RequireSame(gotHost, gotMenu, "the host's program against the menu's mode");
+    RequireSameWrapperState(*viaHost, *viaMenu);
+    REQUIRE(viaHost->getCurrentProgram() == program);
+    REQUIRE(viaHost->CurrentSource().factory == factory);
+    CurationSession& sm = viaMenu->Curation();
+    CurationSession& sh = viaHost->Curation();
+    REQUIRE(sh.HasDocument());
+    REQUIRE(sh.FactoryIndex() == factory);
+    REQUIRE(sh.Stored().id == sm.Stored().id);
+    REQUIRE(sh.SourceLabel() == sm.SourceLabel());
+    REQUIRE(sh.Dirty() == sm.Dirty());
+    REQUIRE(sh.Findings().size() == sm.Findings().size());
+  }
+}
+
+// Program 0 is the default mode with every leaf at its default, as a fresh instance plays it: a
+// Spillover load of the leafless default preset, the document closed. Custom loads nothing.
+TEST_CASE("program 0 plays the default mode at its defaults; Custom loads nothing") {
+  const Stereo in     = MakeInput(9600);
+  const int    change = 4800;
+  const auto   lull   = DecodeFactory(static_cast<size_t>(Lull()));
+  REQUIRE(lull != nullptr);
+  const auto defaults = std::make_unique<PresetState>();
+
+  auto     viaHost = MakeProcessor({}, {});
+  auto     viaLoad = MakeProcessor({}, {});
+  ModeMenu menuHost(*viaHost), menuLoad(*viaLoad);
+  REQUIRE(menuHost.Choose(ModeMenu::kFactoryItem + Lull()));  // before anything plays: Exact
+  REQUIRE(menuLoad.Choose(ModeMenu::kFactoryItem + Lull()));
+  HostRender a, b;
+  a.pattern = b.pattern = {480};
+  a.beforeBlock = [&](int pos) {
+    if (pos == change) viaHost->setCurrentProgram(kDefaultProgram);
+  };
+  b.beforeBlock = [&](int pos) {
+    if (pos != change) return;
+    viaLoad->Curation().Close();
+    REQUIRE(viaLoad->LoadPresetState(*defaults));
+  };
+  const Stereo gotHost = RenderProcessor(*viaHost, in, {}, a);
+  const Stereo gotLoad = RenderProcessor(*viaLoad, in, {}, b);
+  RequireSame(gotHost, gotLoad, "program 0 against a load of the leafless default preset");
+  RequireSame(gotHost, RenderStateReference(*lull, in, kRate, {RefLoad(change, defaults.get())}),
+              "Lull, then a Spillover load of the defaults with Trails");
+  RequireSameWrapperState(*viaHost, *viaLoad);
+  REQUIRE(viaHost->getCurrentProgram() == kDefaultProgram);
+  REQUIRE_FALSE(viaHost->Curation().HasDocument());
+  REQUIRE(viaHost->CurrentSource().factory == -1);
+  REQUIRE(viaHost->CurrentSource().name.isEmpty());
+  const ModeState def{}, now = viaHost->CurrentMode();
+  REQUIRE(std::memcmp(&now, &def, sizeof(ModeState)) == 0);
+  BrainscapeProcessor fresh;
+  for (size_t i = 0; i < kNumLeafParams; ++i) REQUIRE(Bits(viaHost->Param(LeafId(i)).Plain()) == Bits(fresh.Param(LeafId(i)).Plain()));
+  menuHost.Refresh();
+  REQUIRE(menuHost.Name() == "Default mode");
+
+  // Custom: nothing loads, the output runs on, and the program reads Custom until the next load.
+  auto       custom = MakeProcessor(Busy(), {});
+  auto       plain  = MakeProcessor(Busy(), {});
+  uint32_t   serial = 0;
+  HostRender c;
+  c.pattern     = {480};
+  c.beforeBlock = [&](int pos) {
+    if (pos != change) return;
+    serial = custom->LoadSerial();
+    custom->setCurrentProgram(CustomProgram());
+  };
+  RequireSame(RenderProcessor(*custom, in, {}, c), RenderProcessor(*plain, in, {}), "Custom changes nothing");
+  REQUIRE(custom->LoadSerial() == serial);
+  REQUIRE(custom->getCurrentProgram() == CustomProgram());
+  custom->setCurrentProgram(ProgramOfFactory(Lull()));
+  REQUIRE(custom->getCurrentProgram() == ProgramOfFactory(Lull()));
+  // Out of range (an AU user preset's negative number): nothing.
+  serial = custom->LoadSerial();
+  custom->setCurrentProgram(-1);
+  custom->setCurrentProgram(custom->getNumPrograms());
+  REQUIRE(custom->LoadSerial() == serial);
+  REQUIRE(custom->getCurrentProgram() == ProgramOfFactory(Lull()));
+}
+
+// getCurrentProgram is the Modes menu's tick: a factory mode, chosen anywhere or restored with a
+// session, is its program; the default mode is 0; a document file or an unnamed mode is Custom;
+// edits keep the program. The host is told (updateHostDisplay, programChanged) when the program
+// moves without it, and only then.
+TEST_CASE("the current program follows the menu, documents, sessions and the host") {
+  ProgramListener  heard;
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  s.SetRecoveryDir(scratch.dir.getChildFile("recovered"));
+  proc->addListener(&heard);
+  ModeMenu     menu(*proc);
+  juce::String error;
+  const int    lull = ProgramOfFactory(Lull()), engram = ProgramOfFactory(Engram());
+  REQUIRE(proc->getCurrentProgram() == kDefaultProgram);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 0);
+
+  // The menu: the host is told once.
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  REQUIRE(proc->getCurrentProgram() == lull);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 1);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 1);
+
+  // Edits, A/B and Revert keep the program.
+  Pump(*proc);
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  proc->Macro(ParamId::MacroActivity).SetPlainNotifyingHost(0.8f);
+  Pump(*proc);
+  s.Refresh();
+  REQUIRE(s.Dirty());
+  REQUIRE(proc->getCurrentProgram() == lull);
+  REQUIRE(s.SetSide(CurationSession::Side::Stored));
+  REQUIRE(proc->getCurrentProgram() == lull);
+  REQUIRE(s.SetSide(CurationSession::Side::Working));
+  REQUIRE(s.Revert(&error));
+  REQUIRE(proc->getCurrentProgram() == lull);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 1);
+
+  // The host's own change: it holds the program already, so it is not told.
+  proc->setCurrentProgram(engram);
+  REQUIRE(proc->getCurrentProgram() == engram);
+  REQUIRE(s.FactoryIndex() == Engram());
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 1);
+
+  // A document file is Custom; so is a factory mode saved as a copy, which plays as a file.
+  const juce::File engramDoc = scratch.Copy("engram.json");
+  REQUIRE(s.Open(engramDoc, &error));
+  REQUIRE(proc->getCurrentProgram() == CustomProgram());
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 2);
+  REQUIRE(s.OpenFactory(static_cast<size_t>(Lull()), &error));
+  REQUIRE(proc->getCurrentProgram() == lull);
+  REQUIRE(s.SaveAs(scratch.dir.getChildFile("my-lull.json"), false).written);
+  REQUIRE(proc->getCurrentProgram() == CustomProgram());
+  // Closing the document changes nothing that plays.
+  s.Close();
+  REQUIRE(proc->getCurrentProgram() == CustomProgram());
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 2);  // between two ticks Lull came and went: the host holds Custom
+
+  // Sessions: a factory mode restores as its program, a session without one as the default mode
+  // (a document's session plays the default mode until sessions carry packages).
+  auto     withLull = MakeProcessor({}, {});
+  ModeMenu other(*withLull);
+  REQUIRE(other.Choose(ModeMenu::kFactoryItem + Lull()));
+  juce::MemoryBlock lullSession, docSession;
+  withLull->getStateInformation(lullSession);
+  REQUIRE(withLull->Curation().Open(engramDoc, &error));
+  withLull->getStateInformation(docSession);
+  proc->setStateInformation(lullSession.getData(), static_cast<int>(lullSession.getSize()));
+  REQUIRE(proc->getCurrentProgram() == lull);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 3);
+  proc->setStateInformation(docSession.getData(), static_cast<int>(docSession.getSize()));
+  REQUIRE(proc->getCurrentProgram() == kDefaultProgram);
+
+  // Custom from the host: nothing loads, and it reads Custom until the next load.
+  proc->ServiceHostRequests();
+  const int told = heard.programChanges;
+  proc->setCurrentProgram(CustomProgram());
+  REQUIRE(proc->getCurrentProgram() == CustomProgram());
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == told);
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Engram()));
+  REQUIRE(proc->getCurrentProgram() == engram);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == told + 1);
+  proc->removeListener(&heard);
+}
+
+// A host cannot be asked before unsaved edits go, so they are kept: what Save as would write for
+// them goes to a new file, which opens back to what Save as would have played, and the editor's
+// note names it. When that file cannot be written, nothing changes and the host is told the
+// program that still plays.
+TEST_CASE("a host's program change keeps the open document's unsaved edits in a file") {
+  ScratchDir       scratch;
+  const juce::File recovered = scratch.dir.getChildFile("recovered");
+  auto             proc      = MakeProcessor({}, {});
+  CurationSession& s         = proc->Curation();
+  s.SetRecoveryDir(recovered);
+  ModeMenu menu(*proc);
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  Pump(*proc);
+  const auto edit = [](BrainscapeProcessor& p) {
+    p.Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+    p.Macro(ParamId::MacroActivity).SetPlainNotifyingHost(0.8f);
+    Pump(p);
+  };
+
+  SECTION("unedited, nothing is written") {
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    REQUIRE(s.FactoryIndex() == Engram());
+    REQUIRE_FALSE(recovered.exists());
+    REQUIRE(s.LastRecovery() == juce::File());
+    REQUIRE(s.Notice().contains("Echoic: Engram"));
+    REQUIRE_FALSE(s.NoticeWarns());
+  }
+  SECTION("edited with the editor closed: Save as's text goes to a file that plays it back") {
+    edit(*proc);  // and no Refresh: no editor ticks
+    auto     twin = MakeProcessor({}, {});
+    ModeMenu twinMenu(*twin);
+    REQUIRE(twinMenu.Choose(ModeMenu::kFactoryItem + Lull()));
+    Pump(*twin);
+    edit(*twin);
+    const juce::File savedAs = scratch.dir.getChildFile("saved-as.json");
+    REQUIRE(twin->Curation().SaveAs(savedAs, false).written);
+
+    const uint32_t serial = s.NoticeSerial();
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    REQUIRE(s.FactoryIndex() == Engram());
+    REQUIRE(proc->getCurrentProgram() == ProgramOfFactory(Engram()));
+    const juce::File kept = s.LastRecovery();
+    REQUIRE(kept.existsAsFile());
+    REQUIRE(kept.getParentDirectory() == recovered);
+    REQUIRE(kept.getFileName().startsWith("lull-unsaved-"));
+    REQUIRE(kept.hasFileExtension("json"));
+    REQUIRE(Text(kept) == Text(savedAs));
+    REQUIRE(s.NoticeSerial() == serial + 1);
+    REQUIRE(s.NoticeWarns());
+    REQUIRE(s.Notice().contains("Echoic: Engram"));
+    REQUIRE(s.Notice().contains(kept.getFullPathName()));
+
+    juce::String error;
+    REQUIRE(s.Open(kept, &error));
+    Pump(*proc);
+    const auto back = proc->CurrentPreset();
+    const auto want = twin->CurrentPreset();
+    for (uint32_t k = 0; k < back->leafCount; ++k) REQUIRE(Bits(back->leaves[k].value) == Bits(want->leaves[k].value));
+    REQUIRE(std::memcmp(&back->control, &want->control, sizeof(ControlState)) == 0);
+    REQUIRE(Bits(proc->Macro(ParamId::MacroActivity).Plain()) == Bits(0.8f));
+  }
+  SECTION("program 0 with edits: kept, and the document closes") {
+    edit(*proc);
+    proc->setCurrentProgram(kDefaultProgram);
+    REQUIRE(s.LastRecovery().existsAsFile());
+    REQUIRE_FALSE(s.HasDocument());
+    REQUIRE(proc->getCurrentProgram() == kDefaultProgram);
+    BrainscapeProcessor fresh;
+    REQUIRE(Bits(proc->Param(ParamId::Mix).Plain()) == Bits(fresh.Param(ParamId::Mix).Plain()));
+  }
+  SECTION("while A plays, B's edits are kept, and B is not played on the way out") {
+    edit(*proc);
+    s.Refresh();
+    REQUIRE(s.SetSide(CurationSession::Side::Stored));
+    const uint32_t serial = proc->LoadSerial();
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    REQUIRE(proc->LoadSerial() == serial + 1);  // Engram's load alone
+    REQUIRE(s.GetSide() == CurationSession::Side::Working);
+    std::unique_ptr<bsc::Document> d = ReadBack(s.LastRecovery());
+    REQUIRE(Bits(StoredPositionOf(*d, ParamId::MacroActivity)) == Bits(0.8f));
+  }
+  SECTION("edits that cannot be written stop the change, and the host hears what still plays") {
+    ProgramListener heard;
+    proc->addListener(&heard);
+    proc->ServiceHostRequests();  // the menu's Lull
+    REQUIRE(heard.programChanges == 1);
+    edit(*proc);
+    const juce::File blocker = scratch.dir.getChildFile("a-file");
+    REQUIRE(blocker.replaceWithText("not a directory"));
+    s.SetRecoveryDir(blocker.getChildFile("recovered"));
+    const uint32_t serial = proc->LoadSerial();
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    REQUIRE(proc->LoadSerial() == serial);
+    REQUIRE(s.FactoryIndex() == Lull());
+    REQUIRE(s.Dirty());
+    REQUIRE(proc->getCurrentProgram() == ProgramOfFactory(Lull()));
+    REQUIRE(s.NoticeWarns());
+    REQUIRE(s.Notice().contains("could not be kept"));
+    proc->ServiceHostRequests();  // the host chose Engram: it is told Lull plays
+    REQUIRE(heard.programChanges == 2);
+    proc->removeListener(&heard);
+  }
+}
+
+// An LV2 or VST2 host may change the program on its audio thread: there the processor only records
+// it, allocating nothing and loading nothing; the message thread's next tick (the processor's
+// timer, ServiceHostRequests) plays the latest one, as the menu would at that block. A change made
+// on the message thread meanwhile wins over one still waiting.
+TEST_CASE("a host's program change on its audio thread is played by the message thread") {
+  const Stereo in      = MakeInput(14400);
+  const int    request = 4800, applied = 9600;
+  const int    program = ProgramOfFactory(Engram());
+  const int    other   = ProgramOfFactory(Lull());  // computed here: Catch is not for other threads
+  auto         viaHost = MakeProcessor(Busy(), {});
+  auto         viaMenu = MakeProcessor(Busy(), {});
+  ModeMenu     menu(*viaMenu);
+  uint64_t     hits   = 1;
+  uint32_t     serial = 0;
+  HostRender   a, b;
+  a.pattern = b.pattern = {480};
+  a.beforeBlock = [&](int pos) {
+    if (pos == request) {
+      serial = viaHost->LoadSerial();
+      std::thread audio([&] {  // the host's audio thread, between two of its blocks
+        tAudit                = true;
+        const uint64_t before = gAuditHits.load();
+        viaHost->setCurrentProgram(other);  // superseded by the next
+        viaHost->setCurrentProgram(program);
+        hits   = gAuditHits.load() - before;
+        tAudit = false;
+      });
+      audio.join();
+      REQUIRE(viaHost->LoadSerial() == serial);  // nothing loaded on that thread
+      REQUIRE(viaHost->getCurrentProgram() == kDefaultProgram);
+    }
+    if (pos == applied) viaHost->ServiceHostRequests();  // the timer's tick
+  };
+  b.beforeBlock = [&](int pos) {
+    if (pos == applied) REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Engram()));
+  };
+  const Stereo gotHost = RenderProcessor(*viaHost, in, {}, a);
+  const Stereo gotMenu = RenderProcessor(*viaMenu, in, {}, b);
+  REQUIRE(hits == 0u);
+  RequireSame(gotHost, gotMenu, "the recorded program, played at the tick, against the menu at that block");
+  REQUIRE(viaHost->LoadSerial() == serial + 1);  // one load: the latest program
+  RequireSameWrapperState(*viaHost, *viaMenu);
+  REQUIRE(viaHost->getCurrentProgram() == program);
+  REQUIRE(viaHost->Curation().FactoryIndex() == Engram());
+
+  std::thread([&] { viaHost->setCurrentProgram(other); }).join();
+  viaHost->setCurrentProgram(kDefaultProgram);  // on the message thread: at once
+  REQUIRE(viaHost->getCurrentProgram() == kDefaultProgram);
+  viaHost->ServiceHostRequests();
+  REQUIRE(viaHost->getCurrentProgram() == kDefaultProgram);  // the older request was dropped
+
+#if JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+  // The processor's own timer: the message loop alone plays a program chosen on another thread,
+  // and tells the host of a Modes menu choice.
+  ProgramListener heard;
+  viaHost->addListener(&heard);
+  const auto pumpUntil = [](const std::function<bool()>& done) {
+    const uint32_t deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (!done() && juce::Time::getMillisecondCounter() < deadline) {
+      if (!juce::detail::dispatchNextMessageOnSystemQueue(true)) juce::Thread::sleep(1);
+    }
+    return done();
+  };
+  std::thread([&] { viaHost->setCurrentProgram(program); }).join();
+  REQUIRE(pumpUntil([&] { return viaHost->getCurrentProgram() == program; }));
+  REQUIRE(viaHost->Curation().FactoryIndex() == Engram());
+  ModeMenu hostMenu(*viaHost);
+  REQUIRE(hostMenu.Choose(ModeMenu::kFactoryItem + Lull()));
+  REQUIRE(pumpUntil([&] { return heard.programChanges == 1; }));
+  viaHost->removeListener(&heard);
+#endif
 }
 
 TEST_CASE("latency, tail and supported layouts") {

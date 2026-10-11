@@ -15,7 +15,9 @@ namespace brainscape::plugin {
 // (CurationSession::OpenFactory): the processor plays it as a state restore does, a Spillover
 // load with Trails while audio runs (Exact before anything has played), the knobs wait for
 // pickup, and the curation views show its document. Unsaved edits in the open document are
-// dropped only after the curator confirms (AskDiscard).
+// dropped only after the curator confirms (AskDiscard). The host's preset list holds the same
+// modes as programs and loads them along the same path (BrainscapeProcessor::setCurrentProgram,
+// CurationSession::OpenForHost), keeping unsaved edits in a file where this menu asks.
 class ModeMenu final : public Scalable<juce::Button> {
  public:
   explicit ModeMenu(BrainscapeProcessor& processor);

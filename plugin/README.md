@@ -109,7 +109,9 @@ The curation slice (mode-compiler.md §9.1, §11.3) is how factory modes are tun
    family. A factory mode has no file: **Save** is **Save as...**, which writes a copy (that copy
    is then what plays and saves), and **Revert** re-opens the built-in package. While the open
    document has unsaved edits, choosing a mode (even the one playing) or a file to open asks
-   first: **Discard** drops the edits and opens it, **Cancel** keeps them and what plays.
+   first: **Discard** drops the edits and opens it, **Cancel** keeps them and what plays. The
+   host's preset list holds the same modes as programs (see **Programs** under
+   [Load the VST3](#load-the-vst3)).
 1. **Open...** (Ctrl+O) a schema-1 preset document (`.json`) or a package (`.bsp`). It compiles
    through the compiler library and plays at once: a Spillover load with Trails while audio
    runs, Exact before anything has played. A document that does not read or compile is refused
@@ -240,6 +242,40 @@ stopped), the engine runs on and the status line says **Last start not restarted
 option off, trails continue across stops. The host's `reset()` is `Engine::Reset`: it keeps the
 ring.
 
+**Programs.** The host's preset list (the program list a VST3 host reads from the plugin, such
+as FL Studio's wrapper preset menu with its previous/next arrows or Reaper's preset menu; an AU
+host's factory presets) holds 20 programs: **Default mode**
+(program 0: the default mode with every leaf at its default, as a new instance plays), the
+factory set in the Modes menu's order (**Echoic: Callback** … **Misfire: Shards**), the reserves
+(**Reserve: Afterimage** …) and **Custom**. Choosing a program plays it exactly as choosing its
+mode in the Modes menu does: a Spillover load with Trails while audio runs, the knobs waiting for
+pickup, its document open in the curation view (program 0 closes the document).
+
+- The host's program shows what plays, as the Modes menu ticks it: a factory mode chosen in
+  either list or restored with a session is its program, the default mode is **Default mode**,
+  and a document file or an unnamed mode is **Custom** (choosing **Custom** loads nothing). A
+  session saved with a document restores as **Default mode**, the mode it plays until sessions
+  carry packages. When the program changes from inside the plugin (the Modes menu, a document
+  opened), the host is told within 50 ms; a VST3 host hears it as the program parameter moving,
+  which a host writing automation records like any program change.
+- **Edits keep the program**, as VST3 hosts expect: turning a knob never moves the host's
+  program parameter, so no program automation is written, and a host that re-applies its stored
+  program after restoring a project finds it already playing and loads nothing over the session.
+  The other side: re-choosing the program a VST3 host already shows does nothing (JUCE's wrapper
+  passes on changes only); the Modes menu (or **Revert**) brings back the stored version.
+- **Unsaved edits are kept, not dropped.** The Modes menu asks before it drops unsaved edits in
+  the open document; a host's program change cannot ask, so the plugin first writes what **Save**
+  would write for them to `Documents/Brainscape/Recovered/<name>-unsaved-<date>-<time>.json`
+  (**Open...** plays it back; **Save as...** keeps it where you like), names the file in the
+  curation view's note line (shown when the editor next opens, if it was closed), then loads the
+  program. If that file cannot be written, the program does not change, and the host is shown
+  the one still playing.
+- **Threads.** VST3 hosts change the program through the edit controller on their UI thread,
+  where JUCE's wrapper calls `setCurrentProgram`; a program value in `process()`'s parameter
+  changes only moves JUCE's own program parameter. A change from any other thread (an LV2 or VST2
+  host's audio thread) is only recorded there, allocation-free, and the message thread plays it
+  within 50 ms. The Standalone has no host list: its Modes menu is the list.
+
 ## Windows notes
 
 - Install Visual Studio 2022 with the **Desktop development with C++** workload, and run the
@@ -299,6 +335,16 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   block (an Exact restore saved back byte for byte, a recall over an open document, readers
   without the block, unknown and truncated blocks, a mode the build lacks or packages
   differently).
+  The host programs: the list (its count and names, the Modes menu's items in its order), every
+  factory program against the menu's choice of its mode on a playing processor (the same output
+  bit for bit, the same mirrors and document), program 0 against a load of the leafless default
+  preset and the engine reference, Custom, the current program after menu choices, edits, A/B,
+  Revert, documents, Save as, Close, session restores and the host's own changes (the host told
+  only when the program moved without it), unsaved edits kept in a file (byte for byte what Save as
+  writes, played back by Open, with A playing, before program 0, and a file that cannot be written
+  stopping the change), and a change on another thread: allocation-free there, played at the next
+  tick as the menu plays it at that block, the latest winning, and, on Windows and Linux, the
+  processor's own timer doing it in a running message loop.
   The tempo core's part (docs/design/clock.md §8.4): rows 83 and 84 as Subdivision events with
   their typed names; a bounce at 137.5 BPM from ppq 3.37 with Restart on play equal, bit for bit,
   to the engine fed the restart's re-asserts, the host's Tempo and its anchored Start at host
@@ -329,7 +375,10 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
 - `plugin_vst3_hosted`: loads the built VST3 through JUCE's headless VST3 host, restores a
   session state through `IComponent::setState`, reads it back bit for bit, and checks that
   in-place audio in odd host blocks equals the engine reference, and that an offline export
-  with Restart on play, started while the transport plays, restarts once and equals it too.
+  with Restart on play, started while the transport plays, restarts once and equals it too; and
+  the programs as a VST3 host reads them (the root unit's program list and the program-change
+  parameter): their names, a program change through the edit controller that plays Engram and
+  that the session then names, and session restores that move the host's program with them.
 
 ## Current limitations
 

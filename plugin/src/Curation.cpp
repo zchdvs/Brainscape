@@ -233,6 +233,82 @@ bool CurationSession::Revert(juce::String* error) {
   return Open(source_, error);
 }
 
+// ── A host's program change ───────────────────────────────────────────────────────────────
+
+juce::File CurationSession::DefaultRecoveryDir() {
+  return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("Brainscape").getChildFile("Recovered");
+}
+
+void CurationSession::Notify(const juce::String& text, bool warns) {
+  notice_      = text;
+  noticeWarns_ = warns;
+  message_     = text;
+  ++noticeSerial_;
+}
+
+bool CurationSession::KeepEdits(juce::File* file, juce::String* error) {
+  // Save's text for the working document (WriteTo), without Save's load: A, if it plays, stays.
+  const auto               d    = SaveDocument(nullptr);
+  const bsc::CompileResult r    = bsc::CompileDocument(*d);
+  const std::string        text = r.ok ? r.json : bsc::FormatDocument(*d);
+  const juce::File         dir  = RecoveryDir();
+  if (!dir.isDirectory() && !dir.createDirectory()) {
+    *error = "cannot create " + dir.getFullPathName();
+    return false;
+  }
+  // "lull-unsaved-20261011-142233.json": the document's (or the package's) name and the time.
+  const juce::String stem = factory_ >= 0 ? juce::String(Factory(static_cast<size_t>(factory_)).path)
+                                                .fromLastOccurrenceOf("/", false, false)
+                                                .upToLastOccurrenceOf(".json", false, false)
+                                          : jsonFile_.getFileNameWithoutExtension();
+  *file = dir.getNonexistentChildFile(stem + "-unsaved-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S"),
+                                      ".json", false);
+  return WriteBytes(*file, text.data(), text.size(), error);
+}
+
+bool CurationSession::OpenForHost(int index, const juce::String& program, juce::String* error) {
+  juce::String  local;
+  juce::String& err = error != nullptr ? *error : local;
+  if (index >= 0 && static_cast<size_t>(index) >= FactoryCount()) {
+    err = "no factory mode " + juce::String(index);
+    return false;
+  }
+  // Dirty as the menu's question sees it: the editor's timer keeps it current, and the editor may
+  // be closed.
+  Refresh();
+  const juce::String chose = "The host chose " + program;
+  juce::String       kept;
+  if (open_ && dirty_) {
+    const juce::String name = juce::String::fromUTF8(stored_->name.c_str());
+    juce::File         file;
+    if (!KeepEdits(&file, &err)) {
+      err = name + "'s unsaved edits could not be kept (" + err + ")";
+      Notify(chose + ", but " + err + ": nothing changed", true);
+      return false;
+    }
+    lastRecovery_ = file;
+    kept          = "; " + name + "'s unsaved edits are in " + file.getFullPathName();
+  }
+  if (index >= 0) {
+    if (!OpenFactory(static_cast<size_t>(index), &err)) {
+      Notify(chose + ", which did not open (" + err + ")" + kept, true);
+      return false;
+    }
+    Notify(chose + ": " + message_ + kept, kept.isNotEmpty());
+    return true;
+  }
+  // The default mode, which has no document. A's version, if it plays, is not reloaded on the way
+  // out (SetSide): the default mode replaces it.
+  side_ = Side::Working;
+  workingSnapshot_.reset();
+  CloseDocument();
+  const auto defaults = std::make_unique<PresetState>();  // leafless: the default mode at its defaults
+  processor_.LoadPresetState(*defaults, nullptr, PresetSource{});
+  adoptSerial_ = processor_.LoadSerial();
+  Notify(chose + ": every leaf at its default" + kept, kept.isNotEmpty());
+  return true;
+}
+
 juce::String CurationSession::Label(const Origin& origin) const {
   return origin.factory >= 0 ? "factory/" + FactoryBsp(static_cast<size_t>(origin.factory))
                              : origin.file.getFileName();

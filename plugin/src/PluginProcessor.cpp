@@ -211,9 +211,12 @@ BrainscapeProcessor::BrainscapeProcessor()
   if (wrapperType == wrapperType_Standalone) {
     inputMode_.store(static_cast<int>(InputMode::Mono), std::memory_order_relaxed);
   }
+  // Host programs: a change made off the message thread, and the host's view of the program.
+  startTimer(kHostPollMs);
 }
 
 BrainscapeProcessor::~BrainscapeProcessor() {
+  stopTimer();  // its callback reaches the curation session, destroyed before the Timer base
   {
     const std::lock_guard<std::mutex> lock(spareMutex_);
     spareQuit_ = true;
@@ -586,6 +589,56 @@ PresetSource BrainscapeProcessor::CurrentSource() const {
   return source_;
 }
 
+// ── Host programs ────────────────────────────────────────────────────────────────────
+
+int BrainscapeProcessor::ProgramOf(const PresetSource& source, const ModeBlob& mode) {
+  if (source.factory >= 0) {
+    const int program = ProgramOfFactory(source.factory);
+    return program >= 0 ? program : CustomProgram();
+  }
+  static const ModeBlob kDefault{};
+  const bool defaultMode = std::memcmp(&mode, &kDefault, sizeof(ModeBlob)) == 0;
+  return source.name.isEmpty() && defaultMode ? kDefaultProgram : CustomProgram();
+}
+
+// JUCE's VST3 wrapper calls this from the edit controller (the host's UI thread, the message
+// thread), its AU wrapper from the main thread; an LV2 or VST2 host may call it from its audio
+// thread. There it only records the program: nothing allocates, and the one lock is JUCE's thread
+// check's, held by any thread only to compare two thread ids.
+void BrainscapeProcessor::setCurrentProgram(int program) {
+  if (program < 0 || program >= ProgramCount()) return;  // an AU user preset's negative number
+  if (!juce::MessageManager::existsAndIsCurrentThread()) {
+    hostProgram_.store(program, std::memory_order_release);
+    return;
+  }
+  hostProgram_.store(-1, std::memory_order_relaxed);  // this change is later than one still waiting
+  ApplyHostProgram(program);
+}
+
+void BrainscapeProcessor::ApplyHostProgram(int program) {
+  // The host holds this program now: a load that plays it needs no telling, one that is refused
+  // does (ServiceHostRequests).
+  notifiedProgram_ = program;
+  if (program == CustomProgram()) {
+    // Nothing to load: what plays keeps playing, as Custom until the next load.
+    program_.store(program, std::memory_order_relaxed);
+    return;
+  }
+  juce::String error;
+  curation_->OpenForHost(FactoryOfProgram(program), getProgramName(program), &error);
+}
+
+void BrainscapeProcessor::ServiceHostRequests() {
+  const int pending = hostProgram_.exchange(-1, std::memory_order_acquire);
+  if (pending >= 0) ApplyHostProgram(pending);
+  const int now = program_.load(std::memory_order_relaxed);
+  if (now == notifiedProgram_) return;
+  notifiedProgram_ = now;
+  // VST3: JUCE moves its program parameter (performEdit) when it differs from this program;
+  // AU: the host re-reads the present preset.
+  updateHostDisplay(ChangeDetails().withProgramChanged(true));
+}
+
 std::unique_ptr<PresetState> BrainscapeProcessor::CurrentPreset() const {
   auto  preset = std::make_unique<PresetState>();
   float values[kNumLeafParams];
@@ -648,6 +701,7 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
       mode_ = mode;
     }
     source_ = source;
+    program_.store(ProgramOf(source, mode.mode), std::memory_order_relaxed);
     // A preset change plays the preset's stored Subdiv and time mode (clock.md §10.1): the rows
     // take them before the unit goes out, and its load applies them. Under recall Preset with the
     // internal source it plays the stored tempo too, which the display shows at once.
@@ -744,6 +798,9 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
       mode_ = mode;
     }
     source_ = source;
+    // The host's wrapper reads the program back after a restore (VST3's setComponentState): the
+    // factory mode the session restores, else the default mode it plays.
+    program_.store(ProgramOf(source, mode.mode), std::memory_order_relaxed);
     if (state.hasEffectVolume) effectVolume_->StoreMirror(state.effectVolumeDb);
     // A session restore restarts the session's preset with its performance (clock.md §10.1): the
     // tempo it saved (the internal tempo persists, P12) and rows 83 and 84, or the preset's

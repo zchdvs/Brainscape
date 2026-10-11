@@ -14,6 +14,7 @@
 #include "Audition.h"
 #include "BrainscapeParam.h"
 #include "EventQueue.h"
+#include "FactoryModes.h"
 #include "HostTempo.h"
 #include "StateCodec.h"
 #include "TestInput.h"
@@ -48,7 +49,7 @@ struct PresetSource {
 
 // The one AudioProcessor behind every format and the companion app (companion §2.1),
 // hosting brainscape::Engine under the wrapper obligations of companion §4.12.
-class BrainscapeProcessor final : public juce::AudioProcessor {
+class BrainscapeProcessor final : public juce::AudioProcessor, private juce::Timer {
  public:
   static constexpr uint32_t kMaxChunk  = 512;      // the engine's maxBlockSize, always (§4.1)
   static constexpr double   kPedalRate = 48000.0;  // the pedal's only rate (§2.3)
@@ -74,11 +75,22 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // Tails run from 0.27 s to forever (§4.5); VST3 maps infinity to kInfiniteTail.
   double getTailLengthSeconds() const override;
 
-  int                getNumPrograms() override { return 1; }
-  int                getCurrentProgram() override { return 0; }
-  void               setCurrentProgram(int) override {}
-  const juce::String getProgramName(int) override { return {}; }
-  void               changeProgramName(int, const juce::String&) override {}
+  // The programs hosts list and step through (FactoryModes.h): 0 the default mode, then the
+  // factory set in the Modes menu's order, then Custom. A program change plays the program as the
+  // Modes menu plays its mode (CurationSession::OpenForHost): a Spillover load with Trails while
+  // audio runs, the knobs waiting for pickup, its document open; unsaved edits in the open document
+  // are written to a file first, since a host cannot be asked. On the message thread it loads at
+  // once; from any other thread (an audio thread) it only records the program, allocating
+  // nothing, and the processor's timer plays it within kHostPollMs.
+  // getCurrentProgram is the Modes menu's tick: the factory mode that plays (chosen from the menu
+  // or the host's list, or restored with a session), 0 for the default mode, Custom for a document
+  // file or an unnamed mode, or after a host chose Custom. Edits keep the program, as VST3 hosts
+  // expect: they never move the host's program parameter. Any thread.
+  int                getNumPrograms() override { return ProgramCount(); }
+  int                getCurrentProgram() override { return program_.load(std::memory_order_relaxed); }
+  void               setCurrentProgram(int program) override;
+  const juce::String getProgramName(int program) override { return juce::String::fromUTF8(ProgramName(program).c_str()); }
+  void               changeProgramName(int, const juce::String&) override {}  // the names are the set's
 
   void getStateInformation(juce::MemoryBlock& destData) override;
   void setStateInformation(const void* data, int sizeInBytes) override;
@@ -139,6 +151,14 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   // Message thread: counts the loads that replaced the preset (LoadPresetState and session
   // restores), so an editor can lock its knobs for pickup after each (mode-compiler.md §3.5).
   uint32_t LoadSerial() const noexcept { return loadSerial_.load(std::memory_order_relaxed); }
+
+  // Message thread: what the processor's timer does every kHostPollMs. A program change a host
+  // made on another thread plays (the latest, if it made several), and when the program differs
+  // from the one the host was last told of (a Modes menu choice, a document opened, a program
+  // change refused), the host is told (updateHostDisplay with programChanged), so its preset
+  // list shows what plays. Tests call it in place of the timer.
+  void ServiceHostRequests();
+  static constexpr int kHostPollMs = 50;
 
   // The curation slice's document (mode-compiler.md §9.1): message thread only.
   CurationSession& Curation() noexcept { return *curation_; }
@@ -290,6 +310,13 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   void     RenderChunk(const float* hostInL, const float* hostInR, float* outL, float* outR,
                        int offset, int numFrames) noexcept;
 
+  // Host programs (setCurrentProgram), on the message thread: plays `program` and records it as
+  // the one the host holds.
+  void timerCallback() override { ServiceHostRequests(); }
+  void ApplyHostProgram(int program);
+  // The program of what plays (getCurrentProgram): the factory mode's, the default mode's, or Custom.
+  static int ProgramOf(const PresetSource& source, const ModeBlob& mode);
+
   // The spare engine of §4.7 and §4.9, prepared by a worker thread.
   void EnsureSpareWorker();
   void SpareWorkerLoop();
@@ -313,6 +340,12 @@ class BrainscapeProcessor final : public juce::AudioProcessor {
   ModeState          mode_;
   mutable std::mutex modeMutex_;
   PresetSource       source_;  // what mode_ came from: under controlMutex_
+  // The program what plays is (ProgramOf, written with source_), any thread; a program a host
+  // chose off the message thread, waiting for the timer (-1: none); and, message thread, the
+  // program the host was last told of or chose itself.
+  std::atomic<int>   program_{kDefaultProgram};
+  std::atomic<int>   hostProgram_{-1};
+  int                notifiedProgram_ = kDefaultProgram;
 
   // Two slots at most: the live engine and, while the restart option is on, the spare. The
   // audio thread swaps the two pointers at a transport start; slots are allocated and

@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -49,5 +50,22 @@ std::vector<size_t> FactoryMenuOrder();
 // diagnostic) when it does not decode. Message thread: allocates the state.
 std::unique_ptr<PresetState> DecodeFactory(size_t index, PresetDiagnostic* diagnostic = nullptr,
                                            PackageInfo* info = nullptr, PresetMeta* meta = nullptr);
+
+// ── The plugin's programs ─────────────────────────────────────────────────────────────────
+// What hosts list as the plugin's factory presets and step through with their previous and next
+// arrows (BrainscapeProcessor::getNumPrograms): program 0 is the default mode, then the factory
+// set in the Modes menu's order (FactoryMenuOrder: the modes by family, then the reserves), then
+// Custom, which stands for anything else that plays (a document file, an unnamed state) and
+// loads nothing. Any thread.
+inline constexpr int kDefaultProgram = 0;
+int ProgramCount() noexcept;   // FactoryCount() + 2
+int CustomProgram() noexcept;  // the last: ProgramCount() - 1
+// The factory package program `program` loads, or -1 (the default mode, Custom, out of range).
+int FactoryOfProgram(int program);
+// The program that loads factory package `index`, or -1.
+int ProgramOfFactory(int index);
+// The name hosts show, UTF-8: "Default mode", "Echoic: Engram", "Reserve: Afterimage", "Custom";
+// empty out of range.
+std::string ProgramName(int program);
 
 }  // namespace brainscape::plugin

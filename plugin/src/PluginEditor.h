@@ -84,6 +84,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   juce::Rectangle<int> header_;
   bool                 wordmarkText_ = true;  // room for the wordmark's text beside the Modes menu
   float                scale_ = 1.f;
+  uint32_t             noticeSerial_ = 0;  // the curation session's last notice noted (a host's program change)
   juce::TooltipWindow  tooltips_{this, 700};
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrainscapeEditor)

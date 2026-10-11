@@ -28,6 +28,13 @@ void Check(bool ok, const juce::String& what) {
   if (!ok) ++gFailures;
 }
 
+bool AllFinite(const std::vector<float>& v) {
+  for (float x : v) {
+    if (!std::isfinite(x)) return false;
+  }
+  return true;
+}
+
 // The JUCE host keeps the plugin's IComponent state as base64 inside its own XML.
 std::unique_ptr<juce::XmlElement> HostXml(juce::AudioPluginInstance& host) {
   juce::MemoryBlock mb;
@@ -96,8 +103,8 @@ int main(int argc, char* argv[]) {
     }
     // The Leaf rows, freeze, the eight macros, the expression pedal, the effect volume
     // (mode-compiler.md §9.2), perf.subdiv and perf.time_mode (docs/design/clock.md §10.4), and
-    // the bypass JUCE's VST3 wrapper adds.
-    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 14 && haveDelay && haveFreeze &&
+    // the bypass and the program change JUCE's VST3 wrapper adds.
+    Check(host->getParameters().size() == static_cast<int>(kNumLeafParams) + 15 && haveDelay && haveFreeze &&
               haveSubdiv,
           juce::String(host->getParameters().size()) + " host parameters, engine, freeze and Subdiv present");
 
@@ -185,6 +192,47 @@ int main(int argc, char* argv[]) {
           "an offline export restarts once, at its start: equals the reference (first difference L " +
               juce::String(static_cast<juce::int64>(FirstDiff(exported.l, ref.l))) + ")");
     host->setPlayHead(nullptr);
+    host->releaseResources();
+    host.reset();
+
+    // The programs, as a VST3 host sees them (IUnitInfo's program list on the root unit, and
+    // the kIsProgramChange parameter JUCE's wrapper adds): the default mode, the factory set,
+    // Custom. A host's change goes through the edit controller (setParamNormalized on the
+    // message thread) and plays the factory mode, which the session then names; a session
+    // restore moves the host's program to what the session plays.
+    host = formats.createPluginInstance(*types[0], 48000.0, 512, error);
+    Check(host != nullptr && host->setBusesLayout(layout), "a third instance, stereo");
+    if (host == nullptr) return 1;
+    const int          programs = host->getNumPrograms();
+    juce::StringArray  names;
+    for (int i = 0; i < programs; ++i) names.add(host->getProgramName(i));
+    const int engram = names.indexOf("Echoic: Engram");
+    Check(programs > 3 && names[0] == "Default mode" && names[programs - 1] == "Custom" && engram > 0 &&
+              names.contains("Reserve: Afterimage"),
+          juce::String(programs) + " programs: " + names.joinIntoString(", "));
+    Check(host->getCurrentProgram() == 0, "a new instance is at program 0, the default mode");
+    host->prepareToPlay(48000.0, 512);
+    host->setCurrentProgram(engram);
+    WrapperState chosen{};
+    const auto   afterChange = ComponentState(*host);
+    Check(host->getCurrentProgram() == engram && DecodeState(afterChange.data(), afterChange.size(), chosen) &&
+              chosen.hasFactory && chosen.factory.id == "factory.engram",
+          "the host's program change plays Engram, and the session names it (program " +
+              juce::String(host->getCurrentProgram()) + ")");
+    Stereo after = MakeInput(9600);
+    render(after);
+    Check(AllFinite(after.l) && AllFinite(after.r), "Engram plays");
+    // A session of the default mode (the busy leaves, no factory mode) moves the host back to 0.
+    state.settings.restartOnStart = false;
+    EncodeState(state, blob);
+    bool restored = SetComponentState(*host, blob);
+    int  now      = host->getCurrentProgram();
+    Check(restored && now == 0, "a restored session without a factory mode is program 0 (" + juce::String(now) + ")");
+    // And one saved while Engram played moves it to Engram.
+    restored = SetComponentState(*host, afterChange);
+    now      = host->getCurrentProgram();
+    Check(restored && now == engram,
+          "a restored session with Engram is Engram's program (" + juce::String(now) + ")");
     host->releaseResources();
   }
   juce::DeletedAtShutdown::deleteAll();
