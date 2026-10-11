@@ -25,6 +25,12 @@
 //   expression POS        the expression pedal, 0-1 (does nothing without assignments)
 //   freeze on|off | trigger
 //   stats [reset]         CPU load: DWT cycles of Engine::Process per callback, mean and peak
+//   tone [SIGNAL]         test signals straight into the codec instead of the engine's output
+//                         (live/Tone.h; firmware/DAC_TEST.md): tone test (the DAC test program,
+//                         59.5 s), tone sine|isp|fs4|square DB (DB the sample peak, -120 to 0
+//                         dBFS), tone sweep [sine|isp], tone silence; tone off gives the output
+//                         back to the engine; "tone" alone reports what plays. The engine does
+//                         not run meanwhile, and commands that would change it are refused
 //   dfu                   reboot into the bootloader
 #include <atomic>
 #include <cstdlib>
@@ -39,6 +45,7 @@
 #include "brainscape/ModeEval.h"
 #include "brainscape/Params.h"
 #include "live/LivePresets.h"
+#include "live/Tone.h"
 #include "platform/Placement.h"
 #include "platform/Platform.h"
 #include "platform/SeedHw.h"
@@ -51,6 +58,7 @@ using brainscape::golden::JsonObj;
 using brainscape::golden::JsonString;
 using brainscape::golden::JsonUInt;
 namespace live = brainscape::fw::live;
+namespace tone = brainscape::fw::tone;
 
 namespace {
 
@@ -83,6 +91,11 @@ volatile uint64_t     g_statSum = 0;
 std::atomic<bool>     g_statReset{false};
 std::atomic<uint32_t> g_onsets{0};
 
+// The `tone` command (live/Tone.h): while g_toneOn is set the callback plays g_tone instead of
+// running the engine. The main loop changes either only while the callback is muted.
+tone::Player      g_tone;
+std::atomic<bool> g_toneOn{false};
+
 void AudioCallback(daisy::AudioHandle::InputBuffer in, daisy::AudioHandle::OutputBuffer out,
                    size_t size) {
   if (g_statReset.exchange(false, std::memory_order_relaxed)) {
@@ -93,6 +106,12 @@ void AudioCallback(daisy::AudioHandle::InputBuffer in, daisy::AudioHandle::Outpu
   }
   if (g_muted.load(std::memory_order_acquire) || size == 0 || size > kBlock) {
     for (size_t i = 0; i < size; ++i) out[0][i] = out[1][i] = 0.f;
+    g_mutedCallbacks.fetch_add(1, std::memory_order_release);
+    return;
+  }
+  if (g_toneOn.load(std::memory_order_acquire)) {
+    // A test signal straight to the codec; the engine's timeline waits for `tone off`.
+    g_tone.Fill(out[0], out[1], static_cast<uint32_t>(size));
     g_mutedCallbacks.fetch_add(1, std::memory_order_release);
     return;
   }
@@ -480,11 +499,130 @@ std::vector<std::string> Words(const std::string& line) {
   return out;
 }
 
+// ---- The `tone` command (live/Tone.h; firmware/DAC_TEST.md) --------------------------------
+
+constexpr const char* kToneUsage =
+    "tone off | test | silence | sine DB | isp DB | fs4 DB | square DB | sweep [sine|isp]; DB is the "
+    "sample peak in dBFS, -120 to 0, at most two decimals";
+
+tone::Program g_toneBuild;            // built here, copied into g_tone while the callback is muted
+std::string   g_toneSignal = "off";  // what plays, for `tone`
+
+// Hundredths as a JSON number: 5950 -> 59.50.
+std::string Hundredths(uint64_t v) {
+  std::string frac = JsonUInt(v % 100u);
+  if (frac.size() < 2) frac = "0" + frac;
+  return JsonUInt(v / 100u) + "." + frac;
+}
+
+std::string SecondsText(uint64_t frames) { return Hundredths(frames * 100u / tone::kSampleRate); }
+
+std::string DbText(int32_t centiDb) {
+  char text[12];
+  tone::CentiDbText(centiDb, text);
+  return text;
+}
+
+void StartTone(const std::string& signal) {
+  Mute();  // from here the callback no longer reads g_tone
+  g_tone.Start(g_toneBuild);
+  g_toneOn.store(true, std::memory_order_release);
+  Unmute();
+  g_toneSignal = signal;
+}
+
+void ToneCommand(const std::vector<std::string>& w) {
+  const std::string what = w.size() >= 2 ? Lower(w[1]) : std::string();
+  JsonObj           reply;
+  reply.Str("type", "tone");
+  if (w.size() == 1) {
+    const bool on = g_toneOn.load(std::memory_order_acquire);
+    reply.Str("signal", on ? g_toneSignal : std::string("off"));
+    if (on) reply.Raw("seconds", SecondsText(g_tone.Frames())).Bool("ended", g_tone.Done());
+    reply.Str("usage", kToneUsage);
+  } else if (what == "off" && w.size() == 2) {
+    if (g_toneOn.load(std::memory_order_acquire)) {
+      Mute();
+      g_toneOn.store(false, std::memory_order_release);
+      Unmute();
+    }
+    g_toneSignal = "off";
+    reply.Str("signal", "off").Str("output", "engine");
+  } else if (what == "test" && w.size() == 2) {
+    tone::BuildTest(&g_toneBuild);
+    StartTone("test");
+    reply.Str("signal", "test")
+        .UInt("version", tone::kProgramVersion)
+        .UInt("steps", g_toneBuild.count)
+        .UInt("frames", g_toneBuild.Frames())
+        .Raw("seconds", SecondsText(g_toneBuild.Frames()))
+        .Bool("loop", false);
+  } else if (what == "silence" && w.size() == 2) {
+    tone::BuildSteady(&g_toneBuild, tone::Wave::Silence, 0);
+    StartTone("silence");
+    reply.Str("signal", "silence").Bool("loop", true);
+  } else if ((what == "sine" || what == "isp" || what == "fs4" || what == "square") && w.size() == 3) {
+    int32_t centiDb = 0;
+    if (!tone::ParseCentiDb(w[2].c_str(), &centiDb)) {
+      Error("tone " + what + " DB: DB is the sample peak in dBFS, -120 to 0, at most two decimals, not " + w[2]);
+      return;
+    }
+    const tone::Wave wave = what == "sine"  ? tone::Wave::Sine
+                            : what == "isp" ? tone::Wave::Isp
+                            : what == "fs4" ? tone::Wave::Fs4
+                                            : tone::Wave::Square;
+    tone::BuildSteady(&g_toneBuild, wave, centiDb);
+    StartTone(what + " " + DbText(centiDb));
+    const int32_t q        = g_toneBuild.steps[0].q;
+    const bool    quarter  = wave == tone::Wave::Isp || wave == tone::Wave::Fs4;
+    reply.Str("signal", what).Str("dbfs", DbText(centiDb)).Int("code", q).Int("codecCode", tone::CodecCode(q));
+    reply.UInt("hz", quarter ? tone::kSampleRate / 4u : tone::kSampleRate / tone::kPeriod);
+    if (quarter) reply.UInt("phaseDegrees", wave == tone::Wave::Isp ? 45u : 0u);
+    // fs/4 at 45 degrees peaks sqrt(2) above its samples between them: +3.01 dB.
+    if (wave == tone::Wave::Isp) reply.Str("truePeakDbtp", DbText(centiDb + 301));
+    reply.Bool("loop", true);
+  } else if (what == "sweep" && (w.size() == 2 || w.size() == 3)) {
+    const std::string kind = w.size() == 3 ? Lower(w[2]) : std::string("sine");
+    if ((kind != "sine" && kind != "isp") ||
+        !tone::BuildSweep(&g_toneBuild, kind == "isp" ? tone::Wave::Isp : tone::Wave::Sine)) {
+      Error("tone sweep [sine|isp]");
+      return;
+    }
+    StartTone("sweep " + kind);
+    const tone::Step* s = g_toneBuild.steps;
+    const uint32_t    n = g_toneBuild.count - 1u;  // the levels; then 1 s of silence
+    reply.Str("signal", "sweep")
+        .Str("wave", kind)
+        .Str("fromDbfs", DbText(s[0].centiDb))
+        .Str("toDbfs", DbText(s[n - 1u].centiDb))
+        .Str("stepDb", DbText(s[1].centiDb - s[0].centiDb))
+        .Raw("stepSeconds", SecondsText(s[0].frames))
+        .Raw("seconds", SecondsText(g_toneBuild.Frames()))
+        .Bool("loop", true);
+  } else {
+    Error(std::string("tone: ") + kToneUsage);
+    return;
+  }
+  Reply(reply.Done());
+}
+
+// What a playing tone refuses: everything that would send the engine an event or load.
+bool ChangesEngine(const std::string& c) {
+  return c == "preset" || c == "set" || c == "onset" || c == "marks" || c == "macro" || c == "expression" ||
+         c == "freeze" || c == "trigger";
+}
+
 void Command(const std::vector<std::string>& w) {
   const std::string& c = w[0];
   bool               on = false;
   float              value = 0.f;
-  if (c == "info") {
+  if (ChangesEngine(c) && g_toneOn.load(std::memory_order_acquire)) {
+    Error("a tone is playing and the engine is stopped: send tone off first");
+    return;
+  }
+  if (c == "tone") {
+    ToneCommand(w);
+  } else if (c == "info") {
     Reply(Hello());
   } else if (c == "list") {
     std::string list = "[";

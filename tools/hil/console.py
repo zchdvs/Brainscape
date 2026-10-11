@@ -8,12 +8,25 @@ Sends the live image's text commands over USB serial and prints its replies read
 
 Commands (one per line): info | list | params | get | preset N [exact|cut] | set NAME VALUE |
 onset on|off | marks on|off | macro NAME POS | expression POS | freeze on|off | trigger |
-stats [reset] | dfu. NAME is a descriptor name (layer0.size_ms), a ParamId (GrainSizeMs) or a
+stats [reset] | tone [SIGNAL] | dfu. NAME is a descriptor name (layer0.size_ms), a ParamId (GrainSizeMs) or a
 short alias: delay mix feedback trim out size density spray pitch transpose spread reverse
 jitter sustain skew smooth pan modrate moddepth delaytime delayfb delaymix reverbtime reverbmix
 cutoff res morph sens repeat decay voices skip burst spacing volume. Since sound revision 2 onset grains and mark positioning are mode
 structure: "onset" and "marks" load a mode (so do "set onset V" and "set marks V", V >= 0.5 on);
 macro NAME is activity, repeats, shape, time, space, filter, aux1 or aux2.
+
+Test signals straight into the codec instead of the engine's output (firmware/DAC_TEST.md, the
+limiter's DAC test; the engine stops meanwhile and refuses changes until "tone off"):
+  tone test           the DAC test program, 59.5 s, for tools/hil/dac_test.py; then silence
+  tone sine DB        1 kHz sine with sample peaks at DB dBFS (-120 to 0; 0 puts them at 1.0)
+  tone isp DB         fs/4 (12 kHz) at 45 degrees: samples +P +P -P -P at DB, true peak DB + 3.01
+  tone fs4 DB         fs/4 at 0 degrees: 0 +P 0 -P, true peak = sample peak (the isp control)
+  tone square DB      1 kHz square, +-P
+  tone sweep [sine|isp]  stepped level sweep, 0.5 s a step, repeating: 1 kHz -40 to 0 dBFS in
+                      1 dB steps, or isp with sample peaks -12 to 0 dBFS in 0.5 dB steps
+  tone silence        digital silence
+  tone off            the engine's output again
+  tone                what plays, and the usage
 
 Other images answer "info" too, so the console also identifies whatever is flashed.
 """
@@ -67,9 +80,38 @@ def pretty(obj):
         return "error: " + obj.get("message", "")
     if kind == "resync":
         return "(the device's USB serial dropped %s line(s) so far)" % obj.get("droppedLines")
+    if kind == "tone":
+        return tone_text(obj)
     if kind == "rebooting":
         return "rebooting into the %s" % obj.get("to", "bootloader")
     return None
+
+
+def tone_text(obj):
+    """A reply to the tone command, as text."""
+    sig = obj.get("signal")
+    if "usage" in obj:
+        state = "off (the engine plays)" if sig == "off" else "%s, %s s in%s" % (
+            sig, obj.get("seconds"), ", ended: silence" if obj.get("ended") else "")
+        return "tone: %s\n  usage: %s" % (state, obj["usage"])
+    if sig == "off":
+        return "tone off: the engine's output again"
+    if sig == "test":
+        return "tone: the DAC test program v%s, %s steps, %s s (%s frames), then silence" % (
+            obj.get("version"), obj.get("steps"), obj.get("seconds"), obj.get("frames"))
+    if sig == "silence":
+        return "tone: digital silence"
+    if sig == "sweep":
+        return "tone: sweep of the %s from %s to %s dBFS in %s dB steps of %s s, repeating (%s s a pass)" % (
+            obj.get("wave"), obj.get("fromDbfs"), obj.get("toDbfs"), obj.get("stepDb"), obj.get("stepSeconds"),
+            obj.get("seconds"))
+    text = "tone: %s, %s Hz, sample peak %s dBFS (code %s, codec %s)" % (
+        sig, obj.get("hz"), obj.get("dbfs"), obj.get("code"), obj.get("codecCode"))
+    if "phaseDegrees" in obj:
+        text += ", phase %s degrees" % obj["phaseDegrees"]
+    if "truePeakDbtp" in obj:
+        text += ", true peak %s dBTP" % obj["truePeakDbtp"]
+    return text
 
 
 def structure(obj):
@@ -112,7 +154,7 @@ def main():
         else:
             port.write_line("info")
             print("connected to %s; type commands (help: list, params, preset N, set NAME VALUE, onset|marks on|off, "
-                  "macro NAME POS, expression POS, freeze on|off, trigger, stats), Ctrl-C to quit" % args.port)
+                  "macro NAME POS, expression POS, freeze on|off, trigger, stats, tone), Ctrl-C to quit" % args.port)
             for line in sys.stdin:
                 if line.strip():
                     port.write_line(line.strip())

@@ -87,6 +87,16 @@ target_include_directories(firmware_live_presets PRIVATE ${CMAKE_CURRENT_SOURCE_
                                                          ${CMAKE_CURRENT_SOURCE_DIR}/golden)
 add_test(NAME firmware_live_presets COMMAND firmware_live_presets)
 
+# The live image's `tone` test signals (firmware/live/Tone.h) from the source the Seed runs:
+# their codes, levels, the DAC test program and the player under block splits.
+add_executable(firmware_tone
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/tests/tone.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/live/Tone.cpp)
+target_link_libraries(firmware_tone PRIVATE brainscape_dsp)
+target_include_directories(firmware_tone PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware
+                                                 ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+add_test(NAME firmware_tone COMMAND firmware_tone)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)
