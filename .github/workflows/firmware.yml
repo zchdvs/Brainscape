@@ -102,7 +102,7 @@ jobs:
           --archive build-fw/dsp/libbrainscape_dsp.a --archive build-fw/dsp/libbrainscape_dsp_fpenv_hooks.a
           build-fw/firmware/brainscape_parity.elf build-fw/firmware/brainscape_bench.elf
           build-fw/firmware/brainscape_bench_xip.elf build-fw/firmware/brainscape_bench_hooks.elf
-          build-fw/firmware/brainscape_live.elf
+          build-fw/firmware/brainscape_bench_hop.elf build-fw/firmware/brainscape_live.elf
       - name: Upload the images
         if: always()
         uses: actions/upload-artifact@v4

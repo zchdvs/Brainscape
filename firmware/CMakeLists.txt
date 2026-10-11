@@ -181,9 +181,10 @@ find_program(BRAINSCAPE_ARM_READELF arm-none-eabi-readelf HINTS ${_bs_tool_dir} 
 # One firmware image: an ELF, the .bin the web programmer flashes, a .hex, a map file, and
 # a memory-region report. ENGINE_CODE ITCM places the engine archive's code and constants in
 # ITCM (profile §7.1), XIP leaves them with the rest of the code. MIN_HEAP is what the
-# image's heap region must hold (linker check).
+# image's heap region must hold (linker check). ITCM_EXTRA: more linker input patterns to place in
+# ITCM with the engine (an ITCM image only; the hop image's forms, bench/HopForms.h).
 function(brainscape_firmware_image name)
-  cmake_parse_arguments(ARG "" "MIN_HEAP;ENGINE_CODE" "SOURCES;LIBS" ${ARGN})
+  cmake_parse_arguments(ARG "" "MIN_HEAP;ENGINE_CODE;ITCM_EXTRA" "SOURCES;LIBS" ${ARGN})
   set(BRAINSCAPE_LD_MIN_HEAP ${ARG_MIN_HEAP})
   if(ARG_ENGINE_CODE STREQUAL "ITCM")
     set(BRAINSCAPE_LD_ENGINE_CODE "ITCM")
@@ -243,7 +244,7 @@ function(brainscape_firmware_image name)
     # pattern .rodata.[!s]* is every other .rodata section, the tables' COMDAT copies
     # (.rodata._Z...) and merged constants (.rodata.cst*) among them.
     set(_bs_engine_sections ".text .text.* .rodata .rodata.[!s]*")
-    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(${_bs_engine_sections}) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(${_bs_engine_sections}) *(${_bs_engine_comdat})${_bs_itcm_libgcc_inputs} *MemFunctions.c.o*(.text .text.*)")
+    set(BRAINSCAPE_LD_ITCM_INPUTS "EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp.a:*(${_bs_engine_sections}) EXCLUDE_FILE(${_bs_not_itcm}) *libbrainscape_dsp_fpenv_hooks.a:*(${_bs_engine_sections}) *(${_bs_engine_comdat})${_bs_itcm_libgcc_inputs} *MemFunctions.c.o*(.text .text.*) ${ARG_ITCM_EXTRA}")
     set(BRAINSCAPE_LD_ITCM_DISCARD "*libgcc.a:*(.ARM.exidx .ARM.exidx.*)")
   elseif(ARG_ENGINE_CODE STREQUAL "XIP")
     set(BRAINSCAPE_LD_ENGINE_CODE "with the rest of the code, ${BRAINSCAPE_LD_TEXT}")
@@ -338,6 +339,17 @@ brainscape_firmware_image(brainscape_bench_hooks
   LIBS brainscape_fw_golden_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
+# Image 6 of the CPU plan's bench session 2 (docs/design/cpu-budget.md §8.1, D4): the bench with
+# the onset hop's other two forms, the textbook one step 1 replaced and P1's v2, in ITCM beside
+# the engine's AnalyzeHop (bench/HopForms.h; its `hop` command). Its own image, so that P1's v2's
+# 8 KB never sits in the images G6 holds to 8 KB of ITCM spare.
+brainscape_firmware_image(brainscape_bench_hop
+  SOURCES ${_bs_bench_sources} bench/HopMicro.cpp bench/HopForms.cpp
+  LIBS brainscape_fw_golden
+  ENGINE_CODE ITCM
+  ITCM_EXTRA "*HopForms.cpp.o*(.text .text.* .rodata .rodata.*)"
+  MIN_HEAP 4M)
+target_compile_definitions(brainscape_bench_hop PRIVATE BRAINSCAPE_BENCH_HOP=1)
 brainscape_firmware_image(brainscape_live
   SOURCES live/main.cpp live/LivePresets.cpp platform/EventBudget.cpp
   LIBS brainscape_fw_golden
@@ -346,7 +358,7 @@ brainscape_firmware_image(brainscape_live
 
 add_custom_target(brainscape_firmware ALL
   DEPENDS brainscape_parity brainscape_bench brainscape_bench_xip brainscape_bench_hooks
-          brainscape_live)
+          brainscape_bench_hop brainscape_live)
 
 # The Daisy bootloader binary libDaisy ships, beside the images, for a BOOT_QSPI setup.
 if(BRAINSCAPE_FIRMWARE_APP_TYPE STREQUAL "BOOT_QSPI")

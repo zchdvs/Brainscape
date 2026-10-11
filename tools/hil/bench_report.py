@@ -46,7 +46,7 @@ RULE_RATIO, RULE_FLAGGED_PCT = 1.2, 0.5  # profile §4.2's decision rule
 SUITE_LINES = {"memory": {"memory": 1}, "micro": {"micro": 26, "flush-micro": 6}, "restart": {"restart": 8},
                "blocks": {"blocks": 18}, "stages": {"stage": 9}, "births": {"births": 4}, "tail": {"tail": 2},
                "stress": {"stress": (26, 66)}, "post": {"post": 10}, "events": {"event": 6},
-               "speed": {"speed-micro": 94}, "pld": {"pld-micro": 13},
+               "speed": {"speed-micro": 94}, "pld": {"pld-micro": 13}, "hop": {"speed-micro": 6},
                "ledger": {"ledger-constants": 1, "ledger": 25}}
 RUN_SUITES = ("memory", "micro", "restart", "blocks", "stages", "births", "stress", "post", "events", "speed",
               "pld")
@@ -647,13 +647,15 @@ def report(runs, golden, o):
                 if x.get("group") == "calibration":
                     continue
                 units = float(x["units"] or 1)
-                extra = ", ".join("%s %s" % (k, x[k]) for k in ("sounding", "steals", "hermiteSlots") if k in x)
+                extra = ", ".join("%s %s" % (k, x[k]) for k in ("sounding", "steals", "hermiteSlots", "hopsDiffering")
+                                  if k in x)
                 rows.append(([r.name] if multi else []) + [
                     x["group"], x["name"], "%.1f" % ((x["min"] - cal) / units), "%.1f" % ((x["mean"] - cal) / units),
                     "%.1f" % ((x["max"] - cal) / units), "frame" if x["group"] == "renderrun" else "call", extra])
         o.table((["log"] if multi else []) + ["group", "what", "min", "mean", "max", "cycles per", ""], rows)
         o.p()
-        o.p("Each line is 8 measurements on the bench's own grain core (never the engine's), less an empty "
+        o.p("Each line is 8 measurements (64 hops for the hop forms) on the bench's own grain core or detector "
+            "(never the engine's), less an empty "
             "measurement (%s). RenderRun runs 256 frames inside one envelope leg; ring cold: the D-cache cleaned "
             "and invalidated before the call. These are the units the governor's weights, c_b and the per-call "
             "and per-pass terms bound (§5.3, D7: measured upper bounds)." % ", ".join(

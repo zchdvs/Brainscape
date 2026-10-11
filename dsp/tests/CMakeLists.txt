@@ -134,6 +134,16 @@ target_link_libraries(firmware_engine_micro PRIVATE brainscape_dsp)
 target_include_directories(firmware_engine_micro PRIVATE ${_bs_fw} ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 add_test(NAME firmware_engine_micro COMMAND firmware_engine_micro)
 
+# The hop image's three forms of the onset hop's analysis (firmware/bench/HopForms.h), bit for bit
+# against the engine's AnalyzeHop on 64 hops, with a stand-in clock.
+add_executable(firmware_hop_forms
+  ${_bs_fw}/tests/hop_forms.cpp
+  ${_bs_fw}/bench/HopMicro.cpp
+  ${_bs_fw}/bench/HopForms.cpp)
+target_link_libraries(firmware_hop_forms PRIVATE brainscape_dsp)
+target_include_directories(firmware_hop_forms PRIVATE ${_bs_fw} ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+add_test(NAME firmware_hop_forms COMMAND firmware_hop_forms)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)

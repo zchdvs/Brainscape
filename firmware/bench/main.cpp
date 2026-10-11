@@ -15,7 +15,7 @@
 //
 // Commands: info | run [quick] | memory | micro | restart | blocks [quick] | stages [quick]
 //           | births [quick] | tail | stress [quick] | post [quick] | events [quick]
-//           | speed | pld | ledger [quick] | dfu
+//           | speed | pld | ledger [quick] | hop (brainscape_bench_hop only) | dfu
 // Suites:
 //   memory   PlanMemory, the placement and the linker map
 //   micro    FPU latency with normal and subnormal operands at FZ = 0 and 1 (§4.2 test a),
@@ -46,6 +46,9 @@
 //            push and pop; a pass boundary; the old 64-slot sweep; the DetMath calls of a birth
 //   pld      the PLD micro-test: SDRAM line walks with no PLD and PLD 1, 2 and 4 lines ahead, and
 //            a PLD of the line about to be read (does a demand miss wait on it?)
+//   hop      (the brainscape_bench_hop image) the onset hop's analysis three ways on 64 hops, each
+//            from the same state: the engine's AnalyzeHop, the textbook form and P1's v2, all in
+//            ITCM, caches warm and cleaned, each form's bits against the engine's (D4)
 //   ledger   the blocks and stress configurations (fuzz aside) with every block logged: DWT
 //            next to the shadow ledger's charge and the engine's counts (block-log lines)
 // Every result line carries the shadow ledger's summary (bench/ShadowLedger.h): the blocks DWT
@@ -64,6 +67,9 @@
 #include "bench/Configs.h"
 #include "bench/EngineMicro.h"
 #include "bench/Microbench.h"
+#if defined(BRAINSCAPE_BENCH_HOP)
+#include "bench/HopMicro.h"
+#endif
 #include "bench/ShadowLedger.h"
 #include "brainscape/Engine.h"
 #include "brainscape/Params.h"
@@ -636,6 +642,21 @@ void SuitePld() {
   }
 }
 
+#if defined(BRAINSCAPE_BENCH_HOP)
+// The detector's tables and state in AXI SRAM, as the engine's Warm arena places its own.
+float g_hopWarm[kHopWarmFloats];
+
+void SuiteHop() {
+  MicroClock clock;
+  clock.begin = MicroBegin;
+  clock.now   = MicroNow;
+  clock.end   = MicroEnd;
+  if (!RunHopMicro(clock, g_hopWarm, EmitMicro)) {
+    Emit(JsonObj().Str("type", "error").Str("message", "a hop form's bits differ from AnalyzeHop's").Done());
+  }
+}
+#endif
+
 // Every block of the run: DWT, the ledger's charge and the engine's counts, 50 blocks a line.
 void EmitBlockLog(const Spec& s, const Result& r) {
   constexpr uint32_t kPerLine = 50;
@@ -791,6 +812,15 @@ void Command(const std::vector<std::string>& w) {
   } else if (c == "pld") {
     Begin("pld");
     SuitePld();
+  } else if (c == "hop") {
+#if defined(BRAINSCAPE_BENCH_HOP)
+    Begin("hop");
+    SuiteHop();
+#else
+    Emit(JsonObj().Str("type", "error").Str("message", "no hop forms in this image: flash brainscape_bench_hop").Done());
+    fw::SetLedMode(fw::LedMode::Idle);
+    return;
+#endif
   } else if (c == "ledger") {
     Begin(quick ? "ledger quick" : "ledger");
     SuiteLedger(quick);
