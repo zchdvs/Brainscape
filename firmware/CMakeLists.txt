@@ -321,7 +321,8 @@ add_custom_command(OUTPUT ${_bs_murmuration}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/factory/murmuration.bsp ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
   COMMENT "Embedding firmware/factory/murmuration.bsp"
   VERBATIM)
-set(_bs_bench_sources bench/main.cpp bench/Microbench.cpp bench/Configs.cpp ${_bs_murmuration})
+set(_bs_bench_sources bench/main.cpp bench/Microbench.cpp bench/Configs.cpp bench/EngineMicro.cpp
+                       ${_bs_murmuration})
 brainscape_firmware_image(brainscape_bench
   SOURCES ${_bs_bench_sources}
   LIBS brainscape_fw_golden

@@ -125,6 +125,15 @@ target_compile_definitions(brainscape_bench_configs PRIVATE
   BRAINSCAPE_GOLDEN_PRESETS="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets")
 add_test(NAME firmware_bench_configs COMMAND brainscape_bench_configs --check)
 
+# The bench image's micros of the engine's internals (firmware/bench/EngineMicro.h), run once with
+# a stand-in clock: their setups, before a Seed runs them.
+add_executable(firmware_engine_micro
+  ${_bs_fw}/tests/engine_micro.cpp
+  ${_bs_fw}/bench/EngineMicro.cpp)
+target_link_libraries(firmware_engine_micro PRIVATE brainscape_dsp)
+target_include_directories(firmware_engine_micro PRIVATE ${_bs_fw} ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+add_test(NAME firmware_engine_micro COMMAND firmware_engine_micro)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)

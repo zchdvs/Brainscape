@@ -241,6 +241,10 @@ class GranularCore {
                uint32_t* frozenAnchor, uint32_t numFrames, float* wetL, float* wetR) noexcept;
 
  private:
+  // The bench image's per-function DWT micro (firmware/bench/EngineMicro.cpp, cpu-budget.md
+  // §8.2's SuiteMicro) calls the private steps directly on a core of its own; it defines this.
+  friend struct GranularCoreProbe;
+
   struct Mark {
     int64_t  abs;
     uint32_t frame;

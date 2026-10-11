@@ -101,7 +101,42 @@ __attribute__((noinline)) uint32_t FlushChain(uint32_t n) {
   return t1 - t0;
 }
 
+// Line i's first word: 8 words a 32-byte line.
+inline const uint32_t* Line(const uint32_t* buffer, uint32_t i) { return buffer + 8u * i; }
+
+template <bool kSame>
+__attribute__((noinline)) uint32_t LineWalk(const uint32_t* buffer, uint32_t lines, uint32_t ahead, uint32_t work) {
+  uint32_t       acc = 0;
+  const uint32_t t0  = DWT->CYCCNT;
+  for (uint32_t i = 0; i < lines; ++i) {
+    if (kSame) {
+      __builtin_prefetch(Line(buffer, i));
+    } else if (ahead != 0u) {
+      __builtin_prefetch(Line(buffer, i + ahead));
+    }
+    acc += *static_cast<const volatile uint32_t*>(Line(buffer, i));
+    for (uint32_t w = 0; w < work; ++w) {
+      acc = acc * 3u + w;
+      __asm__ volatile("" : "+r"(acc));
+    }
+  }
+  const uint32_t      t1   = DWT->CYCCNT;
+  volatile uint32_t   sink = acc;
+  (void)sink;
+  return t1 - t0;
+}
+
 }  // namespace
+
+uint32_t RunLineWalk(const uint32_t* buffer, uint32_t lines, uint32_t ahead, uint32_t work, bool samePld) {
+  __disable_irq();
+  SCB_CleanInvalidateDCache();
+  __DSB();
+  __ISB();
+  const uint32_t cycles = samePld ? LineWalk<true>(buffer, lines, 0, work) : LineWalk<false>(buffer, lines, ahead, work);
+  __enable_irq();
+  return cycles;
+}
 
 uint32_t RunFpChain(FpOp op, uint32_t xBits, uint32_t aBits, uint32_t bBits, uint32_t fpscr,
                     uint32_t iterations) {

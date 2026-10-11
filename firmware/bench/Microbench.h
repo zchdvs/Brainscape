@@ -34,4 +34,12 @@ uint32_t RunFpChain(FpOp op, uint32_t xBits, uint32_t aBits, uint32_t bBits, uin
 enum class FlushForm : uint8_t { None, BitTest, Compare };
 uint32_t RunFlushLoop(FlushForm form, uint32_t iterations, uint32_t chains);
 
+// The PLD micro-test (docs/design/cpu-budget.md §8.2, G5): with interrupts off and the D-cache
+// cleaned and invalidated first, walks `lines` 32-byte lines of `buffer` (SDRAM), reading one word
+// of each and then running `work` dependent integer steps (the compute between two line touches),
+// with a PLD `ahead` lines ahead of the read (0: none). `samePld`: a PLD of each line just before its
+// own read instead, which shows whether a demand miss waits on the prefetch already in flight or
+// fetches again. Returns DWT cycles for the walk.
+uint32_t RunLineWalk(const uint32_t* buffer, uint32_t lines, uint32_t ahead, uint32_t work, bool samePld);
+
 }  // namespace brainscape::fw::bench

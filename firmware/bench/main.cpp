@@ -15,7 +15,7 @@
 //
 // Commands: info | run [quick] | memory | micro | restart | blocks [quick] | stages [quick]
 //           | births [quick] | tail | stress [quick] | post [quick] | events [quick]
-//           | ledger [quick] | dfu
+//           | speed | pld | ledger [quick] | dfu
 // Suites:
 //   memory   PlanMemory, the placement and the linker map
 //   micro    FPU latency with normal and subnormal operands at FZ = 0 and 1 (§4.2 test a),
@@ -40,6 +40,12 @@
 //   post     each post stage alone, its mix settled and moving, the delay's head gliding and
 //            the filter's coefficients moving, against none (costs by difference)
 //   events   each event type once every 16 blocks: the event blocks against the blocks before
+//   speed    DWT per function on a grain core of the bench's own (bench/EngineMicro.h): RenderRun
+//            per voice-frame by path, rate class, envelope leg and direction, ring warm and cold;
+//            one RenderRun call; the worst trigger birth at 0, 32 and 64 voices; the voice heap's
+//            push and pop; a pass boundary; the old 64-slot sweep; the DetMath calls of a birth
+//   pld      the PLD micro-test: SDRAM line walks with no PLD and PLD 1, 2 and 4 lines ahead, and
+//            a PLD of the line about to be read (does a demand miss wait on it?)
 //   ledger   the blocks and stress configurations (fuzz aside) with every block logged: DWT
 //            next to the shadow ledger's charge and the engine's counts (block-log lines)
 // Every result line carries the shadow ledger's summary (bench/ShadowLedger.h): the blocks DWT
@@ -56,6 +62,7 @@
 
 #include "JsonLine.h"
 #include "bench/Configs.h"
+#include "bench/EngineMicro.h"
 #include "bench/Microbench.h"
 #include "bench/ShadowLedger.h"
 #include "brainscape/Engine.h"
@@ -102,6 +109,16 @@ __attribute__((section(".bss.brainscape_sdram_sorted"))) uint32_t g_sorted[kMaxB
 __attribute__((section(".bss.brainscape_sdram_ledger"))) uint32_t g_ledger[kMaxBlocks];
 __attribute__((section(".bss.brainscape_sdram_flags"))) uint8_t   g_flags[kMaxBlocks];
 __attribute__((section(".bss.brainscape_sdram_counts"))) BlockCounts g_counts[kMaxBlocks];
+
+// The speed suite's grain core, window table and wet buffers in DTCM beside the engine's, its
+// ring in SDRAM; the PLD walk's buffer in SDRAM.
+constexpr uint32_t kMicroRingFrames = 1u << 16;
+alignas(16) __attribute__((section(".bss.brainscape_dtcm_micro_core"))) unsigned char g_microCore[kMicroCoreBytes];
+__attribute__((section(".bss.brainscape_dtcm_micro_lut"))) float g_microLut[4096];
+__attribute__((section(".bss.brainscape_dtcm_micro_wet"))) float g_microWet[2][kMicroMaxFrames];
+__attribute__((section(".bss.brainscape_sdram_micro_ring"))) int16_t g_microRing[2u * kMicroRingFrames];
+constexpr uint32_t kPldWords = 256u * 1024u;  // 1 MiB
+__attribute__((section(".bss.brainscape_sdram_pld"))) uint32_t g_pldBuffer[kPldWords];
 
 Engine*             g_engine = nullptr;
 fw::EnginePlacement g_place;
@@ -540,6 +557,85 @@ void SuiteEvents(bool quick) {
   }
 }
 
+// ---- The speed and PLD micros ---------------------------------------------------------------
+
+void MicroBegin(bool cold) {
+  __disable_irq();
+  if (cold) SCB_CleanInvalidateDCache();  // the ring's lines; the core and tables are in DTCM
+  __DSB();
+  __ISB();
+}
+uint32_t MicroNow() { return DWT->CYCCNT; }
+void     MicroEnd() { __enable_irq(); }
+
+void EmitMicro(const MicroLine& l) {
+  JsonObj o;
+  o.Str("type", "speed-micro")
+      .Str("group", l.group)
+      .Str("name", l.name)
+      .UInt("samples", l.samples)
+      .UInt("units", l.units)
+      .UInt("min", l.min)
+      .UInt("max", l.max)
+      .UInt("mean", l.samples != 0 ? l.sum / l.samples : 0);
+  std::string line = o.Done();
+  if (!l.detail.empty()) {
+    line.pop_back();
+    line += "," + l.detail + "}";
+  }
+  Emit(line);
+}
+
+void SuiteSpeed() {
+  static_assert(sizeof(g_microLut) / sizeof(float) >= 4096u, "the window table's size (detail::kWindowLutSize)");
+  MicroMemory m;
+  m.core       = g_microCore;
+  m.ring       = g_microRing;
+  m.ringFrames = kMicroRingFrames;
+  m.lut        = g_microLut;
+  m.wetL       = g_microWet[0];
+  m.wetR       = g_microWet[1];
+  MicroClock clock;
+  clock.begin = MicroBegin;
+  clock.now   = MicroNow;
+  clock.end   = MicroEnd;
+  if (!RunEngineMicros(clock, m, EmitMicro)) {
+    Emit(JsonObj().Str("type", "error").Str("message", "a speed micro's setup failed (see its line)").Done());
+  }
+}
+
+void SuitePld() {
+  constexpr uint32_t kLines = 4096;  // 128 KiB: eight times the D-cache, every line cold
+  for (uint32_t i = 0; i < kPldWords; ++i) g_pldBuffer[i] = i * 2654435761u;
+  struct Walk {
+    uint32_t ahead, work;
+    bool     same;
+  };
+  std::vector<Walk> walks;
+  for (const uint32_t work : {0u, 16u, 64u}) {
+    for (const uint32_t ahead : {0u, 1u, 2u, 4u}) walks.push_back({ahead, work, false});
+  }
+  walks.push_back({0, 0, true});
+  for (const Walk& w : walks) {
+    uint32_t best = UINT32_MAX, worst = 0;
+    for (int k = 0; k < 4; ++k) {
+      const uint32_t c = mb::RunLineWalk(g_pldBuffer, kLines, w.ahead, w.work, w.same);
+      best             = std::min(best, c);
+      worst            = std::max(worst, c);
+    }
+    Emit(JsonObj()
+             .Str("type", "pld-micro")
+             .Str("pld", w.same ? "the line about to be read" : (w.ahead == 0 ? "none" : "ahead"))
+             .UInt("ahead", w.ahead)
+             .UInt("work", w.work)
+             .UInt("lines", kLines)
+             .UInt("cycles", best)
+             .UInt("worstCycles", worst)
+             .UInt("cyclesPerLineX100", static_cast<uint64_t>(best) * 100u / kLines)
+             .Done());
+  }
+}
+
 // Every block of the run: DWT, the ledger's charge and the engine's counts, 50 blocks a line.
 void EmitBlockLog(const Spec& s, const Result& r) {
   constexpr uint32_t kPerLine = 50;
@@ -656,6 +752,8 @@ void Command(const std::vector<std::string>& w) {
     SuiteStress(quick);
     SuitePost(quick);
     SuiteEvents(quick);
+    SuiteSpeed();
+    SuitePld();
     if (!quick) SuiteTail();
   } else if (c == "memory") {
     Begin("memory");
@@ -687,6 +785,12 @@ void Command(const std::vector<std::string>& w) {
   } else if (c == "events") {
     Begin(quick ? "events quick" : "events");
     SuiteEvents(quick);
+  } else if (c == "speed") {
+    Begin("speed");
+    SuiteSpeed();
+  } else if (c == "pld") {
+    Begin("pld");
+    SuitePld();
   } else if (c == "ledger") {
     Begin(quick ? "ledger quick" : "ledger");
     SuiteLedger(quick);

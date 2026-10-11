@@ -46,8 +46,10 @@ RULE_RATIO, RULE_FLAGGED_PCT = 1.2, 0.5  # profile §4.2's decision rule
 SUITE_LINES = {"memory": {"memory": 1}, "micro": {"micro": 26, "flush-micro": 6}, "restart": {"restart": 8},
                "blocks": {"blocks": 18}, "stages": {"stage": 9}, "births": {"births": 4}, "tail": {"tail": 2},
                "stress": {"stress": (26, 66)}, "post": {"post": 10}, "events": {"event": 6},
+               "speed": {"speed-micro": 94}, "pld": {"pld-micro": 13},
                "ledger": {"ledger-constants": 1, "ledger": 25}}
-RUN_SUITES = ("memory", "micro", "restart", "blocks", "stages", "births", "stress", "post", "events")
+RUN_SUITES = ("memory", "micro", "restart", "blocks", "stages", "births", "stress", "post", "events", "speed",
+              "pld")
 G3_MEDIAN_PERMILLE = 1300  # cpu-budget.md §8.3: the ledger at most 1.3 x DWT at p50
 
 
@@ -633,6 +635,49 @@ def report(runs, golden, o):
         o.p("The nominal preset (the eight-target macro's own for the MacroMove); an event block also pays what the "
             "event starts in it (a load's fade and switch, a trigger's birth). N is the event reserve over the "
             "worst event's cost (D12).")
+
+    speed_runs = [r for r in budget_runs if r.of("speed-micro")]
+    if speed_runs:
+        o.h("DWT per function (cpu-budget.md §8.2 SuiteMicro; firmware/bench/EngineMicro.h)")
+        rows = []
+        for r in speed_runs:
+            lines = r.of("speed-micro")
+            cal = next((x["min"] for x in lines if x.get("group") == "calibration"), 0)
+            for x in lines:
+                if x.get("group") == "calibration":
+                    continue
+                units = float(x["units"] or 1)
+                extra = ", ".join("%s %s" % (k, x[k]) for k in ("sounding", "steals", "hermiteSlots") if k in x)
+                rows.append(([r.name] if multi else []) + [
+                    x["group"], x["name"], "%.1f" % ((x["min"] - cal) / units), "%.1f" % ((x["mean"] - cal) / units),
+                    "%.1f" % ((x["max"] - cal) / units), "frame" if x["group"] == "renderrun" else "call", extra])
+        o.table((["log"] if multi else []) + ["group", "what", "min", "mean", "max", "cycles per", ""], rows)
+        o.p()
+        o.p("Each line is 8 measurements on the bench's own grain core (never the engine's), less an empty "
+            "measurement (%s). RenderRun runs 256 frames inside one envelope leg; ring cold: the D-cache cleaned "
+            "and invalidated before the call. These are the units the governor's weights, c_b and the per-call "
+            "and per-pass terms bound (§5.3, D7: measured upper bounds)." % ", ".join(
+                "%s %s cycles" % (r.name, next((x["min"] for x in r.of("speed-micro") if x.get("group") == "calibration"), "?"))
+                for r in speed_runs))
+
+    pld_runs = [r for r in budget_runs if r.of("pld-micro")]
+    if pld_runs:
+        o.h("PLD on the SDRAM (cpu-budget.md §8.2, G5)")
+        rows = []
+        for r in pld_runs:
+            lines = r.of("pld-micro")
+            for x in lines:
+                base = next((y for y in lines if y["pld"] == "none" and y["work"] == x["work"]), None)
+                gain = "" if base is None or base is x else "%.0f %%" % (100.0 * (1.0 - x["cycles"] / float(base["cycles"])))
+                rows.append(([r.name] if multi else []) + [x["pld"], x["ahead"], x["work"],
+                                                           "%.1f" % (x["cyclesPerLineX100"] / 100.0), gain])
+        o.table((["log"] if multi else []) + ["PLD", "lines ahead", "work steps per line", "cycles per line",
+                                              "saved against no PLD"], rows)
+        o.p()
+        o.p("Every walk starts with the D-cache cleaned and invalidated, one word read per 32-byte line. "
+            "\"The line about to be read\" issues the PLD just before its own demand read: about the no-PLD cost "
+            "means a demand miss waits on the prefetch in flight; about twice it means the line is fetched again. "
+            "G5 keeps PLD in RenderRun only if the fill cost per voice-frame at r = 4 falls by half (step 10).")
 
     ledger_lines = [(r, b) for r in budget_runs for kind in RESULT_KINDS for b in r.of(kind) if b.get("ledger")]
     if ledger_lines:
