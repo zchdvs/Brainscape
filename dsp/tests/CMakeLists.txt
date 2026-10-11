@@ -87,6 +87,17 @@ target_include_directories(firmware_live_presets PRIVATE ${CMAKE_CURRENT_SOURCE_
                                                          ${CMAKE_CURRENT_SOURCE_DIR}/golden)
 add_test(NAME firmware_live_presets COMMAND firmware_live_presets)
 
+# The firmware's event contract (firmware/platform/EventBudget.h, cpu-budget.md §4.3 step 8):
+# its rules, and a random same-frame stream rendered as staged and coalesced, bit for bit.
+add_executable(firmware_event_budget
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/tests/event_budget.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/platform/EventBudget.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/EventScript.cpp)
+target_link_libraries(firmware_event_budget PRIVATE brainscape_dsp brainscape_golden_packages)
+target_include_directories(firmware_event_budget PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware
+                                                          ${CMAKE_CURRENT_SOURCE_DIR}/golden)
+add_test(NAME firmware_event_budget COMMAND firmware_event_budget)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)

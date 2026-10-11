@@ -327,7 +327,7 @@ brainscape_firmware_image(brainscape_bench_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_live
-  SOURCES live/main.cpp live/LivePresets.cpp
+  SOURCES live/main.cpp live/LivePresets.cpp platform/EventBudget.cpp
   LIBS brainscape_fw_golden
   ENGINE_CODE ITCM
   MIN_HEAP 4M)

@@ -377,12 +377,22 @@ python tools/hil/console.py --port auto list "preset 5" stats
 | `expression POS` | The **expression pedal** (0–1): the playing preset's assignments; nothing without any |
 | `freeze on`, `freeze off`, `trigger` | Freeze and footswitch-trigger events |
 | `params`, `get` | Every parameter (every leaf this sound revision plays and the effect volume) with range and current value |
-| `stats [reset]` | **CPU load**: DWT cycles of `Engine::Process` per callback, mean and peak, as a share of the 48-frame budget; blocks over budget; onsets; mode switches; event-queue refusals; the structure playing |
+| `stats [reset]` | **CPU load**: DWT cycles of `Engine::Process` per callback, mean and peak, as a share of the 48-frame budget; blocks over budget; onsets; mode switches; event-queue refusals; the event contract's carried, late and dropped counts; the structure playing |
 | `info`, `dfu` | The hello line; reboot into the bootloader |
 
 Every change reaches the engine as a frame-stamped event through its `EventQueue`, stamped at the
 next block boundary (a late stamp applies at the start of the block that takes it), exactly as the
-pedal's control loop will deliver them (profile §5.11). The engine runs the pedal's configuration:
+pedal's control loop will deliver them (profile §5.11), and under the firmware's event contract
+([`platform/EventBudget.h`](platform/EventBudget.h); [cpu-budget.md](../docs/design/cpu-budget.md)
+§4.3 step 8, D12), which bounds the event work of a block without rewriting what it plays: at most
+5 events a block (provisional until bench session 2 measures each type's cost), of them one
+Spillover load, one trigger and two clock ticks, the overflow and everything after it carried to
+the next block so the stream's order holds; a trigger carried more than 8 blocks past its stamp is
+dropped and counted (the rate cap); and same-frame `SetParam` and `MacroMove` events of one id
+coalesce, the later one in its place, never across a load (it reads row 85). The console flushes
+each command's event at once; the pedal's control loop will stage a whole iteration's. The host
+test `firmware_event_budget` checks each rule, and renders a random same-frame stream as staged
+and as coalesced: the outputs are identical. The engine runs the pedal's configuration:
 48 kHz, `maxBlockSize` 48, the 2²² ring, stereo input. The LED flashes on every detected onset.
 The image keeps its own copy of what it sent (the last load, then every parameter, macro and
 pedal move, evaluated with the engine's own `EvalMacro` and `EvalExpression`), from which `onset`

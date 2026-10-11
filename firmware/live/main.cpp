@@ -3,7 +3,10 @@
 // 18/19 out), the pedal's configuration (maxBlockSize 48, the 2^22 ring), with a few presets
 // from the golden corpus and a text protocol over USB serial (tools/hil/console.py). Every
 // change reaches the engine as a frame-stamped event through its EventQueue, stamped at the
-// next block boundary (determinism-profile.md §5.11), as the pedal's control loop will.
+// next block boundary (determinism-profile.md §5.11), as the pedal's control loop will, under
+// the firmware's event contract (platform/EventBudget.h: at most 5 events, 1 load, 1 trigger and
+// 2 clock ticks a block, the overflow carried to the next block; a trigger carried more than 8
+// blocks is dropped).
 //
 // Sound revision 2 (mode-compiler.md §7): the onset trigger and mark positioning are mode
 // structure, not parameters (rows 27 and 28 are retired), so `onset` and `marks` load a
@@ -24,7 +27,8 @@
 //   macro NAME POS        a macro move (activity repeats shape time space filter aux1 aux2), 0-1
 //   expression POS        the expression pedal, 0-1 (does nothing without assignments)
 //   freeze on|off | trigger
-//   stats [reset]         CPU load: DWT cycles of Engine::Process per callback, mean and peak
+//   stats [reset]         CPU load: DWT cycles of Engine::Process per callback, mean and peak;
+//                         the event contract's carried, late and dropped counts
 //   dfu                   reboot into the bootloader
 #include <atomic>
 #include <cstdlib>
@@ -39,6 +43,7 @@
 #include "brainscape/ModeEval.h"
 #include "brainscape/Params.h"
 #include "live/LivePresets.h"
+#include "platform/EventBudget.h"
 #include "platform/Placement.h"
 #include "platform/Platform.h"
 #include "platform/SeedHw.h"
@@ -73,6 +78,10 @@ std::atomic<uint32_t>    g_blocks{0};  // published block count of the timeline
 std::atomic<bool>        g_muted{false};
 std::atomic<uint32_t>    g_mutedCallbacks{0};
 uint32_t                 g_seq = 0;    // producer: sequence numbers of stamped events
+// The firmware's event contract (platform/EventBudget.h, cpu-budget.md §4.3 step 8): every event
+// passes through it to the queue. The console flushes each command's event at once; the pedal's
+// control loop will stage a whole iteration's, which is where coalescing applies.
+fw::EventBudget          g_budget;
 int32_t                  g_current = 0;
 
 // CPU meter (audio thread writes, main loop reads and resets).
@@ -140,8 +149,15 @@ bool PushEvent(Engine::EventType type, uint32_t id, float value, const PresetSta
   e.id     = id;
   e.value  = value;
   e.preset = preset;
-  if (g_queue.Push(e, index)) return true;
-  Error("the event queue refused the event (full, or out of order)");
+  uint32_t at = UINT32_MAX;
+  if (g_budget.Stage(e)) g_budget.Flush(&g_queue, NextBoundary(), &at);
+  if (at != UINT32_MAX) {
+    if (index != nullptr) *index = at;
+    return true;
+  }
+  Error(type == Engine::EventType::Trigger
+            ? "the trigger was dropped: the event contract's rate cap, or the queue is full"
+            : "the event queue refused the event (full, or out of order)");
   return false;
 }
 
@@ -351,6 +367,9 @@ void Stats(bool reset) {
             .UInt("onsets", g_onsets.load(std::memory_order_relaxed))
             .UInt("modeSwitches", g_engine->ModeSwitches())
             .UInt("queueRefused", g_queue.ConsumeRefused())
+            .UInt("eventsCarried", g_budget.Counts().carried)
+            .UInt("eventsLate", g_budget.Counts().late)
+            .UInt("triggersDropped", g_budget.Counts().triggersDropped)
             .UInt("droppedSerialBytes", Serial().DroppedBytes())
             .Int("preset", g_current)
             .Bool("onset", live::PlaysOnset(g_now.mode))
@@ -396,6 +415,7 @@ void LoadPresetCommand(int32_t n, const std::string& how) {
     const bool     ok = g_engine->LoadPreset(g_presets[n], LoadMode::Exact);
     const uint32_t cycles = fw::Cycles() - t0;
     g_queue.Clear();  // a new engine timeline: frame 0
+    g_budget.Restart();
     g_frame = 0;
     g_blocks.store(0, std::memory_order_release);
     g_seq = 0;

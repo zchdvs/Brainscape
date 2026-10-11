@@ -34,11 +34,13 @@ def pretty(obj):
     if kind == "stats":
         b = obj.get("budgetCycles") or 1
         return ("cpu: mean %.1f %%, peak %.1f %% of the 48-frame budget (%d / %d cycles, %d callbacks, %d over "
-                "budget); onsets %d; mode switches %s; preset %s%s%s; queue refused %d" % (
+                "budget); onsets %d; mode switches %s; preset %s%s%s; queue refused %d; events carried %s, "
+                "late %s, triggers dropped %s" % (
                     100.0 * obj["meanCycles"] / b, 100.0 * obj["peakCycles"] / b, obj["meanCycles"],
                     obj["peakCycles"], obj["callbacks"], obj["overBudget"], obj["onsets"],
                     obj.get("modeSwitches", "?"), obj["preset"], structure(obj),
-                    ", frozen" if obj.get("frozen") else "", obj["queueRefused"]))
+                    ", frozen" if obj.get("frozen") else "", obj["queueRefused"],
+                    obj.get("eventsCarried", "?"), obj.get("eventsLate", "?"), obj.get("triggersDropped", "?")))
     if kind == "presets":
         lines = ["presets:"]
         for p in obj["presets"]:
