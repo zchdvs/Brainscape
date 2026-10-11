@@ -8,10 +8,12 @@ recording then plays those codes through a model of the chain: the DAC's ideal r
 (the codes' harmonics below 24 kHz), an optional clip of the reconstructed waveform (a DAC that
 clips inter-sample peaks, or an output stage that clips below full scale), a gain, the interface's
 anti-alias filter (nothing at or above 0.45 of its rate), its noise, its clock against the Seed's,
-a fractional delay, whatever the Seed played before the program, and the interface's own full
-scale and word length. Each case requires dac_test.py's verdicts and its key numbers:
+a fractional delay, whatever the Seed played before the program, mains hum, a DC offset, and the
+interface's own full scale and word length. Each case requires dac_test.py's verdicts and its key
+numbers:
 
-  clean         48 kHz stereo 24-bit, the two outputs 0.3 dB apart: PASS; the 0 dBFS level, dBu
+  clean         48 kHz stereo 24-bit, the two outputs 0.3 dB apart: PASS; the 0 dBFS level, and
+                in dBu, Vrms and Vpp from the interface's full scale given in dBu or in Vrms
   clipFS        48 kHz mono float, +35 ppm: a DAC that clips at full scale: the fs/4 test FAILs
                 by 1.74 dB, clean up to +0.01 dBTP, the chain PASSes
   headroom96k   96 kHz mono 32-bit extensible, -60 ppm, junk before the program: a DAC with
@@ -19,7 +21,11 @@ scale and word length. Each case requires dac_test.py's verdicts and its key num
   analogClip    an output stage that clips at 0.97 of full scale: the chain FAILs, the fs/4 test
                 is INCONCLUSIVE
   overload      the interface's gain too high: the recording clips, INVALID (exit 2)
-  deadChannel   the second input not connected: analysed on the first, PASS
+  hum           50 Hz hum with its 3rd and 5th harmonics at -70 dBFS on both inputs, the gain
+                low (the 0 dBFS sine at -20 dBFS): the noise floor shows it, PASS
+  dcOffset      a -45 dBFS DC offset at the same gain: the program found, PASS
+  deadChannel   the second input not connected, or carrying the first's crosstalk at -60 dB:
+                analysed on the first, PASS
   padded        a DAW's exact zeros before the recording: found, PASS
   truncated, notFound, tooSlow   exit 2
 
@@ -195,8 +201,9 @@ def step_harmonics(step, rate, rho, gain, clip):
 
 
 def synth(rate, gain_db=-12.0, rho=1.0, clip=None, noise_dbfs=-105.0, lead=1.3, junk=False, tail=0.5,
-          delay=0.37, seed=1, dc=0.0):
-    """One channel of a recording of the program, in interface full-scale units (unquantized)."""
+          delay=0.37, seed=1, dc=0.0, hum_dbfs=None):
+    """One channel of a recording of the program, in interface full-scale units (unquantized).
+    hum_dbfs: 50 Hz mains hum of that peak, with its 3rd and 5th harmonics at 1/3 and 1/5."""
     gain = 10 ** (gain_db / 20)
     t0 = (int(lead * rate) + delay) / rate  # the program's frame 0, in recording seconds
     total = int(round((t0 + dt.PROGRAM_FRAMES / float(dt.SEED_RATE) / rho + tail) * rate))
@@ -229,6 +236,11 @@ def synth(rate, gain_db=-12.0, rho=1.0, clip=None, noise_dbfs=-105.0, lead=1.3, 
             for m in range(a, b):
                 tau = (m / float(rate) - t0) * rho
                 out[m] = sum(amp * cos(om * tau + ph) for om, amp, ph in w)
+    if hum_dbfs is not None:
+        a = 10 ** (hum_dbfs / 20)
+        per = rate // 50 if rate % 50 == 0 else total
+        cycle = [sum(a / h * math.sin(2 * math.pi * 50.0 * h * m / rate) for h in (1, 3, 5)) for m in range(per)]
+        out = [v + cycle[m % per] for m, v in enumerate(out)]
     n = len(noise)
     return [v + noise[i % n] + dc for i, v in enumerate(out)]
 
@@ -277,9 +289,21 @@ def case_clean(tmp):
         check(near(m["noiseFloorDbfs"], -105.0, 0.3), "clean ch%d: noise %.2f" % (c + 1, m["noiseFloorDbfs"]))
         check(near(m["square"]["deltaDb"], 0.0, 0.01), "clean ch%d: square %+.4f" % (c + 1, m["square"]["deltaDb"]))
         check(criteria(rep, c)["chain"][0] == "PASS" and criteria(rep, c)["isp"][0] == "PASS", "clean ch%d verdicts" % (c + 1))
-    # 18 dBu at full scale: the Seed's 0 dBFS at -12.0 dBFS is a +3.0 dBu (rms) sine.
-    check(near(rep["channels"][0].get("zeroDbfsDbu"), 18.0 - 12.0 - 3.0103, 0.02), "clean: dBu")
+    # +18 dBu at full scale (a +18 dBu sine peaks at the interface's full scale): the Seed's 0 dBFS
+    # sine, recorded at -12.0 dBFS, is +6.0 dBu.
+    check(near(rep["channels"][0].get("zeroDbfsDbu"), 18.0 - 12.0, 0.02), "clean: dBu %s" % (
+        rep["channels"][0].get("zeroDbfsDbu"),))
     check("D10 inter-sample peaks: PASS" in text and "RESULT: PASS" in text, "clean: the printed verdict")
+    # The same recording from a Seed whose full scale is 3.6 Vpp (1.8 V peak, 1.273 Vrms, +4.31
+    # dBu): an interface whose full-scale sine is 12 dB above it, given in Vrms.
+    seed_vrms = 1.8 / math.sqrt(2)
+    code, rep, text = run(path, "--interface-fs-vrms", "%.6f" % (seed_vrms * 10 ** (12.0 / 20)))
+    m = rep["channels"][0]
+    check(code == 0 and near(m.get("zeroDbfsVpp"), 3.6, 0.005) and near(m.get("zeroDbfsVrms"), seed_vrms, 0.002)
+          and near(m.get("zeroDbfsDbu"), 20 * math.log10(seed_vrms / dt.DBU_VOLTS), 0.02),
+          "clean: 3.6 Vpp from --interface-fs-vrms: %s Vpp, %s Vrms, %s dBu" % (
+              m.get("zeroDbfsVpp"), m.get("zeroDbfsVrms"), m.get("zeroDbfsDbu")))
+    check("= +4.31 dBu = 1.273 Vrms = 3.60 Vpp" in text, "clean: the printed level in volts")
     return ch1
 
 
@@ -342,6 +366,39 @@ def case_overload(tmp):
     check("the recording clipped" in text and "RESULT: INVALID" in text, "overload: the printed advice")
 
 
+def case_hum(tmp):
+    """Hum the guide calls harmless: the gate and every measurement work at 1 kHz or 12 kHz."""
+    ch1 = synth(48000, -20.0, seed=12, hum_dbfs=-70.0)
+    ch2 = synth(48000, -20.0, seed=13, delay=0.55, hum_dbfs=-70.0)
+    path = os.path.join(tmp, "hum.wav")
+    write_wav(path, [ch1, ch2], 48000, "pcm24")
+    code, rep, text = run(path)
+    check(code == 0 and rep["result"] == "PASS", "hum: PASS (exit %s)\n%s" % (code, text))
+    for c in (0, 1):
+        m = rep["channels"][c]
+        check(m["signal"] and m["referenceSnrDb"] > 90.0, "hum ch%d: the program found at 1 kHz (%.1f dB)" % (
+            c + 1, m["referenceSnrDb"]))
+        check(near(m["noiseFloorDbfs"], -72.4, 0.5), "hum ch%d: the noise floor shows the hum (%.2f dBFS)" % (
+            c + 1, m["noiseFloorDbfs"]))
+        if m["signal"]:
+            check(near(m["zeroDbfs"]["recordedPeakDbfs"], -20.0, 0.01) and near(m["isp"]["test"]["deltaDb"], 0.0, 0.01),
+                  "hum ch%d: 0 dBFS %.3f dBFS, fs/4 test %+.4f dB" % (
+                      c + 1, m["zeroDbfs"]["recordedPeakDbfs"], m["isp"]["test"]["deltaDb"]))
+
+
+def case_dc_offset(tmp):
+    """An offset on the interface's input must not hide the program's silences."""
+    ch = synth(48000, -20.0, seed=14, dc=10 ** (-45.0 / 20))
+    path = os.path.join(tmp, "dcoffset.wav")
+    write_wav(path, [ch], 48000, "pcm24")
+    code, rep, text = run(path)
+    check(code == 0 and rep is not None and rep["result"] == "PASS", "dcOffset: PASS (exit %s)\n%s" % (code, text))
+    if rep is not None:
+        check(near(rep["programStartSeconds"], (int(1.3 * 48000) + 0.37) / 48000, 0.0005),
+              "dcOffset: program start %.6f" % rep["programStartSeconds"])
+        check(near(rep["channels"][0]["zeroDbfs"]["recordedPeakDbfs"], -20.0, 0.01), "dcOffset: 0 dBFS level")
+
+
 def case_dead_channel(tmp, ch1):
     rng = random.Random(9)
     dead = [rng.gauss(0.0, 1e-5) for _ in range(len(ch1))]
@@ -351,6 +408,14 @@ def case_dead_channel(tmp, ch1):
     check(code == 0 and rep["channels"][0]["signal"] and not rep["channels"][1]["signal"],
           "deadChannel: PASS on channel 1, channel 2 without signal (exit %s)" % code)
     check("check this input's wiring" in text, "deadChannel: the printed advice")
+    # The first input's crosstalk at -60 dB is too weak to measure the chain by (a narrower gate
+    # would judge it, and fail it on its noise-limited THD): it is not the program.
+    path = os.path.join(tmp, "crosstalk.wav")
+    write_wav(path, [ch1, [v * 1e-3 + d for v, d in zip(ch1, dead)]], 48000, "pcm24")
+    code, rep, text = run(path)
+    check(code == 0 and rep["channels"][0]["signal"] and not rep["channels"][1]["signal"],
+          "deadChannel: crosstalk at -60 dB is not the program (exit %s, %.1f dB)\n%s" % (
+              code, rep["channels"][1]["referenceSnrDb"], text))
 
 
 def case_padded(tmp, ch1):
@@ -394,6 +459,8 @@ def main():
         case_headroom_96k(tmp)
         case_analog_clip(tmp)
         case_overload(tmp)
+        case_hum(tmp)
+        case_dc_offset(tmp)
         case_dead_channel(tmp, ch1)
         case_padded(tmp, ch1)
         case_errors(tmp, ch1)

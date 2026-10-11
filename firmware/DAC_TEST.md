@@ -55,8 +55,10 @@ minimum, its **phantom power (48 V) off**, and speakers and headphones turned do
   join ring and sleeve at the Seed end. Never use an XLR input: phantom power lives there.
 - **Ground.** AGND to the sleeves, and AGND tied to DGND (pin 40) at the board: libDaisy's guide
   requires the two to be joined outside the Seed. Powering the Seed from the same computer as the
-  interface is fine. If the report shows hum (a noise floor above about -80 dBFS), run the laptop
-  on battery or try another USB port; hum does not change the verdict.
+  interface is fine. If the report shows hum (a noise floor above about -80 dBFS), you can run the
+  laptop on battery or try another USB port, but hum does not change the verdict: the script
+  measures every tone at its own frequency, and decides whether an input carries the program from
+  the 1 kHz sine alone.
 - **Levels.** The Seed's full scale is about 3.6 Vpp, 1.27 Vrms, +4.3 dBu by TI's formula for the
   PCM3060 (Electrosmith states 1 Vrms; this test measures it). The inter-sample test asks for
   3.01 dB more, up to about +7.3 dBu: a line input at low gain takes that easily. Some instrument
@@ -113,7 +115,9 @@ commands that would change it are refused.
    peaks at 0 and +3.01 dBTP; the square; 2 s of silence for the noise floor (each tone 2 s, with
    half a second of silence between); then a slow 1 kHz level sweep from -40 to 0 dBFS (20.5 s)
    and a 12 kHz sweep from -12 to 0 dBFS (12.5 s). Then it stays silent.
-4. **Stop recording** at least 2 seconds after the sweeps end (62 seconds or more in all).
+4. **Stop recording** once the 12 kHz sweep has ended and 2 more seconds of silence have gone by:
+   at least 62 seconds after you typed `tone test`, so about 70 seconds in all is safe. A longer
+   take does no harm; one that stops before the program's end is refused.
 5. Type **`tone off`**: the engine plays again.
 6. **Export the take as WAV**, 24-bit or 32-bit float, at the rate you recorded, without
    normalising or dithering to 16 bits.
@@ -157,11 +161,14 @@ RESULT: PASS
 - **INCONCLUSIVE:** the 12 kHz path compresses even without an inter-sample peak; see the analog
   chain line, then record again.
 - **INVALID** (exit code 2): the recording reached the interface's own full scale, or no input
-  carries the program. The report says how many dB to lower the gain.
+  carries the program. The report says how many dB to lower the gain, or, for an input whose
+  1 kHz sine does not stand 60 dB clear of the silence at 1 kHz, `no usable test signal`: check
+  that input's wiring.
 
 ## 6. What to send back
 
-- The **WAV file** as exported (about 17 MB at 48 kHz, 35 MB at 96 kHz; zipping is fine).
+- The **WAV file** as exported (a 70-second take in 24-bit is about 20 MB at 48 kHz, 40 MB at
+  96 kHz; zipping is fine).
 - The **report** dac_test.py printed and the **`dac-test.json`** it wrote.
 - From the console: the **`info` line** and the **`tone test` reply**.
 - The **interface's make and model**, the inputs used (line or instrument), the gain setting, the
@@ -194,5 +201,7 @@ script needs a recording, so the scope gives the level and a look, not the verdi
 handed to libDaisy as the exact float q · 2⁻²³ ([`live/Tone.h`](live/Tone.h)). libDaisy's `f2s24`
 then sends the codec q itself, except that full scale, 2²³, arrives as 8,388,482, which is what the
 engine's own 1.0 gives (output-limiter.md §2.2). The tone code runs from QSPI, outside the engine
-and ITCM: it is not a sound revision, and the engine's archive and the live image's ITCM are the
-same with or without it.
+and ITCM, and calls none of the engine's code: it is not a sound revision, the engine's archive is
+the same with or without it, and the live image's ITCM holds the same functions at the same
+addresses (only the veneers through which ITCM calls the tempo core's code in QSPI point to where
+that code has moved).

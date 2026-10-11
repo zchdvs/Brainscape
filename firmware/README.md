@@ -638,15 +638,18 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
   `lone_busy`.
 - The `tone` command's generator ([`live/Tone.h`](live/Tone.h)) is the host test
   `firmware_tone`'s: the quarter-wave table against binary64, every wave's codes, the exact float
-  hand-off and libDaisy's `f2s24` clamp, all 12,001 levels from -120 to 0 dB, the DAC test
-  program's steps, and the player against a reference model under five block splits, with the
-  program's digest pinned to its version. `firmware_dac_test_py` compares
-  [`dac_test.py`](../tools/hil/dac_test.py)'s copy of the program with the generator's and runs
-  the analysis on synthetic recordings through a modelled chain (a clean one, a DAC that clips at
-  full scale or 1.5 dB above it, an output stage that clips, an overloaded interface, a dead input,
-  clock offsets of +35 and -60 ppm, 48 and 96 kHz, every WAV format it reads). The tone code adds
-  nothing to the live image's ITCM (63,424 bytes with and without it at revision 9; the `.bin`
-  grows 7,772 bytes in QSPI). What the PCM3060 does with it waits for the owner's recording.
+  hand-off and libDaisy's `f2s24` clamp, all 12,001 levels from -120 to 0 dB (against binary64
+  pow and the engine's exp2), the DAC test program's steps, and the player against a reference
+  model under five block splits, with the program's digest pinned to its version.
+  `firmware_dac_test_py` compares [`dac_test.py`](../tools/hil/dac_test.py)'s copy of the program
+  with the generator's and runs the analysis on synthetic recordings through a modelled chain (a
+  clean one, with the 0 dBFS level in dBu, Vrms and Vpp; a DAC that clips at full scale or 1.5 dB
+  above it; an output stage that clips; an overloaded interface; mains hum; a DC offset; a dead
+  input and another input's crosstalk; clock offsets of +35 and -60 ppm, 48 and 96 kHz, every WAV
+  format it reads). The tone code calls no engine code and adds nothing to the live image's ITCM:
+  at revision 9 it holds the same functions at the same addresses, 63,424 bytes, with and without
+  it, and only the veneers into the tempo core's QSPI code differ, since that code moved; the
+  `.bin` grows 9,572 bytes in QSPI. What the PCM3060 does with it waits for the owner's recording.
 - Not verifiable without the board: anything electrical, the bootloader handoff, the fault
   handler's LED and reset, USB enumeration and throughput, the SAI/codec path, and every cycle
   count. The Rev7 has since shown the bootloader handoff, USB enumeration, whole-corpus streams

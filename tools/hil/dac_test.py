@@ -14,7 +14,9 @@ fits every segment's tone (amplitude, phase, DC) at its exact recorded frequency
 channel:
 
   * the 0 dBFS output level: the 1 kHz sine with sample peaks at 1.0, in dBFS of the interface
-    (and in dBu, Vrms and Vpp when the interface's full-scale level is given);
+    (its peak against the interface's full scale, which for a sine is also its rms against a
+    full-scale sine's, AES17), and in dBu, Vrms and Vpp when the interface's full-scale level is
+    given;
   * the analog chain at full scale: the 1 kHz gain at -6, -1 and 0 dBFS and over the sweep from
     -30 dBFS, against the -20 dBFS reference (within 0.10 dB), the harmonic distortion at -1 and
     0 dBFS (THD of h2-h10 at or below -60 dB) and the crest's flattening (peak at least 0.99 of the
@@ -25,7 +27,10 @@ channel:
     estimates how far above full scale the DAC reproduces a peak; and the full-scale square
     (true peak +2.17 dBTP) as a second witness;
   * the recording: no sample within 0.1 dB of the interface's full scale, the noise floor, and
-    which channels carry the program.
+    which channels carry the program: those where the -20 dBFS sine stands 60 dB above what the
+    same 1 kHz fit finds in the program's silence. Hum and other noise away from 1 kHz neither
+    count against a channel nor change a measurement, since every tone is fitted at its own
+    frequency.
 
 D10's verdict: PASS keeps the limiter's ceiling at C = 1.0; FAIL means the DAC (or the Seed's
 output) clips inter-sample peaks, and the ceiling must drop or the detector be oversampled before
@@ -91,7 +96,7 @@ THD_LIMIT_DB = -60.0     # h2-h10 at -1 and 0 dBFS
 FLAT_LIMIT = 0.99        # peak / fundamental at -1 and 0 dBFS
 ISP_DB = 0.05            # fs/4 gain against its -12 dBFS reference
 RECORDING_CLIP = 10 ** (-0.1 / 20)  # a sample this close to the interface's full scale
-MIN_SNR_DB = 30.0        # the reference sine above the noise, for a channel to count
+MIN_SNR_DB = 60.0        # the 1 kHz reference above the silence's 1 kHz, for a channel to count
 DBU_VOLTS = math.sqrt(0.6)  # 0 dBu: 1 mW into 600 ohms, 0.7746 Vrms
 
 
@@ -396,21 +401,33 @@ class Timeline:
 
 
 def envelope(rec, block):
-    """Mean square per block of every channel together, in full-scale units."""
+    """Mean square per block of every channel together, in full-scale units, about each
+    channel's DC offset, so that an offset on the interface's input does not raise the
+    silences. The offset is the mean of the channel's blocks other than exact zeros (the
+    program's tones are whole periods of zero mean); a block of exact zeros, a DAW's padding,
+    stays 0. Returns the envelope and the offsets, in the channels' units."""
     nblocks = len(rec.channels[0]) // block
     env = [0.0] * nblocks
+    offsets = []
     for ch in rec.channels:
+        sums, squares = [], []
         for i in range(nblocks):
             seg = ch[i * block:(i + 1) * block]
-            env[i] += float(sum(map(operator.mul, seg, seg)))
+            sums.append(sum(seg))
+            squares.append(sum(map(operator.mul, seg, seg)))
+        heard = [i for i in range(nblocks) if squares[i]]
+        dc = float(sum(sums[i] for i in heard)) / (block * len(heard)) if heard else 0.0
+        offsets.append(dc)
+        for i in heard:
+            env[i] += max(float(squares[i]) - 2.0 * dc * float(sums[i]) + block * dc * dc, 0.0)
     k = rec.scale * rec.scale / (block * len(rec.channels))
-    return [e * k for e in env]
+    return [e * k for e in env], offsets
 
 
 def locate(rec):
     """Finds the program: its start in the recording (seconds) and a first time scale."""
     block = max(1, rec.rate // 1000)
-    env = envelope(rec, block)
+    env, dc = envelope(rec, block)
     if not env:
         raise DacTestError("the recording is empty")
     # The quietest 5 % of the blocks, leaving out exact zeros (a DAW's padding before the
@@ -423,7 +440,7 @@ def locate(rec):
     for i, e in enumerate(env):
         if e > loud:
             if run >= quiet_blocks:
-                onsets.append(_refine_onset(rec, max(0, (i - 1) * block), (i + 1) * block, math.sqrt(loud)))
+                onsets.append(_refine_onset(rec, max(0, (i - 1) * block), (i + 1) * block, math.sqrt(loud), dc))
             run = 0
         else:
             run += 1
@@ -460,12 +477,12 @@ def locate(rec):
     return t0, kappa, worst, floor
 
 
-def _refine_onset(rec, a, b, threshold):
+def _refine_onset(rec, a, b, threshold, dc):
     level = threshold / rec.scale
     best = b
-    for ch in rec.channels:
+    for ch, offset in zip(rec.channels, dc):
         for i in range(a, min(b, len(ch))):
-            if abs(ch[i]) > level:
+            if abs(ch[i] - offset) > level:
                 best = min(best, i)
                 break
     return best / float(rec.rate)
@@ -536,7 +553,19 @@ def measure_channel(rec, ch, tl):
     nmean = float(sum(nseg)) / noise_n
     nms = max(float(sum(map(operator.mul, nseg, nseg))) / noise_n - nmean * nmean, 0.0) * scale * scale
     out["noiseFloorDbfs"] = 10 * math.log10(max(nms, 1e-30))
-    snr = db(ref["gain"] * digital_amplitude("sine", REF_1K.q) / math.sqrt(2) / math.sqrt(max(nms, 1e-30)))
+    # Whether this input carries the program, judged at 1 kHz only: the reference's amplitude
+    # against the rms of what the same fit (frequency and length) finds in three windows of the
+    # program's silence. Hum and noise away from 1 kHz do not count, as they do not in any
+    # measurement; 60 dB leaves the 0.10 dB, 0.05 dB and -60 dB criteria measuring the chain,
+    # not the noise, and refuses another input's crosstalk.
+    omega_1k = 2 * math.pi * 1000.0 * tl.rho / rate
+    silence = []
+    for k in range(3):
+        a, n = tl.window(NOISE, 0.25 + k * long_len, long_len)
+        silence.append(fit(x, a, n, omega_1k)["amplitude"] ** 2)
+    noise_1k = math.sqrt(sum(silence) / len(silence)) * scale
+    out["noise1kDbfs"] = db(noise_1k)
+    snr = db(ref["gain"] * digital_amplitude("sine", REF_1K.q) / max(noise_1k, 1e-30))
     out["referenceSnrDb"] = snr
     if snr < MIN_SNR_DB:
         out["signal"] = False
@@ -589,10 +618,11 @@ def judge_channel(m, cal):
     zero = m["zeroDbfs"]
     level = zero["recordedPeakDbfs"]
     lines = []
-    text = "Seed 0 dBFS (1 kHz sine, sample peaks 1.0) = %.2f dBFS peak, %.2f dBFS rms on the interface" % (
-        level, level - 3.0103)
+    text = "Seed 0 dBFS (1 kHz sine, sample peaks 1.0) = %.2f dBFS on the interface" % level
     if cal is not None:
-        dbu = cal + level - 3.0103
+        # cal is the rms level of the sine whose peaks reach the interface's full scale, so the
+        # sine recorded with its peaks at `level` dBFS is cal + level, in dBu rms.
+        dbu = cal + level
         vrms = DBU_VOLTS * 10 ** (dbu / 20)
         text += " = %+.2f dBu = %.3f Vrms = %.2f Vpp" % (dbu, vrms, vrms * 2 * math.sqrt(2))
         m["zeroDbfsDbu"], m["zeroDbfsVrms"], m["zeroDbfsVpp"] = dbu, vrms, vrms * 2 * math.sqrt(2)
@@ -761,8 +791,8 @@ def print_report(report, steps, out=None):
             m["noiseFloorDbfs"], m["programPeakDbfs"],
             "  ** the recording clipped: lower the interface's gain and record again **" if m["recordingClipped"] else ""))
         if not m["signal"]:
-            w("  no test signal (the -20 dBFS sine is %.1f dB against the noise): check this input's wiring\n" %
-              m["referenceSnrDb"])
+            w("  no usable test signal (the -20 dBFS sine is %.1f dB above the silence at 1 kHz; %.0f dB needed): "
+              "check this input's wiring\n" % (m["referenceSnrDb"], MIN_SNR_DB))
             continue
         ref = m["reference1k"]
         w("  %-52s %8.2f dBFS  gain %+7.2f dB (the 1 kHz reference)\n" % (
@@ -826,9 +856,10 @@ def main(argv=None):
     ap.add_argument("recording", help="the WAV file recorded from the Seed's outputs during `tone test`")
     cal = ap.add_mutually_exclusive_group()
     cal.add_argument("--interface-fs-dbu", type=float, metavar="DBU",
-                     help="the interface input's level at 0 dBFS, at the gain used, in dBu (from its manual)")
+                     help="the interface input's level at 0 dBFS at the gain used, in dBu: the rms level of the sine "
+                          "whose peaks reach its full scale, its 'maximum input level' (from its manual)")
     cal.add_argument("--interface-fs-vrms", type=float, metavar="VRMS",
-                     help="the same in volts rms (a sine at 0 dBFS)")
+                     help="the same in volts rms (the rms of the sine whose peaks reach full scale)")
     ap.add_argument("--steps", action="store_true", help="also print every sweep step")
     ap.add_argument("--json", metavar="PATH", help="write every measurement as JSON for the record")
     args = ap.parse_args(argv)
