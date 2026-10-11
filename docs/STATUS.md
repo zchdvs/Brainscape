@@ -822,8 +822,11 @@ records live in [docs/design/reviews/](design/reviews/).
   decisions D1–D13 confirmed): a bit-exact speed pack, then a deterministic cost governor at sound
   revision 8 (9 if CLOCK's tempo core lands first) that holds any 48 frames to 85 %. Of it, this
   tree has steps 1–2, both bit-exact: the onset hop analysis restructured (P3's rewrite, chosen
-  under its D4 because P1's would not fit wave 1's ITCM) and post-chain hygiene; wave 1's ITCM
-  leaves too little room for steps 4, 5 and 11 until cold code moves out (cpu-budget.md §7.3).
+  under its D4 because P1's would not fit wave 1's ITCM) and post-chain hygiene; and, on sound
+  revision 9, steps 4, 6 and 7, all bit-exact (the `RenderRun` restructure, the end-time heap
+  and free mask, the birth trims), after placing the engine by function freed ITCM
+  (cpu-budget.md §7.3): the live image's `.itcm_text` is 52,256 bytes with them, 13,216 spare,
+  against 63,424 and 2,048 before.
   Still to run on the board: the live image's checks, the bench at revision 3 and every image at
   revisions 4 to 7. The images use libDaisy's
   ST USB code and must not be distributed. The first GitHub runs (2026-10-06) rendered the
@@ -1180,9 +1183,10 @@ records live in [docs/design/reviews/](design/reviews/).
   cycles (§8: ≈530 cycles/sample at 1 ms grains). Of the profile's costs, subnormal operations
   cost nothing extra and the flush 0.9–1.8 %; contraction off is inside every figure, not
   isolated. The fix is designed (2026-10-08, [cpu-budget.md](design/cpu-budget.md)); steps 1–2
-  are built, so the detector's hop costs about half (*model*). From the design, still: the
-  scheduler's 64-slot sweep wants a free bitmask (the fix's step 6); segment batching at extreme
-  birth rates; the detector's per-hop FFT is still a single-sample cost spike, about 49,500
+  are built, so the detector's hop costs about half (*model*), and steps 4, 6 and 7 (the grain
+  loop, the end-time heap and free mask in place of the 64-slot sweep, the birth trims), not yet
+  timed on the board. From the design, still: segment batching at extreme birth rates (step 5);
+  the detector's per-hop FFT is still a single-sample cost spike, about 49,500
   cycles after step 1 (*model*): staged analysis is held in reserve (its D10), and the governor
   reserves the hop statically (cpu-budget.md §5.2).
 - **Trigger layer**: no sidechain input; detector constants are calibrated for 44.1/48 kHz
@@ -1245,8 +1249,8 @@ Steps 1–4 need no hardware.
    (2026-10-07, [the silicon record](design/reviews/rev7-silicon-record.md)), and they settled the
    subnormal policy (gradual underflow stays), the flush's form and cost and `Restart`'s time.
    Next, the CPU budget's fix (owner-approved 2026-10-08, [cpu-budget.md](design/cpu-budget.md);
-   steps 1–2 built, the speed pack's rest after wave 1, then the governor at revision 8, or 9
-   after CLOCK's tempo core; the worst case is not met yet) and the decisions the pass leaves
+   steps 1–2, 4, 6 and 7 built, step 5 and the instrumentation of step 8 next, then the governor
+   at revision 8, or 9 after CLOCK's tempo core; the worst case is not met yet) and the decisions the pass leaves
    (polynomial kernels or tables, the pedal's default load mode; explicit FMA is deferred by the
    fix's D10); the live image's checks; the pedal side of the device link
    (TinyUSB, GPL-clean SD disk I/O, the preset slot store, the upload protocol with its PARITY
