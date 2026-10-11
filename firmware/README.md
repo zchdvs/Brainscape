@@ -12,7 +12,7 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 | **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block (with and without a stream of events), per stage, an upper bound per birth, `Restart` against the SDRAM's own floor, subnormal latency, the flush idiom, silent tails | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
 | B, code-placement A/B | `brainscape_bench_xip.bin` | Image B with the engine's code (and the firmware's `memcpy`/`memmove`/`memset`) executing in place from QSPI instead of ITCM (profile §7.1) | `bench_report.py` |
 | B, flush A/B | `brainscape_bench_hooks.bin` | Image B on the engine built with the FP guard's test hooks: the FZ = 0/1 silent-tail test and flag census of profile §4.2 | `bench_report.py` |
-| **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets, modes, macros and parameters over USB | [`tools/hil/console.py`](../tools/hil/console.py) |
+| **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets, modes, macros and parameters over USB; the `tone` test signals for the limiter's DAC test ([DAC_TEST.md](DAC_TEST.md)) | [`tools/hil/console.py`](../tools/hil/console.py), [`tools/hil/dac_test.py`](../tools/hil/dac_test.py) |
 
 Every image links the engine archive `libbrainscape_dsp.a` exactly as CI's `parity-m7` job builds,
 audits and renders it under QEMU (same toolchain, flags and deterministic archive: SHA-256
@@ -378,6 +378,7 @@ python tools/hil/console.py --port auto list "preset 5" stats
 | `freeze on`, `freeze off`, `trigger` | Freeze and footswitch-trigger events |
 | `params`, `get` | Every parameter (every leaf this sound revision plays and the effect volume) with range and current value |
 | `stats [reset]` | **CPU load**: DWT cycles of `Engine::Process` per callback, mean and peak, as a share of the 48-frame budget; blocks over budget; onsets; mode switches; event-queue refusals; the structure playing |
+| `tone SIGNAL` | **Test signals** straight into the codec instead of the engine's output, for the limiter's DAC test ([DAC_TEST.md](DAC_TEST.md), the owner's step-by-step guide): `tone test` (the 59.5 s program [`tools/hil/dac_test.py`](../tools/hil/dac_test.py) analyses), `tone sine DB`, `tone isp DB` (fs/4 at 45°, true peak DB + 3.01 dBTP), `tone fs4 DB`, `tone square DB` (DB the sample peak, -120 to 0 dBFS), `tone sweep [sine\|isp]`, `tone silence`; `tone off` gives the output back to the engine, `tone` reports what plays. Exact integer codes from QSPI, outside the engine: the engine stops meanwhile, and the commands that would change it are refused |
 | `info`, `dfu` | The hello line; reboot into the bootloader |
 
 Every change reaches the engine as a frame-stamped event through its `EventQueue`, stamped at the
@@ -423,6 +424,10 @@ revision runs them again.
       `volume -24` take the wet down, never the dry; `stats` mean and peak under 100 % for every
       preset and structure. Expect the glitch preset to fail the last: its corpus preset,
       `dense_1ms`, peaked at 118.6 % on the bench.
+- [ ] The limiter's DAC test ([DAC_TEST.md](DAC_TEST.md); output-limiter.md §6.4, D10): `tone test`
+      recorded on an audio interface from pins 18 and 19, `tools/hil/dac_test.py` on the file; the
+      0 dBFS output level and whether the PCM3060 clips +3.01 dBTP inter-sample peaks, kept under
+      [`records/`](records/) before the limiter's revision is minted.
 - [ ] Look for USB dropouts during a long render (a `resync` line, a nonzero `droppedBytes`) and
       for audio clicks while typing commands (the USB interrupts run below the audio DMA's
       priority). The long renders are done: no `resync` and 0 bytes dropped in any parity or
@@ -631,6 +636,17 @@ Any image may emit `{"type":"resync",…}` after its USB serial lost lines; erro
 - The live image's presets and structures load exactly on the host (`firmware_live_presets`), and
   its structure check refuses a package with other macros (`switch_onset`) in place of
   `lone_busy`.
+- The `tone` command's generator ([`live/Tone.h`](live/Tone.h)) is the host test
+  `firmware_tone`'s: the quarter-wave table against binary64, every wave's codes, the exact float
+  hand-off and libDaisy's `f2s24` clamp, all 12,001 levels from -120 to 0 dB, the DAC test
+  program's steps, and the player against a reference model under five block splits, with the
+  program's digest pinned to its version. `firmware_dac_test_py` compares
+  [`dac_test.py`](../tools/hil/dac_test.py)'s copy of the program with the generator's and runs
+  the analysis on synthetic recordings through a modelled chain (a clean one, a DAC that clips at
+  full scale or 1.5 dB above it, an output stage that clips, an overloaded interface, a dead input,
+  clock offsets of +35 and -60 ppm, 48 and 96 kHz, every WAV format it reads). The tone code adds
+  nothing to the live image's ITCM (63,424 bytes with and without it at revision 9; the `.bin`
+  grows 7,772 bytes in QSPI). What the PCM3060 does with it waits for the owner's recording.
 - Not verifiable without the board: anything electrical, the bootloader handoff, the fault
   handler's LED and reset, USB enumeration and throughput, the SAI/codec path, and every cycle
   count. The Rev7 has since shown the bootloader handoff, USB enumeration, whole-corpus streams
