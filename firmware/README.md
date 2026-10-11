@@ -526,7 +526,8 @@ reaches (a static call graph from it finds 45,494 bytes of reached code), the RT
 validator (cpu-budget.md §7.3 keeps it until bench session 2 has measured a Spillover load's
 block), the tables and a few small accessors. With the CPU plan's steps 4, 6 and 7 the live
 image's `.itcm_text` is 52,256 bytes (13,216 spare), and parity, bench and bench_hooks hold
-52,312, 52,104 and 52,216.
+52,312, 52,104 and 52,216. Step 5 (the batched render) adds 736 bytes to the live image's: 52,992
+(12,480 spare), and 53,040, 52,840 and 52,944.
 
 ### Memory map
 
@@ -534,7 +535,7 @@ image's `.itcm_text` is 52,256 bytes (13,216 spare), and parity, bench and bench
 | --- | --- | --- |
 | QSPI flash `0x90040000` | the image: vector table, code, constants (the 29 corpus packages among them, 128 KiB), initial data, ITCM's load image | 391 KiB |
 | ITCM | the engine's code and constants (not the package decoder, encoder, SHA-256 or test-signal generator), libgcc's helpers and the firmware's `mem*` functions, copied at boot | 58.8 KiB of 64 |
-| DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (a 9 KiB slot since sound revision 6; `sizeof(Engine)` is `kEngineImplBytes`, 7,168 bytes at sound revision 2, 8,192 since 6, when wave 1's repeat voices grew the grain pool, and 8,448 since the CPU plan's voice heap), the main stack (32 KiB reserved at the top, linker-checked) | 34 KiB + stack |
+| DTCM | the relocated vector table (1 KiB) and the fault handler's stack (1 KiB), Hot arena (24 KiB, `PlanMemory` asks 16.4 KiB at `maxBlockSize` 48, 20 KiB at 512), the Engine object (a 9 KiB slot from sound revision 6, 16 KiB since the CPU plan's step 5; `sizeof(Engine)` is `kEngineImplBytes`, 7,168 bytes at sound revision 2, 8,192 since 6, when wave 1's repeat voices grew the grain pool, 8,448 with the CPU plan's voice heap and 15,872 with step 5's spare grain records), the main stack (32 KiB reserved at the top, linker-checked) | 42 KiB + stack |
 | AXI SRAM (D1) | Warm arena (136 KiB; 128.2 KiB asked at sound revision 2, 1,616 bytes more than revision 1 for the active mode), USB serial rings (33 KiB), `.data` and `.bss` (the live image's 16 `PresetState`s, 2,656 bytes each) | 193 KiB of 512 (live: 249 KiB) |
 | D2 SRAM | libDaisy's audio DMA buffers (MPU non-cacheable) | 16 KiB |
 | Backup SRAM | libDaisy's `boot_info` (the Daisy bootloader's handshake, kept first: linker-checked), then the fault record | 148 B |

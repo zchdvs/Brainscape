@@ -33,10 +33,10 @@ inline constexpr uint32_t kFastCutFrames = 128;
 // per pointer width (measured 6,600 B on the M7 and 6,752 B on x86-64 at sound revision 2;
 // 7,928 B and 8,080 B at 6, wave 1's repeat voices having grown the grain from 80 to 96 bytes;
 // 8,424 B and 8,560 B at 9 with the CPU plan's voice heap and birth caches, cpu-budget.md §4.3
-// steps 6 and 7; plus headroom; each wave raises it, mode-compiler.md §7.1); Engine.cpp
-// static_asserts the fit.
+// steps 6 and 7; 15,288 B and 15,424 B with step 5's 64 spare grain records; plus headroom; each
+// wave raises it, mode-compiler.md §7.1); Engine.cpp static_asserts the fit.
 // The active mode lives in the Warm arena, not here (§7.3).
-inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 8448 : 8704;
+inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 15872 : 16128;
 inline constexpr size_t kEngineImplAlign = 16;
 
 struct EngineConfig {

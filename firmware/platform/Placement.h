@@ -22,13 +22,17 @@ namespace brainscape::fw {
 // Since sound revision 9 the post delay's line holds 4 s, 2^-7 of it and two frames
 // (docs/design/clock.md §5.3, D23, §11.16): Bulk 18,325,232 B (the 2^22 ring's 16,777,216 and the
 // line's 1,548,016), so the Bulk arena grows from 17 to 18 MiB, 549,136 B spare.
+// The CPU plan's batched render (docs/design/cpu-budget.md §4.3, step 5) adds 64 spare grain
+// records to the Engine: kEngineImplBytes is 15,872 B on the M7 (15,288 used) and 16,128 B on
+// x86-64 (15,424), so the slot grows from 9 to 16 KiB; with the 24 KiB Hot arena that is 40 of the
+// 80 KiB the DTCM leaves for them.
 // Every image checks PlanMemory against these at boot (CheckPlacement) and refuses to run
 // on a shortfall; the host test firmware_arena_plan does the same on every ctest run.
 inline constexpr size_t kHotArenaBytes    = 24u * 1024u;           // DTCM
 inline constexpr size_t kWarmArenaBytes   = 136u * 1024u;          // AXI SRAM
 inline constexpr size_t kBulkArenaBytes   = 18u * 1024u * 1024u;   // SDRAM
-inline constexpr size_t kEngineSlotBytes  = 9u * 1024u;            // DTCM, one Engine (and the
-                                                                    // x86-64 one, 8,448 B)
+inline constexpr size_t kEngineSlotBytes  = 16u * 1024u;           // DTCM, one Engine (and the
+                                                                    // x86-64 one, 16,128 B)
 inline constexpr size_t kEngineSlotAlign  = 16u;
 
 // DTCM is 128 KiB and holds the main stack at its top (32 KiB reserved, linker-checked).

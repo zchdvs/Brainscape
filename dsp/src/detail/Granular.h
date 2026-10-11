@@ -24,6 +24,10 @@ inline constexpr uint32_t kBlockWriteAheadFrames = 512;
 inline constexpr uint32_t kGranularFastCutFrames = 128;
 inline constexpr uint32_t kGranularMaxPitch      = 8;  // a pitch set's entries (Mode.h's cap)
 inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
+// The batched render (cpu-budget.md §4.3, step 5): a grain record per voice slot, plus spares for
+// the newborns whose slot's last voice still has frames the block has not rendered yet.
+inline constexpr uint32_t kGranularSpareGrains = 64;
+inline constexpr uint32_t kGranularRecords     = kGranularMaxGrains + kGranularSpareGrains;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
 // schedule-time; grains never re-read a global parameter). A voice with repeat N (mode-compiler.md
@@ -47,7 +51,8 @@ struct Grain {
   grainmath::EnvSpec env;  // one pass's envelope
   float    smoothness;  // piecewise->LUT window morph
   float    gainL, gainR;
-  uint8_t  tier;       // resolved at birth: 0 = cubic Hermite, 1 = linear
+  uint8_t  slot;       // the voice slot it sounds in, resolved at birth: below kHiFiGrains it
+                       // reads with cubic Hermite (T0), the others linearly
   uint8_t  pass;       // the current pass, 0 to passes - 1
   uint8_t  passes;     // N: layer0.position.repeat at birth, 1-16
   bool     active;
@@ -117,6 +122,12 @@ struct GranularStats {
   uint64_t clockBirths    = 0;
   uint64_t clockDropped   = 0;
   int64_t  lastClockBirth = -1;  // the absolute frame of the last clock birth, or -1
+  // The batched render (cpu-budget.md §4.3, step 5): births scheduled in a spare record because
+  // their slot's last voice still had frames to render, and renders of a span before a birth
+  // because no spare was left (more than kGranularSpareGrains such births since the block's last
+  // render). Neither changes the output.
+  uint64_t spareBirths   = 0;
+  uint64_t birthFlushes  = 0;
 };
 
 // The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
@@ -161,6 +172,11 @@ class GranularCore {
   // Kills all voices and re-arms the scheduler to fire on the next sample.
   void Reset() noexcept {
     for (auto& g : grains_) g.active = false;
+    for (uint32_t i = 0; i < kGranularMaxGrains; ++i) {
+      slotRec_[i]  = static_cast<uint8_t>(i);
+      spareRec_[i] = static_cast<uint8_t>(kGranularMaxGrains + i);
+    }
+    spareCount_   = kGranularSpareGrains;
     orderCount_   = 0;
     heapCount_    = 0;
     live_[0]      = 0;
@@ -198,8 +214,8 @@ class GranularCore {
   // A FastCut load at absolute frame `abs` (mode-compiler.md §7.3): every grain still sounding
   // there that is not already fading starts a linear fade to zero over kFastCutFrames from
   // that frame, and its life ends with the fade. Every grain is rendered up to `abs` (the
-  // engine splits its blocks at events), so each fades from where it is. Several loads within
-  // the fade each fade their own grains.
+  // engine splits its blocks at events, and Process renders its whole span before it returns),
+  // so each fades from where it is. Several loads within the fade each fade their own grains.
   void FastCut(int64_t abs) noexcept;
 
   // Schedules and renders one block. wetL/wetR are overwritten (not accumulated).
@@ -233,12 +249,21 @@ class GranularCore {
   static constexpr uint32_t kMaxBursts  = 8;
   static constexpr int64_t  kNoBurstDue = INT64_MAX;
 
+  // A voice born in `slot`, in grain record `rec` (BirthRecord's).
   // anchorFrame: the position reference (the pin while frozen).
   // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
   // drawOrdinal: the same-frame ordinal of the grain's draws (kOrdinalClock for a CLOCK hit,
   // else 0: revision 1's keys).
-  void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
+  void ScheduleGrain(uint32_t slot, uint32_t rec, const GranularParams& p, int64_t birthAbs,
                      uint32_t anchorFrame, uint32_t liveFrame, uint32_t drawOrdinal) noexcept;
+  // The grain record a birth into `slot` at block frame n takes (cpu-budget.md §4.3, step 5): the
+  // slot's own while its last voice has no frame left to render, else a spare. With no spare left
+  // it first renders the block up to n, as every birth did before step 5.
+  uint32_t BirthRecord(uint32_t slot, uint32_t* renderedTo, uint32_t n, int64_t absSample,
+                       float* wetL, float* wetR) noexcept;
+  // A trigger's steal at birthAbs: the oldest voice sounding there, in birth order, ends there.
+  // Returns its slot.
+  uint32_t StealOldest(int64_t birthAbs) noexcept;
   // Fire an explicit trigger: free slot if available and fewer than voice_count voices sound,
   // else steal the OLDEST voice (design §4 allocation policy — explicit triggers never drop a
   // hit; mode-compiler.md §7.5 R12). A CLOCK hit is one too, never capped by `overlap`
@@ -266,7 +291,8 @@ class GranularCore {
   uint32_t PickPitch(const GranularParams& p, int64_t drawKey, uint32_t drawOrdinal) noexcept;
   void UpdateBurstDue() noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
-  // per-sample summation order — see Process), retiring finished grains.
+  // per-sample summation order — see Process), retiring finished grains and returning the
+  // spare records whose slot has moved on.
   void RenderSpan(uint32_t from, uint32_t to, int64_t absSample, float* wetL,
                   float* wetR) noexcept;
   // One grain over block frames [s, e), from its current read position and frame count, all
@@ -275,15 +301,17 @@ class GranularCore {
   void RenderRun(Grain& g, uint32_t s, uint32_t e, bool fade, float* wetL, float* wetR) noexcept;
   // A repeat voice's next pass: back to its start frame, with the decay gain of its age then.
   void NextPass(Grain& g) noexcept;
-  // The sounding voices (cpu-budget.md §4.3, step 6). HeapPlace(slot) after slot's endAbs was
-  // set (a birth, a stolen slot's new voice) or moved earlier (a FastCut); Expire(abs) retires
-  // every voice whose life ended by abs; then LowestFreeSlot() is the lowest slot without a
-  // sounding voice (kGranularMaxGrains when all 64 sound) and heapCount_ how many sound.
-  void     HeapPlace(uint32_t slot) noexcept;
+  // The sounding voices (cpu-budget.md §4.3, step 6). HeapPlace(slot, end) when slot's voice's
+  // life was set to end at `end` (a birth, a stolen slot's new voice) or moved earlier (a
+  // FastCut); Expire(abs) retires every voice whose life ended by abs; then LowestFreeSlot() is
+  // the lowest slot without a sounding voice (kGranularMaxGrains when all 64 sound) and
+  // heapCount_ how many sound.
+  void     HeapPlace(uint32_t slot, int64_t end) noexcept;
   void     Expire(int64_t abs) noexcept;
   uint32_t LowestFreeSlot() const noexcept;
-  void     HeapSiftUp(uint32_t i) noexcept;
-  void     HeapSiftDown(uint32_t i) noexcept;
+  // Puts (slot, end) at heap index i, or above it (up) or below it (down), as its end orders it.
+  void     HeapSiftUp(uint32_t i, uint8_t slot, int64_t end) noexcept;
+  void     HeapSiftDown(uint32_t i, uint8_t slot, int64_t end) noexcept;
 #ifndef NDEBUG
   bool SweepAgrees(int64_t abs) const noexcept;
 #endif
@@ -295,12 +323,23 @@ class GranularCore {
                                        // only by the Debug write-ahead assertion
   int64_t        drawEpoch_      = 0;  // this block's random-number epoch
   float          intervalRemaining_ = 1.0f;  // frames until the next scheduled birth
-  Grain          grains_[kGranularMaxGrains]{};
-  uint8_t        order_[kGranularMaxGrains]{};  // slot indices in ascending birth order
+  // The grain records (cpu-budget.md §4.3, step 5). A block renders once, after its births, so
+  // a voice that ended in it still has frames to render when its slot's next voice is born:
+  // that voice takes a spare record. Each slot's newest voice is in record slotRec_[slot]; the
+  // spare records not in use are spareRec_[0, spareCount_), and a voice's record is returned
+  // there when it has rendered its last frame and its slot has moved on to another record.
+  Grain          grains_[kGranularRecords]{};
+  // The end of each sounding voice, as the heap below orders them: heapEnd_[i] is heap_[i]'s.
+  int64_t        heapEnd_[kGranularMaxGrains]{};
+  uint8_t        order_[kGranularRecords]{};  // records of the voices to render, in birth order
   uint32_t       orderCount_ = 0;
-  // The sounding voices: a min-heap of slots by endAbs, each slot's index in it, and the same
-  // slots as a mask (bit s & 31 of word s >> 5). A voice joins at birth and leaves when a query
-  // finds its life ended; between queries the heap may still hold voices that have ended.
+  uint8_t        slotRec_[kGranularMaxGrains]{};
+  uint8_t        spareRec_[kGranularSpareGrains]{};
+  uint32_t       spareCount_ = 0;
+  // The sounding voices: a min-heap of slots by their voice's end, each slot's index in it, and
+  // the same slots as a mask (bit s & 31 of word s >> 5). A voice joins at birth and leaves when
+  // a query finds its life ended; between queries the heap may still hold voices that have
+  // ended.
   uint8_t        heap_[kGranularMaxGrains]{};
   uint8_t        heapPos_[kGranularMaxGrains]{};
   uint32_t       live_[2]{};

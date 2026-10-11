@@ -430,6 +430,26 @@ Costs and integration:
 - Wave 1's `FireExternal` reads `orderCount_` after a full flush as "voices sounding" (W1
   `Granular.cpp:379-394`). It must count voices with `endAbs > birthAbs` instead.
 
+*As built* (2026-10-11, sound revision 9, bit-exact): 64 spare grain records join the slots' own
+64 (`kGranularSpareGrains`). A voice's record is no longer its slot, so the grain carries its slot
+(its tier is the slot's, as before), each slot names its newest voice's record, and a record
+returns to the spares when its voice has rendered its last frame and its slot has moved on. A birth
+whose slot's last voice still has frames to render takes a spare (`BirthRecord`); with none left
+it renders the span up to itself first, as every birth did before. Step 6's heap now holds each
+voice's end itself. A trigger counts the voices sounding at its frame from the heap (those with
+`endAbs > birthAbs`), and a steal cuts the oldest of them, in birth order, at the birth frame,
+up to which it then renders. The one count the flush moved, a repeat pass begun by a steal on a
+pass boundary, is counted as before. CLOCK hits, bursts and onsets take the trigger path
+unchanged. +736 bytes of live ITCM (52,992; 12,480 spare); `Engine::Impl` 15,288 bytes on the M7
+and 15,424 on x86-64, so `kEngineImplBytes` rises to 15,872 and 16,128 and the firmware's engine
+slot from 9 to 16 KiB (with the Hot arena, 40 of the 80 KiB of DTCM). Checked by the golden check
+at every block pattern (Release, and Debug with the sweep check), the bench configurations'
+hashes and counts (178 to 469,953 spare births each at 48-frame blocks), and a stress set built to
+take the rare paths, 14 configurations under 6 block patterns in Release and Debug: the fallback
+render (up to 2,625 a run at 512-frame blocks), bursts and onsets stealing repeat voices at a pass
+boundary, FastCut loads over spare voices. Every render and every count equals the engine's before
+step 5.
+
 **6. Slot bookkeeping.** The per-attempt 64-slot sweep (`Granular.cpp:426-435`), which repeats on
 every refused retry (`:462-467`), is replaced with:
 
