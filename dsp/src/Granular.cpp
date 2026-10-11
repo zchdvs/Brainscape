@@ -381,6 +381,16 @@ BS_ONE_COPY void GranularCore::RenderRun(Grain& g, uint32_t s, uint32_t e, bool 
   // Tier / unity resolved per grain (design §3): three frame loops. The slots below kHiFiGrains
   // are tier 0, cubic Hermite.
   const int kind = inc == kUnityInc ? 0 : (g.slot < kHiFiGrains ? 1 : 2);
+  // The shadow ledger's counts (step 8): the run's frames in its weight class, the path and the
+  // rate class of |inc| (at most 2^32, at most 2^33, above).
+  {
+    const uint64_t mag = static_cast<uint64_t>(inc < 0 ? -inc : inc);
+    const uint32_t rc  = mag <= (uint64_t{1} << 32) ? 0u : (mag <= (uint64_t{1} << 33) ? 1u : 2u);
+    const uint32_t cls = kind == 0 ? 0u : (kind == 1 ? 1u + rc : 4u + rc);
+    ++stats_.renderRuns;
+    stats_.voiceFrames[cls] += e - s;
+    if (fade) stats_.fadeFrames += e - s;
+  }
 #ifndef NDEBUG
   const bool fits = GrainFitsRing(g, mask_ + 1u);
 #endif

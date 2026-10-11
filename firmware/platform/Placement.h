@@ -23,9 +23,9 @@ namespace brainscape::fw {
 // (docs/design/clock.md §5.3, D23, §11.16): Bulk 18,325,232 B (the 2^22 ring's 16,777,216 and the
 // line's 1,548,016), so the Bulk arena grows from 17 to 18 MiB, 549,136 B spare.
 // The CPU plan's batched render (docs/design/cpu-budget.md §4.3, step 5) adds 64 spare grain
-// records to the Engine: kEngineImplBytes is 15,872 B on the M7 (15,288 used) and 16,128 B on
-// x86-64 (15,424), so the slot grows from 9 to 16 KiB; with the 24 KiB Hot arena that is 40 of the
-// 80 KiB the DTCM leaves for them.
+// records to the Engine: kEngineImplBytes is 15,872 B on the M7 (15,288 used, 15,392 with step 8's
+// ledger counts) and 16,128 B on x86-64 (15,424, then 15,528), so the slot grows from 9 to 16 KiB;
+// with the 24 KiB Hot arena that is 40 of the 80 KiB the DTCM leaves for them.
 // Every image checks PlanMemory against these at boot (CheckPlacement) and refuses to run
 // on a shortfall; the host test firmware_arena_plan does the same on every ctest run.
 inline constexpr size_t kHotArenaBytes    = 24u * 1024u;           // DTCM

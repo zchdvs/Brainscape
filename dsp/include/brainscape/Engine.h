@@ -33,8 +33,9 @@ inline constexpr uint32_t kFastCutFrames = 128;
 // per pointer width (measured 6,600 B on the M7 and 6,752 B on x86-64 at sound revision 2;
 // 7,928 B and 8,080 B at 6, wave 1's repeat voices having grown the grain from 80 to 96 bytes;
 // 8,424 B and 8,560 B at 9 with the CPU plan's voice heap and birth caches, cpu-budget.md §4.3
-// steps 6 and 7; 15,288 B and 15,424 B with step 5's 64 spare grain records; plus headroom; each
-// wave raises it, mode-compiler.md §7.1); Engine.cpp static_asserts the fit.
+// steps 6 and 7; 15,288 B and 15,424 B with step 5's 64 spare grain records, 15,392 B and
+// 15,528 B with step 8's ledger counts; plus headroom; each wave raises it, mode-compiler.md
+// §7.1); Engine.cpp static_asserts the fit.
 // The active mode lives in the Warm arena, not here (§7.3).
 inline constexpr size_t kEngineImplBytes = sizeof(void*) == 4 ? 15872 : 16128;
 inline constexpr size_t kEngineImplAlign = 16;
@@ -289,6 +290,17 @@ class Engine {
   // What the grain scheduler has done, for tests and the audition metrics (mode-compiler.md
   // §10.3, §11.3): counts since Init, which Reset, Restart and loads keep, so a caller reads
   // the difference over a render.
+  //
+  // From the steal count on, also what the CPU plan's shadow ledger charges
+  // (docs/design/cpu-budget.md §4.3 step 8, §5): the work the cost governor accounts for, so a
+  // caller predicts a span's cycles from the differences over it (the bench images log that
+  // prediction next to DWT per block). Counting changes no output bit.
+  // The governor's weight classes of a voice-frame (cpu-budget.md §5.1): [0] unity; [1 + rc]
+  // cubic Hermite (slots 0-7) and [4 + rc] linear, rc the rate class: |increment| at most 1, at
+  // most 2, above.
+  static constexpr uint32_t kCostClasses = 7;
+  // The post chain's stages, in the order the counts are kept: modulation, delay, reverb, filter.
+  static constexpr uint32_t kPostStages = 4;
   struct GrainStats {
     uint64_t births      = 0;  // grains born, from every source
     uint64_t burstBirths = 0;  // of them, bursts' second and later grains (§7.5)
@@ -296,6 +308,15 @@ class Engine {
     uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, §7.5)
     uint64_t steals       = 0;  // triggered grains that took a sounding voice: the oldest,
                                 // at voice_count or with every voice busy (§7.5)
+    uint64_t spareBirths  = 0;  // births in a spare grain record: their slot's last voice still
+                                // had frames to render (the batched render, step 5)
+    uint64_t birthFlushes = 0;  // spans rendered up to a birth because no spare was left
+    uint64_t renderRuns   = 0;  // voice runs rendered: one per voice and render span, plus
+                                // one at each pass boundary and FastCut fade start
+    uint64_t voiceFrames[kCostClasses] = {};  // voice-frames rendered, by weight class
+    uint64_t fadeFrames   = 0;  // of them, frames under a FastCut fade
+    uint64_t postFrames[kPostStages] = {};  // frames each post stage ran: a span's frames
+                                            // whenever the stage was not settled off
   };
   // Audio thread only (plain 64-bit counts, as SampleCounter).
   GrainStats Stats() const noexcept;

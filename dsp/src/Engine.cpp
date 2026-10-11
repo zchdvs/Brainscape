@@ -210,6 +210,14 @@ static_assert(static_cast<uint8_t>(Subdivision::Tap) == tempo::kSubdivTap &&
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
 static_assert(kMaxPitchEntries == detail::kGranularMaxPitch, "a pitch set's cap differs");
 static_assert(kFastCutFrames == detail::kGranularFastCutFrames, "public and core fades differ");
+static_assert(Engine::kCostClasses == detail::kGranularCostClasses &&
+                  Engine::kPostStages == detail::kPostStages,
+              "the shadow ledger's public and core counts differ");
+static_assert(static_cast<uint32_t>(detail::Stage::Mod) == 0u &&
+                  static_cast<uint32_t>(detail::Stage::Delay) == 1u &&
+                  static_cast<uint32_t>(detail::Stage::Reverb) == 2u &&
+                  static_cast<uint32_t>(detail::Stage::Filter) == 3u,
+              "GrainStats::postFrames is in the order modulation, delay, reverb, filter");
 
 // Grain write-head guards keep reads out of the frames Pass 1 writes ahead of the
 // live head within one block; that window must cover the largest legal block.
@@ -602,7 +610,7 @@ BRAINSCAPE_COLD TempoStats Engine::TempoCounts() const noexcept {
                          d.post_.Crossfades(), d.folds_);
 }
 
-Engine::GrainStats Engine::Stats() const noexcept {
+BRAINSCAPE_COLD Engine::GrainStats Engine::Stats() const noexcept {
   const detail::GranularStats& s = impl().granular_.Stats();
   GrainStats out;
   out.births      = s.births;
@@ -610,6 +618,13 @@ Engine::GrainStats Engine::Stats() const noexcept {
   out.skips       = s.skips;
   out.repeatPasses = s.repeatPasses;
   out.steals       = s.steals;
+  out.spareBirths  = s.spareBirths;
+  out.birthFlushes = s.birthFlushes;
+  out.renderRuns   = s.renderRuns;
+  for (uint32_t c = 0; c < kCostClasses; ++c) out.voiceFrames[c] = s.voiceFrames[c];
+  out.fadeFrames = s.fadeFrames;
+  const uint64_t* post = impl().post_.StageFrames();
+  for (uint32_t k = 0; k < kPostStages; ++k) out.postFrames[k] = post[k];
   return out;
 }
 

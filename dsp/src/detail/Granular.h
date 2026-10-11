@@ -28,6 +28,10 @@ inline constexpr uint32_t kNoFade                = 0xFFFFFFFFu;
 // the newborns whose slot's last voice still has frames the block has not rendered yet.
 inline constexpr uint32_t kGranularSpareGrains = 64;
 inline constexpr uint32_t kGranularRecords     = kGranularMaxGrains + kGranularSpareGrains;
+// The cost governor's weight classes of a voice-frame (cpu-budget.md §5.1), which the shadow
+// ledger counts (step 8): 0 unity; 1 + rc cubic Hermite and 4 + rc linear, rc the rate class
+// (|increment| at most 1, at most 2, above).
+inline constexpr uint32_t kGranularCostClasses = 7;
 
 // Everything a grain needs, resolved once at birth (design §3: resolve-once-at-
 // schedule-time; grains never re-read a global parameter). A voice with repeat N (mode-compiler.md
@@ -128,6 +132,11 @@ struct GranularStats {
   // render). Neither changes the output.
   uint64_t spareBirths   = 0;
   uint64_t birthFlushes  = 0;
+  // The shadow ledger's counts (cpu-budget.md §4.3, step 8): RenderRun calls, the frames they
+  // rendered by weight class (kGranularCostClasses), and of those the frames under a FastCut fade.
+  uint64_t renderRuns   = 0;
+  uint64_t voiceFrames[kGranularCostClasses] = {};
+  uint64_t fadeFrames   = 0;
 };
 
 // The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key

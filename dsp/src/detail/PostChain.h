@@ -324,6 +324,10 @@ class PostChain {
 
   // Crossfades started since Init (Engine::TempoCounts' crossfades, clock.md §7.3).
   uint64_t Crossfades() const noexcept { return crossfades_; }
+  // The frames each stage ran since Init, by Stage (Engine::GrainStats::postFrames, the CPU
+  // plan's shadow ledger, cpu-budget.md §4.3 step 8): a span's frames whenever the stage was not
+  // settled off at its start. Counting changes no output bit.
+  const uint64_t* StageFrames() const noexcept { return stageFrames_; }
 
  private:
   void     UpdateFilterCoefs(float cutoff, float res, float morph) noexcept;  // control rate
@@ -375,6 +379,7 @@ class PostChain {
   bool       pdFading_  = false;
   bool       pdPending_ = false;  // a jump waits for the fade in progress to end
   uint64_t   crossfades_ = 0;
+  uint64_t   stageFrames_[kPostStages] = {};
   float      pdGlideCoef_ = 1.f, pdGlideKeep_ = 0.f;  // fixed at Init
   float      pdSlewCoef_ = 1.f, pdSlewKeep_ = 0.f;    // fixed at Init: τ = 1 s (clock.md §7.2)
   float      pdLpL_ = 0.f, pdLpR_ = 0.f;  // loop damping LP state

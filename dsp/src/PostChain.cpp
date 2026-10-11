@@ -216,6 +216,7 @@ BRAINSCAPE_COLD void PostChain::Init(float* warm, float* bulk, double sr) noexce
   pdSlewCoef_  = -static_cast<float>(detmath::Expm1D(-1.0 / (kPostDelaySlewSeconds * sr)));
   pdSlewKeep_  = 1.0f - pdSlewCoef_;
   crossfades_  = 0;
+  for (uint64_t& f : stageFrames_) f = 0;
 
   modDepthSm_.SetTau(10.0f, sr);
   delayMixSm_.SetTau(10.0f, sr);
@@ -356,6 +357,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
         // Early-out when settled at exactly 0 (stall-snap makes that reachable):
         // a bypassed stage costs nothing and its lines freeze — design §2.6.
         if (modDepthSm_.target == 0.f && modDepthSm_.value == 0.f) break;
+        stageFrames_[static_cast<uint32_t>(Stage::Mod)] += numFrames;
         const float rateInc = static_cast<float>(static_cast<double>(p.modRateHz) / sr_);
         for (uint32_t n = 0; n < numFrames; ++n) {
           const float wet = modDepthSm_.Next();  // <= 0.5
@@ -410,6 +412,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
           pdTap_.Retarget(tap);
           pdTap_.slow = p.delaySlow;
         }
+        stageFrames_[static_cast<uint32_t>(Stage::Delay)] += numFrames;
         // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
         assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pd_.len));
         const float dfb = p.delayFb;
@@ -451,6 +454,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
       }
       case Stage::Reverb: {
         if (reverbMixSm_.target == 0.f && reverbMixSm_.value == 0.f) break;
+        stageFrames_[static_cast<uint32_t>(Stage::Reverb)] += numFrames;
         // Decay floor lowered: 0.35 put RT60 at 2.8 s with the knob at ZERO
         // (review finding); this maps ~0.6 s at 0 to ~10 s at 1.
         const float decay = 0.10f + 0.78f * p.reverbTime;
@@ -510,6 +514,7 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
         // re-engage (review findings). At a settled 0 the stage is skipped
         // exactly and its state cleared once.
         if (filterMixSm_.target == 0.f && filterMixSm_.value == 0.f) break;
+        stageFrames_[static_cast<uint32_t>(Stage::Filter)] += numFrames;
         const float fq  = svfFreq_, dp = svfDamp_;
         const float wa  = svfWa_, wb = svfWb_;
         const auto  seg = svfSeg_;
