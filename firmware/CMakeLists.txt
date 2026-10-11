@@ -322,21 +322,27 @@ add_custom_command(OUTPUT ${_bs_murmuration}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/factory/murmuration.bsp ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
   COMMENT "Embedding firmware/factory/murmuration.bsp"
   VERBATIM)
-set(_bs_bench_sources bench/main.cpp bench/Microbench.cpp bench/Configs.cpp bench/EngineMicro.cpp
-                       ${_bs_murmuration})
+# Generated and compiled once, as an object library the four bench images link: an
+# add_custom_command output listed in several independent targets' sources gets one copy of the
+# rule per target, and a parallel Makefile build may run them at once, one target compiling the
+# file while another rewrites it.
+add_library(brainscape_fw_factory OBJECT ${_bs_murmuration})
+target_include_directories(brainscape_fw_factory PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+_brainscape_fw_flags(brainscape_fw_factory)
+set(_bs_bench_sources bench/main.cpp bench/Microbench.cpp bench/Configs.cpp bench/EngineMicro.cpp)
 brainscape_firmware_image(brainscape_bench
   SOURCES ${_bs_bench_sources}
-  LIBS brainscape_fw_golden
+  LIBS brainscape_fw_factory brainscape_fw_golden
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_bench_xip
   SOURCES ${_bs_bench_sources}
-  LIBS brainscape_fw_golden
+  LIBS brainscape_fw_factory brainscape_fw_golden
   ENGINE_CODE XIP
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_bench_hooks
   SOURCES ${_bs_bench_sources}
-  LIBS brainscape_fw_golden_hooks
+  LIBS brainscape_fw_factory brainscape_fw_golden_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
 # Image 6 of the CPU plan's bench session 2 (docs/design/cpu-budget.md §8.1, D4): the bench with
@@ -345,7 +351,7 @@ brainscape_firmware_image(brainscape_bench_hooks
 # 8 KB never sits in the images G6 holds to 8 KB of ITCM spare.
 brainscape_firmware_image(brainscape_bench_hop
   SOURCES ${_bs_bench_sources} bench/HopMicro.cpp bench/HopForms.cpp
-  LIBS brainscape_fw_golden
+  LIBS brainscape_fw_factory brainscape_fw_golden
   ENGINE_CODE ITCM
   ITCM_EXTRA "*HopForms.cpp.o*(.text .text.* .rodata .rodata.*)"
   MIN_HEAP 4M)
