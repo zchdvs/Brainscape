@@ -69,6 +69,10 @@ class CurationSession {
   juce::String Notice() const { return notice_; }
   bool         NoticeWarns() const { return noticeWarns_; }
   uint32_t     NoticeSerial() const { return noticeSerial_; }
+  // The editor's: the notice not yet shown, once (true), even in an editor opened after it. One
+  // that something else has replaced since is dropped (false): a load (a session restore, a Modes
+  // menu choice, Save) or another command's outcome. Editors come and go; this is the session's.
+  bool TakeNotice(juce::String* text, bool* warns);
   // Where OpenForHost keeps unsaved edits: Documents/Brainscape/Recovered, or a directory set here
   // (tests). LastRecovery() is the file it last wrote.
   static juce::File DefaultRecoveryDir();
@@ -242,7 +246,11 @@ class CurationSession {
   PresetSource Source() const;  // what the open document is, for the processor's loads
   void RebuildWorking();
   void Relint();
-  std::unique_ptr<bsc::Document> SaveDocument(std::vector<std::string>* derived) const;
+  // What Save writes for the working document, with the live performance; or, given `loading`
+  // (B's, while A plays), the live performance a load of it would leave (PerformanceAfterLoad),
+  // as Save captures it after it plays B again.
+  std::unique_ptr<bsc::Document> SaveDocument(std::vector<std::string>* derived,
+                                              const PerformanceState* loading = nullptr) const;
   SaveResult WriteTo(const juce::File& json, bool withPackage);
   void ApplyLeaves(const bsc::Document& d);
   void StartLevelMatch();
@@ -272,6 +280,8 @@ class CurationSession {
   juce::String                       notice_;
   bool                               noticeWarns_  = false;
   uint32_t                           noticeSerial_ = 0;
+  bool                               noticePending_ = false;  // not yet taken (TakeNotice)
+  uint32_t                           noticeLoad_    = 0;      // the processor's LoadSerial at the notice
   juce::File                         recoveryDir_, lastRecovery_;
   // What the last Refresh saw, to rebuild only on change.
   std::vector<uint32_t>              seenBits_;

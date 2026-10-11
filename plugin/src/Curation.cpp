@@ -240,15 +240,30 @@ juce::File CurationSession::DefaultRecoveryDir() {
 }
 
 void CurationSession::Notify(const juce::String& text, bool warns) {
-  notice_      = text;
-  noticeWarns_ = warns;
-  message_     = text;
+  notice_        = text;
+  noticeWarns_   = warns;
+  message_       = text;
+  noticePending_ = true;
+  noticeLoad_    = processor_.LoadSerial();  // after the program's load, if it loaded
   ++noticeSerial_;
+}
+
+bool CurationSession::TakeNotice(juce::String* text, bool* warns) {
+  if (!noticePending_) return false;
+  noticePending_ = false;
+  if (message_ != notice_ || processor_.LoadSerial() != noticeLoad_) return false;  // replaced since
+  *text  = notice_;
+  *warns = noticeWarns_;
+  return true;
 }
 
 bool CurationSession::KeepEdits(juce::File* file, juce::String* error) {
   // Save's text for the working document (WriteTo), without Save's load: A, if it plays, stays.
-  const auto               d    = SaveDocument(nullptr);
+  // Save plays B again first (SetSide), which brings back B's Subdiv and time mode (and its tempo
+  // under recall Preset): the performance is captured as that load would leave it.
+  const PerformanceState*  b    = side_ == Side::Stored && workingSnapshot_ != nullptr ? &workingSnapshot_->performance
+                                                                                         : nullptr;
+  const auto               d    = SaveDocument(nullptr, b);
   const bsc::CompileResult r    = bsc::CompileDocument(*d);
   const std::string        text = r.ok ? r.json : bsc::FormatDocument(*d);
   const juce::File         dir  = RecoveryDir();
@@ -585,12 +600,14 @@ void CurationSession::RebuildWorking() {
   }
 }
 
-std::unique_ptr<bsc::Document> CurationSession::SaveDocument(std::vector<std::string>* derived) const {
+std::unique_ptr<bsc::Document> CurationSession::SaveDocument(std::vector<std::string>* derived,
+                                                             const PerformanceState* loading) const {
   auto d = std::make_unique<bsc::Document>(*working_);
   bsc::Derive(d.get(), false, derived);
   // Saving captures the performance (clock.md §10.3): the live committed tempo in whole µs, the
   // live Subdiv and time mode; `reverse` stays the document's until global reverse lands.
-  const PerformanceState live     = processor_.LivePerformance();
+  const PerformanceState live =
+      loading != nullptr ? processor_.PerformanceAfterLoad(*loading) : processor_.LivePerformance();
   d->state->performance.usPerQuarter = live.usPerQuarter;
   d->state->performance.subdiv       = live.subdiv;
   d->state->performance.timeMode     = live.timeMode;

@@ -120,6 +120,15 @@ uint32_t UsFromNs(uint32_t ns) noexcept {
   return us < kMinUsPerQuarter ? kMinUsPerQuarter : (us > kMaxUsPerQuarter ? kMaxUsPerQuarter : us);
 }
 
+// Rows 83 and 84 as a preset change stores them for its stored Subdiv and time mode (clock.md
+// §10.1).
+float SubdivMirrorOf(Subdivision v) noexcept {
+  return Canonicalize(ParamId::PerfSubdiv, static_cast<float>(tempo::SubdivPositionFromCode(static_cast<uint8_t>(v))));
+}
+float TimeModeMirrorOf(brainscape::TimeMode v) noexcept {
+  return Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(v)));
+}
+
 constexpr size_t kPackageHashAt = 96;  // the package header's package_hash (Preset.h)
 
 // The mode a session's FMOD block restores (StateCodec.h): this build's package of that id,
@@ -493,6 +502,22 @@ PerformanceState BrainscapeProcessor::LivePerformance() const {
   return p;
 }
 
+bool BrainscapeProcessor::StoredTempoPlays(uint32_t usPerQuarter) const noexcept {
+  return tempoRecallPreset_.load(std::memory_order_relaxed) && !dispFollowing_.load(std::memory_order_relaxed) &&
+         dispSource_.load(std::memory_order_relaxed) == static_cast<uint8_t>(tempo::ClockSource::Internal) &&
+         usPerQuarter >= kMinUsPerQuarter && usPerQuarter <= kMaxUsPerQuarter;
+}
+
+// LivePerformance as it reads after LoadPresetState stored the rows' mirrors and the tempo.
+PerformanceState BrainscapeProcessor::PerformanceAfterLoad(const PerformanceState& stored) const {
+  PerformanceState p = stored;
+  p.usPerQuarter     = UsFromNs(StoredTempoPlays(stored.usPerQuarter) ? stored.usPerQuarter * 1000u
+                                                                      : liveNs_.load(std::memory_order_relaxed));
+  p.timeMode         = static_cast<brainscape::TimeMode>(TimeModeOf(TimeModeMirrorOf(stored.timeMode)));
+  p.subdiv = static_cast<Subdivision>(tempo::SubdivCodeFromPosition(SubdivPositionOf(SubdivMirrorOf(stored.subdiv))));
+  return p;
+}
+
 TempoInfo BrainscapeProcessor::EngineTempo() const noexcept {
   return engineReady_ ? live_->engine.Tempo() : TempoInfo{};
 }
@@ -618,7 +643,7 @@ void BrainscapeProcessor::setCurrentProgram(int program) {
 void BrainscapeProcessor::ApplyHostProgram(int program) {
   // The host holds this program now: a load that plays it needs no telling, one that is refused
   // does (ServiceHostRequests).
-  notifiedProgram_ = program;
+  notifiedProgram_.store(program, std::memory_order_relaxed);
   if (program == CustomProgram()) {
     // Nothing to load: what plays keeps playing, as Custom until the next load.
     program_.store(program, std::memory_order_relaxed);
@@ -632,8 +657,7 @@ void BrainscapeProcessor::ServiceHostRequests() {
   const int pending = hostProgram_.exchange(-1, std::memory_order_acquire);
   if (pending >= 0) ApplyHostProgram(pending);
   const int now = program_.load(std::memory_order_relaxed);
-  if (now == notifiedProgram_) return;
-  notifiedProgram_ = now;
+  if (notifiedProgram_.exchange(now, std::memory_order_relaxed) == now) return;
   // VST3: JUCE moves its program parameter (performEdit) when it differs from this program;
   // AU: the host re-reads the present preset.
   updateHostDisplay(ChangeDetails().withProgramChanged(true));
@@ -705,12 +729,9 @@ bool BrainscapeProcessor::LoadPresetState(const PresetState& state, LoadReport* 
     // A preset change plays the preset's stored Subdiv and time mode (clock.md §10.1): the rows
     // take them before the unit goes out, and its load applies them. Under recall Preset with the
     // internal source it plays the stored tempo too, which the display shows at once.
-    subdiv_->StoreMirror(Canonicalize(ParamId::PerfSubdiv, static_cast<float>(tempo::SubdivPositionFromCode(
-                                                               static_cast<uint8_t>(mode.performance.subdiv)))));
-    timeMode_->StoreMirror(Canonicalize(ParamId::PerfTimeMode, static_cast<float>(static_cast<uint32_t>(mode.performance.timeMode))));
-    if (tempoRecallPreset_.load(std::memory_order_relaxed) && !dispFollowing_.load(std::memory_order_relaxed) &&
-        dispSource_.load(std::memory_order_relaxed) == static_cast<uint8_t>(tempo::ClockSource::Internal) &&
-        mode.performance.usPerQuarter >= kMinUsPerQuarter && mode.performance.usPerQuarter <= kMaxUsPerQuarter) {
+    subdiv_->StoreMirror(SubdivMirrorOf(mode.performance.subdiv));
+    timeMode_->StoreMirror(TimeModeMirrorOf(mode.performance.timeMode));
+    if (StoredTempoPlays(mode.performance.usPerQuarter)) {
       liveNs_.store(mode.performance.usPerQuarter * 1000u, std::memory_order_relaxed);
     }
     PostStateUnit(plain, mode, UnitKind::PresetChange, 0u);
@@ -799,8 +820,12 @@ void BrainscapeProcessor::setStateInformation(const void* data, int sizeInBytes)
     }
     source_ = source;
     // The host's wrapper reads the program back after a restore (VST3's setComponentState): the
-    // factory mode the session restores, else the default mode it plays.
-    program_.store(ProgramOf(source, mode.mode), std::memory_order_relaxed);
+    // factory mode the session restores, else the default mode it plays. A restore is the host's
+    // own, so it is not told (ServiceHostRequests): an AU host keeps the preset it restored as
+    // its present preset, which a programChanged would replace with this factory preset.
+    const int program = ProgramOf(source, mode.mode);
+    program_.store(program, std::memory_order_relaxed);
+    notifiedProgram_.store(program, std::memory_order_relaxed);
     if (state.hasEffectVolume) effectVolume_->StoreMirror(state.effectVolumeDb);
     // A session restore restarts the session's preset with its performance (clock.md §10.1): the
     // tempo it saved (the internal tempo persists, P12) and rows 83 and 84, or the preset's

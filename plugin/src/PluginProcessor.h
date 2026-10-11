@@ -156,7 +156,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor, private juce::Tim
   // made on another thread plays (the latest, if it made several), and when the program differs
   // from the one the host was last told of (a Modes menu choice, a document opened, a program
   // change refused), the host is told (updateHostDisplay with programChanged), so its preset
-  // list shows what plays. Tests call it in place of the timer.
+  // list shows what plays. A session restore's program is the host's own and is not told: VST3's
+  // setComponentState reads it back, and an AU host keeps the preset it restored. Tests call it
+  // in place of the timer.
   void ServiceHostRequests();
   static constexpr int kHostPollMs = 50;
 
@@ -200,6 +202,11 @@ class BrainscapeProcessor final : public juce::AudioProcessor, private juce::Tim
   // 84 as §5.1's code and the time mode; `reverse` as the preset stores it. What CurrentPreset()
   // and so every save carry into STAT. Any thread.
   PerformanceState LivePerformance() const;
+  // The live performance a LoadPresetState of a preset storing `stored` would leave, without the
+  // load: its Subdiv and time mode, its tempo under recall Preset with the Internal source (as the
+  // load plays it), else the live tempo. What a save made after such a load captures (the
+  // curation's recovery file while A plays: Save as plays B again first). Not on the audio thread.
+  PerformanceState PerformanceAfterLoad(const PerformanceState& stored) const;
 
   // Tests, with processBlock quiesced: the live engine's tempo snapshot and counters.
   TempoInfo  EngineTempo() const noexcept;
@@ -316,6 +323,9 @@ class BrainscapeProcessor final : public juce::AudioProcessor, private juce::Tim
   void ApplyHostProgram(int program);
   // The program of what plays (getCurrentProgram): the factory mode's, the default mode's, or Custom.
   static int ProgramOf(const PresetSource& source, const ModeBlob& mode);
+  // Whether a preset change plays a preset's stored tempo now (recall Preset, the Internal source,
+  // a tempo in range): LoadPresetState and PerformanceAfterLoad.
+  bool StoredTempoPlays(uint32_t usPerQuarter) const noexcept;
 
   // The spare engine of §4.7 and §4.9, prepared by a worker thread.
   void EnsureSpareWorker();
@@ -341,11 +351,12 @@ class BrainscapeProcessor final : public juce::AudioProcessor, private juce::Tim
   mutable std::mutex modeMutex_;
   PresetSource       source_;  // what mode_ came from: under controlMutex_
   // The program what plays is (ProgramOf, written with source_), any thread; a program a host
-  // chose off the message thread, waiting for the timer (-1: none); and, message thread, the
-  // program the host was last told of or chose itself.
+  // chose off the message thread, waiting for the timer (-1: none); and the program the host
+  // holds: the one it was last told of, chose itself or restored with a session (written by
+  // setStateInformation, on whatever thread the host restores on).
   std::atomic<int>   program_{kDefaultProgram};
   std::atomic<int>   hostProgram_{-1};
-  int                notifiedProgram_ = kDefaultProgram;
+  std::atomic<int>   notifiedProgram_{kDefaultProgram};
 
   // Two slots at most: the live engine and, while the restart option is on, the spare. The
   // audio thread swaps the two pointers at a transport start; slots are allocated and

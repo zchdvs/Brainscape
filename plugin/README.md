@@ -257,7 +257,9 @@ pickup, its document open in the curation view (program 0 closes the document).
   session saved with a document restores as **Default mode**, the mode it plays until sessions
   carry packages. When the program changes from inside the plugin (the Modes menu, a document
   opened), the host is told within 50 ms; a VST3 host hears it as the program parameter moving,
-  which a host writing automation records like any program change.
+  which a host writing automation records like any program change. A session restore is the
+  host's own and is not told: a VST3 host reads the restored program back, and an AU host keeps
+  the preset it restored (Logic's or GarageBand's preset name stays).
 - **Edits keep the program**, as VST3 hosts expect: turning a knob never moves the host's
   program parameter, so no program automation is written, and a host that re-applies its stored
   program after restoring a project finds it already playing and loads nothing over the session.
@@ -266,10 +268,11 @@ pickup, its document open in the curation view (program 0 closes the document).
 - **Unsaved edits are kept, not dropped.** The Modes menu asks before it drops unsaved edits in
   the open document; a host's program change cannot ask, so the plugin first writes what **Save**
   would write for them to `Documents/Brainscape/Recovered/<name>-unsaved-<date>-<time>.json`
-  (**Open...** plays it back; **Save as...** keeps it where you like), names the file in the
-  curation view's note line (shown when the editor next opens, if it was closed), then loads the
-  program. If that file cannot be written, the program does not change, and the host is shown
-  the one still playing.
+  (while A plays, B's version with B's Subdiv and time mode, and B's tempo under recall Preset,
+  as **Save** plays B first; **Open...** plays it back; **Save as...** keeps it where you like),
+  names the file in the curation view's note line (once: when the editor next opens, if it was
+  closed, unless something else has loaded since), then loads the program. If that file cannot
+  be written, the program does not change, and the host is shown the one still playing.
 - **Threads.** VST3 hosts change the program through the edit controller on their UI thread,
   where JUCE's wrapper calls `setCurrentProgram`; a program value in `process()`'s parameter
   changes only moves JUCE's own program parameter. A change from any other thread (an LV2 or VST2
@@ -340,11 +343,14 @@ golden hash of sound revision 1, `golden_check_edits` and `golden_forced_flush`)
   bit for bit, the same mirrors and document), program 0 against a load of the leafless default
   preset and the engine reference, Custom, the current program after menu choices, edits, A/B,
   Revert, documents, Save as, Close, session restores and the host's own changes (the host told
-  only when the program moved without it), unsaved edits kept in a file (byte for byte what Save as
-  writes, played back by Open, with A playing, before program 0, and a file that cannot be written
-  stopping the change), and a change on another thread: allocation-free there, played at the next
-  tick as the menu plays it at that block, the latest winning, and, on Windows and Linux, the
-  processor's own timer doing it in a running message loop.
+  only when the program moved without it: never for a restore, on any thread), unsaved edits kept
+  in a file (byte for byte what Save as writes, played back by Open, with A playing, B's Subdiv,
+  time mode and tempo under recall Keep and Preset, before program 0, and a file that cannot be
+  written stopping the change), the editor's note of a host's change (once, in the editor open or
+  the next one, and not after a session restore replaced it), and a change on another thread:
+  allocation-free there, played at the next tick as the menu plays it at that block, the latest
+  winning, and, on Windows and Linux, the processor's own timer doing it in a running message
+  loop.
   The tempo core's part (docs/design/clock.md §8.4): rows 83 and 84 as Subdivision events with
   their typed names; a bounce at 137.5 BPM from ppq 3.37 with Restart on play equal, bit for bit,
   to the engine fed the restart's re-asserts, the host's Tempo and its anchored Start at host

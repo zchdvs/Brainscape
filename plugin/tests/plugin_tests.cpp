@@ -3235,7 +3235,10 @@ TEST_CASE("the current program follows the menu, documents, sessions and the hos
   REQUIRE(heard.programChanges == 2);  // between two ticks Lull came and went: the host holds Custom
 
   // Sessions: a factory mode restores as its program, a session without one as the default mode
-  // (a document's session plays the default mode until sessions carry packages).
+  // (a document's session plays the default mode until sessions carry packages). A restore is the
+  // host's own, so the host is not told: VST3's setComponentState reads the program back, and an
+  // AU host keeps the preset it restored as its present preset (a programChanged would replace it
+  // with the factory preset).
   auto     withLull = MakeProcessor({}, {});
   ModeMenu other(*withLull);
   REQUIRE(other.Choose(ModeMenu::kFactoryItem + Lull()));
@@ -3246,6 +3249,20 @@ TEST_CASE("the current program follows the menu, documents, sessions and the hos
   proc->setStateInformation(lullSession.getData(), static_cast<int>(lullSession.getSize()));
   REQUIRE(proc->getCurrentProgram() == lull);
   proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 2);
+  proc->setStateInformation(docSession.getData(), static_cast<int>(docSession.getSize()));
+  REQUIRE(proc->getCurrentProgram() == kDefaultProgram);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 2);
+  // A restore on another thread (a host's loader) is the host's own too.
+  std::thread([&] { proc->setStateInformation(lullSession.getData(), static_cast<int>(lullSession.getSize())); })
+      .join();
+  REQUIRE(proc->getCurrentProgram() == lull);
+  proc->ServiceHostRequests();
+  REQUIRE(heard.programChanges == 2);
+  // What moves after a restore is still told: the Modes menu's choice.
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Engram()));
+  proc->ServiceHostRequests();
   REQUIRE(heard.programChanges == 3);
   proc->setStateInformation(docSession.getData(), static_cast<int>(docSession.getSize()));
   REQUIRE(proc->getCurrentProgram() == kDefaultProgram);
@@ -3253,6 +3270,7 @@ TEST_CASE("the current program follows the menu, documents, sessions and the hos
   // Custom from the host: nothing loads, and it reads Custom until the next load.
   proc->ServiceHostRequests();
   const int told = heard.programChanges;
+  REQUIRE(told == 3);
   proc->setCurrentProgram(CustomProgram());
   REQUIRE(proc->getCurrentProgram() == CustomProgram());
   proc->ServiceHostRequests();
@@ -3365,6 +3383,150 @@ TEST_CASE("a host's program change keeps the open document's unsaved edits in a 
     proc->ServiceHostRequests();  // the host chose Engram: it is told Lull plays
     REQUIRE(heard.programChanges == 2);
     proc->removeListener(&heard);
+  }
+}
+
+// While A plays, the kept file is still what Save as writes then. Save as plays B again first, which
+// brings back B's Subdiv and time mode, and under recall Preset B's tempo; under Keep the tempo is
+// the one running, even one set while A played. A's are never what is kept.
+TEST_CASE("with A playing, the kept file holds B's performance as Save as writes it") {
+  for (const bool recallPreset : {false, true}) {
+    INFO((recallPreset ? "recall Preset" : "recall Keep"));
+    ScratchDir       scratch;
+    const juce::File recovered = scratch.dir.getChildFile("recovered");
+    PerformanceState b{}, a{};
+    const auto       setUp = [&](BrainscapeProcessor& p) {
+      WrapperSettings w   = p.GetSettings();
+      w.tempoSource       = TempoSource::Internal;
+      w.tempoRecallPreset = recallPreset;
+      p.SetSettings(w);
+      ModeMenu menu(p);
+      REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+      Pump(p);
+      p.Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);  // a leaf edit: the document is Dirty
+      p.SubdivParam().SetPlainNotifyingHost(3.0f);        // B's Subdiv: x2
+      p.TimeModeParam().SetPlainNotifyingHost(1.0f);      // B's time mode: Subdiv
+      REQUIRE(p.SetTempoFromUi(90.0));                    // B's tempo
+      Pump(p);
+      p.Curation().Refresh();
+      REQUIRE(p.Curation().Dirty());
+      b = p.LivePerformance();
+      REQUIRE(b.subdiv == Subdivision::Double);
+      REQUIRE(b.timeMode == brainscape::TimeMode::Subdivision);
+      REQUIRE(p.Curation().SetSide(CurationSession::Side::Stored));
+      Pump(p);
+      if (!recallPreset) {
+        REQUIRE(p.SetTempoFromUi(100.0));  // set while A plays: the running tempo Save captures
+        Pump(p);
+      }
+      a = p.LivePerformance();  // A's Subdiv and time mode, and under recall Preset its tempo
+      REQUIRE(a.subdiv != b.subdiv);
+      REQUIRE(a.timeMode != b.timeMode);
+      REQUIRE(a.usPerQuarter != b.usPerQuarter);
+    };
+    auto twin = MakeProcessor({}, {});
+    setUp(*twin);
+    const juce::File savedAs = scratch.dir.getChildFile("saved-as.json");
+    REQUIRE(twin->Curation().SaveAs(savedAs, false).written);  // plays B again, then writes
+
+    auto proc = MakeProcessor({}, {});
+    proc->Curation().SetRecoveryDir(recovered);
+    setUp(*proc);
+    const uint32_t serial = proc->LoadSerial();
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    REQUIRE(proc->LoadSerial() == serial + 1);  // Engram's load alone: B is not played on the way out
+    const juce::File kept = proc->Curation().LastRecovery();
+    REQUIRE(kept.existsAsFile());
+    const auto k = ReadBack(kept);
+    CHECK(k->state->performance.subdiv == b.subdiv);
+    CHECK(k->state->performance.timeMode == b.timeMode);
+    CHECK(k->state->performance.usPerQuarter == (recallPreset ? b.usPerQuarter : a.usPerQuarter));
+    CHECK(Text(kept) == Text(savedAs));
+  }
+}
+
+namespace {
+// The labels of the editor's document panel, its note line among them.
+juce::String DocumentLabels(BrainscapeEditor& e) {
+  e.RefreshNow();
+  e.DocumentView().Refresh();
+  juce::String all;
+  for (juce::Component* c : e.DocumentView().getChildren()) {
+    if (auto* l = dynamic_cast<juce::Label*>(c)) all << "[" << l->getText() << "]";
+  }
+  return all;
+}
+}  // namespace
+
+// The note of a host's program change shows once, in the editor open then or else the next one
+// opened; an editor opened later never shows it again, nor one something else has replaced since
+// (a session restore, here).
+TEST_CASE("a host's program change is noted once, in the editor open or the next one") {
+  ScratchDir       scratch;
+  auto             proc = MakeProcessor({}, {});
+  CurationSession& s    = proc->Curation();
+  s.SetRecoveryDir(scratch.dir.getChildFile("recovered"));
+  const auto openEditor = [&] {
+    std::unique_ptr<juce::AudioProcessorEditor> owned(proc->createEditor());
+    REQUIRE(dynamic_cast<BrainscapeEditor*>(owned.get()) != nullptr);
+    return owned;
+  };
+  const char* const chose = "The host chose Echoic: Engram";
+
+  proc->setCurrentProgram(ProgramOfFactory(Engram()));  // no editor open
+  {
+    auto  owned = openEditor();
+    auto& e     = *dynamic_cast<BrainscapeEditor*>(owned.get());
+    CHECK(DocumentLabels(e).contains(chose));
+    CHECK(DocumentLabels(e).contains(chose));  // it stays on the note line
+    REQUIRE(e.Modes().Choose(ModeMenu::kFactoryItem + Lull()));
+    CHECK_FALSE(DocumentLabels(e).contains("The host chose"));  // the menu's outcome replaced it
+  }
+  REQUIRE(proc->CurrentSource().factory == Lull());
+  {
+    auto  owned = openEditor();
+    auto& e     = *dynamic_cast<BrainscapeEditor*>(owned.get());
+    CHECK_FALSE(DocumentLabels(e).contains("The host chose"));  // shown once already
+    // A change while an editor is open: its next refresh notes it.
+    proc->setCurrentProgram(ProgramOfFactory(Engram()));
+    CHECK(DocumentLabels(e).contains(chose));
+  }
+  {
+    auto  owned = openEditor();
+    auto& e     = *dynamic_cast<BrainscapeEditor*>(owned.get());
+    CHECK_FALSE(DocumentLabels(e).contains("The host chose"));
+  }
+
+  // Replaced while no editor was open: the host restored a session of Lull after its change.
+  auto     withLull = MakeProcessor({}, {});
+  ModeMenu menu(*withLull);
+  REQUIRE(menu.Choose(ModeMenu::kFactoryItem + Lull()));
+  juce::MemoryBlock lullSession;
+  withLull->getStateInformation(lullSession);
+  proc->setCurrentProgram(ProgramOfFactory(Engram()));
+  REQUIRE(s.FactoryIndex() == Engram());
+  proc->setStateInformation(lullSession.getData(), static_cast<int>(lullSession.getSize()));
+  {
+    auto  owned = openEditor();
+    auto& e     = *dynamic_cast<BrainscapeEditor*>(owned.get());
+    CHECK_FALSE(DocumentLabels(e).contains("The host chose"));
+    CHECK(s.FactoryIndex() == Lull());  // the session's mode, adopted
+  }
+
+  // A refused change (its edits cannot be kept) made with no editor open warns in the next one.
+  proc->Param(ParamId::Mix).SetPlainNotifyingHost(0.5f);
+  proc->Macro(ParamId::MacroActivity).SetPlainNotifyingHost(0.8f);
+  Pump(*proc);
+  const juce::File blocker = scratch.dir.getChildFile("a-file");
+  REQUIRE(blocker.replaceWithText("not a directory"));
+  s.SetRecoveryDir(blocker.getChildFile("recovered"));
+  proc->setCurrentProgram(ProgramOfFactory(Engram()));
+  REQUIRE(s.Dirty());
+  REQUIRE(s.FactoryIndex() == Lull());
+  {
+    auto  owned = openEditor();
+    auto& e     = *dynamic_cast<BrainscapeEditor*>(owned.get());
+    CHECK(DocumentLabels(e).contains("could not be kept"));
   }
 }
 
