@@ -225,14 +225,14 @@ function(brainscape_firmware_image name)
       .rodata._ZN10brainscape13params_detail12kLeafOrdinalE
       .rodata._ZN10brainscape16kDefaultModeHashE)
     list(JOIN _bs_engine_comdat " " _bs_engine_comdat)
-    # Of libgcc, only the members that serve the run-time helpers the engine archive imports
-    # (tools/ci/audit_symbols.py's list; __aeabi_ldivmod and __aeabi_uldivmod with
-    # __udivmoddi4 and __aeabi_ldiv0, __aeabi_d2lz with __aeabi_d2ulz, and __aeabi_l2d, which
-    # shares the double-precision adder's object): the rest (the firmware's own 64-bit to float
-    # conversions, for one) runs on the main loop from QSPI. An engine call to any other member
-    # would need a veneer out of ITCM, which cmake/ItcmCheck.cmake refuses.
-    set(_bs_itcm_libgcc _aeabi_ldivmod.o _aeabi_uldivmod.o _udivmoddi4.o _dvmd_tls.o
-                        _fixdfdi.o _fixunsdfdi.o _arm_addsubdf3.o)
+    # Of libgcc, only the 64-bit division the audio path reaches (__aeabi_ldivmod and
+    # __aeabi_uldivmod with __udivmoddi4 and __aeabi_ldiv0: the tempo core's control-rate
+    # entry points call them from QSPI). The engine's other imports (tools/ci/audit_symbols.py's
+    # list), __aeabi_d2lz and __aeabi_l2d, serve only Init and the tempo producer since the CPU
+    # plan's step 7, and the rest of libgcc only the firmware's main loop: all of it runs from
+    # QSPI. A call from ITCM to any member not named here would need a veneer, which
+    # cmake/ItcmCheck.cmake refuses.
+    set(_bs_itcm_libgcc _aeabi_ldivmod.o _aeabi_uldivmod.o _udivmoddi4.o _dvmd_tls.o)
     set(_bs_itcm_libgcc_inputs "")
     foreach(m IN LISTS _bs_itcm_libgcc)
       string(APPEND _bs_itcm_libgcc_inputs " *libgcc.a:${m}(.text .text.*)")

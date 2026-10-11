@@ -165,6 +165,8 @@ class GranularCore {
     heapCount_    = 0;
     live_[0]      = 0;
     live_[1]      = 0;
+    envTotal_     = 0;  // no grain is 0 frames long: the caches below start empty
+    for (auto& k : ratioKey_) k = kNoRatioKey;
     clockPending_ = 0;
     markCount_  = 0;
     markHead_   = 0;
@@ -303,6 +305,18 @@ class GranularCore {
   uint8_t        heapPos_[kGranularMaxGrains]{};
   uint32_t       live_[2]{};
   uint32_t       heapCount_ = 0;
+  // Birth caches (cpu-budget.md §4.3, step 7), each a value of a pure function under its key, so
+  // a hit returns what the call would: the envelope of a grain of envTotal_ frames at envSustain_
+  // and envSkew_ (compared by their bits), and each pitch entry's ratio for the semitones whose
+  // bits are ratioKey_ (kNoRatioKey, a NaN the clamped pitch never is, when empty).
+  static constexpr uint32_t kNoRatioKey = 0xFFFFFFFFu;
+  grainmath::EnvSpec env_{};
+  uint32_t       envTotal_   = 0;
+  float          envSustain_ = 0.f;
+  float          envSkew_    = 0.f;
+  uint32_t       ratioKey_[kGranularMaxPitch] = {kNoRatioKey, kNoRatioKey, kNoRatioKey, kNoRatioKey,
+                                                 kNoRatioKey, kNoRatioKey, kNoRatioKey, kNoRatioKey};
+  float          ratioOf_[kGranularMaxPitch]{};
   Mark           marks_[kMaxMarks]{};  // recent onset marks (ring of kMaxMarks)
   uint32_t       markHead_  = 0;
   uint32_t       markCount_ = 0;

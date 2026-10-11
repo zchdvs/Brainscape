@@ -461,6 +461,17 @@ hashes, the Debug run of their stressors (trigger floods with steals, FastCut lo
 
 These are bit-exact by construction, gated by the goldens, and not prototyped.
 
+*As built* (2026-10-11, sound revision 9, bit-exact): `RatioToInc` shifts the ratio's 24-bit
+significand by its exponent less 118 (checked against the old form for all 33,554,433 floats in
+[0.25, 4]); without spread the pan's draw and `SinCosD` are skipped (the draw is a pure function
+of its key, so no later draw moves); the ratio is cached per pitch entry under the clamped
+semitones' bits when there is no detune, and the envelope under the block's grain length,
+sustain and skew, a mark-capped grain making its own. With the increment off doubles no ITCM code
+calls `__aeabi_d2lz` or `__aeabi_l2d` (only Init and the tempo producer, from QSPI), so their
+libgcc members leave ITCM: the live image's `.itcm_text` falls by 600 bytes to 52,256 (13,216
+spare). The caches add 104 bytes to `Engine::Impl` (8,424 of 8,448 on the M7, 8,560 of 8,704 on
+x86-64).
+
 **8. Instrumentation and the event contract.**
 
 - **Shadow ledger:** the governor's accounting without its admission rules, so it changes no bits.

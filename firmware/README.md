@@ -516,13 +516,17 @@ constants are the same, only their layout differs):
   side (`Push`, `Clear`) and `CheckPreset`;
 - `SoundRevision.cpp` and the archive's string literals (the parameter table's names and units,
   which only the console reads) stay in QSPI, and of libgcc only the members serving the helpers
-  the engine imports (64-bit division, `__aeabi_d2lz`, `__aeabi_l2d`) go to ITCM.
+  the engine imports (64-bit division, `__aeabi_d2lz`, `__aeabi_l2d`) go to ITCM; since the
+  CPU plan's step 7 builds the grain increment from the ratio's bits, only the 64-bit division
+  (the tempo core's) remains.
 
 `.itcm_text` is then 50,824 bytes in the live image (14,648 spare), 50,880 in parity (14,592),
 50,672 in bench (14,800) and 50,784 in bench_hooks (14,688). What stays is what the audio callback
 reaches (a static call graph from it finds 45,494 bytes of reached code), the RT-safe `Reset`, the
 validator (cpu-budget.md §7.3 keeps it until bench session 2 has measured a Spillover load's
-block), the tables and a few small accessors.
+block), the tables and a few small accessors. With the CPU plan's steps 4, 6 and 7 the live
+image's `.itcm_text` is 52,256 bytes (13,216 spare), and parity, bench and bench_hooks hold
+52,312, 52,104 and 52,216.
 
 ### Memory map
 

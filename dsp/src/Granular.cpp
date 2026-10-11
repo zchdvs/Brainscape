@@ -3,6 +3,7 @@
 #include "detail/Granular.h"
 
 #include <cassert>
+#include <cstring>
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>  // _BitScanForward
 #endif
@@ -19,8 +20,25 @@ using grainmath::RandUnit;
 
 namespace {
 
-constexpr float  kInvScale = 1.0f / 32767.0f;
-constexpr double kFix      = 4294967296.0;  // 2^32
+constexpr float kInvScale = 1.0f / 32767.0f;
+
+// A ratio's signed 32.32 increment, ratio * 2^32: the ratio is a normal float m * 2^(E - 150)
+// (m its 24-bit significand, E its biased exponent), so the product is m * 2^(E - 118), an
+// integer, exactly what RoundHalfAwayI64(double(ratio) * 2^32) returned. Built from the bits, it
+// needs no conversion between int64 and double (no __aeabi_d2lz or __aeabi_l2d on the M7).
+inline int64_t RatioToInc(float ratio) noexcept {
+  assert(ratio >= 0.25f && ratio <= 4.0f);  // the composed pitch is clamped to ±24 st
+  uint32_t bits;
+  std::memcpy(&bits, &ratio, sizeof bits);
+  const uint32_t e = bits >> 23;  // the sign is 0; 125 to 129 for [0.25, 4]
+  const auto     m = static_cast<int64_t>((bits & 0x7FFFFFu) | 0x800000u);
+  return m << (e - 118u);
+}
+
+// One out-of-line copy of MakeEnv for the birth's two uses (ITCM): a grain of `frames` frames.
+BRAINSCAPE_NOINLINE grainmath::EnvSpec EnvOf(uint32_t frames, float sustain, float skew) noexcept {
+  return grainmath::MakeEnv(static_cast<float>(frames), sustain, skew);
+}
 
 // The always-applied LUT morph of a unit-peak envelope value (grainmath::EnvValue), times the
 // window's gain: at smoothness 0 the morph is an exact no-op (env + 0*(lut-env) == env), so no
@@ -162,22 +180,44 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   // (mode-compiler.md §7.5, R11), so its life is passes * L.
   uint32_t       total   = p.totalFrames >= 1u ? p.totalFrames : 1u;
   const uint32_t passes  = p.repeat >= 1u ? p.repeat : 1u;
+  // The envelope of a grain of the block's length, cached while the length, sustain and skew stay
+  // (cpu-budget.md §4.3, step 7): MakeEnv is a function of them.
+  if (envTotal_ != total || std::memcmp(&envSustain_, &p.sustain, sizeof(float)) != 0 ||
+      std::memcmp(&envSkew_, &p.skew, sizeof(float)) != 0) {
+    envTotal_   = total;
+    envSustain_ = p.sustain;
+    envSkew_    = p.skew;
+    env_        = EnvOf(total, p.sustain, p.skew);
+  }
   const int64_t  drawKey = birthAbs - drawEpoch_;
 
   // Resolve everything once (design §3): pitch -> ratio -> signed increment. The pitch is the
   // set's entry plus the transpose leaf, then detune, then the clamp (mode-compiler.md §7.5).
   // Each draw at the birth's key and ordinal (kOrdinalClock for a CLOCK hit, else 0, whose keys
   // are revision 1's: RandUnit(key, purpose, 0, 0) is RandUnit(key, purpose)).
-  const uint32_t ord = drawOrdinal;
-  float st = p.pitchSt[PickPitch(p, drawKey, ord)];
-  if (p.spreadCents > 0.f) {
+  const uint32_t ord   = drawOrdinal;
+  const uint32_t entry = PickPitch(p, drawKey, ord);
+  float          st    = p.pitchSt[entry];
+  const bool     detune = p.spreadCents > 0.f;
+  if (detune) {
     st += (RandUnit(drawKey, Draw::Detune, 0u, ord) * 2.0f - 1.0f) * p.spreadCents * 0.01f;
   }
   // Enforce the design's r_max = 4 ratio ceiling on the COMPOSED value — detune
   // on top of a maxed pitch otherwise exceeds what the guards/budgets assume.
   if (st > 24.f) st = 24.f;
   if (st < -24.f) st = -24.f;
-  const float ratio   = grainmath::SemitonesToRatio(st);
+  // Without detune an entry's ratio repeats birth after birth: it is cached per entry, keyed by
+  // the semitones' bits (cpu-budget.md §4.3, step 7). SemitonesToRatio is a function of them.
+  uint32_t key;
+  std::memcpy(&key, &st, sizeof key);
+  float ratio = ratioOf_[entry];
+  if (detune || ratioKey_[entry] != key) {
+    ratio = grainmath::SemitonesToRatio(st);
+    if (!detune) {
+      ratioKey_[entry] = key;
+      ratioOf_[entry]  = ratio;
+    }
+  }
   const bool  reverse =
       p.reverseProb > 0.f && RandUnit(drawKey, Draw::Reverse, 0u, ord) < p.reverseProb;
 
@@ -206,9 +246,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   if (markActive) {
     // Read attack-length earlier so the marked transient lands at the
     // envelope's flat top, not 15-31 dB down the fade-in (review finding).
-    d += static_cast<double>(grainmath::MakeEnv(static_cast<float>(total), p.sustain,
-                                                p.skew)
-                                 .attackEnd);
+    d += static_cast<double>(env_.attackEnd);
     // Upward pitch inflates the near guard past the mark distance and would
     // silently clamp the grain onto pre-onset material (review finding): cap
     // the grain length so the guard fits, instead of losing the transient.
@@ -263,8 +301,7 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   const auto startFrame =
       (anchorFrame - static_cast<uint32_t>(detmath::RoundHalfAwayI32(d))) & mask_;
   g.pos    = static_cast<uint64_t>(startFrame) << 32;
-  assert(ratio >= 0.25f && ratio <= 4.0f);  // the composed pitch is clamped to ±24 st
-  auto inc = detmath::RoundHalfAwayI64(static_cast<double>(ratio) * kFix);
+  int64_t inc = RatioToInc(ratio);
   if (reverse) inc = -inc;
   g.inc        = inc;
   g.passLen    = total;
@@ -275,7 +312,8 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.rendered   = 0;
   g.fadeStart  = kNoFade;
   g.endAbs     = birthAbs + g.total;
-  g.env        = grainmath::MakeEnv(static_cast<float>(total), p.sustain, p.skew);
+  // A mark-capped grain is shorter than the block's length: its own envelope.
+  g.env = total == envTotal_ ? env_ : EnvOf(total, p.sustain, p.skew);
   // Decay (mode-compiler.md §7.5): the position reference's age at birth, a mark's (a live
   // position is the present, age 0), then at each pass's start.
   assert(!markActive || (birthAbs >= markAbs && birthAbs - markAbs < static_cast<int64_t>(mask_)));
@@ -285,16 +323,18 @@ void GranularCore::ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t
   g.smoothness = p.smoothness;
   g.tier       = slot < kHiFiGrains ? 0 : 1;
 
-  // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9).
-  const float pan = 0.5f + p.panSpread * (RandUnit(drawKey, Draw::Pan, 0u, ord) - 0.5f);
-  double panSin, panCos;
-  detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &panSin, &panCos);
-  g.gainL = static_cast<float>(panCos);
-  g.gainR = static_cast<float>(panSin);
-  // Exact unity at center pan so the degenerate-delay null holds bit-exactly.
+  // Equal-power pan around center, width = panSpread (grain-delay-theory.md §3.9), and exact
+  // unity at center pan so the degenerate-delay null holds bit-exactly: without spread the
+  // gains are 1, so neither the pan's draw (a pure function of its key) nor SinCosD is made.
   if (p.panSpread == 0.0f) {
     g.gainL = 1.0f;
     g.gainR = 1.0f;
+  } else {
+    const float pan = 0.5f + p.panSpread * (RandUnit(drawKey, Draw::Pan, 0u, ord) - 0.5f);
+    double      panSin, panCos;
+    detmath::SinCosD(static_cast<double>(pan * 1.5707963267948966f), &panSin, &panCos);
+    g.gainL = static_cast<float>(panCos);
+    g.gainR = static_cast<float>(panSin);
   }
   g.active = true;
   HeapPlace(slot);
@@ -486,7 +526,7 @@ BRAINSCAPE_NOINLINE void GranularCore::HeapSiftDown(uint32_t i) noexcept {
   heapPos_[slot] = static_cast<uint8_t>(i);
 }
 
-void GranularCore::HeapPlace(uint32_t slot) noexcept {
+BRAINSCAPE_NOINLINE void GranularCore::HeapPlace(uint32_t slot) noexcept {
   assert(slot < kGranularMaxGrains);
   uint32_t&      word = live_[slot >> 5];
   const uint32_t bit  = 1u << (slot & 31u);
