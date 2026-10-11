@@ -13,6 +13,12 @@ side by side; every section says which log its numbers come from.
   bench_report.py --port auto [--run "run"] [--save bench.log]
   bench_report.py --log bench.log [--log bench_xip.log --log bench_hooks.log] [--markdown out.md]
                   [--expect-archive build/fw/firmware/engine-archives.sha256]
+                  [--expect-hashes bench-configs.txt]
+
+--expect-hashes takes the host tool's output (brainscape_bench_configs > bench-configs.txt, built
+with the same engine): every result line whose configuration it lists must carry its hash
+(docs/design/cpu-budget.md §8.3, G1). The shadow ledger section checks G3: no block's DWT above
+the ledger's charge, the median ledger within 1.3 x DWT.
 
 A run is INCOMPLETE, and the exit status 1, when its stream misses bench-begin, bench-end or
 an expected suite line, holds a line that is not a JSON object, carries a "resync" notice or
@@ -35,10 +41,14 @@ DEFAULT_GOLDEN = os.path.normpath(os.path.join(HERE, "..", "..", "dsp", "tests",
 FLUSH_SITES_PER_SAMPLE = 45  # determinism-profile.md §4.3 (derived count, record §4.3)
 RULE_RATIO, RULE_FLAGGED_PCT = 1.2, 0.5  # profile §4.2's decision rule
 
-# Lines each suite emits (firmware/bench/main.cpp); "tail" is 2, or 4 in the hooks build.
+# Lines each suite emits (firmware/bench/main.cpp); "tail" is 2, or 4 in the hooks build. The stress
+# suite's fuzz sets are 10 in a quick run and 50 in a full one, after 16 named configurations.
 SUITE_LINES = {"memory": {"memory": 1}, "micro": {"micro": 26, "flush-micro": 6}, "restart": {"restart": 8},
-               "blocks": {"blocks": 18}, "stages": {"stage": 9}, "births": {"births": 4}, "tail": {"tail": 2}}
-RUN_SUITES = ("memory", "micro", "restart", "blocks", "stages", "births")
+               "blocks": {"blocks": 18}, "stages": {"stage": 9}, "births": {"births": 4}, "tail": {"tail": 2},
+               "stress": {"stress": (26, 66)}, "post": {"post": 10}, "events": {"event": 6},
+               "ledger": {"ledger-constants": 1, "ledger": 25}}
+RUN_SUITES = ("memory", "micro", "restart", "blocks", "stages", "births", "stress", "post", "events")
+G3_MEDIAN_PERMILLE = 1300  # cpu-budget.md §8.3: the ledger at most 1.3 x DWT at p50
 
 
 class Run:
@@ -127,7 +137,8 @@ def read_lines(source, run, save=None, command=None, timeout=900.0):
                 run.end = obj
                 break
             run.lines.append(obj)
-            if device and kind in ("blocks", "stage", "births", "tail", "restart"):
+            if device and kind in ("blocks", "stage", "births", "tail", "restart", "stress", "post", "event",
+                                   "ledger"):
                 print("  %s %s %s" % (kind, obj.get("config") or obj.get("op"), obj.get("cache", "")), flush=True)
     except hilserial.PortGone as e:
         run.port_lost = str(e)
@@ -178,6 +189,8 @@ def validate(run, archives):
         suites = RUN_SUITES + (() if quick else ("tail",)) if name == "run" else (name,)
         for s in suites:
             for kind, count in SUITE_LINES.get(s, {}).items():
+                if isinstance(count, tuple):
+                    count = count[0] if quick else count[1]
                 want = 4 if (kind == "tail" and run.hooks) else count
                 got = len(run.of(kind))
                 if got != want:
@@ -232,6 +245,41 @@ def shipping(runs):
         if not r.hooks and r.code == "ITCM":
             return r
     return next((r for r in runs if not r.hooks), runs[0])
+
+
+RESULT_KINDS = ("blocks", "stage", "births", "tail", "stress", "post", "event", "ledger")
+
+
+def load_expected_hashes(path):
+    """brainscape_bench_configs' lines: '<suite> <sha256> blocks=... <two spaces><config>'."""
+    if not path:
+        return None
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r"^(\S+) ([0-9a-f]{64}) .*?  (.+)$", line.rstrip("\n"))
+            if m:
+                out[m.group(3)] = m.group(2)
+    return out
+
+
+def check_hashes(run, expected):
+    """G1: every result line whose configuration the host tool lists carries its hash."""
+    if expected is None:
+        return
+    checked, wrong = 0, []
+    for kind in RESULT_KINDS:
+        for b in run.of(kind):
+            want = expected.get(b.get("config"))
+            if want is None:
+                continue
+            checked += 1
+            if b.get("hash") != want:
+                wrong.append("%s %s" % (b["config"], b.get("cache", "")))
+    if wrong:
+        run.problems.append("%d result line(s) differ from the host's hashes (G1): %s" % (
+            len(wrong), ", ".join(wrong[:8])))
+    run.notes.append("G1: %d result line(s) checked against the host's hashes, %d differ" % (checked, len(wrong)))
 
 
 def report(runs, golden, o):
@@ -539,6 +587,76 @@ def report(runs, golden, o):
         if not hooks_runs:
             o.p("FZ = 1 and the flag census need brainscape_bench_hooks (firmware/README.md).")
 
+    stress_runs = [r for r in budget_runs if r.of("stress")]
+    if stress_runs:
+        o.h("Session 2's configurations: corners, wave 1, CLOCK, fuzz (cpu-budget.md §8.2)")
+        rows = []
+        for r in stress_runs:
+            for b in r.of("stress"):
+                rows.append(([r.name] if multi else []) + [
+                    b["config"], pct(b["mean"], budget), pct(b["p99"], budget), pct(b["max"], budget), b["maxBlock"],
+                    "" if b.get("exactLoad", True) else "INEXACT LOAD", b["hash"][:16]])
+        o.table((["log"] if multi else []) + ["configuration", "mean", "p99", "max", "max at block", "", "sha256"],
+                rows)
+
+    post_runs = [r for r in budget_runs if r.of("post")]
+    if post_runs:
+        o.h("Post stages alone, by difference from none (cpu-budget.md §8.2)")
+        rows = []
+        for r in post_runs:
+            lines = r.of("post")
+            base = next((x for x in lines if x["config"] == "post:none"), None)
+            for x in lines:
+                cost = "" if base is None or x is base else per_sample(x["mean"] - base["mean"])
+                worst = "" if base is None or x is base else per_sample(x["max"] - base["max"])
+                rows.append(([r.name] if multi else []) + [x["config"], per_sample(x["mean"]), per_sample(x["max"]),
+                                                           cost, worst])
+        o.table((["log"] if multi else []) + ["configuration", "mean c/smp", "max c/smp", "stage (mean) c/smp",
+                                              "max - none's max c/smp"], rows)
+        o.p()
+        o.p("Moving: the mix's target changes every block, so its smoother never settles and the per-sample gate "
+            "runs; the delay's head glides to a new time every block; the filter recomputes its coefficients every "
+            "block. One grain voice, no feedback, in every configuration.")
+
+    event_runs = [r for r in budget_runs if r.of("event")]
+    if event_runs:
+        o.h("Event costs, one every 16 blocks (cpu-budget.md §8.2, D12's N)")
+        rows = []
+        for r in event_runs:
+            for x in r.of("event"):
+                rows.append(([r.name] if multi else []) + [
+                    x["config"], x.get("eventBlocks", "?"), x.get("eventMean", "?"), x.get("beforeMean", "?"),
+                    (x["eventMean"] - x["beforeMean"]) if "eventMean" in x else "?", x.get("eventMax", "?")])
+        o.table((["log"] if multi else []) + ["event", "blocks", "event block mean", "block before mean",
+                                              "event cost (mean)", "event block max"], rows)
+        o.p()
+        o.p("The nominal preset (the eight-target macro's own for the MacroMove); an event block also pays what the "
+            "event starts in it (a load's fade and switch, a trigger's birth). N is the event reserve over the "
+            "worst event's cost (D12).")
+
+    ledger_lines = [(r, b) for r in budget_runs for kind in RESULT_KINDS for b in r.of(kind) if b.get("ledger")]
+    if ledger_lines:
+        o.h("Shadow ledger against DWT (cpu-budget.md §5.5, §8.3 G3)")
+        rows, over, loose = [], [], []
+        for r, b in ledger_lines:
+            l = b["ledger"]
+            rows.append(([r.name] if multi else []) + [
+                b["config"], b.get("cache", ""), l["overLedger"], "%.3f" % (l["worstPermille"] / 1000.0),
+                "%.3f" % (l["medianLedgerPermille"] / 1000.0), pct(l["ledgerMax"], budget)])
+            if l["overLedger"]:
+                over.append(b["config"])
+            if l["medianLedgerPermille"] > G3_MEDIAN_PERMILLE:
+                loose.append(b["config"])
+        o.table((["log"] if multi else []) + ["configuration", "cache", "blocks over the ledger",
+                                              "worst DWT / ledger", "median ledger / DWT", "ledger max"], rows)
+        o.p()
+        o.p("**G3:** DWT %s; the median ledger is %s. The constants are provisional "
+            "(firmware/bench/ShadowLedger.h, cpu-budget.md §5.3); the ledger suite's block-log lines carry every "
+            "block's counts, so a refit needs no new run." % (
+                "never exceeds the ledger" if not over else "EXCEEDS the ledger in " + ", ".join(sorted(set(over))[:12]),
+                "within 1.3 x DWT everywhere" if not loose else "looser than 1.3 x DWT in " +
+                ", ".join(sorted(set(loose))[:12])))
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -548,6 +666,9 @@ def main():
     ap.add_argument("--save", help="write the raw stream to this file (with --port)")
     ap.add_argument("--golden", default=DEFAULT_GOLDEN)
     ap.add_argument("--markdown", help="also write the report to this file")
+    ap.add_argument("--expect-hashes", metavar="FILE",
+                    help="brainscape_bench_configs' output for the same engine: the hashes every result line "
+                         "must carry (G1)")
     ap.add_argument("--expect-archive", metavar="SHA256|FILE",
                     help="the engine archive(s) the device must run: a SHA-256 (the shipping archive), or the "
                          "firmware build's engine-archives.sha256 (both archives)")
@@ -576,8 +697,10 @@ def main():
     if not runs:
         print("no bench data")
         return 2
+    expected_hashes = load_expected_hashes(args.expect_hashes)
     for r in runs:
         validate(r, archives)
+        check_hashes(r, expected_hashes)
     with open(args.golden, encoding="utf-8") as f:
         golden = json.load(f)
     o = Out()

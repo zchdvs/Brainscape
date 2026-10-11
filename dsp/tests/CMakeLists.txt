@@ -98,6 +98,33 @@ target_include_directories(firmware_event_budget PRIVATE ${CMAKE_CURRENT_SOURCE_
                                                           ${CMAKE_CURRENT_SOURCE_DIR}/golden)
 add_test(NAME firmware_event_budget COMMAND firmware_event_budget)
 
+# The bench images' configurations (firmware/bench/Configs.h) on the host: the output hashes the
+# Seed must match (cpu-budget.md §8.3, G1) and the shadow ledger's worst block. The ctest checks
+# that every configuration builds, loads exactly and renders.
+set(_bs_fw ${CMAKE_CURRENT_SOURCE_DIR}/../../firmware)
+set(_bs_murmuration ${CMAKE_CURRENT_BINARY_DIR}/FactoryMurmuration.cpp)
+add_custom_command(OUTPUT ${_bs_murmuration}
+  COMMAND ${CMAKE_COMMAND} -DIN=${_bs_fw}/factory/murmuration.bsp -DOUT=${_bs_murmuration}
+          -DSYMBOL=kFactoryMurmuration -DHEADER=bench/FactoryPackages.h
+          -DNAMESPACE=brainscape::fw::bench -P ${_bs_fw}/cmake/EmbedFile.cmake
+  DEPENDS ${_bs_fw}/factory/murmuration.bsp ${_bs_fw}/cmake/EmbedFile.cmake
+  COMMENT "Embedding firmware/factory/murmuration.bsp"
+  VERBATIM)
+add_executable(brainscape_bench_configs
+  ${_bs_fw}/tests/bench_configs.cpp
+  ${_bs_fw}/bench/Configs.cpp
+  ${_bs_murmuration}
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/Corpus.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/EventScript.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/golden/Render.cpp)
+target_link_libraries(brainscape_bench_configs PRIVATE brainscape_dsp brainscape_golden_packages)
+target_include_directories(brainscape_bench_configs PRIVATE ${_bs_fw} ${CMAKE_CURRENT_SOURCE_DIR}/golden
+                                                            ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_definitions(brainscape_bench_configs PRIVATE
+  BRAINSCAPE_GOLDEN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/golden/golden.json"
+  BRAINSCAPE_GOLDEN_PRESETS="${CMAKE_CURRENT_SOURCE_DIR}/golden/presets")
+add_test(NAME firmware_bench_configs COMMAND brainscape_bench_configs --check)
+
 # Offline render tool: fast-iteration audio out of the same engine the pedal runs.
 add_executable(brainscape_render render_main.cpp)
 target_link_libraries(brainscape_render PRIVATE brainscape_dsp)

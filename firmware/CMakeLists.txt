@@ -311,18 +311,29 @@ brainscape_firmware_image(brainscape_parity
 # executing in place from QSPI (the code-placement A/B of profile §7.1), and the engine
 # built with the FP guard's test hooks (flushing forced on and exception flags collected:
 # the FZ = 0/1 silent-tail A/B and flag census of profile §4.2).
+# The bench's configurations (bench/Configs.h) play one factory package, compiled in from
+# firmware/factory byte for byte (bench/FactoryPackages.h).
+set(_bs_murmuration ${CMAKE_CURRENT_BINARY_DIR}/FactoryMurmuration.cpp)
+add_custom_command(OUTPUT ${_bs_murmuration}
+  COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/factory/murmuration.bsp -DOUT=${_bs_murmuration}
+          -DSYMBOL=kFactoryMurmuration -DHEADER=bench/FactoryPackages.h
+          -DNAMESPACE=brainscape::fw::bench -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/factory/murmuration.bsp ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
+  COMMENT "Embedding firmware/factory/murmuration.bsp"
+  VERBATIM)
+set(_bs_bench_sources bench/main.cpp bench/Microbench.cpp bench/Configs.cpp ${_bs_murmuration})
 brainscape_firmware_image(brainscape_bench
-  SOURCES bench/main.cpp bench/Microbench.cpp
+  SOURCES ${_bs_bench_sources}
   LIBS brainscape_fw_golden
   ENGINE_CODE ITCM
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_bench_xip
-  SOURCES bench/main.cpp bench/Microbench.cpp
+  SOURCES ${_bs_bench_sources}
   LIBS brainscape_fw_golden
   ENGINE_CODE XIP
   MIN_HEAP 4M)
 brainscape_firmware_image(brainscape_bench_hooks
-  SOURCES bench/main.cpp bench/Microbench.cpp
+  SOURCES ${_bs_bench_sources}
   LIBS brainscape_fw_golden_hooks
   ENGINE_CODE ITCM
   MIN_HEAP 4M)

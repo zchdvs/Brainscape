@@ -1,8 +1,9 @@
 // Image B, BENCH (firmware/README.md): the DWT measurement pass of determinism-profile.md
-// §4.2, §7 and §8.4 step 13 and grain-engine.md §8. Every number is DWT cycles of the 480 MHz
-// core with interrupts off around the measured call; per-block results stream as JSON lines
-// for tools/hil/bench_report.py, which turns them into budget percentages (10,000 cycles per
-// sample, 480,000 per 48-frame block) and the profile's decision checks.
+// §4.2, §7 and §8.4 step 13, grain-engine.md §8 and the CPU plan's bench sessions
+// (docs/design/cpu-budget.md §8). Every number is DWT cycles of the 480 MHz core with
+// interrupts off around the measured call; results stream as JSON lines for
+// tools/hil/bench_report.py, which turns them into budget percentages (10,000 cycles per
+// sample, 480,000 per 48-frame block) and the profile's and the CPU plan's checks.
 //
 // Built three times from this source: brainscape_bench (the shipping engine archive, its
 // code in ITCM), brainscape_bench_xip (the same archive executing in place from QSPI: the
@@ -13,7 +14,8 @@
 // code: in ITCM in brainscape_bench and _hooks, in QSPI in _xip.
 //
 // Commands: info | run [quick] | memory | micro | restart | blocks [quick] | stages [quick]
-//           | births [quick] | tail | dfu
+//           | births [quick] | tail | stress [quick] | post [quick] | events [quick]
+//           | ledger [quick] | dfu
 // Suites:
 //   memory   PlanMemory, the placement and the linker map
 //   micro    FPU latency with normal and subnormal operands at FZ = 0 and 1 (§4.2 test a),
@@ -27,18 +29,24 @@
 //            block, trigger bursts, freeze toggles, Spillover loads that switch modes, Trails
 //            and FastCut)
 //   stages   per-stage cost by difference: the pessimistic configuration with one stage off
-//            (the engine has no per-stage counters, and none are added: they would be
-//            instrumentation inside dsp/)
 //   births   an upper bound on the per-birth cost at the maximum birth rate (one per
 //            sample): equal voice counts, 48 vs 2.4 births per block
 //   tail     §4.2 test b: 123 s of the golden tail vector and 2 s of noise then 120 s of
 //            silence, at FZ = 0 and (hooks build) FZ = 1, with statistics for the active
 //            part and the silent tail separately and (hooks build) the blocks raising IDC or
 //            UFC; output hashes for the golden comparison
+//   stress   the CPU plan's session-2 configurations (cpu-budget.md §8.2): the legal corners,
+//            wave 1's stressors, CLOCK, the macro sweep and 50 seeded fuzz sets
+//   post     each post stage alone, its mix settled and moving, the delay's head gliding and
+//            the filter's coefficients moving, against none (costs by difference)
+//   events   each event type once every 16 blocks: the event blocks against the blocks before
+//   ledger   the blocks and stress configurations (fuzz aside) with every block logged: DWT
+//            next to the shadow ledger's charge and the engine's counts (block-log lines)
+// Every result line carries the shadow ledger's summary (bench/ShadowLedger.h): the blocks DWT
+// exceeded it (G3 asks none) and the worst and median DWT-to-ledger ratios.
 //
-// Sound revision 2 (mode-compiler.md §4.2, §7): onset grains and mark positioning are mode
-// structure, so the configurations that use them take a corpus package's mode (kOnsetMarks)
-// instead of setting rows 27 and 28, which are retired.
+// The configurations themselves are bench/Configs.h's, which the host tool
+// brainscape_bench_configs renders too: its hashes are what every line's "hash" must equal.
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -46,16 +54,12 @@
 #include <string>
 #include <vector>
 
-#include "Corpus.h"
-#include "EventScript.h"
 #include "JsonLine.h"
-#include "Render.h"
-#include "Sha256.h"
+#include "bench/Configs.h"
 #include "bench/Microbench.h"
+#include "bench/ShadowLedger.h"
 #include "brainscape/Engine.h"
-#include "brainscape/EventQueue.h"
 #include "brainscape/Params.h"
-#include "brainscape/TestSignal.h"
 #include "platform/Placement.h"
 #include "platform/Platform.h"
 #include "platform/UsbSerial.h"
@@ -66,6 +70,7 @@
 
 using namespace brainscape;
 using namespace brainscape::golden;
+using namespace brainscape::fw::bench;
 using brainscape::fw::Serial;
 using brainscape::fw::UsbSerial;
 namespace mb = brainscape::fw::bench;
@@ -78,82 +83,37 @@ constexpr bool kHooks = true;
 constexpr bool kHooks = false;
 #endif
 
-constexpr uint32_t kBlock       = 48;
-constexpr uint32_t kMaxBlocks   = 124u * 1000u;  // 124 s of 48-frame blocks
 constexpr uint32_t kFpscrFz     = 1u << 24;
 constexpr uint32_t kFlagIdc     = 0x80u;  // input denormal
 constexpr uint32_t kFlagUfc     = 0x08u;  // underflow
 
-// Per-block cycles and FPSCR flags of the current run, and a scratch copy for percentiles, in
-// SDRAM (written between measurements only).
+// What the engine did in one block (the differences of Engine::Stats over it), as the ledger
+// suite logs it; saturated at the field's top.
+struct BlockCounts {
+  uint16_t voiceFrames[Engine::kCostClasses];
+  uint16_t births, passes, runs, fade, events;
+  uint8_t  post[Engine::kPostStages];
+};
+
+// Per-block cycles, ledger charges, FPSCR flags and counts of the current run, and a scratch
+// copy for percentiles, in SDRAM (written between measurements only).
 __attribute__((section(".bss.brainscape_sdram_cycles"))) uint32_t g_cycles[kMaxBlocks];
 __attribute__((section(".bss.brainscape_sdram_sorted"))) uint32_t g_sorted[kMaxBlocks];
+__attribute__((section(".bss.brainscape_sdram_ledger"))) uint32_t g_ledger[kMaxBlocks];
 __attribute__((section(".bss.brainscape_sdram_flags"))) uint8_t   g_flags[kMaxBlocks];
+__attribute__((section(".bss.brainscape_sdram_counts"))) BlockCounts g_counts[kMaxBlocks];
 
-Engine*                  g_engine = nullptr;
-fw::EnginePlacement      g_place;
-std::vector<VectorCase>* g_corpus   = nullptr;
-uint32_t                 g_overhead = 0;  // DWT cycles of an empty measurement
-
-// The "events" configuration's transport, as the live image delivers events.
-EventQueue         g_queue;
-Engine::BlockEvent g_blockEvents[EventQueue::kCapacity];
-std::unique_ptr<PresetState> g_loadA, g_loadB;  // Spillover payloads (never modified)
-
-// The structure of the pessimistic configuration: onset-triggered grains positioned at marks,
-// the mode of a corpus package (dsp/tests/golden/presets) with the default macros and CTRL,
-// which the live image's `onset on` and `marks on` load too (firmware/live/LivePresets.h).
-constexpr const char* kOnsetMarks = "strum_marks";
-
-// A complete preset: `preset` (a package's leaves, mode and CTRL, or the defaults, with its
-// parameters over them), with the mode and CTRL of the package `structure` when given.
-std::unique_ptr<PresetState> Build(const PresetSource& preset, const char* structure) {
-  std::unique_ptr<PresetState> mode;
-  if (structure != nullptr) {
-    mode = CompletePreset(PresetSource{structure, {}});
-    if (mode == nullptr) return nullptr;
-  }
-  return CompletePreset(preset, 0, mode.get());
-}
+Engine*             g_engine = nullptr;
+fw::EnginePlacement g_place;
+Bench*              g_bench    = nullptr;
+uint32_t            g_overhead = 0;  // DWT cycles of an empty measurement
 
 void Emit(const std::string& json) {
   Serial().WriteLine(json, UsbSerial::Mode::Block);
   Serial().Flush(2000);
 }
 
-const VectorCase* FindVector(const char* name) {
-  for (const VectorCase& v : *g_corpus) {
-    if (std::strcmp(v.name, name) == 0) return &v;
-  }
-  return nullptr;
-}
-
-const PresetCase* FindPreset(const char* vector, const char* name) {
-  const VectorCase* v = FindVector(vector);
-  if (v == nullptr) return nullptr;
-  for (const PresetCase& p : v->presets) {
-    if (std::strcmp(p.name, name) == 0) return &p;
-  }
-  return nullptr;
-}
-
 // ---- One measured render -----------------------------------------------------------------
-
-struct Spec {
-  std::string                   config;   // what the line calls it
-  std::string                   input;    // which notes
-  PresetSource                  preset;   // loaded Exact: a corpus package or the defaults,
-                                          // with parameters over them
-  const char*                   structure = nullptr;  // a package's mode and CTRL instead
-  std::vector<testsignal::Note> notes;
-  uint32_t                      frames     = 0;
-  bool                          cold       = false;  // clean+invalidate D and I caches per block
-  bool                          forceFlush = false;  // hooks build: FZ inside the guard
-  bool                          events     = false;  // the event stream of PushBlockEvents
-  // > 0: statistics for the active part [0, tail) and the silent tail [tail, end) too, the
-  // tail starting at the first block after the last input frame.
-  uint32_t                      tailStartFrame = 0;
-};
 
 // Statistics of blocks [first, first + blocks) of the run.
 struct Stats {
@@ -161,6 +121,9 @@ struct Stats {
   uint64_t sum = 0;
   uint32_t min = 0, max = 0, maxIndex = 0, p50 = 0, p90 = 0, p99 = 0, p999 = 0;
   uint32_t idcBlocks = 0, ufcBlocks = 0, flaggedBlocks = 0, worstFlaggedCycles = 0;
+  // The shadow ledger (G3): blocks whose DWT exceeded its charge, the largest DWT / ledger and
+  // the median ledger / DWT, in permille, and its largest charge.
+  uint32_t overLedger = 0, worstPermille = 0, medianLedgerPermille = 0, ledgerMax = 0;
 };
 
 struct Result {
@@ -195,6 +158,11 @@ Stats Summarize(uint32_t first, uint32_t end) {
       ++s.flaggedBlocks;
       if (c > s.worstFlaggedCycles) s.worstFlaggedCycles = c;
     }
+    const uint32_t l = g_ledger[b];
+    if (c > l) ++s.overLedger;
+    if (l > s.ledgerMax) s.ledgerMax = l;
+    const uint64_t worst = l != 0 ? static_cast<uint64_t>(c) * 1000u / l : 0xFFFFFFFFu;
+    if (worst > s.worstPermille) s.worstPermille = static_cast<uint32_t>(std::min<uint64_t>(worst, 0xFFFFFFFFu));
   }
   std::copy(g_cycles + first, g_cycles + end, g_sorted);
   std::sort(g_sorted, g_sorted + s.blocks);
@@ -206,7 +174,22 @@ Stats Summarize(uint32_t first, uint32_t end) {
   s.p90  = pct(900);
   s.p99  = pct(990);
   s.p999 = pct(999);
+  for (uint32_t b = first; b < end; ++b) {
+    const uint64_t r = g_cycles[b] != 0 ? static_cast<uint64_t>(g_ledger[b]) * 1000u / g_cycles[b] : 0xFFFFFFFFu;
+    g_sorted[b - first] = static_cast<uint32_t>(std::min<uint64_t>(r, 0xFFFFFFFFu));
+  }
+  std::sort(g_sorted, g_sorted + s.blocks);
+  s.medianLedgerPermille = pct(500);
   return s;
+}
+
+std::string LedgerJson(const Stats& s) {
+  return JsonObj()
+      .UInt("overLedger", s.overLedger)
+      .UInt("worstPermille", s.worstPermille)
+      .UInt("medianLedgerPermille", s.medianLedgerPermille)
+      .UInt("ledgerMax", s.ledgerMax)
+      .Done();
 }
 
 std::string StatsJson(const Stats& s) {
@@ -226,138 +209,75 @@ std::string StatsJson(const Stats& s) {
     o.UInt("idcBlocks", s.idcBlocks).UInt("ufcBlocks", s.ufcBlocks).UInt("flaggedBlocks", s.flaggedBlocks);
     o.UInt("worstFlaggedCycles", s.worstFlaggedCycles);
   }
+  o.Raw("ledger", LedgerJson(s));
   return o.Done();
 }
 
-void PackFrames(const float* l, const float* r, uint32_t n, uint8_t* bytes) {
-  for (uint32_t i = 0; i < n; ++i) {
-    uint32_t u[2];
-    std::memcpy(&u[0], &l[i], 4);
-    std::memcpy(&u[1], &r[i], 4);
-    for (int c = 0; c < 2; ++c) {
-      for (int b = 0; b < 4; ++b) bytes[8u * i + 4u * c + b] = static_cast<uint8_t>(u[c] >> (8 * b));
-    }
-  }
-}
+uint16_t Sat16(uint64_t v) { return static_cast<uint16_t>(v < 0xFFFFu ? v : 0xFFFFu); }
 
-// 0 -> 1 -> 0 over `period` blocks.
-float Tri(uint32_t b, uint32_t period) {
-  const uint32_t phase = b % period;
-  const uint32_t half  = period / 2u;
-  return phase < half ? static_cast<float>(phase) / static_cast<float>(half)
-                      : static_cast<float>(period - phase) / static_cast<float>(half);
-}
+// The measured block: DWT around Process with interrupts off, then the engine's counts over it.
+struct RunState {
+  bool               cold = false;  // clean and invalidate the D and I caches before each block
+  Engine::GrainStats before{};
+};
 
-// The "events" configuration: what a player and the pedal's control loop throw at the engine,
-// stamped into block b of the engine timeline in (frame, seq) order. Every block: cutoff,
-// pitch and grain size sweeps (RebuildDirty and the filter coefficients every block); every
-// 250 ms a burst of four footswitch triggers 12 frames apart (manual births); every 1.5 s a
-// freeze toggle; every second a Spillover load, alternating two presets in two modes, so
-// each is a mode switch: the nominal preset (the default mode) with a FastCut, which fades
-// every sounding grain over 128 frames, and the pessimistic one (onset grains at marks) with
-// Trails (mode-compiler.md §7.3).
-void PushBlockEvents(uint32_t b, uint32_t* seq, Result* r) {
-  const int64_t f0   = static_cast<int64_t>(b) * kBlock;
-  auto          push = [&](int64_t frame, Engine::EventType type, uint32_t id, float value,
-                  const PresetState* preset) {
-    Engine::Event e;
-    e.frame  = frame;
-    e.seq    = (*seq)++;
-    e.type   = type;
-    e.id     = id;
-    e.value  = value;
-    e.preset = preset;
-    ++r->eventsPushed;
-    if (!g_queue.Push(e)) ++r->eventsRefused;
-  };
-  if (b % 1000u == 500u) {
-    const bool nominal = (b / 1000u) % 2u == 0u;
-    push(f0, Engine::EventType::SpilloverLoad,
-         static_cast<uint32_t>(nominal ? SwitchStyle::FastCut : SwitchStyle::Trails), 0.f,
-         nominal ? g_loadB.get() : g_loadA.get());
+void TimedBlock(void* user, uint32_t b, const Engine::ProcessContext& ctx) {
+  auto* rs = static_cast<RunState*>(user);
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+  detail::fpenv_test::flags = 0;
+#endif
+  __disable_irq();
+  if (rs->cold) {
+    // Inside the interrupts-off region, so no interrupt handler re-warms the caches
+    // between the invalidate and the measured call.
+    SCB_CleanInvalidateDCache();
+    SCB_InvalidateICache();
   }
-  if (b % 1500u == 750u) push(f0, Engine::EventType::Freeze, 0, (b / 1500u) % 2u == 0u ? 1.f : 0.f, nullptr);
-  const auto set = [&](ParamId id, float v) {
-    push(f0, Engine::EventType::SetParam, static_cast<uint32_t>(id), Canonicalize(id, v), nullptr);
-  };
-  set(ParamId::FilterCutoffHz, 500.f + 7500.f * Tri(b, 2000u));
-  set(ParamId::TransposeSt, -12.f + 36.f * Tri(b, 3000u));
-  set(ParamId::GrainSizeMs, 5.f + 195.f * Tri(b, 4000u));
-  if (b % 250u == 0u) {
-    for (uint32_t k = 0; k < 4u; ++k) {
-      push(f0 + 12 * static_cast<int64_t>(k), Engine::EventType::Trigger,
-           static_cast<uint32_t>(Engine::TriggerSource::Footswitch), 1.f, nullptr);
-    }
-  }
+  __DSB();
+  __ISB();
+  const uint32_t t0 = DWT->CYCCNT;
+  g_engine->Process(ctx);
+  const uint32_t t1 = DWT->CYCCNT;
+  __enable_irq();
+  g_cycles[b] = t1 - t0 > g_overhead ? t1 - t0 - g_overhead : 0;
+#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
+  g_flags[b] = static_cast<uint8_t>(detail::fpenv_test::flags & (kFlagIdc | kFlagUfc));
+#else
+  g_flags[b] = 0;
+#endif
+  const Engine::GrainStats now = g_engine->Stats();
+  const Engine::GrainStats d   = StatsDelta(rs->before, now);
+  rs->before                   = now;
+  const uint64_t ledger        = LedgerCycles(d, ctx.numFrames);
+  g_ledger[b]                  = static_cast<uint32_t>(std::min<uint64_t>(ledger, 0xFFFFFFFFu));
+  BlockCounts& c               = g_counts[b];
+  for (uint32_t k = 0; k < Engine::kCostClasses; ++k) c.voiceFrames[k] = Sat16(d.voiceFrames[k]);
+  c.births = Sat16(d.births);
+  c.passes = Sat16(d.repeatPasses);
+  c.runs   = Sat16(d.renderRuns);
+  c.fade   = Sat16(d.fadeFrames);
+  c.events = Sat16(ctx.numEvents);
+  for (uint32_t k = 0; k < Engine::kPostStages; ++k) c.post[k] = static_cast<uint8_t>(std::min<uint64_t>(d.postFrames[k], 255u));
 }
 
 Result Run(const Spec& s) {
   Result r;
-  {
-    const std::unique_ptr<PresetState> preset = Build(s.preset, s.structure);
-    r.loaded = preset != nullptr && g_engine->LoadPreset(*preset, LoadMode::Exact);
-  }
-  g_queue.Clear();  // the Exact load started a new engine timeline at frame 0
-  auto gen = std::make_unique<testsignal::Generator>();
-  gen->Start(s.notes.data(), static_cast<uint32_t>(s.notes.size()));
-  Sha256  sha;
-  int32_t qL[kBlock], qR[kBlock];
-  float   inL[kBlock], inR[kBlock], outL[kBlock], outR[kBlock];
-  uint8_t bytes[kBlock * 8];
-  const float* ins[2]  = {inL, inR};
-  float*       outs[2] = {outL, outR};
-  uint32_t     seq     = 0;
-  r.blocks             = std::min(s.frames / kBlock, kMaxBlocks);
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
   detail::fpenv_test::forceFlush = s.forceFlush;
 #endif
-  for (uint32_t b = 0; b < r.blocks; ++b) {
-    gen->RenderQ23(qL, qR, kBlock);
-    for (uint32_t i = 0; i < kBlock; ++i) {
-      inL[i] = testsignal::Q23ToFloat(qL[i]);
-      inR[i] = testsignal::Q23ToFloat(qR[i]);
-    }
-    Engine::ProcessContext ctx;
-    ctx.in        = ins;
-    ctx.out       = outs;
-    ctx.numFrames = kBlock;
-    if (s.events) {
-      PushBlockEvents(b, &seq, &r);
-      ctx.events    = g_blockEvents;
-      ctx.numEvents = g_queue.PopBlock(static_cast<int64_t>(b) * kBlock, kBlock, g_blockEvents,
-                                       EventQueue::kCapacity);
-    }
-#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
-    detail::fpenv_test::flags = 0;
-#endif
-    __disable_irq();
-    if (s.cold) {
-      // Inside the interrupts-off region, so no interrupt handler re-warms the caches
-      // between the invalidate and the measured call.
-      SCB_CleanInvalidateDCache();
-      SCB_InvalidateICache();
-    }
-    __DSB();
-    __ISB();
-    const uint32_t t0 = DWT->CYCCNT;
-    g_engine->Process(ctx);
-    const uint32_t t1 = DWT->CYCCNT;
-    __enable_irq();
-    g_cycles[b] = t1 - t0 > g_overhead ? t1 - t0 - g_overhead : 0;
-#if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
-    g_flags[b] = static_cast<uint8_t>(detail::fpenv_test::flags & (kFlagIdc | kFlagUfc));
-#else
-    g_flags[b] = 0;
-#endif
-    PackFrames(outL, outR, kBlock, bytes);
-    sha.Update(bytes, sizeof bytes);
-  }
+  RunState rs;
+  rs.cold                   = s.cold;
+  rs.before                 = g_engine->Stats();
+  const Bench::Rendered out = g_bench->Render(s, TimedBlock, &rs);
 #if defined(BRAINSCAPE_FPENV_TEST_HOOKS)
   detail::fpenv_test::forceFlush = false;
 #endif
-  g_queue.Clear();
-  r.hash  = sha.Hex();
-  r.whole = Summarize(0, r.blocks);
+  r.loaded        = out.loaded;
+  r.blocks        = out.blocks;
+  r.eventsPushed  = out.eventsPushed;
+  r.eventsRefused = out.eventsRefused;
+  r.hash          = out.hash;
+  r.whole         = Summarize(0, r.blocks);
   if (s.tailStartFrame != 0) {
     r.segmented      = true;
     r.tailStartBlock = std::min((s.tailStartFrame + kBlock - 1u) / kBlock, r.blocks);
@@ -392,78 +312,12 @@ std::string ResultJson(const char* type, const Spec& s, const Result& r) {
     o.UInt("idcBlocks", w.idcBlocks).UInt("ufcBlocks", w.ufcBlocks).UInt("flaggedBlocks", w.flaggedBlocks);
     o.UInt("worstFlaggedCycles", w.worstFlaggedCycles);
   }
-  if (s.events) o.UInt("eventsPushed", r.eventsPushed).UInt("eventsRefused", r.eventsRefused);
+  if (s.events.kind != Events::None) o.UInt("eventsPushed", r.eventsPushed).UInt("eventsRefused", r.eventsRefused);
+  o.Raw("ledger", LedgerJson(w));
   if (r.segmented) {
     o.UInt("tailStartBlock", r.tailStartBlock).Raw("active", StatsJson(r.active)).Raw("tail", StatsJson(r.tail));
   }
   return o.Done();
-}
-
-// ---- Configurations ------------------------------------------------------------------------
-
-using P = ParamId;
-
-// grain-engine.md §8's nominal row: 64 voices at unity rate, 20 ms grains, every post stage
-// in moderate use, the tamer in the loop.
-ParamList Nominal() {
-  return {{P::Overlap, 1.0f},  {P::GrainSizeMs, 20.0f}, {P::Feedback, 0.5f},
-          {P::ModDepth, 0.3f}, {P::DelayMix, 0.3f},     {P::ReverbMix, 0.3f},
-          {P::FilterCutoffHz, 5000.0f}};
-}
-
-// The pessimistic configuration: 64 voices at +24 st (r = 4) with full cents spread, reverse,
-// spray and jitter, feedback above unity, every post stage on (modulation at its maximum
-// rate and depth), and in the kOnsetMarks structure onset-triggered grains positioned at marks.
-ParamList Pessimistic(float grainMs) {
-  return {{P::Overlap, 1.0f},        {P::GrainSizeMs, grainMs}, {P::TransposeSt, 24.0f},
-          {P::SpreadCents, 100.0f},  {P::ReverseProb, 0.5f},    {P::SprayMs, 200.0f},
-          {P::Jitter, 1.0f},         {P::PanSpread, 1.0f},      {P::Feedback, 1.05f},
-          {P::ModDepth, 1.0f},       {P::ModRateHz, 10.0f},     {P::DelayMix, 0.5f},
-          {P::DelayFb, 0.6f},        {P::DelayTimeMs, 350.0f},  {P::ReverbMix, 0.5f},
-          {P::ReverbTime, 0.9f},     {P::FilterCutoffHz, 2000.0f}, {P::FilterRes, 0.5f},
-          {P::FilterMorph, 1.5f},    {P::TriggerSens, 0.8f}};
-}
-
-ParamList With(ParamList base, const ParamList& changes) {
-  for (const auto& c : changes) {
-    bool found = false;
-    for (auto& kv : base) {
-      if (kv.first == c.first) {
-        kv.second = c.second;
-        found     = true;
-      }
-    }
-    if (!found) base.push_back(c);
-  }
-  return base;
-}
-
-Spec Make(const std::string& config, const char* vector, PresetSource preset, uint32_t seconds,
-          const char* structure = nullptr) {
-  Spec s;
-  s.config    = config;
-  s.input     = vector;
-  s.preset    = std::move(preset);
-  s.structure = structure;
-  const VectorCase* v = FindVector(vector);
-  if (v != nullptr) {
-    s.notes  = VectorNotes(*v);
-    s.frames = std::min(seconds * 48000u, v->frames);
-  }
-  return s;
-}
-
-// The pessimistic configuration at `grainMs`, in its structure, with `changes` over it.
-Spec MakePessimistic(const std::string& config, const char* vector, float grainMs,
-                     uint32_t seconds, const ParamList& changes = {}) {
-  return Make(config, vector, PresetSource{nullptr, With(Pessimistic(grainMs), changes)}, seconds,
-              kOnsetMarks);
-}
-
-// A corpus preset as the corpus starts it: its package (leaves, mode, CTRL) and parameters.
-PresetSource Corpus(const char* vector, const char* preset) {
-  const PresetCase* p = FindPreset(vector, preset);
-  return p != nullptr ? PresetSource{p->package, p->params} : PresetSource{};
 }
 
 // ---- Suites --------------------------------------------------------------------------------
@@ -593,14 +447,14 @@ void StmClear(void* p, uint32_t bytes) {
 void SuiteRestart() {
   // Dirty buffers first: a Restart after rendering clears the ring, the post delay and the
   // reverb (the canonical config's 16 MiB ring and 0.75 MiB post delay in SDRAM).
-  Spec s = MakePessimistic("pess_render", "onset_bursts_6s", 20.0f, 2);
+  const Spec s = g_bench->RestartRender();
   Run(s);
   EmitOp("Restart", "after 2 s of rendering", Timed([] { g_engine->Restart(); }));
   EmitOp("Restart", "again, nothing rendered since (skips the clears)",
          Timed([] { g_engine->Restart(); }));
   Run(s);
   static std::unique_ptr<PresetState> preset;
-  preset = Build(s.preset, s.structure);
+  preset = g_bench->Build(s);
   EmitOp("LoadPreset(Exact)", "after 2 s of rendering",
          Timed([] { g_engine->LoadPreset(*preset, LoadMode::Exact); }));
   Run(s);
@@ -621,22 +475,7 @@ void SuiteRestart() {
 }
 
 void SuiteBlocks(bool quick) {
-  const uint32_t sec = quick ? 4u : 10u;
-  std::vector<Spec> specs;
-  specs.push_back(Make("default", "plucks_12s", PresetSource{}, sec));
-  specs.push_back(Make("nominal", "strums_16s", PresetSource{nullptr, Nominal()}, sec));
-  specs.push_back(MakePessimistic("pess_render", "onset_bursts_6s", 20.0f, 6));
-  specs.push_back(MakePessimistic("pess_births", "onset_bursts_6s", 1.0f, 6));
-  Spec events = MakePessimistic("pess_events: sweeps every block, triggers, freeze, loads", "strums_16s",
-                                20.0f, sec);
-  events.events = true;
-  specs.push_back(events);
-  specs.push_back(Make("corpus:tail_post_fb", "strums_16s", Corpus("strums_tail_123s", "tail_post_fb"), sec));
-  specs.push_back(Make("corpus:pitch_reverse_spray", "plucks_12s", Corpus("plucks_12s", "pitch_reverse_spray"), sec));
-  specs.push_back(Make("corpus:max_delay_spray_rev_up24", "plucks_12s",
-                       Corpus("plucks_12s", "max_delay_spray_rev_up24"), sec));
-  specs.push_back(Make("corpus:dense_1ms", "onset_bursts_6s", Corpus("onset_bursts_6s", "dense_1ms"), 6));
-  for (Spec& s : specs) {
+  for (Spec& s : g_bench->Blocks(quick)) {
     for (const bool cold : {false, true}) {
       s.cold = cold;
       Emit(ResultJson("blocks", s, Run(s)));
@@ -645,102 +484,117 @@ void SuiteBlocks(bool quick) {
 }
 
 void SuiteStages(bool quick) {
-  const uint32_t sec = quick ? 3u : 6u;
-  struct Variant {
-    const char* name;
-    ParamList   changes;
-    bool        onsetMarks = true;  // false: the default mode (no onset grains, no marks)
-  };
-  const Variant variants[] = {
-      {"all stages", {}},
-      {"-modulation", {{P::ModDepth, 0.0f}}},
-      {"-post delay", {{P::DelayMix, 0.0f}}},
-      {"-reverb", {{P::ReverbMix, 0.0f}}},
-      {"-filter", {{P::FilterCutoffHz, 20000.0f}}},
-      {"-feedback", {{P::Feedback, 0.0f}}},
-      {"-onset grains and marks", {}, false},
-      {"-pitch (r = 1)", {{P::TransposeSt, 0.0f}, {P::SpreadCents, 0.0f}}},
-      {"-grains (1 voice)", {{P::Overlap, 0.0f}}},
-  };
-  for (const Variant& v : variants) {
-    Spec s = MakePessimistic(std::string("stages:") + v.name, "onset_bursts_6s", 20.0f, sec, v.changes);
-    if (!v.onsetMarks) s.structure = nullptr;
-    Emit(ResultJson("stage", s, Run(s)));
-  }
+  for (const Spec& s : g_bench->Stages(quick)) Emit(ResultJson("stage", s, Run(s)));
 }
 
 void SuiteBirths(bool quick) {
-  const uint32_t sec = quick ? 4u : 10u;
-  // Scheduler births at equal voice counts (target = 64 * overlap^3; overlap values whose
-  // binary32 target is >= 48 and 16): 1 ms grains are born every 48/T frames and live 48,
-  // 20 ms grains every 960/T frames and live 960, so the voices rendered per block match and
-  // the births per block differ by (T - T/20). Per-birth DetMath paths on: pitch with cents
-  // spread, reverse, spray, pan; jitter 0 for an exact birth count; post stages off. The
-  // difference also carries the short grains' ring-read locality (a new spray position per
-  // birth), so it bounds ScheduleGrain's cost from above rather than isolating it.
-  struct Birth {
-    float    overlap;
-    uint32_t voices;
-  };
-  for (const Birth bt : {Birth{0.90856034f, 48u}, Birth{0.62996054f, 16u}}) {
-    for (const float ms : {1.0f, 20.0f}) {
-      const ParamList params = {{P::Overlap, bt.overlap}, {P::GrainSizeMs, ms}, {P::Jitter, 0.0f},
-                                {P::SprayMs, 50.0f},      {P::TransposeSt, 7.0f}, {P::SpreadCents, 50.0f},
-                                {P::ReverseProb, 0.5f},   {P::PanSpread, 1.0f}, {P::Mix, 1.0f}};
-      Spec s = Make(std::string("births:") + JsonUInt(bt.voices) + " voices, " +
-                        (ms == 1.0f ? "1 ms" : "20 ms"),
-                    "plucks_12s", PresetSource{nullptr, params}, sec);
-      const Result r     = Run(s);
-      // Scheduler births per block x1000: at most one per frame.
-      const uint32_t grainFrames = ms == 1.0f ? 48u : 960u;
-      const uint32_t perBlock    = std::min<uint32_t>(48000u, bt.voices * 48u * 1000u / grainFrames);
-      std::string    line        = ResultJson("births", s, r);
-      line.pop_back();
-      line += ",\"voices\":" + JsonUInt(bt.voices) + ",\"grainFrames\":" + JsonUInt(grainFrames) +
-              ",\"birthsPerBlockX1000\":" + JsonUInt(perBlock) + "}";
-      Emit(line);
-    }
+  for (const Spec& s : g_bench->Births(quick)) {
+    const Result r = Run(s);
+    // Scheduler births per block x1000: at most one per frame.
+    const uint32_t perBlock = std::min<uint32_t>(48000u, s.voices * 48u * 1000u / s.grainFrames);
+    std::string    line     = ResultJson("births", s, r);
+    line.pop_back();
+    line += ",\"voices\":" + JsonUInt(s.voices) + ",\"grainFrames\":" + JsonUInt(s.grainFrames) +
+            ",\"birthsPerBlockX1000\":" + JsonUInt(perBlock) + "}";
+    Emit(line);
   }
 }
 
 void SuiteTail() {
-  // The golden tail vector exactly as the corpus renders it (one Exact load, 48-frame blocks,
-  // no events): its hash must equal golden.json's strums_tail_123s/tail_post_fb at FZ = 0,
-  // and at FZ = 1 too (profile §6.4's forced-flush control). The silent tail starts after
-  // the vector's active frames (3 s of strums).
-  const VectorCase* tailVec = FindVector("strums_tail_123s");
-  Spec goldenTail;
-  goldenTail.config = "golden:strums_tail_123s/tail_post_fb";
-  goldenTail.input  = "strums_tail_123s";
-  goldenTail.preset = Corpus("strums_tail_123s", "tail_post_fb");
-  if (tailVec != nullptr) {
-    goldenTail.notes          = VectorNotes(*tailVec);
-    goldenTail.frames         = tailVec->frames;
-    goldenTail.tailStartFrame = tailVec->activeFrames;
-  }
-  // 2 s of noise, then 120 s of silence through feedback and every post stage (§4.2 b).
-  Spec noise;
-  noise.config = "noise-tail:pessimistic, feedback 0.95";
-  noise.input  = "2 s noise + 120 s silence";
-  noise.preset    = PresetSource{nullptr, With(Pessimistic(20.0f), {{P::Feedback, 0.95f}})};
-  noise.structure = kOnsetMarks;
-  testsignal::Note n;
-  n.kind    = testsignal::Kind::Noise;
-  n.start   = 0;
-  n.length  = 2u * 48000u;
-  n.level   = 1 << 22;  // -6 dBFS
-  n.seed    = 0x7A11u;
-  n.attack  = 48;
-  n.release = 480;  // ends at start + length
-  noise.notes.push_back(n);
-  noise.frames         = 122u * 48000u;
-  noise.tailStartFrame = n.start + n.length;
-  for (Spec* s : {&goldenTail, &noise}) {
+  for (Spec& s : g_bench->Tail()) {
     for (const bool fz : {false, true}) {
       if (fz && !kHooks) continue;
-      s->forceFlush = fz;
-      Emit(ResultJson("tail", *s, Run(*s)));
+      s.forceFlush = fz;
+      Emit(ResultJson("tail", s, Run(s)));
     }
+  }
+}
+
+// §8.2's configurations, warm (a cold pass of the corners is `stress` run twice by the report).
+void SuiteStress(bool quick) {
+  for (const Spec& s : g_bench->Stress(quick)) Emit(ResultJson("stress", s, Run(s)));
+}
+
+void SuitePost(bool quick) {
+  for (const Spec& s : g_bench->Post(quick)) Emit(ResultJson("post", s, Run(s)));
+}
+
+// Each event type at block 16k + 8: the event blocks' mean and maximum, and the mean of the
+// blocks just before them (no event), for the event's cost by difference.
+void SuiteEvents(bool quick) {
+  for (const Spec& s : g_bench->EventCosts(quick)) {
+    const Result r      = Run(s);
+    uint64_t     sumEv = 0, sumBefore = 0;
+    uint32_t     n = 0, maxEv = 0;
+    for (uint32_t b = 8; b < r.blocks; b += 16u) {
+      sumEv += g_cycles[b];
+      sumBefore += g_cycles[b - 1u];
+      if (g_cycles[b] > maxEv) maxEv = g_cycles[b];
+      ++n;
+    }
+    std::string line = ResultJson("event", s, r);
+    line.pop_back();
+    line += ",\"eventBlocks\":" + JsonUInt(n) + ",\"eventMean\":" + JsonUInt(n != 0 ? sumEv / n : 0) +
+            ",\"beforeMean\":" + JsonUInt(n != 0 ? sumBefore / n : 0) + ",\"eventMax\":" + JsonUInt(maxEv) + "}";
+    Emit(line);
+  }
+}
+
+// Every block of the run: DWT, the ledger's charge and the engine's counts, 50 blocks a line.
+void EmitBlockLog(const Spec& s, const Result& r) {
+  constexpr uint32_t kPerLine = 50;
+  for (uint32_t b0 = 0; b0 < r.blocks; b0 += kPerLine) {
+    const uint32_t end = std::min(b0 + kPerLine, r.blocks);
+    const auto     arr = [&](auto field) {
+      std::string a = "[";
+      for (uint32_t b = b0; b < end; ++b) a += (b != b0 ? "," : "") + JsonUInt(field(b));
+      return a + "]";
+    };
+    JsonObj o;
+    o.Str("type", "block-log").Str("config", s.config).UInt("first", b0);
+    o.Raw("cycles", arr([](uint32_t b) { return static_cast<uint64_t>(g_cycles[b]); }));
+    o.Raw("ledger", arr([](uint32_t b) { return static_cast<uint64_t>(g_ledger[b]); }));
+    o.Raw("births", arr([](uint32_t b) { return static_cast<uint64_t>(g_counts[b].births); }));
+    o.Raw("passes", arr([](uint32_t b) { return static_cast<uint64_t>(g_counts[b].passes); }));
+    o.Raw("runs", arr([](uint32_t b) { return static_cast<uint64_t>(g_counts[b].runs); }));
+    o.Raw("fade", arr([](uint32_t b) { return static_cast<uint64_t>(g_counts[b].fade); }));
+    o.Raw("events", arr([](uint32_t b) { return static_cast<uint64_t>(g_counts[b].events); }));
+    for (uint32_t k = 0; k < Engine::kCostClasses; ++k) {
+      static const char* const kNames[Engine::kCostClasses] = {"vfUnity", "vfHermite0", "vfHermite1", "vfHermite2",
+                                                               "vfLinear0", "vfLinear1", "vfLinear2"};
+      std::string a = "[";
+      for (uint32_t b = b0; b < end; ++b) a += (b != b0 ? "," : "") + JsonUInt(g_counts[b].voiceFrames[k]);
+      o.Raw(kNames[k], a + "]");
+    }
+    for (uint32_t k = 0; k < Engine::kPostStages; ++k) {
+      static const char* const kNames[Engine::kPostStages] = {"postMod", "postDelay", "postReverb", "postFilter"};
+      std::string a = "[";
+      for (uint32_t b = b0; b < end; ++b) a += (b != b0 ? "," : "") + JsonUInt(g_counts[b].post[k]);
+      o.Raw(kNames[k], a + "]");
+    }
+    Emit(o.Done());
+  }
+}
+
+void SuiteLedger(bool quick) {
+  const LedgerConstants& k = kProvisionalLedger;
+  std::string            w = "[";
+  for (uint32_t i = 0; i < Engine::kCostClasses; ++i) w += (i != 0 ? "," : "") + JsonUInt(k.weight[i]);
+  std::string p = "[";
+  for (uint32_t i = 0; i < Engine::kPostStages; ++i) p += (i != 0 ? "," : "") + JsonUInt(k.post[i]);
+  Emit(JsonObj()
+           .Str("type", "ledger-constants")
+           .Raw("weight", w + "]")
+           .UInt("birth", k.birth)
+           .UInt("pass", k.pass)
+           .UInt("fade", k.fade)
+           .Raw("post", p + "]")
+           .UInt("reserve", k.reserve)
+           .Done());
+  for (const Spec& s : g_bench->LedgerSet(quick)) {
+    const Result r = Run(s);
+    Emit(ResultJson("ledger", s, r));
+    EmitBlockLog(s, r);
   }
 }
 
@@ -799,6 +653,9 @@ void Command(const std::vector<std::string>& w) {
     SuiteBlocks(quick);
     SuiteStages(quick);
     SuiteBirths(quick);
+    SuiteStress(quick);
+    SuitePost(quick);
+    SuiteEvents(quick);
     if (!quick) SuiteTail();
   } else if (c == "memory") {
     Begin("memory");
@@ -821,6 +678,18 @@ void Command(const std::vector<std::string>& w) {
   } else if (c == "tail") {
     Begin("tail");
     SuiteTail();
+  } else if (c == "stress") {
+    Begin(quick ? "stress quick" : "stress");
+    SuiteStress(quick);
+  } else if (c == "post") {
+    Begin(quick ? "post quick" : "post");
+    SuitePost(quick);
+  } else if (c == "events") {
+    Begin(quick ? "events quick" : "events");
+    SuiteEvents(quick);
+  } else if (c == "ledger") {
+    Begin(quick ? "ledger quick" : "ledger");
+    SuiteLedger(quick);
   } else if (c == "dfu") {
     fw::RebootToBootloader();
   } else {
@@ -850,14 +719,10 @@ int main() {
   ec.maxBlockSize = kBlock;  // the pedal's engine
   const char* why = nullptr;
   if (!fw::CheckPlacement(ec, g_place, &why)) fw::Fatal(why);
-  g_corpus = new std::vector<VectorCase>(BuildCorpus());
-  g_loadA  = Build(PresetSource{nullptr, Pessimistic(20.0f)}, kOnsetMarks);
-  g_loadB  = Build(PresetSource{nullptr, Nominal()}, nullptr);
-  if (g_loadA == nullptr || g_loadB == nullptr || !CheckPreset(*g_loadA) || !CheckPreset(*g_loadB)) {
-    fw::Fatal("the events configuration's presets do not build (a package missing from the image?)");
-  }
   g_engine = new (g_place.engine) Engine();
   if (!g_engine->Init(ec, g_place.arenas)) fw::Fatal("Engine::Init refused the placement");
+  g_bench = new Bench();
+  if (!g_bench->Setup(g_engine, &why)) fw::Fatal(why);
 
   // The cost of the measurement itself: two CYCCNT reads with interrupts off.
   uint32_t overhead = UINT32_MAX;

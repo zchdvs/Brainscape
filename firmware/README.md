@@ -9,7 +9,7 @@ not the pedal firmware: no controls, no presets on SD, no device link.
 | Image | `.bin` | What it does | Host tool |
 | --- | --- | --- | --- |
 | **A, parity** | `brainscape_parity.bin` | Renders the golden corpus on the Seed exactly as the golden harness does, from the corpus's packages compiled in, and streams every hash | [`tools/hil/parity_check.py`](../tools/hil/parity_check.py) |
-| **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block (with and without a stream of events), per stage, an upper bound per birth, `Restart` against the SDRAM's own floor, subnormal latency, the flush idiom, silent tails | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
+| **B, bench** | `brainscape_bench.bin` | The DWT measurement pass: cycles per block (with and without a stream of events), per stage, an upper bound per birth, `Restart` against the SDRAM's own floor, subnormal latency, the flush idiom, silent tails; the CPU plan's session-2 corners, stressors and fuzz sets, post-stage and event costs, and the shadow ledger next to DWT for every block | [`tools/hil/bench_report.py`](../tools/hil/bench_report.py) |
 | B, code-placement A/B | `brainscape_bench_xip.bin` | Image B with the engine's code (and the firmware's `memcpy`/`memmove`/`memset`) executing in place from QSPI instead of ITCM (profile §7.1) | `bench_report.py` |
 | B, flush A/B | `brainscape_bench_hooks.bin` | Image B on the engine built with the FP guard's test hooks: the FZ = 0/1 silent-tail test and flag census of profile §4.2 | `bench_report.py` |
 | **C, live** | `brainscape_live.bin` | The engine in the audio callback on the Seed's codec, presets, modes, macros and parameters over USB | [`tools/hil/console.py`](../tools/hil/console.py) |
@@ -242,7 +242,8 @@ time: `parity_check.py --log parity-rev7.log --run "run"`.
 python tools/hil/bench_report.py --port auto --save bench.log --markdown bench.md
 ```
 
-`run` takes about 10–15 minutes (`--run "run quick"` skips the two-minute silent tails). Every
+`run` takes about 20–25 minutes (`--run "run quick"` skips the two-minute silent tails and shortens
+the rest; `ledger` is its own command, its per-block logs several MB). Every
 number is DWT cycles of the 480 MHz core with **interrupts off around the measured call** (and, for
 cold-cache blocks, around the cache maintenance before it); the budget is 10,000 cycles per sample,
 480,000 per 48-frame block. Every `bench-begin` line records the state the numbers were taken
@@ -259,6 +260,28 @@ and where `memset` runs. The suites (each also a command):
 | `stages` | The pessimistic configuration with one stage switched off at a time (the onset grains and marks by loading the default mode instead): each stage's mean cost by difference (the engine has no per-stage counters, and none were added: that would be instrumentation in `dsp/`) | where the cycles go |
 | `births` | 48 and 16 voices with 1 ms vs 20 ms grains: equal voices rendered per block, 48 vs 2.4 births per block. The difference is the birth cost at the maximum rate plus the short grains' ring-read locality, so it bounds `ScheduleGrain` from above | an upper bound for grain-engine §8's `ScheduleGrain` row |
 | `tail` | 123 s of the golden tail vector (`strums_tail_123s/tail_post_fb`) and 2 s of noise then 120 s of silence through the pessimistic configuration: statistics for the active part and for the **silent tail** separately, and the output hash | §4.2 test b |
+| `stress` | The CPU plan's session-2 configurations ([cpu-budget.md](../docs/design/cpu-budget.md) §8.2): the legal corner (64 voices × 1.33 ms × jitter 0 × +24 st × every post stage) with and without onset marks and with a manual trigger due every frame (48 at each block's first frame, as the pedal stamps them), 5 ms grains at +24 st, the default at overlap 1 at 0, +12 and +24 st, the factory **Murmuration** at Activity max (its package compiled in from `factory/`), wave 1's stressors (a 16-grain burst at spacing 0 every 50 ms, 16 repeat passes of 16-frame mark-capped grains with decay at 64 voices, an 8-entry pitch set with spread, a MIDI flood of 48 per block 2 s on and 2 s off, `voice_count` 32 with triggers), CLOCK's hits and cloud, the macro sweep, and 50 seeded fuzz sets of random leaves, structure and events, 2,000 blocks each (10 × 500 with `quick`) | the governor's constants and G2/G4 |
+| `post` | Each post stage alone on one grain voice: its mix settled, its mix moving (a new target every block, so the smoother never settles), the delay's head gliding to a new time every block, the filter's coefficients recomputed every block; each against `post:none` | the post-stage charges K_s (§5.1) and step 2's A/B |
+| `events` | Each event type once every 16 blocks on the nominal preset: `SetParam` (a granular and a filter row), a `MacroMove` with eight curved targets, `SpilloverLoad` with FastCut and with Trails, `Trigger`: the event blocks' mean and maximum against the blocks just before | D12's N and the event reserve of S |
+| `ledger` | The `blocks` and `stress` configurations (fuzz aside) with **every block logged**: DWT next to the shadow ledger's charge and the engine's counts (voice-frames by weight class, births, passes, runs, fade frames, events, each post stage's frames) in `block-log` lines | G3, and a refit of every constant without another run |
+
+Every result line also carries the **shadow ledger**'s summary ([`bench/ShadowLedger.h`](bench/ShadowLedger.h);
+cpu-budget.md §4.3 step 8, §5): the cost governor's accounting without its admission rules,
+computed after each block from the engine's counts over it (`Engine::GrainStats`) with §5.3's
+provisional constants: the blocks whose DWT exceeded it (G3 asks none), the worst DWT/ledger ratio
+and the median ledger/DWT (G3 asks at most 1.3). The configurations live in
+[`bench/Configs.h`](bench/Configs.h), which the host tool **`brainscape_bench_configs`**
+(`firmware/tests/bench_configs.cpp`, built with the host tests) renders with the same engine code:
+its hashes are the ones every result line must carry (G1), and `bench_report.py --expect-hashes`
+checks them:
+
+```text
+build/dsp/tests/brainscape_bench_configs > bench-configs.txt     (quick: brainscape_bench_configs quick)
+python tools/hil/bench_report.py --log bench.log --expect-hashes bench-configs.txt
+```
+
+The ctest `firmware_bench_configs` checks that every configuration builds, loads exactly and
+renders.
 
 Then flash the two variants and run the same command, saving `bench_xip.log` and
 `bench_hooks.log`, and compare all three:
