@@ -968,6 +968,61 @@ TEST_CASE("R12: at voice_count voices a trigger steals the oldest", "[wave1]") {
   CHECK(wide.engine.Stats().steals == 0u);
 }
 
+TEST_CASE("R12: a trigger steals the oldest sounding voice, not the one that ends first",
+          "[wave1]") {
+  // Two voices: A, 200 ms, at frame 0; B, 10 ms, at 100; C, 10 ms, at 200, which steals. The
+  // oldest is A, the voice that ends last: it is cut at 200, and once C ends at 680 nothing
+  // sounds. Stealing the voice that ends first (B, the end-time heap's minimum) would leave A
+  // sounding to frame 9,600. The batched render (cpu-budget.md §4.3 step 5) cuts the victim at
+  // the birth frame inside a span, so the case is checked inside one block, across blocks and
+  // frame by frame.
+  const Stereo in     = Sine(10240);
+  const auto   preset = Preset({{ParamId::VoiceCount, 2.0f}, {ParamId::GrainSizeMs, 200.0f},
+                                {ParamId::DelayMs, 1.0f}, {ParamId::SprayMs, 0.0f},
+                                {ParamId::Mix, 1.0f}},
+                               kSourceFootswitch);
+  const std::vector<Ev> events = {Trig(0, 0, TS::Footswitch),
+                                  Set(100, 0, ParamId::GrainSizeMs, 10.0f),
+                                  Trig(100, 1, TS::Footswitch), Trig(200, 0, TS::Footswitch)};
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{512}, {48}, {1}, {37, 5, 300, 1}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    Rig rig;
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    const Stereo out = Render(rig.engine, in, events, pattern);
+    CHECK(rig.engine.Stats().births == 3u);
+    CHECK(rig.engine.Stats().steals == 1u);
+    CHECK(Rms(out.l, 0, 680) > 0.01);  // the three grains sound
+    size_t loud = 0;
+    for (size_t i = 680; i < out.l.size(); ++i) loud += (out.l[i] != 0.0f || out.r[i] != 0.0f) ? 1u : 0u;
+    CHECK(loud == 0u);  // and nothing after C: A was the voice cut
+  }
+}
+
+TEST_CASE("R12: a steal on its victim's pass boundary inside a span counts the pass", "[wave1]") {
+  // One voice of 10 ms (480 frames) in 2 passes, a burst of 2 grains 10 ms apart: the burst's
+  // second grain steals the first's voice at 480, exactly where its second pass begins. The old
+  // schedule rendered the span up to every birth and so counted that pass; the batched render
+  // cuts the victim inside the span without reaching the boundary, and StealOldest counts it.
+  // Inside one 512-frame block and across block splits, the count is the same.
+  const Stereo in     = Sine(1536);
+  const auto   preset = Preset({{ParamId::GrainSizeMs, 10.0f}, {ParamId::Repeat, 2.0f},
+                                {ParamId::VoiceCount, 1.0f}, {ParamId::Jitter, 0.0f},
+                                {ParamId::BurstCount, 2.0f}, {ParamId::BurstSpacingMs, 10.0f}});
+  for (const std::vector<uint32_t>& pattern :
+       {std::vector<uint32_t>{512}, {48}, {1}, {37, 5, 300, 1}}) {
+    INFO("pattern of " << pattern.size() << " starting " << pattern[0]);
+    Rig rig;
+    REQUIRE(rig.engine.LoadPreset(*preset, LoadMode::Exact));
+    const Engine::GrainStats before = rig.engine.Stats();
+    Render(rig.engine, in, {Trig(0, 0, TS::Footswitch)}, pattern);
+    const Engine::GrainStats after = rig.engine.Stats();
+    CHECK(after.births - before.births == 3u);
+    CHECK(after.steals - before.steals == 1u);
+    CHECK(after.repeatPasses - before.repeatPasses == 2u);
+  }
+}
+
 TEST_CASE("R12: periodic births stop at voice_count, triggers never do", "[wave1]") {
   // Bursts of 8 from the footswitch over a free-running cloud of 3 voices: the burst steals,
   // and while triggered grains fill the voices the scheduler waits.
