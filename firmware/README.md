@@ -564,7 +564,11 @@ validator (cpu-budget.md §7.3 keeps it until bench session 2 has measured a Spi
 block), the tables and a few small accessors. With the CPU plan's steps 4, 6 and 7 the live
 image's `.itcm_text` is 52,256 bytes (13,216 spare), and parity, bench and bench_hooks hold
 52,312, 52,104 and 52,216. Step 5 (the batched render) adds 736 bytes to the live image's: 52,992
-(12,480 spare), and 53,040, 52,840 and 52,944.
+(12,480 spare), and 53,040, 52,840 and 52,944. Step 8's ledger counts bring the live and parity
+images to 53,288 (12,184 spare) and bench and bench_hooks to 53,264 and 53,368; the hop-forms image
+(`brainscape_bench_hop`) holds 58,224 with the textbook form and P1's v2. The bench images' DTCM
+also holds the `speed` suite's grain core, window table and buffers: 78 KiB, 50 KiB left for the
+stack.
 
 ### Memory map
 

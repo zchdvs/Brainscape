@@ -19,7 +19,8 @@
 > [`firmware/records/rev7-2026-10-07/`](../../firmware/records/rev7-2026-10-07/README.md).
 > Status: **owner-approved design** (2026-10-08): the owner confirmed the thirteen decisions of
 > §9 as proposed. Steps 1 and 2 of §4, both bit-exact, are built at sound revision 3 (§4.1,
-> §4.2); nothing else is.
+> §4.2); steps 4 to 8, all bit-exact, on sound revision 9 (§4.3, as-built notes; §7.3). Bench
+> session 2 (§8) is next.
 
 **Evidence labels.**
 
@@ -506,6 +507,33 @@ x86-64).
   - a trigger rate cap.
 - **Bench image:** per-block logging, `SuiteMicro` additions and the new configurations (§8).
 
+*As built* (2026-10-11, sound revision 9, bit-exact):
+
+- **The shadow ledger's counts.** `Engine::GrainStats` gains, as counts since Init: the spare
+  births and birth flushes of step 5; the voice runs rendered; the voice-frames rendered by the
+  governor's seven weight classes (§5.1's w_U, w_H[rc], w_L[rc]); the frames under a FastCut fade;
+  and the frames each post stage ran (a span's frames whenever the stage was not settled off at
+  its start). `RenderRun` adds its frames once per run, the post chain once per stage and span.
+  The voice-frame and fade counts are the same under every block pattern. +296 bytes of live ITCM
+  (53,288; 12,184 spare); `Engine::Impl` 15,392 bytes on the M7, 15,528 on x86-64.
+- **The ledger** (`firmware/bench/ShadowLedger.h`): from the counts' differences over a block it
+  charges §5.3's S pro rata, each voice-frame its weight, each birth c_b, each pass begun c_pass,
+  each fade frame a provisional 4 cycles, and each post stage's frames its K_s, with §5.3's
+  provisional constants (column A's c_b, the conservative weights). The bench logs it next to
+  DWT; it is the governor's accounting in total (Σ load_f plus the births' c_b + w is the
+  voice-frames' weights plus the births' c_b), not its per-frame bank, which step 11 adds.
+- **The firmware event contract** (`firmware/platform/EventBudget.h`, the live image's
+  producer): same-frame `SetParam` and `MacroMove` events of one id coalesce, the later one in its
+  place, never across a load (a load reads row 85); stamps never fall; at most 5 events a block
+  (N, provisional until session 2 prices each type), of them 1 load, 1 trigger and 2 clock ticks
+  (clock.md §4.5), the overflow and everything after it carried to the next block; a trigger
+  carried more than 8 blocks is dropped and counted (the rate cap). The host test
+  `firmware_event_budget` renders a random same-frame stream staged and coalesced: identical.
+- **The bench images** (§8): the configurations move to `firmware/bench/Configs.h`, which the host
+  tool `brainscape_bench_configs` renders with the same engine code, so every device line's hash
+  has a host value (G1); every result line carries the ledger's summary (G3); new suites `stress`,
+  `post`, `events`, `speed`, `pld` and `ledger` (§8.2), and the hop-forms image (§8.1, image 6).
+
 ### 4.4 What steps 1–7 achieve without a governor
 
 Two models: P1's Tier 1 (its worst-case model and benched-block table) and P3's pack-only probe
@@ -876,6 +904,20 @@ Every function of both engine archives has the same instructions and constants a
 laid out differently (compared function by function from their disassembly); the validator, the
 RT-safe `Reset` and what the audio callback reaches (45,494 bytes by a static call graph) stay.
 
+Steps 4 to 8 then use 2,464 of the room in the live image: step 4 +1,472, step 6 +560, step 7
+−600, step 5 +736, step 8's counts +296. `.itcm_text` at the end of step 8:
+
+| Image | Bytes (spare) |
+|---|---|
+| `live` | 53,288 (12,184) |
+| `parity` | 53,288 (12,184) |
+| `bench` | 53,264 (12,208) |
+| `bench_hooks` | 53,368 (12,104) |
+| `bench_hop` (image 6, §8.1) | 58,224 (7,248) |
+
+G6's 8 KB holds in every image but the hop-forms one, which carries P1's v2 only to time it. The
+governor (about 2.3 KB in its prototype) leaves the live image about 9.9 KB.
+
 ### 7.4 The factory set
 
 - **One function.** The same V_eff/`CostModel` function serves the engine, `bspc` and the plugin,
@@ -925,6 +967,19 @@ does not fit wave 1's ITCM even in the bench image (§4.1):
    timed against the old form in its own image. The hop's object is byte-identical in the
    revision-3 and wave-1 builds, so the timing carries over to wave 1.
 
+   *As built* (2026-10-11): with the ITCM freed (§7.3) the pair is one image on revision 9's tree,
+   `brainscape_bench_hop`: the bench with the textbook form and P1's v2 in ITCM beside the engine's
+   `AnalyzeHop` (576 and 4,256 bytes; `firmware/bench/HopForms.h`), its `hop` command timing all
+   three on the same 64 hops from the same state, caches warm and cleaned, and checking each
+   form's bits against the engine's (the host test `firmware_hop_forms` does the same off the
+   board). The hop's code is the same at revision 9 (§7.3's function-by-function compare).
+
+*Image 2 as built* (2026-10-11): `brainscape_bench` at the end of step 8. Images 1 and 1b come
+from the tree before the speed pack (`814bf47`) with its own bench source, without the ledger and
+the new suites; every configuration both images run must hash alike, and the host tool's hashes
+hold for both trees, since steps 4 to 8 change no output bit (G1). Image 3 waits for PLD (step
+10), image 4 for the governor (step 11).
+
 ### 8.2 Configurations
 
 - **Session 1's whole suite, warm and cold:** default, nominal, `pess_render`, `pess_births`,
@@ -961,6 +1016,21 @@ does not fit wave 1's ITCM even in the bench image (§4.1):
     whether a demand miss waits on an outstanding PLD.
 - **Per-block logging:** DWT next to the shadow ledger's prediction for the stress configurations.
   Today the bench sends only percentiles (`firmware/bench/main.cpp:176-230`).
+
+*As built* (2026-10-11), by bench command (`firmware/README.md` §4): the whole suite as before
+(`blocks` warm and cold, `stages`, `births`, `tail`); the corners, the wave-1 stressors (and
+CLOCK's hits and cloud, and the macro sweep) and the fuzz sets in `stress` (a trigger flood stamps
+48 triggers at each block's first frame, as the pedal stamps events; Murmuration is the factory
+package compiled in, at Activity max by a `MacroMove` at frame 0; each fuzz set draws every leaf,
+the default mode or one of eleven corpus modes, and an event stream, from its seed); the post stages alone in
+`post` and each event type in `events`, both by difference; the per-function units in `speed`
+(`RenderRun` by path, rate class, leg and direction, ring warm and cold; one call; the worst
+trigger birth at 0, 32 and 64 voices with a steal at 32 and 64; the heap's push and pop; a pass
+boundary; the 64-slot sweep; `Exp2F`, `LogF`, `SinCosD`, a draw and the int64 pair), the PLD walk
+in `pld`, the hop forms in image 6's `hop`, and every block of the blocks and stress
+configurations in `ledger`. The stress configurations run warm only. Not yet: the governor's
+per-frame step (step 11). `bench_report.py` checks the lines' counts and, with
+`--expect-hashes`, their hashes (G1), and tabulates G3.
 
 ### 8.3 Pass criteria
 

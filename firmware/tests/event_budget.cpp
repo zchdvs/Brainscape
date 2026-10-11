@@ -201,7 +201,9 @@ void Equivalence() {
       } else if (k < 96) {
         stream[blk].push_back(Ev(f, seq++, Type::Trigger, Rand(2)));
       } else {
-        stream[blk].push_back(Ev(f, seq++, Type::SpilloverLoad, Rand(2), 0.f, Rand(2) ? a.get() : c.get()));
+        const uint32_t     style = Rand(2);  // one draw a statement: argument order is unspecified
+        const PresetState* load  = Rand(2) != 0u ? a.get() : c.get();
+        stream[blk].push_back(Ev(f, seq++, Type::SpilloverLoad, style, 0.f, load));
       }
     }
   }
