@@ -326,6 +326,39 @@ int64_t NotBeforeSecond(const PresetCase& p, Feature f, const RenderOutput& r) {
         }
       }
       return 0;
+    case Feature::TempoEvents:  // the first of events 6-10
+      for (const Event& e : p.script.Events()) {
+        if (IsTempoEvent(e)) return e.frame / 48000;
+      }
+      return 0;
+    case Feature::Subdiv: {  // a stored subdivision other than TAP, or the first Subdivision event
+      const auto stored = [&p](const PresetSource& s) {
+        const std::unique_ptr<PresetState> state = CompletePreset(s, p.strip);
+        return state != nullptr && state->performance.subdiv != Subdivision::Tap;
+      };
+      if (stored(PresetSource{p.package, p.params})) return 0;
+      int64_t first = INT64_MAX;
+      for (const StagedLoad& st : p.script.Staged()) {
+        if (!stored(st.preset)) continue;
+        for (const Event& e : p.script.Events()) {
+          if (e.type == EventType::SpilloverLoad && e.frame / 48000 < first &&
+              &p.script.Staged()[e.id] == &st) {
+            first = e.frame / 48000;
+          }
+        }
+        for (const RestartPoint& rp : p.script.Restarts()) {
+          if (rp.load && &p.script.Staged()[rp.staged] == &st && rp.frame / 48000 < first) {
+            first = rp.frame / 48000;
+          }
+        }
+      }
+      for (const Event& e : p.script.Events()) {
+        if (e.type == EventType::Subdivision && (e.id >> 8) == 0u && e.frame / 48000 < first) {
+          first = e.frame / 48000;
+        }
+      }
+      return first == INT64_MAX ? 0 : first;
+    }
     default: return 0;
   }
 }

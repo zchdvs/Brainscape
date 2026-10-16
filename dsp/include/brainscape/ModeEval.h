@@ -47,4 +47,13 @@ size_t EvalExpression(const ModeBlob& mode, const ControlState& control, float p
 // conversion. 0 when r <= 1. A grain whose base delay is below it is moved back by the guard.
 float NearGuardMs(float sizeMs, float entrySt, float transposeSt, float spreadCents) noexcept;
 
+// Whether a preset reads tempo (docs/design/clock.md §6.6, D21): its mode lists `clock`, a
+// layer's base_sync is not off, or post.delay.sync (row 63) reads as a nonzero code at its stored
+// value or at an end of a macro target or an expression assignment on it. Derived from the
+// package, never stored, so no byte and no hash depends on it. Producers read it at each load:
+// in a preset without it the pedal ignores the time-mode gesture and shows the tap LED steady,
+// and the editor dims rows 83-84; tap still sets the (global) tempo. Integer-only (the values
+// are compared on their bits), outside the FP guard; bspc reports it beside the lint.
+bool UsesTempo(const PresetState& preset) noexcept;
+
 }  // namespace brainscape

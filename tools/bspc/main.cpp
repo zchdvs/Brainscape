@@ -23,6 +23,7 @@
 #include "Migrate.h"
 #include "Suite.h"
 #include "Text.h"
+#include "brainscape/ModeEval.h"
 #include "brainscape/SoundRevision.h"
 
 namespace {
@@ -260,7 +261,8 @@ int Usage() {
       "                                     to the same STAT and MODE\n"
       "  stamp [--check] FILE...            documents: rewrite sound_rev and sound_hash for this\n"
       "                                     build; packages: recompile from their JSON section\n"
-      "  lint [--factory] DOC.json...       lint findings L1-L9 (--factory: L4, L7-L9 are errors)\n"
+      "  lint [--factory] DOC.json...       lint findings L1-L9 (--factory: L4, L7-L9 are errors),\n"
+      "                                     and whether each preset uses tempo\n"
       "  diff A.bsp B.bsp                   the first differing field, by name\n"
       "  derive [--solve] DOC.json...       targeted leaves from macro positions (--solve:\n"
       "                                     positions from leaves), rewritten in place\n"
@@ -442,6 +444,9 @@ int CmdLint(const Args& a) {
       continue;
     }
     if (Report(bsc::Lint(doc, options), file)) rc = kFound;
+    // Beside the lint (docs/design/clock.md §6.6): whether the preset reads tempo, derived from
+    // its content and never stored; producers read the same function at each load.
+    Out(file + (brainscape::UsesTempo(*doc.state) ? ": uses tempo\n" : ": does not use tempo\n"));
   }
   return rc;
 }

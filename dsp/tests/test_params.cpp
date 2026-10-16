@@ -163,8 +163,8 @@ ParamKind KindOf(uint32_t id) { return FindParam(static_cast<ParamId>(id))->kind
 
 // ── The table (design §4.2) ────────────────────────────────────────────────────────────
 
-TEST_CASE("the ID table runs 1-82 with the design's kinds for this build") {
-  REQUIRE(kNumParams == 82u);
+TEST_CASE("the ID table runs 1-86 with the design's kinds for this build") {
+  REQUIRE(kNumParams == 86u);
   for (uint32_t id = 1; id <= kNumParams; ++id) {
     const ParamDescriptor* d = FindParam(static_cast<ParamId>(id));
     REQUIRE(d != nullptr);
@@ -177,14 +177,18 @@ TEST_CASE("the ID table runs 1-82 with the design's kinds for this build") {
     if (id >= 57 && id <= 59) want = ParamKind::Leaf, since = 4;  // W1's R9 (§7.5)
     if (id == 29 || id == 30) want = ParamKind::Leaf, since = 6;  // W1's R11
     if (id == 31) want = ParamKind::Leaf, since = 7;              // W1's R12
+    if (id == 63) want = ParamKind::Leaf, since = 9;              // synced times (clock.md §6.1)
     if (id >= 69 && id <= 76) want = ParamKind::Macro;
     if (id == 77 || id == 78) want = ParamKind::Performance;
     if (id == 82) want = ParamKind::Global;
+    if (id == 83 || id == 84) want = ParamKind::Performance;  // the tempo core (clock.md §10.4)
+    if (id == 85) want = ParamKind::Global;                   // global.tempo_recall
+    if (id == 86) want = ParamKind::Global;                   // global.tempo_glide (§7.1)
     CHECK(d->kind == want);
     CHECK(d->sinceRev == since);
   }
   CHECK(FindParam(static_cast<ParamId>(0)) == nullptr);
-  CHECK(FindParam(static_cast<ParamId>(83)) == nullptr);
+  CHECK(FindParam(static_cast<ParamId>(87)) == nullptr);
 }
 
 TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
@@ -228,6 +232,10 @@ TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
       {ParamId::PerfLoopLevel, "perf.loop_level", 0.0f, 1.0f, 1.0f, kDomainNone},
       {ParamId::TriggerOffset, "global.trigger_offset", -1.0f, 1.0f, 0.0f, kDomainDetector},
       {ParamId::EffectVolumeDb, "global.effect_volume_db", -24.0f, 12.0f, 0.0f, kDomainWet},
+      {ParamId::PerfSubdiv, "perf.subdiv", 0.0f, 5.0f, 2.0f, kDomainNone},
+      {ParamId::PerfTimeMode, "perf.time_mode", 0.0f, 2.0f, 0.0f, kDomainNone},
+      {ParamId::TempoRecall, "global.tempo_recall", 0.0f, 1.0f, 0.0f, kDomainNone},
+      {ParamId::TempoGlide, "global.tempo_glide", 0.0f, 1.0f, 0.0f, kDomainNone},
   };
   for (const Row& r : rows) {
     const ParamDescriptor& d = *FindParam(r.id);
@@ -278,8 +286,8 @@ TEST_CASE("renamed and new rows carry the design's names, ranges and domains") {
 
 TEST_CASE("the Leaf rows are the presets' leaves, in ascending id order") {
   // Sound revision 1's rows but the retired 27 and 28, and wave 1's leaves as they land: 57-59
-  // (sound revision 4), 29 and 30 (6), 31 (7).
-  REQUIRE(kNumLeafParams == 32u);
+  // (sound revision 4), 29 and 30 (6), 31 (7); synced times' 63 (9).
+  REQUIRE(kNumLeafParams == 33u);
   uint32_t prev = 0;
   for (size_t i = 0; i < kNumLeafParams; ++i) {
     const auto id = static_cast<uint32_t>(LeafId(i));
@@ -458,7 +466,8 @@ const std::map<ParamId, float> kChangeTo = {
     {ParamId::ReverbMix, 1.0f},       {ParamId::FilterCutoffHz, 400.0f}, {ParamId::FilterRes, 1.0f},
     {ParamId::FilterMorph, 2.0f},     {ParamId::TriggerSens, 1.0f},   {ParamId::EffectVolumeDb, -9.0f},
     {ParamId::Intermittency, 0.5f},   {ParamId::BurstCount, 5.0f},    {ParamId::BurstSpacingMs, 40.0f},
-    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f},     {ParamId::VoiceCount, 2.0f}};
+    {ParamId::Repeat, 4.0f},          {ParamId::DecayMs, 600.0f},     {ParamId::VoiceCount, 2.0f},
+    {ParamId::DelaySync, 6.0f}};  // 1/8 at the stored 120 BPM: 250 ms, a crossfade from 90 ms
 
 constexpr int64_t kChangeFrame = 2401;  // off the 48-frame grid, before the second pluck
 

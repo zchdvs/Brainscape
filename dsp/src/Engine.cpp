@@ -19,8 +19,10 @@
 #include "detail/MixLaw.h"
 #include "detail/ModeEvalBody.h"
 #include "detail/OnsetDetector.h"
+#include "detail/Placement.h"
 #include "detail/PostChain.h"
 #include "detail/Smoother.h"
+#include "detail/Tempo.h"
 
 namespace brainscape {
 
@@ -48,12 +50,16 @@ constexpr bool RowIsWellFormed(const ParamDescriptor& d) {
   if (!(d.min < d.max) || !(d.def >= d.min) || !(d.def <= d.max)) return false;
   if ((d.domain & ~kAllParamDomains) != 0u) return false;
   // A Leaf row names the revision that made it one, and this build plays it; no other kind
-  // has a revision. Rows that hold a value (Leaf, Global) rebuild something; Macro and
-  // Performance rows act through their own events.
+  // has a revision. Rows that hold a value (Leaf, Global) rebuild something, but for
+  // global.tempo_recall and global.tempo_glide, which the engine reads where they act, at a
+  // Spillover load and where it classifies a change of the committed tempo (docs/design/clock.md
+  // §7.1, §10.4); Macro and Performance rows act through their own events.
   switch (d.kind) {
     case ParamKind::Leaf:
       return d.sinceRev >= 1u && d.sinceRev <= kSoundRevision && d.domain != kDomainNone;
-    case ParamKind::Global: return d.sinceRev == 0u && d.domain != kDomainNone;
+    case ParamKind::Global:
+      return d.sinceRev == 0u && (d.domain != kDomainNone || d.id == ParamId::TempoRecall ||
+                                  d.id == ParamId::TempoGlide);
     case ParamKind::Macro:
     case ParamKind::Performance: return d.sinceRev == 0u && d.domain == kDomainNone;
     case ParamKind::Reserved: return d.sinceRev == 0u;
@@ -137,6 +143,11 @@ struct ActiveMode {
 };
 static_assert(std::is_trivially_destructible<ActiveMode>::value, "the Warm arena never destructs");
 constexpr size_t kActiveModeBytes = (sizeof(ActiveMode) + 15u) & ~size_t{15};
+// The tempo core beside it (docs/design/clock.md §2.6): its follower's window, ring and tap chain
+// are about 1.1 KiB, inside the pedal's Warm arena, not the DTCM-bound Impl.
+static_assert(std::is_trivially_destructible<TempoCore>::value, "the Warm arena never destructs");
+static_assert(alignof(TempoCore) <= 16u && alignof(ActiveMode) <= 16u, "the Warm arena's alignment");
+constexpr size_t kTempoCoreBytes = (sizeof(TempoCore) + 15u) & ~size_t{15};
 
 // Two modes are the same when their content is (design §7.3): compared word by word up to
 // modeHash, which the engine never trusts. ModeBlob has no implicit padding (Mode.h), so every
@@ -178,6 +189,23 @@ static_assert(std::atomic<float>::is_always_lock_free,
 static_assert(kFeedbackDelayFrames / detail::kOnsetHop + 2u <=
                   detail::TriggerEvents::kMaxOnsets,
               "TriggerEvents::kMaxOnsets must cover the largest legal block");
+
+// A span's CLOCK hits reach the grain core in the onsets' way (docs/design/clock.md §6.3).
+static_assert(detail::TriggerEvents::kMaxClock == TempoCore::kMaxClockPerSpan,
+              "TriggerEvents::kMaxClock must hold a span's grid hits");
+static_assert(kFeedbackDelayFrames <= TempoCore::kMaxSpanFrames,
+              "a render span must stay within the tempo core's largest");
+static_assert(static_cast<uint8_t>(Engine::EventType::Tap) == tempo::kEventTap &&
+                  static_cast<uint8_t>(Engine::EventType::Tempo) == tempo::kEventTempo &&
+                  static_cast<uint8_t>(Engine::EventType::ClockTick) == tempo::kEventClockTick &&
+                  static_cast<uint8_t>(Engine::EventType::Transport) == tempo::kEventTransport &&
+                  static_cast<uint8_t>(Engine::EventType::Subdivision) ==
+                      tempo::kEventSubdivision,
+              "the tempo events' numbers are clock.md §4.1's");
+static_assert(static_cast<uint8_t>(Subdivision::Tap) == tempo::kSubdivTap &&
+                  kSubdivisionCount == tempo::kSubdivCodes && kTimeModeCount == tempo::kTimeModeCodes &&
+                  static_cast<uint8_t>(TimeMode::Tempo) == tempo::kTimeModeTempo,
+              "the performance state's codes are the tempo core's");
 
 static_assert(kMaxGrains == detail::kGranularMaxGrains, "public and core voice counts differ");
 static_assert(kMaxPitchEntries == detail::kGranularMaxPitch, "a pitch set's cap differs");
@@ -245,7 +273,7 @@ using detail::CanonicalValue;  // detail/Canonical.h: the one canonicalization r
 
 // Bodies of the free-function entry points; the public functions below only add the
 // guard (detail/FpEnvGuard.h explains the split).
-BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
+BRAINSCAPE_COLD BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   MemoryPlan plan{};
   if (!SampleRateSupported(cfg.sampleRate)) return plan;  // Init refuses the config too
   // Hot (DTCM-class): window LUT + wet accumulators. The grain pool itself lives
@@ -255,13 +283,14 @@ BRAINSCAPE_FP_BODY MemoryPlan PlanMemoryBody(const EngineConfig& cfg) noexcept {
   plan.align[static_cast<size_t>(Tier::Hot)] = 16;
   // Warm (AXI-class): feedback FIFO + taming diffuser + mod lines + reverb tank
   // + onset-detector analysis/FFT/whitening state.
-  // Then the active mode (design §7.3).
+  // Then the active mode (design §7.3), then the tempo core (docs/design/clock.md §2.6).
   plan.bytes[static_cast<size_t>(Tier::Warm)] =
-      (static_cast<size_t>(kFeedbackDelayFrames) * 2u +
+      (((static_cast<size_t>(kFeedbackDelayFrames) * 2u +
        detail::FeedbackTamer::WarmFloats(cfg.sampleRate) +
        detail::PostChain::WarmFloats(cfg.sampleRate) + detail::OnsetDetector::WarmFloats()) *
           sizeof(float) +
-      kActiveModeBytes;
+      15u) & ~size_t{15}) +  // the objects after the floats start 16-aligned (Init)
+      kActiveModeBytes + kTempoCoreBytes;
   plan.align[static_cast<size_t>(Tier::Warm)] = 16;
   // Bulk (SDRAM-class): history ring + post-delay buffer; looper A+B when the
   // looper lands. Frame counts are bounded by Init (<= 2^26), so these products
@@ -290,15 +319,19 @@ const ParamDescriptor* PlayableLeaf(uint32_t id) noexcept {
                                                                                       : nullptr;
 }
 
-// Stored performance fields this build cannot play (design §7.3 step 4): every field away from
-// its default, until W2 plays them.
+// Stored performance fields this build cannot play as stored (design §7.3 step 4): since sound
+// revision 8 it plays the time mode, the subdivision and the tempo (docs/design/clock.md §2.4,
+// §11.2), so only `reverse` away from its default, until global reverse; and, in a state built
+// in memory (a decoded package never has one), a field outside its range or a nonzero reserved
+// byte, which the tempo core replaces with Init's defaults.
 uint32_t UnsupportedPerformance(const PerformanceState& p) noexcept {
-  const PerformanceState def{};
-  return static_cast<uint32_t>(p.reverse != def.reverse) +
-         static_cast<uint32_t>(p.timeMode != def.timeMode) +
-         static_cast<uint32_t>(p.subdiv != def.subdiv) +
-         static_cast<uint32_t>(p.tempoSource != def.tempoSource) +
-         static_cast<uint32_t>(p.usPerQuarter != def.usPerQuarter);
+  const auto mode   = static_cast<uint8_t>(p.timeMode);
+  const auto subdiv = static_cast<uint8_t>(p.subdiv);
+  return static_cast<uint32_t>(p.reverse != 0u) + static_cast<uint32_t>(mode >= kTimeModeCount) +
+         static_cast<uint32_t>(subdiv >= kSubdivisionCount) +
+         static_cast<uint32_t>(p.reserved != 0u) +
+         static_cast<uint32_t>(p.usPerQuarter < kMinUsPerQuarter ||
+                               p.usPerQuarter > kMaxUsPerQuarter);
 }
 
 // Design §7.3 steps 0, 1 and 2, and step 4's count (determinism profile §5.10 with the per-kind
@@ -386,6 +419,29 @@ struct Engine::Impl {
   void RebuildDirty() noexcept;
   float Active(ParamId id) const noexcept { return active_[SlotOf(id)]; }
 
+  // Synced times (docs/design/clock.md §5.3, §6.1, §6.2, §7.1; sound revision 9). A synced
+  // duration reads the committed tempo Pc and the effective subdivision's ticks, so after every
+  // tempo call (an event 6-10, a Spillover load's performance state) a change of either marks the
+  // domain of each synced target, and a change of Pc has its class noted for the post delay:
+  // NoteTempo. Each target keeps the inputs it was last computed from, so a rebuild that changes
+  // none of them computes nothing (the tempo core's out-of-line FoldedFrames runs only for a
+  // change), and a change is classed and its folds counted once.
+  // The classes of Pc changes by strength (§7.1, §7.2): a Jump crossfades over anything, a Step
+  // glides over a Drift, and a Drift slews only when every change before the rebuild was one.
+  static constexpr uint8_t kClassNone = 0, kClassDrift = 1, kClassStep = 2, kClassJump = 3;
+  struct SyncedInputs {  // 16 bytes: Impl is in DTCM (kEngineImplBytes)
+    uint64_t pc      = 0;
+    uint32_t frames  = 0;  // the result: exact integer frames, folded
+    uint8_t  ticks   = 0;  // the effective subdivision's (§2.3's s), 3-96
+    int8_t   octaves = 0;  // the fold, within ±5 (§5.3)
+    uint8_t  code    = 0;  // §5.2's code; 0 while unsynced
+  };
+  // Folds `in` to the code at the core's Pc and ticks when any input changed, counting its folds;
+  // true when it changed. Out of line, as NoteTempo: the ITCM holds one copy (detail/Placement.h).
+  BRAINSCAPE_NOINLINE bool Resync(SyncedInputs* in, uint8_t code, uint32_t minFrames,
+                                  uint32_t maxFrames) noexcept;
+  BRAINSCAPE_NOINLINE void NoteTempo() noexcept;
+
   // The pieces of Process: what SetParam, SetFreeze and Trigger queued, applied at the
   // block's first frame; one event, which leaves a Freeze in *freeze for the frame's
   // events to settle; and the render of frames [start, start + count) of the block, which
@@ -404,6 +460,11 @@ struct Engine::Impl {
   // active mode by content, and every domain rebuilds.
   void InstallMode(const PresetState& preset) noexcept;
   void ApplySpillover(const float* values, const PresetState& preset, SwitchStyle style) noexcept;
+  // global.tempo_recall (row 85) as the next load reads it: its latest stored value, so an
+  // unstamped SetParam before a direct Spillover call counts as at the load's frame.
+  bool RecallPreset() const noexcept {
+    return pending_[SlotOf(ParamId::TempoRecall)].load(std::memory_order_relaxed) >= 0.5f;
+  }
 
   EngineConfig cfg_{};
   int16_t*     ring_       = nullptr;  // interleaved stereo, historyFrames frames
@@ -414,6 +475,15 @@ struct Engine::Impl {
                                        // kFeedbackDelayFrames frames (NOT maxBlockSize —
                                        // see the constant's rationale in Engine.h)
   ActiveMode*  mode_       = nullptr;  // Warm arena: the active mode and CTRL (design §7.3)
+  TempoCore*   tempo_      = nullptr;  // Warm arena: the tempo core (clock.md §2.6)
+  // Synced times (NoteTempo): the post delay's target and layer 0's base delay as last computed,
+  // the tempo core's Pc serial as last seen, the class of the Pc changes since the post target
+  // was last computed, and the folds counted (TempoStats::folds).
+  SyncedInputs postSync_{};
+  SyncedInputs baseSync_{};
+  uint32_t     pcSerialSeen_ = 0;
+  uint8_t      pcClass_      = kClassNone;  // kClass* above: the strongest class wins
+  uint64_t     folds_        = 0;
   uint32_t     mask_       = 0;
   uint32_t     writeFrame_ = 0;
   // mix_: the Mix knob, smoothed (its law: detail/MixLaw.h); wetGain_: the wet signal's gain
@@ -453,7 +523,7 @@ struct Engine::Impl {
   float                 active_[kNumStored]{};
 };
 
-Engine::Engine() noexcept {
+BRAINSCAPE_COLD Engine::Engine() noexcept {
   static_assert(sizeof(Impl) <= kEngineImplBytes, "raise kEngineImplBytes in Engine.h");
   static_assert(alignof(Impl) <= kEngineImplAlign, "raise kEngineImplAlign in Engine.h");
   // Engine's implicit destructor never runs ~Impl.
@@ -469,7 +539,7 @@ const Engine::Impl& Engine::impl() const noexcept {
 
 // Entry points that run floating-point code: the guard writes the profile's control
 // word and restores the caller's on return (determinism profile §4.1).
-bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+BRAINSCAPE_COLD bool Engine::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   const detail::FpEnvGuard guard;
   return impl().Init(cfg, arenas);
 }
@@ -477,11 +547,11 @@ void Engine::Reset() noexcept {
   const detail::FpEnvGuard guard;
   impl().Reset();
 }
-void Engine::Restart() noexcept {
+BRAINSCAPE_COLD void Engine::Restart() noexcept {
   const detail::FpEnvGuard guard;
   impl().Restart();
 }
-void Engine::ClearHistory() noexcept {
+BRAINSCAPE_COLD void Engine::ClearHistory() noexcept {
   const detail::FpEnvGuard guard;
   impl().ClearHistory();
 }
@@ -489,16 +559,17 @@ void Engine::Process(const ProcessContext& ctx) noexcept {
   const detail::FpEnvGuard guard;
   impl().Process(ctx);
 }
-void Engine::SetParam(ParamId id, float value, uint32_t /*sampleOffset*/) noexcept {
+BRAINSCAPE_COLD void Engine::SetParam(ParamId id, float value,
+                                      uint32_t /*sampleOffset*/) noexcept {
   const detail::FpEnvGuard guard;
   impl().SetParam(id, value);
 }
-bool Engine::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
-                        SwitchStyle style) noexcept {
+BRAINSCAPE_COLD bool Engine::LoadPreset(const PresetState& preset, LoadMode mode,
+                                        LoadReport* report, SwitchStyle style) noexcept {
   const detail::FpEnvGuard guard;
   return impl().LoadPreset(preset, mode, report, style);
 }
-float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
+BRAINSCAPE_COLD float Engine::GetParam(ParamId id) const noexcept { return impl().GetParam(id); }
 
 void Engine::SetFreeze(bool on) noexcept {
   impl().freezePending_.store(on, std::memory_order_relaxed);
@@ -512,6 +583,22 @@ void Engine::Trigger(TriggerSource src, float /*velocity*/, uint32_t /*sampleOff
   // the trigger's frame decides it as a Trigger event at that frame would be decided.
   (src == TriggerSource::MidiNote ? impl().manualMidi_ : impl().manualFootswitch_)
       .fetch_add(1u, std::memory_order_relaxed);
+}
+
+TempoInfo Engine::Tempo() const noexcept {
+  const Impl& d = impl();
+  if (d.tempo_ == nullptr) return TempoInfo{};
+  return d.tempo_->Info();
+}
+
+BRAINSCAPE_COLD TempoStats Engine::TempoCounts() const noexcept {
+  const Impl& d = impl();
+  if (d.tempo_ == nullptr) return TempoStats{};
+  // The CLOCK births are the grain core's (clock.md §6.3), the crossfades the post chain's and the
+  // folds the synced times' (§5.3, §7.3); deferrals wait for the governor. The copy is the tempo
+  // core's, out of ITCM (§11.12).
+  return d.tempo_->Counts(d.granular_.Stats().clockBirths, d.granular_.Stats().clockDropped,
+                         d.post_.Crossfades(), d.folds_);
 }
 
 Engine::GrainStats Engine::Stats() const noexcept {
@@ -538,7 +625,7 @@ const ParamDescriptor* Descriptors(size_t* count) noexcept {
   return kParamTable;
 }
 
-const ParamDescriptor* Engine::Descriptors(size_t* count) noexcept {
+BRAINSCAPE_COLD const ParamDescriptor* Engine::Descriptors(size_t* count) noexcept {
   return brainscape::Descriptors(count);
 }
 
@@ -553,7 +640,7 @@ float Canonicalize(ParamId id, float plainValue) noexcept {
   return CanonicalizeBody(id, plainValue);
 }
 
-MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
+BRAINSCAPE_COLD MemoryPlan PlanMemory(const EngineConfig& cfg) noexcept {
   const detail::FpEnvGuard guard;
   return PlanMemoryBody(cfg);
 }
@@ -564,7 +651,7 @@ bool CheckPreset(const PresetState& preset, LoadReport* report) noexcept {
   return CheckPresetBody(preset, report != nullptr ? report : &local);
 }
 
-bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
+BRAINSCAPE_COLD bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept {
   ready_ = false;
   if (!SampleRateSupported(cfg.sampleRate)) return false;
   if (cfg.maxBlockSize == 0) return false;
@@ -607,8 +694,25 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
   warm += detail::PostChain::WarmFloats(cfg.sampleRate);
   detector_.Init(warm, cfg.sampleRate);
   warm += detail::OnsetDetector::WarmFloats();
+  // The float regions above leave `warm` only 4-byte aligned; the active mode and the tempo
+  // core (64-bit counters) start at the next 16-byte offset from the arena's 16-aligned base,
+  // as PlanMemory counts it.
+  auto* const warmBase = static_cast<unsigned char*>(arenas.base[static_cast<size_t>(Tier::Warm)]);
+  unsigned char* const objects =
+      warmBase + ((static_cast<size_t>(reinterpret_cast<unsigned char*>(warm) - warmBase) + 15u) &
+                  ~size_t{15});
   // The default mode (Mode.h), which plays as sound revision 1 did, until a load brings one.
-  mode_          = ::new (static_cast<void*>(warm)) ActiveMode();
+  mode_          = ::new (static_cast<void*>(objects)) ActiveMode();
+  // The tempo core after it (clock.md §2.6): Init's 120 BPM, Free and TAP, boundary 0 at frame
+  // 0, at the integer rate R (§1.3), 48,000 on every pedal-exact path. Constructed and Init-ed
+  // out of line, so none of that code is in ITCM (§11.12).
+  tempo_ = TempoCore::Create(objects + kActiveModeBytes,
+                             static_cast<uint32_t>(detmath::RoundHalfAwayI32(cfg.sampleRate)));
+  postSync_     = SyncedInputs{};
+  baseSync_     = SyncedInputs{};
+  pcSerialSeen_ = tempo_->PcSerial();
+  pcClass_      = kClassNone;
+  folds_        = 0;
   modeSwitches_  = 0;
   mask_          = cfg.historyFrames - 1u;
   writeFrame_    = 0;
@@ -651,6 +755,10 @@ bool Engine::Impl::Init(const EngineConfig& cfg, const Arenas& arenas) noexcept 
     pending_[i].store(def, std::memory_order_relaxed);
     active_[i] = def;
   }
+  // The post parameters as a freshly constructed engine holds them: RebuildPostParams sets
+  // delaySlow and delayJump only when the synced target changes, and postSync_ was cleared above,
+  // so a Drift's slew flag from before a re-Init would otherwise outlive it (clock.md §11.16).
+  pp_    = detail::PostParams{};
   dirty_ = kAllParamDomains;
   RebuildDirty();
   post_.Reset(pp_);  // primes the post-chain mix smoothers from the ACTUAL params
@@ -690,7 +798,7 @@ void Engine::Impl::Reset() noexcept {
   norm_.Prime(norm_.target);
 }
 
-void Engine::Impl::Restart() noexcept {
+BRAINSCAPE_COLD void Engine::Impl::Restart() noexcept {
   if (!ready_) return;
   // What Init clears and Reset keeps; Reset below does the rest. Freeze goes off first,
   // because the normalization rebuilt in Reset depends on it.
@@ -702,18 +810,24 @@ void Engine::Impl::Restart() noexcept {
   frozen_        = false;
   frozenAnchor_  = 0;
   freezePending_.store(false, std::memory_order_relaxed);
+  // The active preset's stored performance state, boundary 0 at frame 0, the follower, tap and
+  // transport cleared (clock.md §2.5): frames restart at 0. Reset rebuilds every domain, the
+  // synced targets from the restarted tempo, and primes the post delay's head on its target.
+  tempo_->Restart();
+  pcSerialSeen_ = tempo_->PcSerial();
+  pcClass_      = kClassNone;
   Reset();
 }
 
-void Engine::Impl::ClearHistory() noexcept {
+BRAINSCAPE_COLD void Engine::Impl::ClearHistory() noexcept {
   if (!ready_) return;
   std::memset(ring_, 0, static_cast<size_t>(cfg_.historyFrames) * 2u * sizeof(int16_t));
   post_.ClearBuffers();  // the post delay/reverb tails are history too
   historyClear_ = true;
 }
 
-bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode, LoadReport* report,
-                              SwitchStyle style) noexcept {
+BRAINSCAPE_COLD bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode,
+                                              LoadReport* report, SwitchStyle style) noexcept {
   LoadReport r;
   float      values[kNumLeafParams];
   ResolvePreset(preset, values, &r);  // steps 0-2, and step 4's count
@@ -727,6 +841,9 @@ bool Engine::Impl::LoadPreset(const PresetState& preset, LoadMode mode, LoadRepo
         pending_[SlotOf(LeafId(i))].store(values[i], std::memory_order_relaxed);
       }
       InstallMode(preset);
+      // Step 4: the stored performance state becomes the active preset's, which the Restart
+      // of step 5 plays (clock.md §2.5); producers re-assert the running performance after it.
+      tempo_->SetStoredPerformance(preset.performance);
       Restart();
     } else {
       ApplySpillover(values, preset, style);
@@ -762,6 +879,11 @@ void Engine::Impl::ApplySpillover(const float* values, const PresetState& preset
                                   SwitchStyle style) noexcept {
   for (size_t i = 0; i < kNumLeafParams; ++i) SetValue(SlotOf(LeafId(i)), values[i]);
   InstallMode(preset);
+  // Step 4 (clock.md §2.5): the stored time mode and subdivision apply, and under
+  // global.tempo_recall Preset with the Internal source the stored tempo, phase-continuous, after
+  // §3.5's gap rule at this frame; the phasor never moves.
+  tempo_->SpilloverLoad(sampleCounter_, preset.performance, RecallPreset());
+  NoteTempo();
   if (style == SwitchStyle::FastCut) granular_.FastCut(sampleCounter_);
   freezePending_.store(false, std::memory_order_relaxed);
   SetFrozen(false);
@@ -796,11 +918,76 @@ void Engine::ClearLooper() noexcept {
   // never called from a plugin prepare path (design §7).
 }
 
+void Engine::Impl::NoteTempo() noexcept {
+  const uint32_t serial = tempo_->PcSerial();
+  if (serial != pcSerialSeen_) {
+    pcSerialSeen_ = serial;
+    if (postSync_.code != 0u) {
+      const tempo::PcChange c   = tempo_->LastPcChange();
+      const uint8_t         cls = c == tempo::PcChange::Jump    ? kClassJump
+                                  : c == tempo::PcChange::Drift ? kClassDrift
+                                                                : kClassStep;
+      if (cls > pcClass_) pcClass_ = cls;
+      dirty_ |= kDomainPost;
+    }
+  }
+  const uint32_t ticks = tempo_->GridTicks();
+  if (postSync_.code != 0u && ticks != postSync_.ticks) dirty_ |= kDomainPost;
+  if (baseSync_.code != 0u && (ticks != baseSync_.ticks || tempo_->Pc() != baseSync_.pc)) {
+    dirty_ |= kDomainGranular;
+  }
+}
+
+bool Engine::Impl::Resync(SyncedInputs* in, uint8_t code, uint32_t minFrames,
+                          uint32_t maxFrames) noexcept {
+  if (code == 0u) {
+    const bool was = in->code != 0u;
+    *in            = SyncedInputs{};
+    return was;  // sync off: a discrete change
+  }
+  const uint64_t pc    = tempo_->Pc();
+  const uint32_t ticks = tempo_->GridTicks();
+  if (code == in->code && ticks == in->ticks && pc == in->pc) return false;
+  int32_t        octaves = 0;
+  const uint32_t frames =
+      tempo::FoldedFrames(pc, tempo::NoteTicks(code), ticks, minFrames, maxFrames, &octaves);
+  folds_ += static_cast<uint64_t>(octaves < 0 ? -octaves : octaves);
+  in->pc      = pc;
+  in->frames  = frames;
+  in->ticks   = static_cast<uint8_t>(ticks);     // SubdivTicks: 3-96
+  in->octaves = static_cast<int8_t>(octaves);    // FoldedFrames: within ±10
+  in->code    = code;
+  return true;
+}
+
 void Engine::Impl::RebuildPostParams() noexcept {
   const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   pp_.modRateHz    = get(ParamId::ModRateHz);
   pp_.modDepth     = get(ParamId::ModDepth);
   pp_.delayFrames  = static_cast<float>(get(ParamId::DelayTimeMs) * 0.001 * cfg_.sampleRate);
+  // Row 63 (clock.md §6.1, sound revision 9): nonzero, the target is its note value at the
+  // committed tempo and effective Subdiv, folded into 10 ms-4.03 s, in exact frames, and time_ms
+  // waits. Its code is read as a counting leaf is, RoundHalfAwayI32 of the canonical value
+  // (mode-compiler.md §3.7). How the head reaches a new target is the change's (§7.1, §7.3): a
+  // discrete change (the code, the Subdiv, the fold, sync on or off) or a Jump of Pc crossfades,
+  // unless global.tempo_glide is On, which glides a Jump; a Drift slews; any other change glides.
+  {
+    const int32_t raw = detmath::RoundHalfAwayI32(static_cast<double>(get(ParamId::DelaySync)));
+    assert(raw >= 0 && raw <= static_cast<int32_t>(kMaxSyncDivision));
+    const auto         code = static_cast<uint8_t>(raw);
+    const uint8_t      cls  = pcClass_;
+    pcClass_                = kClassNone;
+    const SyncedInputs was  = postSync_;
+    const uint32_t     rate = tempo_->Rate();
+    if (Resync(&postSync_, code, tempo::PostSyncMinFrames(rate), tempo::PostSyncMaxFrames(rate))) {
+      const bool discrete = code != was.code || postSync_.ticks != was.ticks ||
+                            postSync_.octaves != was.octaves;
+      const bool glideJumps = get(ParamId::TempoGlide) >= 0.5f;
+      if (discrete || (cls == kClassJump && !glideJumps)) ++pp_.delayJump;
+      pp_.delaySlow = !discrete && cls == kClassDrift;
+    }
+    pp_.delaySyncFrames = postSync_.frames;
+  }
   pp_.delayFb      = get(ParamId::DelayFb);
   pp_.delayMix     = get(ParamId::DelayMix);
   pp_.reverbTime = get(ParamId::ReverbTime);
@@ -820,7 +1007,17 @@ void Engine::Impl::RebuildGranularParams() noexcept {
   const auto get = [&](ParamId id) { return active_[SlotOf(id)]; };
   const double sr = cfg_.sampleRate;
 
-  gp_.baseDelayFrames = static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
+  // A synced base delay (clock.md §6.2, Q11; sound revision 9): layer 0's base_sync's note value
+  // at the committed tempo and effective Subdiv, folded into 1 ms-5.04 s (base_ms's range and
+  // 2^-7 of it, §5.3), an exact integer number of frames, so the first grain tap lands on the
+  // division; base_ms waits. Grains resolve their position at birth, so a change reaches only
+  // grains born after it.
+  const uint32_t rate = tempo_->Rate();
+  Resync(&baseSync_, mode_->mode.layers[0].baseSync, tempo::BaseSyncMinFrames(rate),
+         tempo::BaseSyncMaxFrames(rate));
+  gp_.baseDelayFrames = baseSync_.code != 0u
+                            ? static_cast<double>(baseSync_.frames)
+                            : static_cast<double>(get(ParamId::DelayMs)) * 0.001 * sr;
   gp_.sprayFrames     = static_cast<float>(get(ParamId::SprayMs) * 0.001 * sr);
   // ONE rounded integer drives grain length, spacing, and the voice budget —
   // spacing from the unrounded float opened duty-cycle holes across 80% of the
@@ -955,7 +1152,7 @@ void Engine::Impl::RebuildGranularParams() noexcept {
 
 // Leaf and Global rows store; every other kind is a no-op (design §4.1, §7.4): a Macro
 // moves through MacroMove, a Performance row through its own events.
-void Engine::Impl::SetParam(ParamId id, float value) noexcept {
+BRAINSCAPE_COLD void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   const size_t slot = SlotOf(id);
   if (slot == kNumStored) return;
   // NaN must never reach the smoothers, where it is an absorbing state recoverable
@@ -963,7 +1160,7 @@ void Engine::Impl::SetParam(ParamId id, float value) noexcept {
   pending_[slot].store(CanonicalValue(RowOfSlot(slot), value), std::memory_order_relaxed);
 }
 
-float Engine::Impl::GetParam(ParamId id) const noexcept {
+BRAINSCAPE_COLD float Engine::Impl::GetParam(ParamId id) const noexcept {
   const size_t slot = SlotOf(id);
   if (slot == kNumStored) return 0.f;
   return pending_[slot].load(std::memory_order_relaxed);
@@ -1048,6 +1245,15 @@ void Engine::Impl::DrainPending() noexcept {
 }
 
 void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
+  // The tempo core sees every event at its frame (clock.md §3.5: the gap rule applies before
+  // an event of any type; §4.2: a type above 10 is ignored and counted, before the switch,
+  // which keeps no default so a new type cannot slip through unhandled).
+  const auto type = static_cast<uint8_t>(e.type);
+  if (type > tempo::kEventLast) {
+    tempo_->CountUnknownEvent(sampleCounter_);
+    return;
+  }
+  tempo_->BeforeEvent(sampleCounter_);
   switch (e.type) {
     case EventType::SetParam: {  // Leaf and Global rows only, as SetParam
       const size_t slot = SlotOf(static_cast<ParamId>(e.id));
@@ -1092,6 +1298,20 @@ void Engine::Impl::ApplyEvent(const BlockEvent& e, bool* freeze) noexcept {
       const size_t n = detail::EvalExpressionBody(mode_->mode, mode_->control, e.value, out,
                                                   kMaxExpressions * kMaxMacroTargets);
       SetLeaves(out, n);
+      break;
+    }
+    // Events 6-10 (clock.md §4.1): the payload is read from the value's bits, never computed,
+    // and an invalid one is ignored and counted (§4.2). A tempo change, a placement or a
+    // Subdivision can make a grid position due, which the next span's catch-up fires here.
+    case EventType::Tap:
+    case EventType::Tempo:
+    case EventType::ClockTick:
+    case EventType::Transport:
+    case EventType::Subdivision: {
+      uint32_t bits;
+      std::memcpy(&bits, &e.value, sizeof bits);
+      tempo_->ApplyEvent(sampleCounter_, type, e.id, bits);
+      NoteTempo();  // a synced target follows a change of Pc or of the subdivision (§6.1, §6.2)
       break;
     }
   }
@@ -1159,6 +1379,24 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
       ev.manualCount < pendingFootswitch_ ? ev.manualCount : pendingFootswitch_;
   pendingFootswitch_ -= fromFootswitch;
   pendingMidi_ -= ev.manualCount - fromFootswitch;
+  // The CLOCK grid (clock.md §6.3): every position due in the span, by the catch-up at its first
+  // frame and then at each F(k), at most kMaxClockPerSpan. The grid runs whatever the mode, so
+  // a mode that lists `clock` never inherits a stale catch-up; only such a mode births on it, and
+  // a mode without it drops the hits still waiting for their jittered frame, as a trigger whose
+  // source the mode leaves out is dropped. The grid's period scales the jitter.
+  {
+    GridHit        hits[TempoCore::kMaxClockPerSpan];
+    const uint32_t nh = tempo_->GridFrames(sampleCounter_ + count, hits, TempoCore::kMaxClockPerSpan);
+    if ((sources & kSourceClock) == 0u) {
+      granular_.ClearClock();
+    } else if (nh != 0u) {
+      ev.clockGridFrames = tempo_->GridPeriodFrames();
+      for (uint32_t i = 0; i < nh; ++i) {
+        assert(hits[i].frame >= sampleCounter_ && hits[i].frame < sampleCounter_ + count);
+        ev.clockOffset[ev.clockCount++] = static_cast<uint32_t>(hits[i].frame - sampleCounter_);
+      }
+    }
+  }
   for (uint32_t n = 0; n < count; ++n) {
     const int64_t abs  = sampleCounter_ + n;
     const auto    slot = static_cast<uint32_t>(abs) & (kFeedbackDelayFrames - 1u);
@@ -1203,8 +1441,14 @@ void Engine::Impl::RenderFrames(const ProcessContext& ctx, uint32_t start,
   }
 
   // ── Pass 2: schedule + render the grain block (per-grain over the whole block).
+  const uint64_t clockBirths = granular_.Stats().clockBirths;
   granular_.Process(gp_, ev, sampleCounter_, epochStart_, ringStart, frozen_, &frozenAnchor_,
                     count, wetL_, wetR_);
+  // The frame the last CLOCK hit was born at, after its jitter (TempoInfo::lastClockBirth),
+  // when one was born in this span.
+  if (granular_.Stats().clockBirths != clockBirths) {
+    tempo_->NoteClockBirth(granular_.Stats().lastClockBirth);
+  }
 
   // ── Pass 3a: normalization (smoothed), then the feedback tap — TAMED wet into
   // the FIFO (design §2.3: DC/HP/LP/saturator/diffuser sit inside the loop; the

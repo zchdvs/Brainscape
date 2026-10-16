@@ -9,13 +9,15 @@
 #include "gui/BrainscapeLookAndFeel.h"
 #include "gui/CurationViews.h"
 #include "gui/ModeMenu.h"
+#include "gui/TempoPanel.h"
 #include "gui/Widgets.h"
 
 namespace brainscape::plugin {
 
 // The curation bench (mode-compiler.md §9.1): two views over one processor.
-//   Pedal  : the pedal's eight knobs with pickup and Shift, the open preset document with its
-//            commands (open, save, solve, A/B, render) and the compiler's findings;
+//   Pedal  : the pedal's eight knobs with pickup and Shift, the tempo strip (BPM, TAP, Subdiv,
+//            time mode; docs/design/clock.md §10.3), the open preset document with its commands
+//            (open, save, solve, A/B, render) and the compiler's findings;
 //   Leaves : every engine leaf as a knob, grouped as in companion §2.5's raw-parameter view (the
 //            design's Advanced tab), marked with the macros that move it.
 // Around both: the header's Modes menu (the factory set built in, and the mode that plays),
@@ -25,7 +27,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   static constexpr int kDefaultWidth  = 1180;
   static constexpr int kDefaultHeight = 720;
   static constexpr int kMinWidth      = 940;
-  static constexpr int kMinHeight     = 600;
+  static constexpr int kMinHeight     = 676;  // the tempo strip's 74 px over the 600 before it
 
   enum class View : uint8_t { Pedal, Leaves };
 
@@ -49,6 +51,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   ModeMenu&                      Modes() noexcept { return modes_; }
   DocumentPanel&                 DocumentView() noexcept { return document_; }
   FindingsPanel&                 Findings() noexcept { return findings_; }
+  TempoPanel&                    Tempo() noexcept { return tempo_; }
 
  private:
   void timerCallback() override { RefreshNow(); }
@@ -68,6 +71,7 @@ class BrainscapeEditor final : public juce::AudioProcessorEditor, private juce::
   MacroPanel       macros_;
   DocumentPanel    document_;
   FindingsPanel    findings_;
+  TempoPanel       tempo_;
 
   OnsetLed       led_;
   LevelMeter     inMeter_{"IN"}, outMeter_{"OUT"};

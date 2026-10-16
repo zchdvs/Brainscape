@@ -3,8 +3,8 @@
   "id": "factory.engram",
   "name": "Engram",
   "family": "echoic",
-  "sound_rev": 7,
-  "sound_hash": "c4ccd1232a0dbb129ac54d6d5cef53329efcd860eb0b4ffd4cd27ef10037656e",
+  "sound_rev": 9,
+  "sound_hash": "ffda2308f269a34e2be3294f0f924119f5bda2acea504d78b4e5de53fdf4a660",
   "meta": {
     "author": "",
     "description": "",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 405,
       "fb": 0.45,
-      "mix": 1
+      "mix": 1,
+      "sync": 0
     },
     "reverb": {
       "time": 0.4,

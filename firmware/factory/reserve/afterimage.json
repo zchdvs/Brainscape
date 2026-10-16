@@ -3,8 +3,8 @@
   "id": "factory.afterimage",
   "name": "Afterimage",
   "family": "reverie",
-  "sound_rev": 7,
-  "sound_hash": "9faf1c55543650f2bcc7a52ef1b3a2df825fef51d2da7a91d1f2d284d3db0e5c",
+  "sound_rev": 9,
+  "sound_hash": "833c1973957572393f98ef9fa3a0b2d88dfb7cb4192e54cadf205207ebf8986a",
   "meta": {
     "author": "Brainscape",
     "description": "A short, close grain cloud that lingers just behind the playing.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

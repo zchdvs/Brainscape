@@ -3,8 +3,8 @@
   "id": "corpus.freeze_long",
   "name": "Freeze long",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "e4305e8347b58637396b53fe795c3c6b057ce821d5e88c5ba3e7520f22acefca",
+  "sound_rev": 9,
+  "sound_hash": "4c70475ef7fdc50b49c21f7205a4aa2810d80482ed3da5ff0b55344cac692cb0",
   "meta": {
     "author": "",
     "description": "Golden corpus: a 69 s freeze on marks.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

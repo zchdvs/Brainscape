@@ -25,7 +25,7 @@ namespace brainscape {
 //                                          96      package_hash = SHA-256(package, this zeroed)
 //
 // STAT: u32 n (<= 128), n x {u32 id, u32 bits} with ascending ids, then the performance state
-//       {u8 reverse, time_mode, subdiv, tempo_source; u32 us_per_quarter}.
+//       {u8 reverse, time_mode, subdiv, reserved (0, was tempo_source); u32 us_per_quarter}.
 // MODE: u32 features, u32 chunk_count, then chunks {u32 tag, u32 length, payload} in the order
 //       SCHD, LAYR, PSET, STEP, MODS, ROUT, LINK, DUCK, MACR, each at most once: SCHD, LAYR and
 //       MACR always, the others exactly when used (Mode.h), at most 4 KiB.
@@ -110,7 +110,8 @@ enum class PresetError : uint8_t {
   StatCount,          // over 128 leaves
   StatOrder,          // ids not strictly ascending. detail: the id
   StatValue,          // NaN, infinite, -0 or subnormal. detail: the id
-  Performance,        // a performance field outside its enumeration or range
+  Performance,        // a performance field outside its enumeration or range, or its
+                      // reserved byte 3 (was tempo_source) nonzero
   StatPadding,        // a nonzero leaf slot past the count (a state built in memory). detail:
                       // the slot
   // MODE
@@ -121,7 +122,8 @@ enum class PresetError : uint8_t {
   ChunkLength,        // detail: the tag
   ChunkCount,         // chunk_count is not the number of chunks
   ChunkDefault,       // a present optional chunk equal to its absent default. detail: the tag
-  ModePadding,        // a nonzero pad, or a nonzero entry past a count
+  ModePadding,        // a nonzero pad or reserved byte (SCHD's byte 2, was `subdiv`), or
+                      // a nonzero entry past a count
   ModeCount,          // a count outside its cap
   ModeEnum,           // an enumeration value outside the vocabulary
   ModeValue,          // a float NaN, infinite, -0 or subnormal

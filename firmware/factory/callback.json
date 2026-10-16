@@ -3,8 +3,8 @@
   "id": "factory.callback",
   "name": "Callback",
   "family": "echoic",
-  "sound_rev": 7,
-  "sound_hash": "9dddef2cb509069a28d44902deb73d23de937d501c0dfaa81f6e6f6b337379c4",
+  "sound_rev": 9,
+  "sound_hash": "6b06d754f2306ea64e0aae456c09c0e1a23b5c97827e0604116d0c683f403803",
   "meta": {
     "author": "Brainscape",
     "description": "A grain tap answered by the post delay's exact taps.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 375.00003,
       "fb": 0.5,
-      "mix": 0.55
+      "mix": 0.55,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

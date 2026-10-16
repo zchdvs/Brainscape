@@ -3,8 +3,8 @@
   "id": "example.controls",
   "name": "Controls",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "1f9b8508583dee411b524cc9dae207846846fd353feb06b74c73d5e844f349f7",
+  "sound_rev": 9,
+  "sound_hash": "88485a1587b4037fcc1c2199d9f62bfa033b145fc1e43f1a4a968419582afc38",
   "meta": {
     "author": "",
     "description": "",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

@@ -5,6 +5,7 @@
 #include "Text.h"
 #include "brainscape/ModeEval.h"
 #include "brainscape/ParamDisplay.h"
+#include "brainscape/Tempo.h"
 
 namespace bsc {
 
@@ -45,6 +46,47 @@ void Reach(const Document& d, uint32_t leafId, uint32_t* lowest, uint32_t* highe
   }
   *lowest  = lo;
   *highest = hi;
+}
+
+// Reach, and both ends of every expression assignment on the leaf too: the values the controls
+// reach (the expression pedal moves a leaf as a macro does, clock.md §6.5).
+void ReachAll(const Document& d, uint32_t leafId, uint32_t* lowest, uint32_t* highest) {
+  Reach(d, leafId, lowest, highest);
+  const ControlState& c = d.state->control;
+  for (uint32_t i = 0; i < c.exprCount && i < kMaxExpressions; ++i) {
+    if (c.expressions[i].target != leafId) continue;
+    for (const uint32_t b : {BitsOf(c.expressions[i].lo), BitsOf(c.expressions[i].hi)}) {
+      if (LessBits(b, *lowest)) *lowest = b;
+      if (LessBits(*highest, b)) *highest = b;
+    }
+  }
+}
+
+// A counting leaf's integer as the engine reads it, RoundHalfAwayI32 of the canonical value
+// (mode-compiler.md §3.7), here from the bits of a value in [0, 2^23): floor(v + 1/2) is
+// floor((floor(2v) + 1) / 2). Negative values, NaN and below 1/2 read 0.
+uint32_t CountOf(uint32_t bits) {
+  if ((bits >> 31) != 0u) return 0u;
+  const uint32_t exponent = (bits >> 23) & 0xFFu;
+  if (exponent < 126u) return 0u;  // below 1/2
+  if (exponent >= 149u) return 0x7FFFFFFFu;  // 2^22 or more: never a code
+  const uint32_t mant = (bits & 0x7FFFFFu) | 0x800000u;  // v = mant · 2^(exponent - 150)
+  return ((mant >> (149u - exponent)) + 1u) >> 1u;
+}
+
+// The tempo a preset stores, in BPM to a tenth, for messages: 6·10^7 / µs, rounded.
+std::string Bpm(uint32_t usPerQuarter) {
+  const uint64_t tenths = (600000000ull + usPerQuarter / 2u) / usPerQuarter;
+  return Dec(static_cast<uint32_t>(tenths / 10u)) + "." + Dec(static_cast<uint32_t>(tenths % 10u));
+}
+
+// A synced field's effective value (FormatSyncedTime) at a tempo and Subdiv, at 48 kHz.
+std::string Synced(tempo::SyncTarget target, uint32_t code, uint32_t ns, uint8_t subdiv,
+                   uint8_t timeMode) {
+  char buf[96];
+  FormatSyncedTime(target, static_cast<uint8_t>(code), ns, subdiv, timeMode, 48000u, buf,
+                   sizeof buf);
+  return std::string(buf);
 }
 
 bool Detached(const Document& d, uint32_t leafId) {
@@ -147,6 +189,15 @@ Wide Distance(uint32_t t, uint32_t v) {
 // sign(|t - a| - |t - b|): negative when a lands nearer t, zero on a tie.
 int Nearer(uint32_t t, uint32_t a, uint32_t b) {
   return Sign(Add(Distance(t, a), Negate(Distance(t, b))));
+}
+
+// Whether `frames` at 48 kHz, frames / 48 ms, is below the binary32 `ms`, exactly: frames · 2^149
+// against 48 · ms · 2^149 (48 = 32 + 16).
+bool FramesBelowMs(uint32_t frames, uint32_t msBits) {
+  Wide x16 = Scaled(msBits);
+  for (int i = 0; i < 4; ++i) x16 = Add(x16, x16);
+  const Wide x48 = Add(x16, Add(x16, x16));
+  return Sign(Add(Scaled(tempo::IntegerValueBits(frames)), Negate(x48))) < 0;
 }
 
 uint32_t ValueAt(const ModeBlob& mode, uint32_t macroId, uint32_t index, uint32_t positionBits) {
@@ -316,10 +367,32 @@ std::vector<Finding> Lint(const Document& d, const LintOptions& options) {
     Reach(d, size, &sizeLo, &sizeHi);
     Reach(d, trans, &transLo, &transHi);
     Reach(d, spread, &spreadLo, &spreadHi);
+    // A synced base delay (clock.md §6.2, §11.1) at its shortest: the note value at 300 BPM under
+    // ×8, the shortest tempo and the finest Subdiv the live controls reach, folded (§5.3).
+    const uint32_t syncCode = m.layers[n].baseSync;
+    const uint32_t syncLo =
+        syncCode != 0u ? tempo::SyncedDuration(tempo::SyncTarget::BaseDelay,
+                                               static_cast<uint8_t>(syncCode),
+                                               tempo::kMinNsPerQuarter, 5, 0, 48000u)
+                             .frames
+                       : 0u;
     for (uint32_t e = 0; e < m.pitch[n].count; ++e) {
       const float    st = m.pitch[n].entries[e].st;
       const uint32_t guard =
           BitsOf(NearGuardMs(FloatOf(sizeHi), st, FloatOf(transHi), FloatOf(spreadHi)));
+      if (syncCode != 0u) {
+        if (FramesBelowMs(syncLo, guard)) {
+          add("L2", false,
+              At(d, "base_sync:" + Dec(n), "/layers/" + Dec(n) + "/position/base_sync"),
+              "the synced base delay at its shortest, " +
+                  Synced(tempo::SyncTarget::BaseDelay, syncCode, tempo::kMinNsPerQuarter, 5, 0) +
+                  " (300 BPM, Subdiv \xC3\x97" "8), is below size_ms * (r - 1) = " +
+                  NumberText(guard) + " ms for pitch entry " + NumberText(BitsOf(st)) +
+                  " st at the largest size, transpose and spread reached, so the guard moves "
+                  "those grains back");
+        }
+        continue;
+      }
       if (LessBits(baseLo, guard)) {
         add("L2", false, At(d, "leaf:" + Dec(base), "/layers/" + Dec(n) + "/position/base_ms"),
             "the smallest base_ms reached, " + NumberText(baseLo) +
@@ -440,6 +513,94 @@ std::vector<Finding> Lint(const Document& d, const LintOptions& options) {
         }
       }
     }
+  }
+
+  // Synced times (clock.md §5.2, §6.2, §6.5; sound revision 9). The stored tempo and Subdiv as a
+  // load plays them (§2.4: Tempo time mode forces TAP).
+  const PerformanceState& perf    = s.performance;
+  const uint32_t          ns      = perf.usPerQuarter * 1000u;
+  const auto              subdiv  = static_cast<uint8_t>(perf.subdiv);
+  const auto              tmode   = static_cast<uint8_t>(perf.timeMode);
+  static const char* const kRates[] = {"TAP", "\xC3\x97" "1/4", "\xC3\x97" "1/2",
+                                       "\xC3\x97" "2", "\xC3\x97" "4", "\xC3\x97" "8"};
+  const std::string       storedAt =
+      "at the stored " + Bpm(perf.usPerQuarter) + " BPM and " +
+      kRates[tmode == tempo::kTimeModeTempo || subdiv >= tempo::kSubdivCodes ? 0u : subdiv];
+
+  // L12 (§6.2, Q11, D6): a synced base delay with grain feedback, whose repeats fall a FIFO pass
+  // (10.67 ms at 48 kHz) later per pass than the grid.
+  uint32_t fbLo, fbHi;
+  ReachAll(d, static_cast<uint32_t>(ParamId::Feedback), &fbLo, &fbHi);
+  for (uint32_t n = 0; n < m.schedule.layerCount; ++n) {
+    if (m.layers[n].baseSync == 0u || !LessBits(0u, fbHi)) continue;
+    add("L12", false, At(d, "base_sync:" + Dec(n), "/layers/" + Dec(n) + "/position/base_sync"),
+        "layer " + Dec(n) + " syncs its base delay with feedback.amount reaching " +
+            NumberText(fbHi) +
+            ": grain-feedback repeats fall 10.67 ms later per pass than the grid; tempo-exact "
+            "repeats belong on the post delay (post.delay.sync with post.delay.fb)");
+  }
+
+  // L13 (§6.5): a macro target or expression assignment on a leaf a sync overrides wherever it
+  // could move: post.delay.time_ms while row 63 is nonzero at every value the controls reach, a
+  // layer's base_ms while its base_sync is not off (structure, which nothing moves).
+  uint32_t syncLoBits, syncHiBits;
+  ReachAll(d, static_cast<uint32_t>(ParamId::DelaySync), &syncLoBits, &syncHiBits);
+  const auto overridden = [&](uint32_t leafId, const std::string& by) {
+    for (uint32_t k = 0; k < t.macroCount; ++k) {
+      const MacroDef& md = t.macros[k];
+      for (uint32_t i = 0; i < md.count; ++i) {
+        if (t.targets[md.first + i].param != leafId) continue;
+        add("L13", false, At(d, "target:" + Dec(md.id) + ":" + Dec(i), "/macros"),
+            std::string(MacroName(md.id)) + " targets " + RowName(leafId) + ", which " + by +
+                " overrides at every position: the target does nothing");
+      }
+    }
+    const ControlState& c = s.control;
+    for (uint32_t i = 0; i < c.exprCount && i < kMaxExpressions; ++i) {
+      if (c.expressions[i].target != leafId) continue;
+      add("L13", false, At(d, "expression:" + Dec(i), "/controls/expression"),
+          std::string("the expression pedal targets ") + RowName(leafId) + ", which " + by +
+              " overrides at every position: the assignment does nothing");
+    }
+  };
+  if (CountOf(syncLoBits) >= 1u) {
+    overridden(static_cast<uint32_t>(ParamId::DelayTimeMs), "post.delay.sync");
+  }
+  for (uint32_t n = 0; n < m.schedule.layerCount; ++n) {
+    if (m.layers[n].baseSync == 0u) continue;
+    overridden(static_cast<uint32_t>(n == 1u ? ParamId::L1DelayMs : ParamId::DelayMs),
+               "layer " + Dec(n) + "'s base_sync");
+  }
+
+  // L14 (§5.2, §5.3): a synced field whose reachable codes fold at the stored tempo and Subdiv,
+  // where a sweep of the code is no longer monotone in duration.
+  {
+    const uint32_t lo = CountOf(syncLoBits) < 1u ? 1u : CountOf(syncLoBits);
+    const uint32_t hi = CountOf(syncHiBits) > kMaxSyncDivision ? kMaxSyncDivision : CountOf(syncHiBits);
+    std::string    folds;
+    for (uint32_t code = lo; code <= hi; ++code) {
+      const tempo::SyncedTime st = tempo::SyncedDuration(
+          tempo::SyncTarget::PostDelay, static_cast<uint8_t>(code), ns, subdiv, tmode, 48000u);
+      if (st.frames == 0u || st.octaves == 0) continue;
+      folds += (folds.empty() ? "" : ", ") +
+               Synced(tempo::SyncTarget::PostDelay, code, ns, subdiv, tmode);
+    }
+    if (!folds.empty()) {
+      add("L14", false,
+          At(d, "leaf:" + Dec(static_cast<uint32_t>(ParamId::DelaySync)), "/post/delay/sync"),
+          "post.delay.sync's reachable codes fold " + storedAt + " (10 ms-4 s): " + folds +
+              "; a sweep of the code is not monotone there");
+    }
+  }
+  for (uint32_t n = 0; n < m.schedule.layerCount; ++n) {
+    const uint32_t code = m.layers[n].baseSync;
+    if (code == 0u) continue;
+    const tempo::SyncedTime st = tempo::SyncedDuration(
+        tempo::SyncTarget::BaseDelay, static_cast<uint8_t>(code), ns, subdiv, tmode, 48000u);
+    if (st.frames == 0u || st.octaves == 0) continue;
+    add("L14", false, At(d, "base_sync:" + Dec(n), "/layers/" + Dec(n) + "/position/base_sync"),
+        "layer " + Dec(n) + "'s base_sync folds " + storedAt + " (1 ms-5 s): " +
+            Synced(tempo::SyncTarget::BaseDelay, code, ns, subdiv, tmode));
   }
 
   // L9: other makers' marks in product strings.

@@ -7,8 +7,16 @@
 # code or constant section that an ITCM member of the engine archives defines must therefore
 # keep its copy in ITCM (below 0x00010000), whichever object supplied it; a new one fails the
 # build until it is named in brainscape_firmware_image's _bs_engine_comdat (CMakeLists.txt).
+#
+# It also checks the calls out of ITCM. A call from code in ITCM to code outside it (QSPI) goes
+# through a linker veneer placed in ITCM beside the caller, so the image's ITCM veneers are exactly
+# its calls out of ITCM. The audio path makes none per sample: the only ones allowed are the
+# tempo core's control-rate entry points (docs/design/clock.md §9.6, §11.12), named in
+# ITCM_VENEERS. Any other (a hot path calling a cold engine function, or an object kept out of
+# ITCM) fails the build until it is moved, inlined, or named there deliberately.
 #   cmake -DELF=... -DREADELF=arm-none-eabi-readelf -DARCHIVE=libbrainscape_dsp.a
-#         -DHOOKS_ARCHIVE=libbrainscape_dsp_fpenv_hooks.a -DNOT_ITCM=Decode.cpp.obj,... -P ItcmCheck.cmake
+#         -DHOOKS_ARCHIVE=libbrainscape_dsp_fpenv_hooks.a -DNOT_ITCM=Decode.cpp.obj,...
+#         -DITCM_VENEERS=<mangled target>,... -P ItcmCheck.cmake
 cmake_minimum_required(VERSION 3.22)
 string(REPLACE "," ";" not_itcm "${NOT_ITCM}")
 set(symbols "")
@@ -71,4 +79,30 @@ if(NOT problems STREQUAL "")
   message(FATAL_ERROR "ItcmCheck: ${name} keeps engine COMDAT sections outside ITCM (add them to "
                       "_bs_engine_comdat in firmware/CMakeLists.txt):\n${problems}")
 endif()
-message(STATUS "ItcmCheck: ${name}: ${linked} of the engine's ${defined} COMDAT sections linked, all in ITCM")
+
+# GNU ld names the stub of a long branch to `target` __<target>_veneer.
+string(REPLACE "," ";" allowed "${ITCM_VENEERS}")
+string(REGEX MATCHALL "[0-9]+: [0-9a-f]+ +[0-9]+ +[A-Z_]+ +[A-Z_]+ +[A-Z_]+ +[0-9A-Z_]+ +__[A-Za-z0-9_$.]+_veneer\n"
+       veneers "${syms}")
+set(calls 0)
+set(unexpected "")
+foreach(v IN LISTS veneers)
+  string(REGEX MATCH "^[0-9]+: ([0-9a-f]+) .* __([A-Za-z0-9_$.]+)_veneer" _ "${v}")
+  set(addr "${CMAKE_MATCH_1}")
+  set(target "${CMAKE_MATCH_2}")
+  math(EXPR value "0x${addr}")
+  if(value GREATER_EQUAL 65536)
+    continue()  # outside ITCM: a call into ITCM, or between QSPI and flash
+  endif()
+  math(EXPR calls "${calls} + 1")
+  if(NOT target IN_LIST allowed)
+    string(APPEND unexpected "  ${target} (veneer at 0x${addr})\n")
+  endif()
+endforeach()
+if(NOT unexpected STREQUAL "")
+  message(FATAL_ERROR "ItcmCheck: ${name} calls out of ITCM to targets not in ITCM_VENEERS "
+                      "(firmware/CMakeLists.txt): keep the callee in ITCM or inline it, or name it "
+                      "there if it runs at control rate only:\n${unexpected}")
+endif()
+message(STATUS "ItcmCheck: ${name}: ${linked} of the engine's ${defined} COMDAT sections linked, all in ITCM; "
+               "${calls} calls out of ITCM, all allowed")

@@ -3,8 +3,8 @@
   "id": "example.default",
   "name": "Default",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "3d8bf7893f8a70698dd1827b7c53595ae5fad3c856378d02c5e6534cc2e98ee1",
+  "sound_rev": 9,
+  "sound_hash": "5e6a2701b4c16088efaf90d21ca65de7c1cb5195327cc4e4634373a5f77c64e3",
   "meta": {
     "author": "",
     "description": "",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.5,

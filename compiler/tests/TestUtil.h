@@ -46,6 +46,7 @@ inline bool ValidateAll(const brainscape::PresetState& s, uint32_t supported,
 inline bsc::CompileOptions AllFeatures() {
   bsc::CompileOptions o;
   o.read.supportedFeatures = brainscape::kModeFeatureAll;
+  o.read.globalReverse     = true;
   o.decode                 = DecodeAll;
   o.validate               = ValidateAll;
   return o;

@@ -498,6 +498,313 @@ PresetCase MonoStutter() {
   return p;
 }
 
+
+// ── Sound revision 8: the tempo core (docs/design/clock.md §8.3). ────────────────────────────
+// Every clock preset plays at 140 BPM (857.14 frames per tick) or 137.5 BPM (872.73), never at
+// the stored default's 120 (1,000 frames per tick), which hid draft v1's firing bug at every
+// block size (record §2.6, E1). The packages: presets/clock_hits.json (births on the grid alone:
+// sources clock, footswitch and midi_note; stored 428,571 µs, 140 BPM, TAP), clock_cloud.json
+// (a periodic cloud with clocked hits and onsets held to 12 voices, which hits steal from; stored
+// 436,364 µs, 137.5 BPM, ×2 in Subdiv time mode) and clock_recall.json (clock_hits' mode stored
+// at 600,000 µs, 100 BPM, ×1/2: what a recall plays).
+
+using tempo::SubdivField;
+using tempo::TransportKind;
+
+constexpr uint32_t kNs140   = 428571429;  // 140 BPM: 6e10 / 140, rounded
+constexpr uint32_t kNs137_5 = 436363636;  // 137.5 BPM
+constexpr uint32_t kNs100   = 600000000;
+constexpr uint32_t kNs150   = 400000000;
+
+// The position the master's next tick carries after `frame`: the ticks the script sends from
+// the one a Start at `startFrame` made position 0, up to `frame` (a producer's re-assert reads it
+// from MidiClockParser, §2.5, §4.3).
+uint32_t NextTickPosition(const Script& s, int64_t startFrame, int64_t frame) {
+  uint32_t n = 0;
+  for (const Event& e : s.Events()) {
+    if (e.type == EventType::ClockTick && e.frame > startFrame && e.frame < frame) ++n;
+  }
+  return n;
+}
+
+// The internal tempo at its stored 140 BPM: the Subdiv stepped through all six codes, Tempo time
+// mode forcing TAP and Free restoring the kept code, then intermittency, bursts and jitter.
+PresetCase ClockInternal() {
+  PresetCase p = PackagePreset("clock_internal", "clock_hits");
+  Script&    s = p.script;
+  const uint8_t codes[] = {3, 4, 5, 2, 1, 0};  // ×2, ×4, ×8, ×1/2, ×1/4, TAP
+  for (int k = 0; k < 6; ++k) {
+    s.Subdivision(S(2 + 3 * k) + 7 + 31 * k, SubdivField::Subdivision, codes[k]);
+  }
+  s.Subdivision(S(19) + 31, SubdivField::Subdivision, 5);  // ×8, then Tempo mode: TAP
+  s.Subdivision(S(20) + 29, SubdivField::TimeMode, 2);
+  s.Subdivision(S(22) + 37, SubdivField::TimeMode, 0);     // Free: ×8 again
+  s.Param(S(21) + 43, P::Intermittency, 0.4f);
+  s.Param(S(23) + 47, P::BurstCount, 3.0f);
+  s.Param(S(23) + 47, P::BurstSpacingMs, 40.0f);
+  s.Subdivision(S(24) + 41, SubdivField::Subdivision, 0);
+  s.Param(S(25) + 53, P::Jitter, 0.7f);
+  p.require   = {{C::SubdivEvents, 10, 10}, {C::ClockBirths, 150}, {C::Skips, 20},
+                 {C::BurstBirths, 20},     {C::OffGridEvents, 14}, {C::InvalidEvents, 0, 0}};
+  p.ablate    = {Feature::Clock, Feature::Subdiv, Feature::TempoEvents, Feature::Intermittency,
+                 Feature::Burst};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// Tap chains on a half-note grid (§3.2): set at 100 BPM on a downbeat, refined, a bounce, a
+// pause re-arming a chain at 80 BPM (its first tap the new downbeat), halving in three taps,
+// doubling in two.
+PresetCase ClockTap() {
+  PresetCase p = PackagePreset("clock_tap", "clock_hits");
+  Script&    s = p.script;
+  s.Subdivision(S(1) + 5, SubdivField::Subdivision, 2);  // ×1/2: positions divisible by 48
+  int64_t at = TapSeries(s, S(2) + 101, {28800, 28800, 28800}, 0, 0);  // 100 BPM
+  at = TapSeries(s, at + 29100, {29000, 28900}, 40, 1);                // refined
+  s.Tap(at + 2000);                                                    // a bounce, ignored
+  at = TapSeries(s, at + 96000, {36000, 36000, 36000}, 30, 2);         // a pause: 80 BPM
+  at = TapSeries(s, at + 72000, {72000}, 0, 3);                        // halving: 40 BPM
+  TapSeries(s, at + 36000, {36000}, 0, 4);                             // doubling: 80 BPM
+  p.require   = {{C::Taps, 16, 16}, {C::TapsIgnored, 1, 1}, {C::Jumps, 4}, {C::ClockBirths, 20},
+                 {C::OffGridEvents, 10}};
+  p.ablate    = {Feature::TempoEvents, Feature::Clock};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// A hardware clock at 140 BPM (§3.3, §3.4): free-running clock acquired without a Start, then
+// Start, Stop with ticks while stopped, Song Position and Continue, FA then FC then F8 starting
+// nothing (E10), and a last Start. Over a periodic cloud whose hits steal (D13).
+PresetCase ClockMidiHw() {
+  PresetCase p = PackagePreset("clock_midi_hw", "clock_cloud");
+  Script&    s = p.script;
+  ClockTicks(s, S(1), kNs140, 1610, TickModel::Hardware, 11);  // to about 29.75 s
+  s.Transport(S(3) + 517, TransportKind::Start, 0, true);
+  s.Transport(S(8) + 233, TransportKind::Stop, 0, true);
+  s.Transport(S(9) + 401, TransportKind::Locate, 6 * 64, true);  // Song Position: bar 17
+  s.Transport(S(11) + 99, TransportKind::Continue, 0, true);
+  s.Transport(S(14) + 7, TransportKind::Stop, 0, true);
+  s.Transport(S(15) + 120, TransportKind::Start, 0, true);
+  s.Transport(S(15) + 300, TransportKind::Stop, 0, true);  // cancels the armed Start
+  s.Transport(S(19) + 61, TransportKind::Start, 0, true);
+  p.require   = {{C::ClockTicks, 1600}, {C::TransportEvents, 8, 8}, {C::Commits, 1},
+                 {C::ClockBirths, 130},  {C::Steals, 100},         {C::OffGridEvents, 8}};
+  p.ablate    = {Feature::TempoEvents, Feature::Clock, Feature::Subdiv};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// A computer's clock at 137.5 BPM (§3.3, §3.5): jitter, held ticks bunching behind them, a
+// 200 ms dropout, a tempo step to 150 BPM re-acquired, then a loss and a tap accepted after it.
+// §7.4's budget with §7.1's constants as the owner adopted them (2026-10-10): three acquisitions
+// and one deadband commit, a Drift, as rule 3.1 settles the re-acquired 24-tick fit; jitter
+// alone commits nothing (26 commits, 23 of them drifts, under the constants before).
+PresetCase ClockMidiComputer() {
+  PresetCase p = PackagePreset("clock_midi_computer", "clock_hits");
+  Script&    s = p.script;
+  s.Subdivision(S(1) + 3, SubdivField::Subdivision, 3);  // ×2
+  int64_t at = ClockTicks(s, S(1), kNs137_5, 605, TickModel::Computer, 21, S(6), S(6) + 9600);
+  at         = ClockTicks(s, at, kNs150, 450, TickModel::Computer, 22);  // to 19.5 s
+  TapSeries(s, at + S(1) + 2203, {19200, 19200}, 0, 0);                  // 150 BPM, internal
+  ClockTicks(s, S(25), kNs137_5, 220, TickModel::Computer, 23);          // to 29 s
+  p.require   = {{C::ClockTicks, 1200}, {C::DropoutTicks, 5}, {C::Reacquires, 1},
+                 {C::ClockGaps, 1},     {C::ClockLosses, 1},  {C::Taps, 3, 3},
+                 {C::TickOutliers, 6},  {C::Commits, 4},  {C::Slews, 1, 1}};
+  p.ablate    = {Feature::TempoEvents, Feature::Clock};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Songs (§3.4, §3.5, §7.1): Start at 140 BPM, Stop and five seconds without clock, Start at
+// 100 BPM (more than 6.25 % away: the early commit at 12 ticks); Stop and Start, a 1.5 s gap
+// mid-song and the ticks resuming ClockRunning after 24.
+PresetCase ClockSong() {
+  PresetCase p = PackagePreset("clock_song", "clock_hits");
+  Script&    s = p.script;
+  s.Transport(S(1) - 211, TransportKind::Start, 0, true);
+  ClockTicks(s, S(1), kNs140, 392, TickModel::Hardware, 31);  // to 8 s
+  s.Transport(S(8) + 77, TransportKind::Stop, 0, true);
+  s.Transport(S(13) - 157, TransportKind::Start, 0, true);
+  ClockTicks(s, S(13), kNs100, 200, TickModel::Hardware, 32);  // to 18 s
+  s.Transport(S(18) + 13, TransportKind::Stop, 0, true);
+  s.Transport(S(18) + 1003, TransportKind::Start, 0, true);
+  ClockTicks(s, S(18) + 1200, kNs100, 470, TickModel::Hardware, 33, S(23), S(24) + 24000);
+  p.require   = {{C::EarlyCommits, 1}, {C::ClockLosses, 1}, {C::ClockResumes, 1},
+                 {C::ClockGaps, 2},    {C::TransportEvents, 5, 5}, {C::Commits, 3}};
+  p.ablate    = {Feature::TempoEvents, Feature::Clock};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// Loads (§2.5, §3.6): Spillover under Keep while clocked, under Preset while clocked (the clock
+// wins) and after a loss (the stored tempo, a jump), then an Exact load mid-clock with a
+// producer's re-asserts at its frame 0: the tempo, Locate to the next tick's position and
+// Continue, both at the next tick.
+PresetCase ClockLoads() {
+  PresetCase p = PackagePreset("clock_loads", "clock_hits");
+  Script&    s = p.script;
+  s.Transport(S(1) - 101, TransportKind::Start, 0, true);
+  ClockTicks(s, S(1), kNs140, 504, TickModel::Hardware, 41);  // to 10 s
+  s.SpilloverPackage(S(5) + 41, "clock_recall");              // Keep: the tempo runs on
+  s.Param(S(7) + 3, P::TempoRecall, 1.0f);                    // Preset
+  s.SpilloverPackage(S(8) + 59, "clock_hits");                // under clock: ignored
+  s.SpilloverPackage(S(12) + 83, "clock_recall");             // after the loss: 100 BPM
+  const int64_t start = S(15) - 5;
+  s.Transport(start, TransportKind::Start, 0, true);
+  ClockTicks(s, S(15), kNs140, 840, TickModel::Hardware, 42);  // to 29.4 s
+  const int64_t load = S(20) + 4801;
+  s.ExactLoadPackage(load, "clock_hits");
+  s.Tempo(load, kNs140);
+  s.Transport(load, TransportKind::Locate, NextTickPosition(s, start, load), true);
+  s.Transport(load, TransportKind::Continue, 0, true);
+  p.require   = {{C::Loads, 3, 3},       {C::Restarts, 1, 1}, {C::ClockLosses, 1},
+                 {C::Jumps, 2},          {C::TransportEvents, 4, 4}, {C::EarlyCommits, 1, 1},
+                 {C::ModeSwitches, 0, 0}};
+  p.ablate    = {Feature::TempoEvents, Feature::Spillover, Feature::Restart};
+  p.invariant = {Invariance::RestartTail, Invariance::HostileFpEnv};
+  return p;
+}
+
+// Tempo jumps (§7.1): taps from 120 to 90 BPM, a host-style Start anchored past the block's
+// first frame (E9), a recall under Preset, host tempo jumps, and invalid and unknown events. Then
+// a MIDI Start whose first ticks arrive bunched on one frame, as a computer master's held tick
+// releases them (§4.5): 49 ticks with no slope place boundary 48 exactly there (§3.3 step 4), so
+// the catch-up's position 0 and the ×1/2 grid's 48 fall due at one frame, and §6.3's one hit per
+// frame births the second a frame later (the grid held from the Start to its tick, note 26).
+PresetCase TempoJump() {
+  PresetCase p = PackagePreset("tempo_jump", "clock_hits");
+  Script&    s = p.script;
+  s.Tempo(S(1) + 7, 500000000);                                   // 120 BPM
+  const int64_t at = TapSeries(s, S(2) + 333, {24000, 24000, 24000}, 0, 0);
+  TapSeries(s, at + 32000, {32000, 32000, 32000, 32000}, 0, 0);    // to 90 BPM
+  s.Transport(S(10) + 48, TransportKind::Start, 96, false, 300);  // the host's, anchored
+  s.Param(S(14) + 5, P::TempoRecall, 1.0f);
+  s.SpilloverPackage(S(15) + 211, "clock_recall");                // 100 BPM, ×1/2
+  s.Tempo(S(20) + 307, 857142857);                                // the host's 70 BPM
+  s.Tempo(S(24) + 409, 375000000);                                // 160 BPM
+  s.Raw(S(26) + 5, EventType::Tempo, tempo::kMinNsPerQuarter - 1, 0.f);  // out of range
+  s.Raw(S(26) + 6, EventType::Transport, tempo::TransportId(TransportKind::Stop, true) | 4u, 0.f);
+  s.Raw(S(26) + 7, static_cast<EventType>(12), 0, 0.f);           // unknown: ignored
+  s.Transport(S(27) + 401, TransportKind::Start, 0, true);
+  for (int k = 0; k < 49; ++k) s.Tick(S(27) + 1009);              // bunched: 0 and 48 at once
+  p.require   = {{C::Jumps, 5},           {C::Taps, 9, 9},  {C::TransportEvents, 2, 2},
+                 {C::InvalidEvents, 2, 2}, {C::Loads, 1, 1}, {C::OffGridEvents, 10},
+                 {C::ClockTicks, 49, 49}};
+  p.ablate    = {Feature::TempoEvents, Feature::Spillover};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// ── Sound revision 9: synced times (docs/design/clock.md §5-§7, §8.3). ───────────────────────
+// The packages: presets/sync_post.json (onset grains into a post delay at 1/4, feedback 0.6, the
+// time macro sweeping the code 1/8-1/2, Repeats on post.delay.fb; 140 BPM, TAP in Subdiv time
+// mode), sync_base.json (a periodic cloud whose base delay is synced to 1/8, grain feedback 0.5;
+// 137.5 BPM) and sync_fold.json (onset grains into a post delay at 2/1: 3.84 s at its 125 BPM,
+// between time_ms's 2 s and the 4 s line).
+
+constexpr uint32_t kNs90  = 666666667;
+constexpr uint32_t kNs137 = 437956204;  // 137 BPM
+constexpr uint32_t kNs52  = 1153846154;
+constexpr uint32_t kNs58  = 1034482759;
+
+// Row 63 on the committed 140 BPM (§6.1, §7.3): the time macro sweeping the code (discrete:
+// crossfades), a Subdiv jump and a fade chain (the Subdiv knob through all six zones 200 frames
+// apart, each fade starting where the last ends), a Tempo-knob Step (a glide) and a host Jump (a
+// crossfade), a song recall under tempo_recall Preset back to the stored 140 BPM (a Spillover
+// load of the same package: code, Subdiv and fold unchanged, so only the recall's Jump fades it,
+// §2.5, §7.1), and a Subdiv change mid-trail, after the input stops.
+PresetCase SyncPost() {
+  PresetCase p = PackagePreset("sync_post", "sync_post");
+  Script&    s = p.script;
+  for (int k = 0; k <= 6; ++k) s.Macro(S(2 + k) + 101 + 37 * k, P::MacroTime, I2F(k) / 6.0f);
+  s.Macro(S(9) + 7, P::MacroTime, 0.5f);                      // back to 1/4
+  s.Subdivision(S(10) + 13, SubdivField::Subdivision, 3);     // ×2: eighths
+  const uint8_t zones[] = {1, 2, 0, 3, 4, 5};                 // the knob's six zones
+  for (int k = 0; k < 6; ++k) s.Subdivision(S(13) + 29 + 200 * k, SubdivField::Subdivision, zones[k]);
+  s.Subdivision(S(15) + 41, SubdivField::Subdivision, 0);     // TAP
+  s.Tempo(S(17) + 211, kNs137_5);                             // 1.8 %: a Step, which glides
+  s.Tempo(S(20) + 5, kNs90);                                  // a Jump: a crossfade
+  s.Param(S(22) + 3, P::TempoRecall, 1.0f);                   // recall Preset
+  s.SpilloverPackage(S(23) + 307, "sync_post");               // 140 BPM recalled: a Jump
+  s.Subdivision(S(28) + 24007, SubdivField::Subdivision, 2);  // ×1/2 in the trail
+  p.require   = {{C::MacroMoves, 8, 8}, {C::SubdivEvents, 9, 9}, {C::Crossfades, 12},
+                 {C::Jumps, 2, 2},       {C::Loads, 1, 1},      {C::Onsets, 10},
+                 {C::OffGridEvents, 20}};
+  p.ablate    = {Feature::Sync, Feature::Subdiv, Feature::Macro, Feature::Crossfade};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A MIDI clock on the synced echo (§7.1, §7.2): Start, ideal ticks at 137.5 BPM, acquired (a Step
+// from the stored 140, which glides), then at 137 BPM (0.36 %: past rule 3.1's band, a deadband
+// commit, a Drift, which slews), then a step to 150 BPM (re-acquired, a Jump: a crossfade), Stop.
+PresetCase SyncClock() {
+  PresetCase p = PackagePreset("sync_clock", "sync_post");
+  Script&    s = p.script;
+  s.Transport(S(1) - 307, TransportKind::Start, 0, true);
+  int64_t at = ClockTicks(s, S(1), kNs137_5, 330, TickModel::None, 0);  // to about 8.6 s
+  at         = ClockTicks(s, at, kNs137, 420, TickModel::None, 0);        // to about 17.8 s
+  at         = ClockTicks(s, at, kNs150, 300, TickModel::None, 0);        // to about 23.8 s
+  s.Transport(at + 1201, TransportKind::Stop, 0, true);
+  p.require   = {{C::ClockTicks, 1050, 1050}, {C::Commits, 3}, {C::Slews, 1}, {C::Jumps, 1},
+                 {C::Reacquires, 1},          {C::Crossfades, 1}, {C::TransportEvents, 2, 2}};
+  p.ablate    = {Feature::Sync, Feature::TempoEvents};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// A synced base delay with grain feedback (§6.2, Q11; lint L12) at 137.5 BPM: taps to 90 BPM (the
+// base delay follows for grains born after), the Subdiv to ×2 and back, a host Jump.
+PresetCase SyncBase() {
+  PresetCase p = PackagePreset("sync_base", "sync_base");
+  Script&    s = p.script;
+  TapSeries(s, S(3) + 1009, {32000, 32000, 32000}, 0, 0);     // 90 BPM
+  s.Subdivision(S(9) + 77, SubdivField::Subdivision, 3);      // ×2
+  s.Subdivision(S(14) + 131, SubdivField::Subdivision, 0);
+  s.Tempo(S(19) + 43, kNs137_5);
+  s.Param(S(23) + 19, P::Feedback, 0.8f);
+  p.require   = {{C::Taps, 4, 4}, {C::SubdivEvents, 2, 2}, {C::Jumps, 2}, {C::Births, 500},
+                 {C::OffGridEvents, 8}};
+  p.ablate    = {Feature::Sync, Feature::Feedback, Feature::Subdiv};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
+// A tempo sweep across the folds (§5.3): 2/1 from 125 BPM (3.84 s, which draft v1's 2 s line
+// folded) down past 120, where it folds to a whole note (a crossfade: a fold change crosses an
+// octave), the code to 1/1 on the way, which folds below 60 BPM, down to 52 BPM; then a host Jump
+// to 58 BPM, which keeps the fold: a crossfade, or with the crossfade ablation a glide. Every
+// step is within Pc >> 5, a Step: it glides unless the fold changes.
+PresetCase SyncFold() {
+  PresetCase p = PackagePreset("sync_fold", "sync_fold");
+  Script&    s = p.script;
+  const int64_t end = TempoSweep(s, S(2) + 3, 480000000, kNs52, 48, 14400);  // 0.3 s a step
+  s.Param(S(11) + 17, P::DelaySync, 15.0f);                                   // 1/1, at 66 BPM
+  s.Tempo(end + 24011, kNs58);                                                // a Jump
+  p.require   = {{C::Events, 50, 50}, {C::Folds, 20}, {C::Crossfades, 4}, {C::Jumps, 1, 1},
+                 {C::Onsets, 10},     {C::OffGridEvents, 50}};
+  p.ablate    = {Feature::Sync, Feature::Crossfade};
+  p.invariant = {Invariance::HostileFpEnv};
+  return p;
+}
+
+// global.tempo_glide On (D22, §7.1): the jumps of a tapped tempo and a host's glide, the tape
+// swoop; a Subdiv change still crossfades.
+PresetCase SyncGlide() {
+  PresetCase p = PackagePreset("sync_glide", "sync_post");
+  Script&    s = p.script;
+  s.Param(S(1) + 5, P::TempoGlide, 1.0f);
+  TapSeries(s, S(4) + 333, {32000, 32000, 32000}, 0, 0);  // 140 to 90 BPM: a Jump, glided
+  s.Tempo(S(12) + 9, kNs140);                             // a host Jump back, glided
+  s.Subdivision(S(16) + 41, SubdivField::Subdivision, 2);  // discrete: a crossfade
+  s.Param(S(22) + 3, P::TempoGlide, 0.0f);
+  s.Tempo(S(24) + 77, kNs90);                             // Off again: crossfades
+  p.require   = {{C::Jumps, 3, 3}, {C::Crossfades, 2, 2}, {C::Taps, 4, 4}, {C::OffGridEvents, 9}};
+  p.ablate    = {Feature::Sync, Feature::Subdiv};
+  p.invariant = {Invariance::AmongEdits, Invariance::HostileFpEnv};
+  return p;
+}
+
 }  // namespace
 
 const char* CounterName(Counter c) noexcept {
@@ -530,6 +837,26 @@ const char* CounterName(Counter c) noexcept {
     case C::Skips: return "skips";
     case C::RepeatPasses: return "repeatPasses";
     case C::Steals: return "steals";
+    case C::Taps: return "taps";
+    case C::TapsIgnored: return "tapsIgnored";
+    case C::TapPhases: return "tapPhases";
+    case C::ClockTicks: return "clockTicks";
+    case C::TickOutliers: return "tickOutliers";
+    case C::Reacquires: return "reacquires";
+    case C::DropoutTicks: return "dropoutTicks";
+    case C::ClockGaps: return "clockGaps";
+    case C::ClockLosses: return "clockLosses";
+    case C::ClockResumes: return "clockResumes";
+    case C::TransportEvents: return "transportEvents";
+    case C::SubdivEvents: return "subdivEvents";
+    case C::ClockBirths: return "clockBirths";
+    case C::Commits: return "commits";
+    case C::EarlyCommits: return "earlyCommits";
+    case C::Jumps: return "jumps";
+    case C::Slews: return "slews";
+    case C::Crossfades: return "crossfades";
+    case C::Folds: return "folds";
+    case C::InvalidEvents: return "invalidEvents";
     case C::kCount: break;
   }
   return "unknown";
@@ -565,6 +892,11 @@ const char* FeatureName(Feature f) noexcept {
     case Feature::Repeat: return "repeat";
     case Feature::Decay: return "decay";
     case Feature::VoiceCount: return "voiceCount";
+    case Feature::Clock: return "clock";
+    case Feature::TempoEvents: return "tempoEvents";
+    case Feature::Subdiv: return "subdiv";
+    case Feature::Sync: return "sync";
+    case Feature::Crossfade: return "crossfade";
   }
   return "unknown";
 }
@@ -657,6 +989,30 @@ PresetCase Ablate(const PresetCase& in, Feature f) {
     case Feature::Repeat: neutral(P::Repeat, 1.0f); break;
     case Feature::Decay: neutral(P::DecayMs, 0.0f); break;
     case Feature::VoiceCount: neutral(P::VoiceCount, 64.0f); break;
+    case Feature::Clock: out.strip |= kStripClock; break;
+    case Feature::TempoEvents: drop([](const Event& e) { return IsTempoEvent(e); }); break;
+    case Feature::Subdiv:
+      out.strip |= kStripSubdiv;
+      drop([](const Event& e) { return e.type == EventType::Subdivision && (e.id >> 8) == 0u; });
+      break;
+    case Feature::Sync:
+      neutral(P::DelaySync, 0.0f);
+      drop([](const Event& e) {
+        return e.type == EventType::MacroMove || e.type == EventType::Expression;
+      });
+      out.strip |= kStripSync;
+      break;
+    case Feature::Crossfade: {  // the device setting before everything else at frame 0
+      Event e;
+      e.frame = 0;
+      e.type  = EventType::SetParam;
+      e.id    = static_cast<uint32_t>(P::TempoGlide);
+      e.value = 1.0f;
+      events.insert(events.begin(), e);
+      uint32_t seq = 0;
+      for (Event& x : events) x.seq = seq++;
+      break;
+    }
   }
   return out;
 }
@@ -731,10 +1087,31 @@ PresetCase TailAfterRestart(const PresetCase& p, int64_t* start) {
   tail.params                 = state.params;
   tail.strip                  = p.strip;
   tail.script.MutableStaged() = p.script.Staged();
+  // A restart keeps the device settings (mode-compiler.md §3.8), which a render starts from at
+  // their defaults: the ones the script set before it are set again at the tail's frame 0, first.
+  std::vector<Event> globals;
+  for (const Event& e : p.script.Events()) {
+    if (e.frame >= last.frame || e.type != EventType::SetParam) continue;
+    const ParamDescriptor* d = FindParam(static_cast<ParamId>(e.id));
+    if (d == nullptr || d->kind != ParamKind::Global) continue;
+    Event g = e;
+    g.frame = 0;
+    for (Event& was : globals) {
+      if (was.id == g.id) was.id = UINT32_MAX;  // superseded: the latest value wins
+    }
+    globals.push_back(g);
+  }
+  uint32_t seq = 0;
+  for (Event g : globals) {
+    if (g.id == UINT32_MAX) continue;
+    g.seq = seq++;
+    tail.script.MutableEvents().push_back(g);
+  }
   for (const Event& e : p.script.Events()) {
     if (e.frame < last.frame) continue;
     Event moved = e;
     moved.frame -= last.frame;
+    moved.seq = seq++;
     tail.script.MutableEvents().push_back(moved);
   }
   return tail;
@@ -1085,6 +1462,23 @@ std::vector<VectorCase> BuildCorpus() {
     v.presets.push_back(DecayMarks());
     v.presets.push_back(VoiceLimit());  // sound revision 7 on: voice count
     v.presets.push_back(MonoStutter());
+    corpus.push_back(std::move(v));
+  }
+
+  {  // The tempo core (sound revision 8 on, docs/design/clock.md §8.3): 30 s of plucks.
+    VectorCase v{"plucks_clock_30s", Vector::Plucks, Frames(28), Frames(30), false, {}};
+    v.presets.push_back(ClockInternal());
+    v.presets.push_back(ClockTap());
+    v.presets.push_back(ClockMidiHw());
+    v.presets.push_back(ClockMidiComputer());
+    v.presets.push_back(ClockSong());
+    v.presets.push_back(ClockLoads());
+    v.presets.push_back(TempoJump());
+    v.presets.push_back(SyncPost());  // sound revision 9 on: synced times
+    v.presets.push_back(SyncClock());
+    v.presets.push_back(SyncBase());
+    v.presets.push_back(SyncFold());
+    v.presets.push_back(SyncGlide());
     corpus.push_back(std::move(v));
   }
 

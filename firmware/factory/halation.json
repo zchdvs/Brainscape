@@ -3,8 +3,8 @@
   "id": "factory.halation",
   "name": "Halation",
   "family": "reverie",
-  "sound_rev": 7,
-  "sound_hash": "00c172880a0f4834d1967264c0cea527b2911d38b45e7129c43c74a63fbe4e54",
+  "sound_rev": 9,
+  "sound_hash": "ef74a13a723f4fd85a8b3a34a855852dc63962cf548bf66cb5feeca7cffc68d0",
   "meta": {
     "author": "Brainscape",
     "description": "A grain cloud with an octave above glowing through it.",
@@ -69,7 +69,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.65,

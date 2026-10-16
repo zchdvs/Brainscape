@@ -3,8 +3,8 @@
   "id": "factory.lull",
   "name": "Lull",
   "family": "reverie",
-  "sound_rev": 7,
-  "sound_hash": "5016601d80f1b82ea14595d40b32d990aa9a250e11d54c8c1736ea651ac8b9d1",
+  "sound_rev": 9,
+  "sound_hash": "e8e965e8362bfac78576d28e8368c343e0ce227dccd3615f4a6810bf75982bf6",
   "meta": {
     "author": "Brainscape",
     "description": "A long, slow wash that holds what you play; Repeats sets how long it lingers.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.85,

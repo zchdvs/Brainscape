@@ -10,18 +10,26 @@ namespace brainscape::plugin {
 // host thread), the GUI (message thread) and scripted producers. MIDI arrives with the
 // audio block and state restores travel as a unit, so neither passes through here.
 struct WrapperEvent {
-  // Param is a SetParam on a Leaf or Global row; Macro a MacroMove and Expression an Expression
-  // event (mode-compiler.md §3.4): their fan-out reaches the engine's leaves through the active
-  // mode, and the wrapper's leaf mirrors through the same evaluator (ModeEval.h).
-  enum class Type : uint8_t { Param, Freeze, Trigger, Macro, Expression };
+  // Param is a SetParam on a Leaf or Global row, or a change of rows 83 and 84 (perf.subdiv and
+  // perf.time_mode), which the wrapper sends as a Subdivision event (docs/design/clock.md §10.4);
+  // Macro a MacroMove and Expression an Expression event (mode-compiler.md §3.4): their fan-out
+  // reaches the engine's leaves through the active mode, and the wrapper's leaf mirrors through
+  // the same evaluator (ModeEval.h). The tempo core's events (clock.md §4.1, Tempo.h) carry their
+  // payloads: Tap and ClockTick nothing, Tempo its ns per quarter in `id`, Transport its
+  // tempo::TransportId in `id` and its position's binary32 in `value`, Subdivision its
+  // tempo::SubdivisionId in `id`. While the wrapper follows the host's tempo it drops Tap and Tempo
+  // events (§10.1).
+  enum class Type : uint8_t { Param, Freeze, Trigger, Macro, Expression, Tap, Tempo, ClockTick, Transport, Subdivision };
   // Same-frame order is state load, host automation, MIDI, UI; Source is that rank.
   enum class Source : uint8_t { Host = 1, Midi = 2, Ui = 3 };
   Type     type   = Type::Param;
   Source   source = Source::Ui;
   uint32_t id     = 0;    // ParamId for Type::Param and Type::Macro; the TriggerSource for
-                          // Type::Trigger; 0 for Type::Expression
+                          // Type::Trigger; 0 for Type::Expression; the payload's id for events
+                          // 6-10 (above)
   float    value  = 0.f;  // canonical plain value (a macro's or the pedal's position, 0-1);
-                          // 0/1 for Freeze; velocity for Trigger
+                          // 0/1 for Freeze; velocity for Trigger; +0 or a Transport's position
+                          // for events 6-10
   // Set by EventSink::Post: the restore generation the event was posted in.
   uint32_t generation = 0;
   // Absolute engine frame (frames since the last Init or restart) the event applies at
@@ -109,18 +117,16 @@ using WrapperQueue = MpscQueue<WrapperEvent, 2048>;
 // re-sends every mirror at the next block's first frame, so the live engine cannot stay
 // out of step with what the host and GUI show. That is exact for a parameter or freeze
 // event, which would have applied at that same frame with the mirror's value; a trigger,
-// a macro move, an expression move (whose fan-out no mirror holds) or a scripted event
-// cannot be re-sent, so those are counted as lost, never coalesced (profile §5.11).
+// a macro move, an expression move (whose fan-out no mirror holds), a tap, a tempo or any
+// other event of the tempo core, or a scripted event cannot be re-sent, so those are counted
+// as lost, never coalesced (profile §5.11).
 class EventSink {
  public:
   // Any thread. Live producers: a parameter's or freeze's mirror is stored first.
   void Post(WrapperEvent e) noexcept {
     if (Push(e)) return;
     resync_.store(true, std::memory_order_release);
-    if (e.type == WrapperEvent::Type::Trigger || e.type == WrapperEvent::Type::Macro ||
-        e.type == WrapperEvent::Type::Expression) {
-      CountLost();
-    }
+    if (e.type != WrapperEvent::Type::Param && e.type != WrapperEvent::Type::Freeze) CountLost();
   }
   // Any thread. Scripted producers: no mirror holds the event, so an overflow loses it.
   void PostScripted(WrapperEvent e) noexcept {

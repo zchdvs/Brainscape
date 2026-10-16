@@ -6,6 +6,7 @@
 
 #include "detail/DetMath.h"
 #include "detail/FlushTiny.h"
+#include "detail/Tempo.h"
 
 namespace brainscape::detail {
 
@@ -48,11 +49,26 @@ constexpr float    kRvTapGain[3] = {0.6f, -0.35f, 0.4f};
 // Taming diffuser lengths (ms-scale primes, per channel).
 constexpr uint32_t kTamerAp32k[4] = {101, 189, 137, 251};  // L0, L1, R0, R1
 
-// Post-delay ceiling: 2 s (the Space-knob delay never needs more; design §2.6).
-constexpr double kPostDelayMaxSeconds = 2.0;
+// post.delay.time_ms's ceiling: 2 s (the Space-knob delay never needs more; design §2.6), its
+// target clamped at round(2·R) - 1 as it always was. A synced target reaches
+// tempo::PostSyncMaxFrames(R), 4·R and 2^-7 of it, inclusive (docs/design/clock.md §5.3, D23,
+// sound revision 9, §11.16), so the line holds that and 2 frames more, the cubic read's
+// neighbours, all at the tempo core's integer rate R: at a non-integer host rate a synced target
+// is never clamped short.
+constexpr double   kPostDelayMaxSeconds = 2.0;
+constexpr uint32_t kPostLineExtraFrames = 2;
 // Each of the tap glide's two poles (TapGlide): a 100 ms change comes within a frame of
 // its target in 0.55 s, a 1 s change (at the speed cap) in 2.3 s.
 constexpr double kPostDelayGlideSeconds = 0.05;
+// Each pole of the slew a synced target's Drift takes (clock.md §7.2): a 0.4 % commit on a 500 ms
+// delay bends the repeats about 0.07 %.
+constexpr double kPostDelaySlewSeconds = 1.0;
+
+// The post delay's line in frames (BulkFloats holds two channels of it): 193,502 at 48 kHz.
+inline uint32_t PostLineFrames(double sr) noexcept {
+  return tempo::PostSyncMaxFrames(static_cast<uint32_t>(detmath::RoundHalfAwayI32(sr))) +
+         kPostLineExtraFrames;
+}
 // Mod line: 25 ms, center tap 10 ms, max excursion 4 ms (8 ms at full depth read
 // as seasick vibrato; review finding).
 constexpr double kModLineSeconds   = 0.025;
@@ -145,9 +161,7 @@ uint32_t PostChain::WarmFloats(double sr) noexcept {
   return total;
 }
 
-uint32_t PostChain::BulkFloats(double sr) noexcept {
-  return 2u * static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
-}
+uint32_t PostChain::BulkFloats(double sr) noexcept { return 2u * PostLineFrames(sr); }
 
 void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
   sr_      = sr;
@@ -174,9 +188,10 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
     p += n;
   }
 
-  auto pdLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
-  if (pdLen < 2u) pdLen = 2u;
-  pd_.Init(bulk, pdLen);  // 2 * pdLen floats: BulkFloats
+  pd_.Init(bulk, PostLineFrames(sr));  // 2 * len floats: BulkFloats
+  // time_ms's clamp: the line's last frame before sound revision 9.
+  const auto timeLen = static_cast<uint32_t>(detmath::RoundHalfAwayI32(kPostDelayMaxSeconds * sr));
+  pdTimeMax_         = timeLen > 3u ? timeLen - 1u : 2u;
 
   // Everything that depends only on the (lifetime-fixed) sample rate is computed
   // once here — the reverb prologue used to call expm1/lround every block
@@ -197,6 +212,9 @@ void PostChain::Init(float* warm, float* bulk, double sr) noexcept {
   }
   pdGlideCoef_ = -static_cast<float>(detmath::Expm1D(-1.0 / (kPostDelayGlideSeconds * sr)));
   pdGlideKeep_ = 1.0f - pdGlideCoef_;
+  pdSlewCoef_  = -static_cast<float>(detmath::Expm1D(-1.0 / (kPostDelaySlewSeconds * sr)));
+  pdSlewKeep_  = 1.0f - pdSlewCoef_;
+  crossfades_  = 0;
 
   modDepthSm_.SetTau(10.0f, sr);
   delayMixSm_.SetTau(10.0f, sr);
@@ -230,20 +248,55 @@ void PostChain::Reset(const PostParams& p) noexcept {
   // (review finding).
   modDepthSm_.Prime(p.modDepth * 0.5f);
   delayMixSm_.Prime(p.delayMix);
-  pdTap_.Prime(DelayTarget(p.delayFrames));
+  // The head on the target, and no crossfade under way or waiting (clock.md §7.3).
+  pdTap_.Prime(DelayTarget(p));
+  pdOut_.Prime(pdTap_.target);
+  pdFading_     = false;
+  pdPending_    = false;
+  pdFadePos_    = 0;
+  pdPendingTap_ = 0;
+  pdJumpSeen_   = p.delayJump;
   reverbMixSm_.Prime(p.reverbMix);
   filterMixSm_.Prime(p.filterBypass ? 0.f : 1.f);
 }
 
-uint32_t PostChain::DelayTarget(float delayFrames) const noexcept {
+uint32_t PostChain::DelayTarget(const PostParams& p) const noexcept {
+  // A synced target (clock.md §6.1) is exact integer frames in 10 ms to PostSyncMaxFrames (§5.3);
+  // the line's last two frames are the cubic read's neighbours, so it reaches every one.
+  if (p.delaySyncFrames != 0u) {
+    uint32_t back = p.delaySyncFrames;
+    if (back < 2u) back = 2u;
+    if (back > pd_.len - kPostLineExtraFrames) back = pd_.len - kPostLineExtraFrames;
+    return back;
+  }
   // Profile §3.10: a conversion in range. Init primes from PostParams{}, whose 48 kHz
-  // default overruns the line below 8.4 kHz, so the clamp holds it. The floor keeps
+  // default overruns the 2 s clamp below 8.4 kHz, so the clamp holds it. The floor keeps
   // TapGlide's cubic read inside the line (10 ms is 80 frames even at 8 kHz).
-  assert(delayFrames >= 0.f && delayFrames < 0x1p32f);
-  auto back = static_cast<uint32_t>(delayFrames);
+  assert(p.delayFrames >= 0.f && p.delayFrames < 0x1p32f);
+  auto back = static_cast<uint32_t>(p.delayFrames);
   if (back < 2u) back = 2u;
-  if (back > pd_.len - 1u) back = pd_.len - 1u;
+  if (back > pdTimeMax_) back = pdTimeMax_;
   return back;
+}
+
+void PostChain::FadeFrame(float* tapL, float* tapR) noexcept {
+  // Frame n of the crossfade (clock.md §7.3) mixes the outgoing head by (1024 - n) / 1024 and the
+  // incoming one, read into *tapL and *tapR, by n / 1024, so its last frame is the incoming head
+  // alone. A jump that waited starts the next fade at the frame after.
+  float outL, outR;
+  HeadFrame(pdOut_, &outL, &outR);
+  const uint32_t k  = ++pdFadePos_;
+  const float    gi = static_cast<float>(k) * (1.0f / static_cast<float>(kXfadeFrames));
+  const float    go = static_cast<float>(kXfadeFrames - k) * (1.0f / static_cast<float>(kXfadeFrames));
+  *tapL             = outL * go + *tapL * gi;
+  *tapR             = outR * go + *tapR * gi;
+  if (k == kXfadeFrames) {
+    pdFading_ = false;
+    if (pdPending_) {
+      pdPending_ = false;
+      StartFade(pdPendingTap_);
+    }
+  }
 }
 
 void PostChain::UpdateFilterCoefs(float cutoff, float res, float morph) noexcept {
@@ -326,15 +379,35 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
       }
       case Stage::Delay: {
         // A silent stage has nothing to glide, so its head jumps to the target, including
-        // when it re-engages and the time changes on the same frame. The mix reaches 0
-        // only at the per-sample gate and leaves it only at an event, so every split sees
-        // the same silent block starts (contract #1).
-        const uint32_t tap = DelayTarget(p.delayFrames);
+        // when it re-engages and the time changes on the same frame; a crossfade under way or
+        // waiting goes with it (clock.md §7.3). The mix reaches 0 only at the per-sample gate
+        // and leaves it only at an event, so every split sees the same silent block starts
+        // (contract #1). A change of the target applies here, at a span's first frame, which is
+        // an event's: a jump (PostParams::delayJump raised) crossfades, or, while a fade runs,
+        // waits for it, the latest target starting the next fade at the frame after the running
+        // one ends, inside the loop below, so a chain of jumps fades at the same frames whatever
+        // the split; any other change retargets the head (during a fade the incoming one, while
+        // a jump waits the target it waits with), gliding, or slewing after a Drift.
+        const uint32_t tap  = DelayTarget(p);
+        const bool     jump = p.delayJump != pdJumpSeen_;
+        pdJumpSeen_         = p.delayJump;
         if (delayMixSm_.value == 0.f) {
           pdTap_.Prime(tap);
+          pdFading_  = false;
+          pdPending_ = false;
           if (delayMixSm_.target == 0.f) break;
-        } else {
+        } else if (jump) {
+          if (pdFading_) {
+            pdPending_    = true;
+            pdPendingTap_ = tap;
+          } else {
+            StartFade(tap);
+          }
+        } else if (pdPending_) {
+          pdPendingTap_ = tap;
+        } else if (tap != pdTap_.target) {
           pdTap_.Retarget(tap);
+          pdTap_.slow = p.delaySlow;
         }
         // Profile §3.10: post.delay.time_ms is 10-2000 ms, so the tap is inside the line.
         assert(p.delayFrames >= 0.f && p.delayFrames <= static_cast<float>(pd_.len));
@@ -357,14 +430,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
             gd = detmath::SqrtF(1.0f - mix);
           }
           float tapL, tapR;
-          if (pdTap_.moving) {
-            pdTap_.Step(pdGlideCoef_, pdGlideKeep_);
-            pdTap_.Read(pd_, &tapL, &tapR);
-          } else {
-            const float* f = pd_.Frame(pdTap_.base);
-            tapL           = f[0];
-            tapR           = f[1];
-          }
+          HeadFrame(pdTap_, &tapL, &tapR);
+          if (pdFading_) FadeFrame(&tapL, &tapR);  // the feedback write takes the mixed read
           // Damped, DC-blocked regeneration (bare recirculation measured x9.9 DC
           // gain and full-bandwidth repeats forever; review finding).
           pdDcL_ += pdDcCoef_ * (tapL - pdDcL_);
@@ -485,7 +552,8 @@ void PostChain::Process(const PostParams& p, uint32_t numFrames, float* left,
   // Determinism profile §3.7: smoother states stay finite (checked once per block).
   assert(detmath::IsFinite(modDepthSm_.value) && detmath::IsFinite(delayMixSm_.value) &&
          detmath::IsFinite(reverbMixSm_.value) && detmath::IsFinite(filterMixSm_.value) &&
-         detmath::IsFinite(pdTap_.lead) && detmath::IsFinite(pdTap_.frac));
+         detmath::IsFinite(pdTap_.lead) && detmath::IsFinite(pdTap_.frac) &&
+         detmath::IsFinite(pdOut_.lead) && detmath::IsFinite(pdOut_.frac));
 }
 
 }  // namespace brainscape::detail

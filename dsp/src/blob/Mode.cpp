@@ -99,7 +99,6 @@ uint32_t RequiredModeFeatures(const ModeBlob& mode) noexcept {
   if ((sources & kSourceOnset) != 0u) f |= kModeFeatureOnset;
   if ((sources & kSourceClock) != 0u) f |= kModeFeatureClock;
   if ((sources & kDefaultSources) != kDefaultSources) f |= kModeFeatureSources;
-  if (mode.schedule.subdiv != Subdivision::Quarter) f |= kModeFeatureClock;
   if (mode.schedule.stepOrder != StepOrder::Fixed || mode.steps.countMax != 0u) {
     f |= kModeFeatureSteps;
   }

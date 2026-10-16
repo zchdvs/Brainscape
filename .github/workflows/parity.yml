@@ -211,6 +211,18 @@ jobs:
           TOOL=$(find build -type f \( -name brainscape_blob_tool -o -name brainscape_blob_tool.exe \) | head -n 1)
           "$TOOL" --fuzz
           "$TOOL" --fixtures dsp/tests/golden/presets/frozen
+      # The tempo core on this leg (clock.md §8.2): seeded streams through TempoCore and the
+      # reference model, which must agree, and the committed digest of TempoCore's outputs, which
+      # every leg and the emulated M7 must reproduce (integer-only code: any difference is a bug).
+      - name: Build the tempo tool
+        id: tempo
+        if: ${{ !cancelled() }}
+        run: cmake --build build --config Release --target brainscape_tempo_tool
+      - name: Check the tempo core against its reference and the committed digest
+        if: ${{ !cancelled() && steps.tempo.outcome == 'success' }}
+        run: |
+          TOOL=$(find build -type f \( -name brainscape_tempo_tool -o -name brainscape_tempo_tool.exe \) | head -n 1)
+          "$TOOL" --check
 
   # bspc-roundtrip (mode-compiler.md §8.3, §10.1, §10.2; companion §3.4) on parity-host's legs:
   # the compiler's tests (the number code's per-pull-request hashes, the JSON grammar, schema 1,
@@ -449,6 +461,16 @@ jobs:
           qemu-arm -cpu cortex-m7 build-m7/dsp/tests/blob/brainscape_blob_tool.elf --fuzz
           qemu-arm -cpu cortex-m7 build-m7/dsp/tests/blob/brainscape_blob_tool.elf \
             --fixtures dsp/tests/golden/presets/frozen
+      # The tempo core on the M7 (clock.md §8.2), whose 64-bit divisions are libgcc's: the
+      # streams against the reference model and the hosts' committed digest. The tool links the
+      # firmware's archive too.
+      - name: Build the tempo tool ELF
+        id: tempo
+        if: ${{ !cancelled() }}
+        run: cmake --build build-m7 --target brainscape_tempo_tool
+      - name: Check the tempo core under qemu-arm -cpu cortex-m7
+        if: ${{ !cancelled() && steps.tempo.outcome == 'success' }}
+        run: qemu-arm -cpu cortex-m7 build-m7/dsp/tests/tempo/brainscape_tempo_tool.elf --check
       - name: Audit fused instructions (Armv7-M)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: ${{ env.PARITY_AUDITS_GATING != 'true' }}

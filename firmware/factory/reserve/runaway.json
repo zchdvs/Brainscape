@@ -3,8 +3,8 @@
   "id": "factory.runaway",
   "name": "Runaway",
   "family": "reverie",
-  "sound_rev": 7,
-  "sound_hash": "da84eb4c0c34be47f9abb776816537231127b76fd4fa93a4c8192e9a6199be5b",
+  "sound_rev": 9,
+  "sound_hash": "7beb185a65a886822e96d9138ac003622de2a3ec376b5002e89c1f861035b120",
   "meta": {
     "author": "Brainscape",
     "description": "An octave-up shimmer that feeds on itself into a long swell, then fades.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 350,
       "fb": 0.3,
-      "mix": 0
+      "mix": 0,
+      "sync": 0
     },
     "reverb": {
       "time": 0.9,

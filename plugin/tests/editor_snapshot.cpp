@@ -4,8 +4,10 @@
 // (a knob waiting for pickup, a hand-edited leaf Save will derive, Shift, the stored version
 // playing for A/B, a finished render), a frame at 44.1 kHz with freeze engaged and the restart
 // option on, a factory mode chosen from the header's Modes menu (and a reserve) with the menu
-// itself drawn as the look and feel draws it, and the Standalone's editor after an audition
-// render.
+// itself drawn as the look and feel draws it, the Standalone's editor after an audition render,
+// and the tempo strip (docs/design/clock.md §10.3): a clock preset's document under a tapped
+// tempo with Subdiv and time mode set, the host's tempo followed, the strip at the minimum size,
+// its settings menu, and the Standalone following a MIDI clock.
 //   brainscape_editor_snapshot <output directory>
 #include <algorithm>
 #include <chrono>
@@ -28,15 +30,43 @@ using namespace brainscape::plugin;
 
 namespace {
 
+// A host transport for the tempo frames: its tempo, and a position that advances with the
+// blocks Play renders.
+class SnapshotPlayHead final : public juce::AudioPlayHead {
+ public:
+  double bpm     = 128.0;
+  double ppq     = 0.0;
+  bool   playing = true;
+  juce::Optional<PositionInfo> getPosition() const override {
+    PositionInfo info;
+    info.setIsPlaying(playing);
+    info.setBpm(bpm);
+    info.setPpqPosition(ppq);
+    return info;
+  }
+};
+
 // Runs the pluck generator through the engine so the meters and onset LED have something
-// to show.
-void Play(BrainscapeProcessor& proc, double rate, double seconds) {
+// to show. With a playhead, its position follows the blocks; with `clockBpm`, a MIDI clock
+// (F8 every 1/24 of a quarter, after an FA) arrives in the blocks' MIDI.
+void Play(BrainscapeProcessor& proc, double rate, double seconds, SnapshotPlayHead* head = nullptr,
+          double clockBpm = 0.0) {
   const int                block = static_cast<int>(rate / 100.0);
   juce::AudioBuffer<float> buffer(2, block);
   juce::MidiBuffer         midi;
+  const double             tick = clockBpm > 0.0 ? rate * 60.0 / clockBpm / 24.0 : 0.0;
+  double                   next = 0.0;
   for (int done = 0; done < static_cast<int>(rate * seconds); done += block) {
     buffer.clear();
+    midi.clear();
+    if (clockBpm > 0.0) {
+      if (done == 0) midi.addEvent(juce::MidiMessage::midiStart(), 0);
+      for (; next < done + block; next += tick) {
+        midi.addEvent(juce::MidiMessage::midiClock(), static_cast<int>(next) - done);
+      }
+    }
     proc.processBlock(buffer, midi);
+    if (head != nullptr) head->ppq += block * head->bpm / (60.0 * rate);
   }
 }
 
@@ -274,6 +304,73 @@ int main(int argc, char* argv[]) {
   ok &= Snapshot(*editor, dir, "editor-pedal-reserve", BrainscapeEditor::kDefaultWidth,
                  BrainscapeEditor::kDefaultHeight);
   ok &= Snapshot(*editor, dir, "editor-pedal-reserve-large", 1680, 1000);
+
+  // The tempo strip (clock.md §10.3) over a preset that uses tempo: the golden corpus's
+  // clock_hits document (stored at 140 BPM), the Subdiv at x2 in Subdiv time mode, three taps at
+  // 100 BPM under the internal source; then the host's 128 BPM followed (TAP greyed), at the
+  // default and minimum sizes; and the strip's settings menu.
+  const juce::File clockDoc = scratch.getChildFile("clock_hits.json");
+  ok &= juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile("clock_hits.json").copyFileTo(clockDoc);
+  if (!proc.Curation().Open(clockDoc, &error)) {
+    std::printf("cannot open %s: %s\n", clockDoc.getFullPathName().toRawUTF8(), error.toRawUTF8());
+    return 1;
+  }
+  settings             = proc.GetSettings();
+  settings.tempoSource = TempoSource::Internal;
+  proc.SetSettings(settings);
+  Play(proc, 48000.0, 0.3);
+  editor->Tempo().SubdivSegment(3).onClick();
+  editor->Tempo().TimeSegment(1).onClick();
+  for (int tap = 0; tap < 3; ++tap) {
+    proc.TapFromUi();
+    Play(proc, 48000.0, 0.6);  // 100 BPM
+  }
+  Play(proc, 48000.0, 0.15);
+  ok &= Snapshot(*editor, dir, "editor-tempo-internal", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  SnapshotPlayHead host;
+  settings.tempoSource = TempoSource::Host;
+  proc.SetSettings(settings);
+  proc.setPlayHead(&host);
+  Play(proc, 48000.0, 0.5, &host);
+  ok &= Snapshot(*editor, dir, "editor-tempo-host", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  ok &= Snapshot(*editor, dir, "editor-tempo-host-minimum", BrainscapeEditor::kMinWidth,
+                 BrainscapeEditor::kMinHeight);
+  proc.setPlayHead(nullptr);
+  editor->setSize(BrainscapeEditor::kDefaultWidth, BrainscapeEditor::kDefaultHeight);
+  {
+    juce::LookAndFeel& lf   = editor->getLookAndFeel();
+    const juce::Image  menu = DrawMenu(editor->Tempo().SettingsMenu(), lf, 240, 24, nullptr);
+    juce::Image        canvas(juce::Image::ARGB, menu.getWidth() + 24, menu.getHeight() + 24, true);
+    {
+      juce::Graphics g(canvas);
+      g.fillAll(palette::kBackground);
+      g.drawImageAt(menu, 12, 12);
+    }
+    ok &= WriteImage(canvas, dir, "editor-tempo-settings");
+  }
+  // Synced times (clock.md §5.3, §5.4): the corpus's sync_post document (a post delay synced to
+  // 1/4, stored at 140 BPM) at x1/2 under the internal source: the strip's second line shows what
+  // the echo plays, and the Leaves view dims post.delay.time_ms, which waits.
+  const juce::File syncDoc = scratch.getChildFile("sync_post.json");
+  ok &= juce::File(BRAINSCAPE_GOLDEN_PRESETS).getChildFile("sync_post.json").copyFileTo(syncDoc);
+  if (!proc.Curation().Open(syncDoc, &error)) {
+    std::printf("cannot open %s: %s\n", syncDoc.getFullPathName().toRawUTF8(), error.toRawUTF8());
+    return 1;
+  }
+  settings.tempoSource = TempoSource::Internal;
+  proc.SetSettings(settings);
+  Play(proc, 48000.0, 0.3);
+  editor->Tempo().SubdivSegment(1).onClick();
+  Play(proc, 48000.0, 0.5);
+  ok &= Snapshot(*editor, dir, "editor-tempo-synced", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  editor->SetView(BrainscapeEditor::View::Leaves);
+  ok &= Snapshot(*editor, dir, "editor-leaves-synced", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  editor->SetView(BrainscapeEditor::View::Pedal);
+  proc.Curation().Close();
   owned.reset();
   scratch.deleteRecursively();
 
@@ -298,6 +395,23 @@ int main(int argc, char* argv[]) {
   appEditor->SetView(BrainscapeEditor::View::Leaves);
   ok &= Snapshot(*appEditor, dir, "editor-standalone-audition", BrainscapeEditor::kDefaultWidth,
                  BrainscapeEditor::kDefaultHeight);
+  // The Standalone following a MIDI clock at 132 BPM from its MIDI input (clock.md §10.2): MIDI,
+  // locked after 24 ticks.
+  Play(app, 48000.0, 2.0, nullptr, 132.0);
+  appEditor->SetView(BrainscapeEditor::View::Pedal);
+  ok &= Snapshot(*appEditor, dir, "editor-tempo-midi", BrainscapeEditor::kDefaultWidth,
+                 BrainscapeEditor::kDefaultHeight);
+  {
+    juce::LookAndFeel& lf   = appEditor->getLookAndFeel();
+    const juce::Image  menu = DrawMenu(appEditor->Tempo().SettingsMenu(), lf, 240, 24, nullptr);
+    juce::Image        canvas(juce::Image::ARGB, menu.getWidth() + 24, menu.getHeight() + 24, true);
+    {
+      juce::Graphics g(canvas);
+      g.fillAll(palette::kBackground);
+      g.drawImageAt(menu, 12, 12);
+    }
+    ok &= WriteImage(canvas, dir, "editor-tempo-settings-standalone");
+  }
   appOwned.reset();
   return ok ? 0 : 1;
 }

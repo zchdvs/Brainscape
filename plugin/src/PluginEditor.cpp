@@ -69,6 +69,7 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
       macros_(owner),
       document_(owner),
       findings_(owner.Curation()),
+      tempo_(owner),
       testPanel_(owner) {
   setLookAndFeel(&laf_);
   for (size_t g = 0; g < kNumParamGroups; ++g) {
@@ -99,6 +100,11 @@ BrainscapeEditor::BrainscapeEditor(BrainscapeProcessor& owner)
   addChildComponent(macros_);
   addChildComponent(document_);
   addChildComponent(findings_);
+  addChildComponent(tempo_);
+  tempo_.onStore = [this] {
+    document_.Save();
+    RefreshNow();
+  };
   addAndMakeVisible(modes_);
   modes_.onChosen = [this](bool opened, const juce::String& message) {
     document_.Note(message, opened ? palette::kText : palette::kBad);
@@ -146,6 +152,7 @@ void BrainscapeEditor::SetView(View view) {
     s->setVisible(shown);
   }
   macros_.setVisible(pedal);
+  tempo_.setVisible(pedal);
   document_.setVisible(pedal);
   findings_.setVisible(pedal);
   resized();
@@ -187,6 +194,10 @@ void BrainscapeEditor::RefreshMarks() {
   CurationSession&      s = processor_.Curation();
   std::set<std::string> pending;
   for (const std::string& line : s.PendingDerives()) pending.insert(line.substr(0, line.find(':')));
+  const BrainscapeProcessor::TempoDisplay tempoNow = processor_.GetTempoDisplay();
+  const BrainscapeParam*                  sync     = processor_.FindHostParam(ParamId::DelaySync);
+  const uint8_t echo = sync != nullptr ? DelaySyncCode(sync->Plain()) : 0u;
+  const uint8_t base = processor_.CurrentMode().mode.layers[0].baseSync;
   for (ParamKnob* k : knobs_) {
     const ParamId id = k->Attachment().Param().Id();
     std::vector<juce::Colour> marks;
@@ -200,6 +211,20 @@ void BrainscapeEditor::RefreshMarks() {
         tip << "\n";
       }
     }
+    // Synced times (clock.md §5.4): row 63 shows what it plays; post.delay.time_ms waits while row
+    // 63 is set, and base_ms while layer 0's base_sync is, each dimmed.
+    bool dim = false;
+    if (id == ParamId::DelaySync) {
+      const uint8_t code = DelaySyncCode(k->Attachment().Param().Plain());
+      if (code != 0u) tip << "Plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::PostDelay, code) << "\n";
+    } else if (id == ParamId::DelayTimeMs && echo != 0u) {
+      dim = true;
+      tip << "Waits: post.delay.sync plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::PostDelay, echo) << "\n";
+    } else if (id == ParamId::DelayMs && base != 0u) {
+      dim = true;
+      tip << "Waits: base_sync plays " << SyncedTimeText(tempoNow, tempo::SyncTarget::BaseDelay, base) << "\n";
+    }
+    k->setAlpha(dim ? 0.45f : 1.0f);
     const bool detached = !marks.empty() && s.IsDetached(id);
     const bool due      = pending.count(FindParam(id)->name) != 0;
     if (!marks.empty()) {
@@ -251,6 +276,7 @@ void BrainscapeEditor::RefreshNow() {
   macros_.Refresh();
   document_.Refresh();
   findings_.Refresh();
+  tempo_.Refresh();
   modes_.Refresh();
   juce::String note;
   if (s.HasDocument()) {
@@ -323,6 +349,7 @@ void BrainscapeEditor::resized() {
   modes_.SetScale(scale_);
   document_.SetScale(scale_);
   findings_.SetScale(scale_);
+  tempo_.SetScale(scale_);
   tabNote_.setFont(UiFont(13.0f * scale_));
 
   auto r  = getLocalBounds();
@@ -363,9 +390,14 @@ void BrainscapeEditor::resized() {
   tabNote_.setBounds(tab);
 
   if (view_ == View::Pedal) {
-    auto row1 = r.removeFromTop(juce::jmax(px(196), r.getHeight() * 41 / 100));
+    // The macro knobs, the tempo strip under them, then the document, the findings and the test
+    // input.
+    const int stripH = px(64);
+    auto      row1   = r.removeFromTop(juce::jmax(px(196), (r.getHeight() - stripH - kGap) * 41 / 100));
     r.removeFromTop(kGap);
     macros_.setBounds(row1);
+    tempo_.setBounds(r.removeFromTop(stripH));
+    r.removeFromTop(kGap);
     LayoutRow(r, {{&document_, 9}, {&findings_, 7}, {&testPanel_, 10}});
     return;
   }

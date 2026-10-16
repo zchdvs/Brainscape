@@ -1,13 +1,17 @@
 // The macro evaluator and the pitch guard (docs/design/mode-compiler.md §3.3, §2.7 L2): the
 // guarded floating-point functions the compiler's lint and derive passes call, and whose bodies
 // the engine's MacroMove and Expression events run (sound revision 2); with EvalExpression.
+#include <cstdio>
 #include <cstring>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "FpEnvTestUtil.h"
 #include "brainscape/Mode.h"
 #include "brainscape/ModeEval.h"
 #include "brainscape/Params.h"
+#include "brainscape/Preset.h"
 #include "catch.hpp"
 
 using namespace brainscape;
@@ -238,4 +242,94 @@ TEST_CASE("EvalExpression: CTRL's assignments in order, a leaf or a macro's targ
   REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 2u);
   ctrl.present = 0;
   REQUIRE(EvalExpression(*mode, ctrl, 0.5f, out, 32) == 0u);
+}
+
+// ── UsesTempo (docs/design/clock.md §6.6, D21) ───────────────────────────────────────────────
+
+namespace {
+
+void SetSyncLeaf(PresetState* s, float v) {
+  s->leaves[0] = PresetLeaf{static_cast<uint32_t>(ParamId::DelaySync), v};
+  s->leafCount = 1;
+}
+
+}  // namespace
+
+TEST_CASE("UsesTempo: the clock source, a synced base delay, row 63 at any reachable end",
+          "[mode-eval][tempo]") {
+  auto s = std::make_unique<PresetState>();
+  REQUIRE_FALSE(UsesTempo(*s));  // the default mode reads no tempo
+  s->mode.schedule.sources = static_cast<uint8_t>(s->mode.schedule.sources | kSourceClock);
+  REQUIRE(UsesTempo(*s));
+  s->mode.schedule.sources = kDefaultSources;
+  s->mode.layers[0].baseSync = 3;  // 1/16
+  REQUIRE(UsesTempo(*s));
+  s->mode.layers[0].baseSync = 0;
+  s->mode.layers[1].baseSync = 9;  // a second layer the mode does not have
+  REQUIRE_FALSE(UsesTempo(*s));
+  s->mode.schedule.layerCount = 2;
+  REQUIRE(UsesTempo(*s));
+  s->mode.schedule.layerCount = 1;
+  s->mode.layers[1].baseSync  = 0;
+  // Row 63's stored value, read as RoundHalfAwayI32 of its canonical value (code 0 below 0.5).
+  struct Stored {
+    uint32_t bits;
+    bool     uses;
+  };
+  for (const Stored& v : {Stored{Bits(0.0f), false}, Stored{Bits(0.49999997f), false},
+                          Stored{Bits(0.5f), true}, Stored{Bits(1.0f), true},
+                          Stored{Bits(16.0f), true}, Stored{Bits(40.0f), true},
+                          Stored{0x80000000u, false}, Stored{Bits(-3.0f), false},
+                          Stored{0x00000001u, false}, Stored{0x7FC00000u, false},
+                          Stored{0x7F800000u, false}, Stored{0xFF800000u, false}}) {
+    INFO(v.bits);
+    SetSyncLeaf(s.get(), FromBits(v.bits));
+    REQUIRE(UsesTempo(*s) == v.uses);
+  }
+  SetSyncLeaf(s.get(), 0.0f);
+  // Reached only through a macro: either end of the target's range counts.
+  auto withMacro = std::make_unique<PresetState>(*s);
+  withMacro->mode = *OneTarget(ParamId::DelaySync, 0.0f, 0.4f, 1.0f);
+  REQUIRE_FALSE(UsesTempo(*withMacro));
+  withMacro->mode = *OneTarget(ParamId::DelaySync, 0.0f, 4.0f, 1.0f);
+  REQUIRE(UsesTempo(*withMacro));
+  withMacro->mode = *OneTarget(ParamId::DelaySync, 6.0f, 0.0f, 1.0f);
+  REQUIRE(UsesTempo(*withMacro));
+  withMacro->mode = *OneTarget(ParamId::DelayTimeMs, 10.0f, 1000.0f, 1.0f);
+  REQUIRE_FALSE(UsesTempo(*withMacro));
+  // Or through an expression assignment.
+  s->control.exprCount      = 1;
+  s->control.expressions[0] =
+      ExpressionAssignment{static_cast<uint32_t>(ParamId::DelaySync), 0.0f, 0.25f, 1.0f};
+  REQUIRE_FALSE(UsesTempo(*s));
+  s->control.expressions[0].hi = 12.0f;
+  REQUIRE(UsesTempo(*s));
+  s->control.exprCount = 0;  // a stale entry past the count is not read
+  REQUIRE_FALSE(UsesTempo(*s));
+}
+
+TEST_CASE("UsesTempo: no factory package reads tempo (D21)", "[mode-eval][tempo]") {
+  const std::string dir = BRAINSCAPE_FACTORY_PACKAGES;
+  FILE*             m   = std::fopen((dir + "/MANIFEST").c_str(), "rb");
+  REQUIRE(m != nullptr);
+  char   line[512];
+  size_t packages = 0;
+  while (std::fgets(line, sizeof line, m) != nullptr) {
+    std::string path(line);
+    while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) path.pop_back();
+    path = path.substr(path.rfind(' ') + 1);                       // the document's path
+    path = dir + "/" + path.substr(0, path.size() - 5) + ".bsp";  // its package
+    INFO(path);
+    FILE* f = std::fopen(path.c_str(), "rb");
+    REQUIRE(f != nullptr);
+    std::vector<uint8_t> bytes(kMaxPackageBytes + 1u);
+    const size_t         n = std::fread(bytes.data(), 1, bytes.size(), f);
+    std::fclose(f);
+    auto state = std::make_unique<PresetState>();
+    REQUIRE(DecodePreset(bytes.data(), n, state.get()));
+    REQUIRE_FALSE(UsesTempo(*state));
+    ++packages;
+  }
+  std::fclose(m);
+  REQUIRE(packages == 18u);
 }

@@ -111,6 +111,12 @@ struct GranularStats {
   uint64_t skips       = 0;  // periodic births and triggers that intermittency skipped
   uint64_t repeatPasses = 0;  // passes begun after a voice's first (repeat, sound revision 6)
   uint64_t steals       = 0;  // triggered grains that took a sounding voice (sound revision 7)
+  // CLOCK (sound revision 8, docs/design/clock.md §6.3): grid hits born (a hit's burst's later
+  // grains count as burst births), and hits dropped because kMaxClockPending were already
+  // waiting, which only placements at nearly every frame can reach.
+  uint64_t clockBirths    = 0;
+  uint64_t clockDropped   = 0;
+  int64_t  lastClockBirth = -1;  // the absolute frame of the last clock birth, or -1
 };
 
 // The same-frame ordinals of the intermittency draws (mode-compiler.md §7.5, R8's key
@@ -119,16 +125,28 @@ struct GranularStats {
 inline constexpr uint32_t kOrdinalPeriodic = 0;
 inline constexpr uint32_t kOrdinalOnset    = 1;
 inline constexpr uint32_t kOrdinalManual   = 2;
+// A CLOCK grid hit (sound revision 8, docs/design/clock.md §6.3): its intermittency and jitter
+// draws, and its grain's own draws, take ordinal 3, so a hit sharing a frame with a periodic,
+// onset or manual birth never stacks an identical grain. Every other birth's grain draws at
+// ordinal 0, revision 1's keys.
+inline constexpr uint32_t kOrdinalClock    = 3;
 
 // External trigger events for one block, collected by the Engine (onset detector,
 // manual/MIDI triggers). Offsets are block-relative sample indices, ascending.
 struct TriggerEvents {
   static constexpr uint32_t kMaxOnsets = 8;  // > maxBlockSize/kOnsetHop + slack
+  static constexpr uint32_t kMaxClock  = 4;  // TempoCore::kMaxClockPerSpan (Engine.cpp checks)
   uint32_t onsetOffset[kMaxOnsets];
   uint32_t onsetMarkFrame[kMaxOnsets];  // ring frame where the onset's audio starts
   uint32_t onsetCount   = 0;
   uint32_t manualCount  = 0;  // fired at offsets 0,1,2,... (consecutive so the
                               // counter-keyed draws stay distinct per grain)
+  // The CLOCK grid's positions in the block (docs/design/clock.md §6.3), ascending, passed only
+  // while the playing mode lists `clock`; and the grid's period in frames, MulDivRoundU64(P, G,
+  // K) < 2^24, for the jitter.
+  uint32_t clockOffset[kMaxClock];
+  uint32_t clockCount      = 0;
+  uint32_t clockGridFrames = 0;
 };
 
 class GranularCore {
@@ -143,7 +161,8 @@ class GranularCore {
   // Kills all voices and re-arms the scheduler to fire on the next sample.
   void Reset() noexcept {
     for (auto& g : grains_) g.active = false;
-    orderCount_ = 0;
+    orderCount_   = 0;
+    clockPending_ = 0;
     markCount_  = 0;
     markHead_   = 0;
     // 1.0, not 0: the per-sample decrement runs before the fire check, so an
@@ -165,6 +184,11 @@ class GranularCore {
   // Counts since Init (Engine::Stats); Reset and Restart keep them.
   const GranularStats& Stats() const noexcept { return stats_; }
   void                 ClearStats() noexcept { stats_ = GranularStats{}; }
+
+  // Drops the CLOCK hits waiting for their (jittered) frame: the engine's gate while the
+  // playing mode does not list `clock` (docs/design/clock.md §6.3), as a trigger whose source
+  // the mode leaves out is dropped.
+  void ClearClock() noexcept { clockPending_ = 0; }
 
   // A FastCut load at absolute frame `abs` (mode-compiler.md §7.3): every grain still sounding
   // there that is not already fading starts a linear fade to zero over kFastCutFrames from
@@ -206,19 +230,26 @@ class GranularCore {
 
   // anchorFrame: the position reference (the pin while frozen).
   // liveFrame: ring frame Pass 1 wrote at birthAbs — the write-head guard reference.
+  // drawOrdinal: the same-frame ordinal of the grain's draws (kOrdinalClock for a CLOCK hit,
+  // else 0: revision 1's keys).
   void ScheduleGrain(uint32_t slot, const GranularParams& p, int64_t birthAbs,
-                     uint32_t anchorFrame, uint32_t liveFrame) noexcept;
+                     uint32_t anchorFrame, uint32_t liveFrame, uint32_t drawOrdinal) noexcept;
   // Fire an explicit trigger: free slot if available and fewer than voice_count voices sound,
   // else steal the OLDEST voice (design §4 allocation policy — explicit triggers never drop a
-  // hit; mode-compiler.md §7.5 R12).
+  // hit; mode-compiler.md §7.5 R12). A CLOCK hit is one too, never capped by `overlap`
+  // (docs/design/clock.md §6.3, D13).
   void FireExternal(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
                     uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
-                    int64_t absSample, float* wetL, float* wetR) noexcept;
-  // A trigger (an onset or a manual trigger, `ordinal` saying which) at birthAbs: skipped by
-  // intermittency, or its burst's first grain now and the rest queued. True when it fired.
+                    int64_t absSample, float* wetL, float* wetR, uint32_t drawOrdinal) noexcept;
+  // A trigger (an onset, a manual trigger or a CLOCK hit, `ordinal` saying which) at birthAbs:
+  // skipped by intermittency, or its burst's first grain now and the rest queued. True when it
+  // fired.
   bool FireTrigger(const GranularParams& p, uint32_t ordinal, int64_t birthAbs,
                    uint32_t anchorFrame, uint32_t liveFrame, uint32_t* renderedTo, uint32_t n,
                    int64_t absSample, float* wetL, float* wetR) noexcept;
+  // A CLOCK hit due at `due` joins the queue, ordered by due frame (equal frames in arrival
+  // order); with kMaxClockPending already waiting it is dropped and counted.
+  void AddClockHit(int64_t due) noexcept;
   // The oldest due burst's next grain: at most one a frame, and none at a frame a trigger
   // already fired at, so no two of the frame's births share the frame's draws.
   void FireBurst(const GranularParams& p, int64_t birthAbs, uint32_t anchorFrame,
@@ -226,8 +257,8 @@ class GranularCore {
                  float* wetL, float* wetR) noexcept;
   void AddBurst(int64_t next, uint32_t spacing, uint32_t remaining) noexcept;
   // The pitch-set entry a birth plays (mode-compiler.md §7.5, R10): the next of the cycle, or a
-  // weighted draw at the birth's key.
-  uint32_t PickPitch(const GranularParams& p, int64_t drawKey) noexcept;
+  // weighted draw at the birth's key and draw ordinal.
+  uint32_t PickPitch(const GranularParams& p, int64_t drawKey, uint32_t drawOrdinal) noexcept;
   void UpdateBurstDue() noexcept;
   // Renders every live voice over [from, to) in BIRTH order (the canonical
   // per-sample summation order — see Process), retiring finished grains.
@@ -256,6 +287,12 @@ class GranularCore {
   Burst          bursts_[kMaxBursts]{};   // in progress, oldest first
   uint32_t       burstCount_ = 0;
   int64_t        burstDue_   = kNoBurstDue;  // the earliest `next` among them
+  // CLOCK hits waiting for their frame (docs/design/clock.md §6.3): the grid frame plus the
+  // jitter's delay, at most half a grid period, so one or two in steady running; one fires per
+  // frame. Ordered by due frame.
+  static constexpr uint32_t kMaxClockPending = 8;
+  int64_t        clockDue_[kMaxClockPending]{};
+  uint32_t       clockPending_ = 0;
   grainmath::PitchCycle pitchCycle_;  // `cycle` selection's position, over every birth
   GranularStats  stats_;
 };

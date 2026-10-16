@@ -288,16 +288,33 @@ TEST_CASE("a load's missing and unknown leaves, sinceRev and performance state",
     CHECK(FindParam(LeafId(i))->sinceRev >= 1u);
     CHECK(FindParam(LeafId(i))->sinceRev <= kSoundRevision);
   }
-  // Stored performance state this build cannot play yet (W2): applied, but inexact.
-  auto preset                  = Complete({{ParamId::Mix, 0.25f}});
-  preset->performance.reverse  = 1;
-  preset->performance.timeMode = TimeMode::Tempo;
+  // The stored performance state (docs/design/clock.md §2.4, §11.2): since sound revision 8 the
+  // time mode, the subdivision and the tempo play, so a load of them is exact; `reverse` waits
+  // for global reverse (W2): applied, but inexact.
+  auto preset                      = Complete({{ParamId::Mix, 0.25f}});
+  preset->performance.reverse      = 1;
+  preset->performance.timeMode     = TimeMode::Tempo;
+  preset->performance.subdiv       = Subdivision::Octuple;
+  preset->performance.usPerQuarter = kMinUsPerQuarter;
   Rig        rig;
   LoadReport report;
   CHECK_FALSE(rig.engine.LoadPreset(*preset, LoadMode::Exact, &report));
   CHECK(report.applied);
-  CHECK(report.unsupported == 2u);
+  CHECK(report.unsupported == 1u);
   CHECK(rig.engine.GetParam(ParamId::Mix) == 0.25f);
+  CHECK(rig.engine.Tempo().nsPerQuarter == kMinUsPerQuarter * 1000u);
+  CHECK(rig.engine.Tempo().timeMode == static_cast<uint8_t>(TimeMode::Tempo));
+  CHECK(rig.engine.Tempo().subdiv == static_cast<uint8_t>(Subdivision::Octuple));
+  preset->performance.reverse = 0;
+  CHECK(rig.engine.LoadPreset(*preset, LoadMode::Exact, &report));
+  CHECK(report.unsupported == 0u);
+  // A state built in memory with a field outside its range, or the reserved byte set, is counted
+  // and loads Init's defaults for it (a decoded package never has one).
+  preset->performance.reserved = 1;
+  preset->performance.subdiv   = static_cast<Subdivision>(6);
+  CHECK_FALSE(rig.engine.LoadPreset(*preset, LoadMode::Exact, &report));
+  CHECK(report.unsupported == 2u);
+  CHECK(rig.engine.Tempo().subdiv == 0u);
   preset->performance = PerformanceState{};
   CHECK(rig.engine.LoadPreset(*preset, LoadMode::Exact, &report));
   CHECK(report.unsupported == 0u);

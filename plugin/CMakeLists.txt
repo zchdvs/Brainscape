@@ -47,6 +47,7 @@ set(BRAINSCAPE_PLUGIN_SOURCES
   src/BrainscapeParam.cpp
   src/Curation.cpp
   src/FactoryModes.cpp
+  src/HostTempo.cpp
   src/PlainAttachment.cpp
   src/PluginEditor.cpp
   src/PluginProcessor.cpp
@@ -56,6 +57,7 @@ set(BRAINSCAPE_PLUGIN_SOURCES
   src/gui/BrainscapeLookAndFeel.cpp
   src/gui/CurationViews.cpp
   src/gui/ModeMenu.cpp
+  src/gui/TempoPanel.cpp
   src/gui/Widgets.cpp
   ${_bs_factory_table}
 )
@@ -132,7 +134,8 @@ if(BRAINSCAPE_BUILD_TESTS)
   add_executable(brainscape_editor_snapshot tests/editor_snapshot.cpp)
   target_link_libraries(brainscape_editor_snapshot PRIVATE Brainscape brainscape_compiler)
   target_compile_definitions(brainscape_editor_snapshot PRIVATE
-    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data")
+    BRAINSCAPE_TEST_DATA="${PROJECT_SOURCE_DIR}/compiler/tests/data"
+    BRAINSCAPE_GOLDEN_PRESETS="${PROJECT_SOURCE_DIR}/dsp/tests/golden/presets")
   target_include_directories(brainscape_editor_snapshot PRIVATE
     src
     $<TARGET_PROPERTY:Brainscape,INCLUDE_DIRECTORIES>)

@@ -223,6 +223,7 @@ constexpr Settable kSettable[] = {
     {ParamId::Intermittency, "Intermittency"},
     {ParamId::BurstCount, "BurstCount"},
     {ParamId::BurstSpacingMs, "BurstSpacingMs"},
+    {ParamId::DelaySync, "DelaySync"},
     {ParamId::EffectVolumeDb, "EffectVolumeDb"},
 };
 constexpr size_t kNumSettable = sizeof kSettable / sizeof kSettable[0];
@@ -265,7 +266,7 @@ constexpr Alias kAliases[] = {
     {"decay", ParamId::DecayMs},          {"voices", ParamId::VoiceCount},
     {"skip", ParamId::Intermittency},
     {"burst", ParamId::BurstCount},       {"spacing", ParamId::BurstSpacingMs},
-    {"volume", ParamId::EffectVolumeDb},
+    {"sync", ParamId::DelaySync},         {"volume", ParamId::EffectVolumeDb},
 };
 
 const Settable* FindByName(const std::string& name) {

@@ -139,7 +139,7 @@ SECTIONS
 
 	/* The arena sections come before .data and .bss, whose catch-all patterns would otherwise
 	 * take them: Brainscape names them .bss.brainscape_* so the compiler emits them as NOBITS
-	 * (a custom name does not, and a 17 MiB arena would be 17 MiB of object file). They are
+	 * (a custom name does not, and an 18 MiB arena would be 18 MiB of object file). They are
 	 * not zeroed by the startup code: Engine::Init clears what it reads, and the owners clear
 	 * the rest. libDaisy's own .dtcmram_bss and .sdram_bss land here too. */
 	.dtcmram_bss (NOLOAD) :

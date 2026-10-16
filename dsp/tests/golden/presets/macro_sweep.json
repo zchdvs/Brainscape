@@ -3,8 +3,8 @@
   "id": "corpus.macro_sweep",
   "name": "Macro sweep",
   "family": "none",
-  "sound_rev": 7,
-  "sound_hash": "585787e48c8bcb4cce604fff728676994436717698384482aeb51a29d28f3b0f",
+  "sound_rev": 9,
+  "sound_hash": "8608ea3ca63eed29e50c5b97d3a2af041ade5ed3ab93b00f9672918dbd49d2cc",
   "meta": {
     "author": "",
     "description": "Golden corpus: every macro swept, two auxiliary ones with windows and reversed ranges.",
@@ -65,7 +65,8 @@
     "delay": {
       "time_ms": 300,
       "fb": 0.3,
-      "mix": 0.2
+      "mix": 0.2,
+      "sync": 0
     },
     "reverb": {
       "time": 0.6,

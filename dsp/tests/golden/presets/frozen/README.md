@@ -30,6 +30,8 @@ overwrite one.
 | `w3-leaf-macro-target.bsp` | decodes; `ValidateMode`: `UnsupportedTarget`, ID 32 (since revision 7, when it was added); its verdict changes in W3 | a macro target on `layer0.level_db` (-12 to 0 dB), a wave-3 leaf and a Reserved row: the role `w1-leaf-macro-target.bsp` held until revision 6 |
 | `w3-leaf-expression.bsp` | `UnsupportedTarget`, ID 32 (since revision 7); its verdict changes in W3 | an expression assignment on the same leaf, refused at decode, named: the role `w1-leaf-expression.bsp` held until revision 6 |
 | `w2-step-table.bsp` | `UnsupportedFeature`, step tables (since revision 7); its verdict changes in W2 | a wave-2 package (four steps, shuffled), built from the revision-1 recipe: the role `future-pitch-set.bsp` held until revision 5 |
+| `stat-tempo-source.bsp` | `Performance` (since the tempo core reserved the byte) | STAT's performance byte 3 at 1, `tempo_source` as the first schema wrote it: the tempo source became a device setting ([clock.md](../../../../../docs/design/clock.md) D3), so the byte is reserved |
+| `schd-subdiv.bsp` | `ModePadding`, `SCHD` (since the tempo core reserved the byte) | SCHD's byte 2 at 1, the scheduler's `subdiv` as the first schema wrote it: withdrawn for the performance state's one subdivision (clock.md D14) |
 
 The recipes in `Fixtures.cpp` spell out each revision's leaves rather than reading the build's
 table, so `--write-fixtures` and the `[fixtures]` test keep rebuilding the committed bytes.

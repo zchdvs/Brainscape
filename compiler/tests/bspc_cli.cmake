@@ -97,6 +97,7 @@ run(1 fmt --check messy.json)
 expect_in("${OUT}" "messy.json" "fmt --check")
 expect_same(messy.json "${messy}" "fmt --check")
 run(0 lint default.json)  # warnings only
+expect_in("${OUT}" "default.json: does not use tempo" "lint reports UsesTempo")
 run(1 lint --factory default.json)  # L4 is an error for factory presets
 run(0 compile -o messy-out.bsp messy.json)
 expect_absent(messy.bsp "compile -o")

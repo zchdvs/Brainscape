@@ -50,7 +50,17 @@ namespace brainscape::golden {
 // 12 (sound revision 7, wave 1's voice count, R12): voice_limit (a cloud held to 6 voices, then
 // 2, then 64, onset bursts stealing) and mono_stutter (onsets alone, one voice, spaced bursts
 // cutting each other) in plucks_wave1_12s; the steals counter; the voiceCount ablation.
-inline constexpr uint32_t kCorpusVersion = 12;
+// 13 (sound revision 8, the tempo core, docs/design/clock.md §8.3): plucks_clock_30s with
+// clock_internal, clock_tap, clock_midi_hw, clock_midi_computer, clock_song, clock_loads and
+// tempo_jump, every clock preset at 140 or 137.5 BPM (fractional frames per tick); the script
+// verbs Tap, Tempo, Tick, Transport and Subdivision, the ClockTicks and TapSeries generators;
+// the tempo counters (Engine::TempoCounts); the clock, tempoEvents and subdiv ablations; a
+// restart's tail carries the device settings set before it.
+// 14 (sound revision 9, synced times, docs/design/clock.md §8.3): sync_post, sync_clock,
+// sync_base, sync_fold and sync_glide in plucks_clock_30s, on the packages sync_post, sync_base and
+// sync_fold (row 63 at 1/4 and 2/1, a base_sync of 1/8), at 140, 137.5 and 125 BPM; the TempoSweep
+// generator; the crossfades and folds counted; the sync and crossfade ablations.
+inline constexpr uint32_t kCorpusVersion = 14;
 
 enum class Counter : uint8_t {
   Frames,             // frames rendered
@@ -95,6 +105,34 @@ enum class Counter : uint8_t {
   // Triggered grains that took a sounding voice, the oldest, at voice_count or with all 64
   // busy (Engine::Stats, from sound revision 7, mode-compiler.md §7.5 R12).
   Steals,
+  // The tempo core's counts over the render (Engine::TempoCounts, from sound revision 8,
+  // docs/design/clock.md §2.6, §8.3): valid Tap events, those ignored (under ClockRunning, or a
+  // bounce) and the downbeat marks under ClockFree; valid ClockTicks, outliers, re-acquisitions
+  // and inferred lost ticks; gaps, losses (gaps under a clock) and resumes; Transport and
+  // Subdivision events applied; CLOCK births; commits by the clock rules (acquisition and the
+  // deadband), early commits; changes of the committed tempo classed Jump and Drift (slews);
+  // since synced times (sound revision 9, §11.3) the post chain's crossfades and the synced
+  // durations' octave folds; and events 6-10 ignored for an invalid payload.
+  Taps,
+  TapsIgnored,
+  TapPhases,
+  ClockTicks,
+  TickOutliers,
+  Reacquires,
+  DropoutTicks,
+  ClockGaps,
+  ClockLosses,
+  ClockResumes,
+  TransportEvents,
+  SubdivEvents,
+  ClockBirths,
+  Commits,
+  EarlyCommits,
+  Jumps,
+  Slews,
+  Crossfades,
+  Folds,
+  InvalidEvents,
   kCount
 };
 const char* CounterName(Counter) noexcept;
@@ -116,11 +154,20 @@ const char* CounterName(Counter) noexcept;
 // PitchSet gives every loaded mode the default set {0: 1} by `cycle`, PitchSelect makes its
 // `random` selection `cycle`. Sound revision 6: Repeat sets layer0.position.repeat to 1 and
 // Decay layer0.decay_ms to 0. Sound revision 7: VoiceCount sets layer0.voice_count to 64.
+// Sound revision 8 (docs/design/clock.md §8.3): Clock removes the `clock` source from every
+// loaded mode, TempoEvents drops events 6-10, and Subdiv plays TAP throughout (every loaded
+// preset's stored subdivision TAP, the Subdivision events of field 0 dropped). Sound revision 9:
+// Sync plays every synced field unsynced (post.delay.sync at 0 wherever the preset, a load or a
+// SetParam sets it, the macro and expression moves that could set it again dropped, every
+// loaded mode's base_sync off), and Crossfade glides the tempo's jumps (global.tempo_glide On
+// from frame 0). The design's third, slew (drifts glide), has no switch outside the engine; the
+// unit tests check the slew (test_sync.cpp).
 enum class Feature : uint8_t {
   MarkPosition, OnsetTrigger, Reverse, Pitch, Spray, Feedback,
   PostMod, PostDelay, PostReverb, PostFilter, Freeze, Triggers, RingLength,
   Spillover, Restart, Mode, Macro, ModeSwitch, FastCut, WetKill,
   Sources, Burst, Intermittency, PitchSet, PitchSelect, Repeat, Decay, VoiceCount,
+  Clock, TempoEvents, Subdiv, Sync, Crossfade,
 };
 const char* FeatureName(Feature) noexcept;
 
@@ -156,7 +203,7 @@ struct PresetCase {
   // its leaves, mode and CTRL (mode-compiler.md §10.3). Its sound and control hashes go into
   // the golden file, for the sound-revision gate's package rule (§8.3).
   const char*                            package = nullptr;
-  uint8_t                                strip   = 0;  // ablations only: Strip bits
+  uint16_t                               strip   = 0;  // ablations only: Strip bits
 };
 
 struct VectorCase {
@@ -185,7 +232,8 @@ PresetCase Ablate(const PresetCase&, Feature f);
 PresetSource StateAt(const PresetCase& p, int64_t frame);
 
 // What RestartTail renders: the preset from the script's last restart on, its events and
-// restarts moved to that frame; *start receives the frame.
+// restarts moved to that frame, the device settings (Global rows) the script set before it set
+// again at its frame 0, as a restart keeps them; *start receives the frame.
 PresetCase TailAfterRestart(const PresetCase& p, int64_t* start);
 
 // What AmongEdits renders: the preset with every SetParam event joined by edits that rebuild

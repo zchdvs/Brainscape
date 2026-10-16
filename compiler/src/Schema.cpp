@@ -41,8 +41,12 @@ constexpr uint32_t kB500     = 0x43FA0000u;  // 500
 constexpr uint32_t kB5       = 0x40A00000u;  // 5
 constexpr uint32_t kB80      = 0x42A00000u;  // 80
 
-// Not a mode feature: the stored performance state (§2.6), which W2 brings with CLOCK.
-constexpr uint32_t kNeedPerformance = 1u << 31;
+// Not mode features: the stored performance state (§2.6), whose fields arrive in two parts
+// (docs/design/clock.md §11.1): the time mode, the subdivision and the tempo with the tempo
+// core, which brings CLOCK, so a build that plays `clock` plays them; and global reverse later
+// in W2 (ReadOptions::globalReverse), so `reverse: true` stays E6 until then.
+constexpr uint32_t kNeedPerformanceTempo   = 1u << 31;
+constexpr uint32_t kNeedPerformanceReverse = 1u << 30;
 
 constexpr uint32_t kFirstMacro = static_cast<uint32_t>(ParamId::MacroActivity);
 
@@ -53,6 +57,8 @@ struct EnumSpec {
   uint8_t            def;
   const uint32_t*    features;  // per value; or null, and `feature` for any value but `def`
   uint32_t           feature;
+  // E5's hint for a value that is not a name, when it says something the list does not; or null.
+  const char* (*hint)(std::string_view) = nullptr;
 };
 
 struct FloatSpec {
@@ -79,7 +85,16 @@ struct RecordSpec {
 
 const char* const kFamilyNames[]    = {"none", "recall", "reverie", "misfire", "echoic"};
 const char* const kSourceNames[]    = {"periodic", "clock", "onset", "footswitch", "midi_note"};
-const char* const kSubdivNames[]    = {"1/4", "1/2", "tap", "2x", "4x", "8x"};
+// The Subdiv control's six positions as rate multipliers, in code order (clock.md §5.1, D7):
+// code 0, TAP, is the default; never note values, so the Microcosm's printed labels are E5.
+const char* const kSubdivNames[]    = {"tap", "x1/4", "x1/2", "x2", "x4", "x8"};
+// The note values of synced fields, by code (clock.md §5.2): 0 off, then sixteen by duration,
+// `t` a triplet and `d` dotted.
+const char* const kDivisionNames[]  = {"off",  "1/32", "1/16t", "1/16", "1/8t", "1/16d",
+                                       "1/8",  "1/4t", "1/8d",  "1/4",  "1/2t", "1/4d",
+                                       "1/2",  "1/1t", "1/2d",  "1/1",  "2/1"};
+static_assert(sizeof(kDivisionNames) / sizeof(kDivisionNames[0]) == kMaxSyncDivision + 1u,
+              "a name per division code");
 const char* const kStepOrderNames[] = {"fixed", "shuffle", "random"};
 const char* const kPositionNames[]  = {"live", "mark", "pin", "grid"};
 const char* const kSprayLawNames[]  = {"uniform", "exp"};
@@ -95,7 +110,6 @@ const char* const kRouteToNames[]   = {"size", "cutoff", "ratio", "position", "l
 const char* const kDrawNames[]      = {"grain.pitch", "grain.pan",     "grain.position",
                                        "grain.size",  "grain.reverse", "grain.gain"};
 const char* const kTimeModeNames[]  = {"free", "subdiv", "tempo"};
-const char* const kTempoSrcNames[]  = {"internal", "midi", "host"};
 const char* const kStageNames[]     = {"mod", "delay", "reverb", "filter"};
 
 const uint32_t kPositionFeatures[] = {0, kModeFeatureMarkPosition, kModeFeaturePinPosition,
@@ -103,7 +117,6 @@ const uint32_t kPositionFeatures[] = {0, kModeFeatureMarkPosition, kModeFeatureP
 const uint32_t kSprayLawFeatures[] = {0, kModeFeatureExpSpray};
 
 const EnumSpec kFamilySpec{kFamilyNames, 5, 0, nullptr, 0};
-const EnumSpec kSubdivSpec{kSubdivNames, kSubdivisionCount, 0, nullptr, kModeFeatureClock};
 const EnumSpec kStepOrderSpec{kStepOrderNames, kStepOrderCount, 0, nullptr, kModeFeatureSteps};
 const EnumSpec kPositionSpec{kPositionNames, kPositionSourceCount, 0, kPositionFeatures, 0};
 const EnumSpec kSprayLawSpec{kSprayLawNames, kSprayLawCount, 0, kSprayLawFeatures, 0};
@@ -114,9 +127,21 @@ const EnumSpec kQuantizeSpec{kQuantizeNames, kQuantizeModeCount, 0, nullptr, kMo
 const EnumSpec kBandSpec{kBandNames, kSvfBandCount, 0, nullptr, 0};
 const EnumSpec kCutoffSrcSpec{kCutoffSrcNames, kCutoffSourceCount, 0, nullptr, 0};
 const EnumSpec kShapeSpec{kShapeNames, kModulatorShapeCount, 0, nullptr, 0};
-const EnumSpec kTimeModeSpec{kTimeModeNames, kTimeModeCount, 0, nullptr, kNeedPerformance};
-const EnumSpec kPerfSubdivSpec{kSubdivNames, kSubdivisionCount, 0, nullptr, kNeedPerformance};
-const EnumSpec kTempoSrcSpec{kTempoSrcNames, kTempoSourceCount, 0, nullptr, kNeedPerformance};
+const EnumSpec kTimeModeSpec{kTimeModeNames, kTimeModeCount, 0, nullptr, kNeedPerformanceTempo};
+// The Microcosm's printed labels name the same positions, but "1/4" and "1/2" read as the note
+// values row 63 takes beside them, so no spelling of them is read (clock.md §5.1, record P6).
+const char* SubdivHint(std::string_view text) {
+  for (const char* printed : {"1/4", "1/2", "TAP", "2x", "4x", "8x"}) {
+    if (text == printed) {
+      return "Subdiv's positions are rates, written x1/4, x1/2, tap, x2, x4 and x8; the "
+             "Microcosm's printed labels are not read, as \"1/4\" and \"1/2\" would read as "
+             "note values";
+    }
+  }
+  return nullptr;
+}
+const EnumSpec kPerfSubdivSpec{kSubdivNames, kSubdivisionCount, 0, nullptr, kNeedPerformanceTempo,
+                               SubdivHint};
 
 const FloatSpec kSlotShareSpec{kB0, kB1, true, kB1, false, kModeFeatureTwoLayers, "E4"};
 const FloatSpec kMarkJitterSpec{kB0, kB1, false, kB0, false, kModeFeatureMarkWalk, "E4"};
@@ -138,7 +163,8 @@ const IntSpec kWeightSpec{1, 16, 1, false, 0, "E4"};
 const IntSpec kMarkIndexSpec{0, kMaxMarkIndex, 0, false, kModeFeatureMarkWalk, "E8"};
 const IntSpec kRootSpec{0, 11, 0, false, kModeFeatureQuantize, "E4"};
 const IntSpec kRouteLayerSpec{0, kMaxModeLayers - 1, 0, false, 0, "E4"};
-const IntSpec kTempoSpec{kMinUsPerQuarter, kMaxUsPerQuarter, 500000, false, kNeedPerformance, "E4"};
+const IntSpec kTempoSpec{kMinUsPerQuarter, kMaxUsPerQuarter, 500000, false, kNeedPerformanceTempo,
+                        "E4"};
 
 const RecordSpec kPitchRecords{1, kMaxPitchEntries, true, "pitch entries"};
 const RecordSpec kStepRecords{0, kMaxSteps, false, "steps"};
@@ -165,6 +191,8 @@ const char* RemovedHint(std::string_view key) {
       {"ratio_gen", "editor-only data lives under editor.ratio_gen"},
       {"onset_trigger", "schema 1 lists onset in scheduler.sources"},
       {"time", "the post delay's time is time_ms (milliseconds)"},
+      {"subdiv", "withdrawn from the scheduler: the subdivision is performance.subdiv"},
+      {"tempo_source", "withdrawn: the tempo source is a device setting, not part of a preset"},
   };
   for (const Hint& h : kHints) {
     if (key == h.key) return h.hint;
@@ -229,7 +257,8 @@ const FeatureInfo kFeatureInfo[] = {
     {kModeFeatureRoutes, "modulation routes", "W3"},
     {kModeFeatureLinks, "links", "W3"},
     {kModeFeatureDryDuck, "dry-duck envelope times", "W3"},
-    {kNeedPerformance, "stored performance state", "W2"},
+    {kNeedPerformanceTempo, "the stored tempo, time mode and subdivision", "W2 (the tempo core)"},
+    {kNeedPerformanceReverse, "global reverse", "W2 (global reverse)"},
 };
 
 const FeatureInfo* InfoFor(uint32_t bit) {
@@ -310,7 +339,7 @@ void VisitLayer(V& v, Document& d, uint32_t n) {
     v.Enum("source", L.source, kPositionSpec, true, "source:" + Dec(n));
     v.Leaf("base_ms", id(ParamId::DelayMs, ParamId::L1DelayMs));
     v.Leaf("spray_ms", id(ParamId::SprayMs, ParamId::L1SprayMs));
-    v.Division("base_sync", L.baseSync, kModeFeatureTempoSync);
+    v.Division("base_sync", L.baseSync, kModeFeatureTempoSync, "base_sync:" + Dec(n));
     v.Enum("spray_law", L.sprayLaw, kSprayLawSpec);
     v.Leaf("repeat", id(ParamId::Repeat, ParamId::L1Repeat));
     v.Object("mark", false, [&] {
@@ -380,7 +409,6 @@ void Visit(V& v, Document& d) {
       v.Leaf("count", ParamId::BurstCount);
       v.Leaf("spacing_ms", ParamId::BurstSpacingMs);
     });
-    v.Enum("subdiv", m.schedule.subdiv, kSubdivSpec);
     v.Object("steps", false, [&] {
       v.Leaf("count", ParamId::StepCount);
       v.Enum("order", m.schedule.stepOrder, kStepOrderSpec);
@@ -468,10 +496,9 @@ void Visit(V& v, Document& d) {
   v.Controls(d);
   v.Object("performance", false, [&] {
     PerformanceState& p = d.state->performance;
-    v.Bool("reverse", p.reverse, kNeedPerformance);
+    v.Bool("reverse", p.reverse, kNeedPerformanceReverse);
     v.Enum("time_mode", p.timeMode, kTimeModeSpec);
     v.Enum("subdiv", p.subdiv, kPerfSubdivSpec);
-    v.Enum("tempo_source", p.tempoSource, kTempoSrcSpec);
     v.Int("tempo_us_per_quarter", p.usPerQuarter, kTempoSpec);
   });
   v.Object("editor", false, [&] {
@@ -568,7 +595,10 @@ class Reader {
         return;
       }
     }
-    Error("E5", loc, Quoted(m->value.text) + " is not one of " + Join(spec.names, spec.count));
+    const char* hint = spec.hint != nullptr ? spec.hint(m->value.text) : nullptr;
+    Error("E5", loc,
+          Quoted(m->value.text) + " is not one of " + Join(spec.names, spec.count) +
+              (hint != nullptr ? std::string(" (") + hint + ")" : std::string()));
   }
 
   void Float(const char* key, float& value, const FloatSpec& spec) {
@@ -657,21 +687,29 @@ class Reader {
     Error("E5", At(m->value, Pointer(key)), Quoted(m->value.text) + " is not one of lfo, env");
   }
 
-  // A tempo division: "off", or a division, whose vocabulary W2 defines (§2.2).
-  void Division(const char* key, uint8_t& value, uint32_t /*feature*/) {
+  // A tempo division (§2.2): "off", or a note value of clock.md §5.2 by name, which needs
+  // `feature` (a synced base delay: tempo-synced times). `whereKey` records where it was read,
+  // for the lints (L13, L14).
+  void Division(const char* key, uint8_t& value, uint32_t feature,
+                const std::string& whereKey = std::string()) {
     const json::Member* m = Take(key);
     if (m == nullptr) return;
     if (m->value.type != json::Type::String) {
       TypeError(*m, "a string");
       return;
     }
-    if (m->value.text == "off") {
-      value = 0;
-      return;
+    const Location loc = At(m->value, Pointer(key));
+    if (!whereKey.empty()) d_.where[whereKey] = loc;
+    for (uint8_t i = 0; i <= kMaxSyncDivision; ++i) {
+      if (m->value.text == kDivisionNames[i]) {
+        value = i;
+        if (i != 0u) Need(feature, loc, Quoted(key) + " " + Quoted(m->value.text));
+        return;
+      }
     }
-    Error("E6", At(m->value, Pointer(key)),
-          "tempo divisions (" + Quoted(m->value.text) +
-              ") need W2, which defines their vocabulary; this build accepts \"off\"");
+    Error("E5", loc,
+          Quoted(m->value.text) + " is not one of " +
+              Join(kDivisionNames, sizeof kDivisionNames / sizeof kDivisionNames[0]));
   }
 
   template <class C, class F>
@@ -1752,7 +1790,8 @@ class Reader {
   // E6: what this build cannot play, named with its wave, where it is first written.
   void Unsupported() {
     uint32_t supported = options_.supportedFeatures & kModeFeatureAll;
-    if ((options_.supportedFeatures & kModeFeatureClock) != 0u) supported |= kNeedPerformance;
+    if ((options_.supportedFeatures & kModeFeatureClock) != 0u) supported |= kNeedPerformanceTempo;
+    if (options_.globalReverse) supported |= kNeedPerformanceReverse;
     for (const NeedRecord& n : needAt_) {
       if ((supported & n.bit) == 0u) Error("E6", n.at, n.message);
     }
@@ -1901,10 +1940,10 @@ class Writer {
               json::Value::String(value == brainscape::ModulatorType::Envelope ? "env" : "lfo"));
   }
 
-  void Division(const char* key, const uint8_t& value, uint32_t /*feature*/) {
+  void Division(const char* key, const uint8_t& value, uint32_t /*feature*/,
+                const std::string& /*whereKey*/ = std::string()) {
     if (value == 0u && records_ == 0) return;
-    // Divisions other than "off" cannot be read before W2 defines them.
-    Top().Add(key, json::Value::String(value == 0u ? "off" : "division " + Dec(value)));
+    Top().Add(key, json::Value::String(value <= kMaxSyncDivision ? kDivisionNames[value] : "?"));
   }
 
   template <class C, class F>
